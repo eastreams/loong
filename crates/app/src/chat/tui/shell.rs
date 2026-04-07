@@ -5017,6 +5017,8 @@ fn apply_terminal_event(
                 Close,
                 Submit(String),
                 UpdateQuery(String),
+                MoveFirst,
+                MoveLast,
                 MoveUp,
                 MoveDown,
                 None,
@@ -5041,6 +5043,10 @@ fn apply_terminal_event(
                             None => SessionPickerAction::None,
                         }
                     }
+                    KeyCode::Home | KeyCode::Left => SessionPickerAction::MoveFirst,
+                    KeyCode::End | KeyCode::Right => SessionPickerAction::MoveLast,
+                    KeyCode::BackTab => SessionPickerAction::MoveUp,
+                    KeyCode::Tab => SessionPickerAction::MoveDown,
                     KeyCode::Up => SessionPickerAction::MoveUp,
                     KeyCode::Down => SessionPickerAction::MoveDown,
                     KeyCode::Backspace => {
@@ -5053,14 +5059,8 @@ fn apply_terminal_event(
                         query.push(ch);
                         SessionPickerAction::UpdateQuery(query)
                     }
-                    KeyCode::Left
-                    | KeyCode::Right
-                    | KeyCode::Home
-                    | KeyCode::End
-                    | KeyCode::PageUp
+                    KeyCode::PageUp
                     | KeyCode::PageDown
-                    | KeyCode::Tab
-                    | KeyCode::BackTab
                     | KeyCode::Delete
                     | KeyCode::Insert
                     | KeyCode::F(_)
@@ -5109,6 +5109,21 @@ fn apply_terminal_event(
                         session_picker.selected_index = 0;
                         session_picker.list_scroll_offset = 0;
                         session_picker.clamp_selection(session_picker_visible_rows());
+                    }
+                }
+                SessionPickerAction::MoveFirst => {
+                    if let Some(session_picker) = shell.session_picker.as_mut() {
+                        session_picker.selected_index = 0;
+                        session_picker.clamp_selection(session_picker_visible_rows());
+                    }
+                }
+                SessionPickerAction::MoveLast => {
+                    if let Some(session_picker) = shell.session_picker.as_mut() {
+                        let filtered_count = session_picker.filtered_indices().len();
+                        if filtered_count > 0 {
+                            session_picker.selected_index = filtered_count.saturating_sub(1);
+                            session_picker.clamp_selection(session_picker_visible_rows());
+                        }
                     }
                 }
                 SessionPickerAction::MoveUp => {
@@ -8747,6 +8762,78 @@ mod tests {
 
         assert_eq!(session_picker.query, "b");
         assert_eq!(filtered_session_id, Some("beta-session"));
+    }
+
+    #[test]
+    fn session_picker_home_and_end_jump_to_edges() {
+        let mut shell = state::Shell::new("root-session");
+        shell.session_picker = Some(state::SessionPickerState::new(
+            state::SessionPickerMode::Resume,
+            vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "alpha-session".to_owned(),
+                    label: Some("Alpha".to_owned()),
+                    agent_presentation: None,
+                    state: "ready".to_owned(),
+                    kind: "root".to_owned(),
+                    task_phase: None,
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "beta-session".to_owned(),
+                    label: Some("Beta".to_owned()),
+                    agent_presentation: None,
+                    state: "completed".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("completed".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "gamma-session".to_owned(),
+                    label: Some("Gamma".to_owned()),
+                    agent_presentation: None,
+                    state: "running".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("running".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+            ],
+        ));
+        if let Some(session_picker) = shell.session_picker.as_mut() {
+            session_picker.selected_index = 1;
+        }
+        shell.focus.push(FocusLayer::SessionPicker);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::End)),
+            &tx,
+            &mut submit_text,
+        );
+
+        let session_picker = shell.session_picker.as_ref().expect("session picker");
+        assert_eq!(session_picker.selected_index, 2);
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Home)),
+            &tx,
+            &mut submit_text,
+        );
+
+        let session_picker = shell.session_picker.as_ref().expect("session picker");
+        assert_eq!(session_picker.selected_index, 0);
     }
 
     #[test]

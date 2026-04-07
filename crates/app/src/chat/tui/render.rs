@@ -799,17 +799,17 @@ fn render_theme_picker(
     area: Rect,
     palette: &Palette,
 ) {
-    if area.width < 52 || area.height < 12 {
+    if area.width < 52 || area.height < 14 {
         return;
     }
 
     let max_width = area.width.saturating_sub(6);
-    let preferred_width = 60u16;
+    let preferred_width = 64u16;
     let popup_width = preferred_width.min(max_width).max(52);
 
     let max_height = area.height.saturating_sub(4);
-    let preferred_height = 12u16;
-    let popup_height = preferred_height.min(max_height).max(12);
+    let preferred_height = 14u16;
+    let popup_height = preferred_height.min(max_height).max(14);
 
     let popup_x = area.x + (area.width.saturating_sub(popup_width)) / 2;
     let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
@@ -841,11 +841,29 @@ fn render_theme_picker(
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(4)])
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(4),
+        ])
         .split(inner_area);
-    let [meta_area, list_area] = sections.as_ref() else {
+    let [intro_area, meta_area, list_area] = sections.as_ref() else {
         return;
     };
+
+    let intro_lines = vec![
+        Line::styled(
+            " Choose the text style that looks best with your terminal.".to_owned(),
+            Style::default()
+                .fg(palette.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(
+            " Preview first, then apply when the surface feels right.".to_owned(),
+            Style::default().fg(palette.dim),
+        ),
+    ];
+    frame.render_widget(Paragraph::new(intro_lines), *intro_area);
 
     let source_label = if theme_picker.palette_hint_override.is_some() {
         "session override"
@@ -860,6 +878,7 @@ fn render_theme_picker(
         super::terminal::PaletteHint::Light => "light",
         super::terminal::PaletteHint::Plain => "plain",
     };
+    let selected_option = theme_picker.picker.selected_option();
     let meta_lines = vec![
         Line::from(vec![
             Span::styled(" Active ".to_owned(), Style::default().fg(palette.dim)),
@@ -872,10 +891,18 @@ fn render_theme_picker(
             Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
             Span::styled(source_label.to_owned(), Style::default().fg(palette.dim)),
         ]),
-        Line::styled(
-            " Preview updates this session immediately.".to_owned(),
-            Style::default().fg(palette.dim),
-        ),
+        Line::from(vec![
+            Span::styled(" Preview ".to_owned(), Style::default().fg(palette.dim)),
+            Span::styled(
+                selected_option.label().to_owned(),
+                Style::default().fg(palette.info),
+            ),
+            Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
+            Span::styled(
+                selected_option.detail().to_owned(),
+                Style::default().fg(palette.dim),
+            ),
+        ]),
     ];
     frame.render_widget(Paragraph::new(meta_lines), *meta_area);
 
@@ -959,9 +986,13 @@ fn render_session_picker(
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(6)])
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(6),
+        ])
         .split(inner_area);
-    let [search_area, list_area] = sections.as_ref() else {
+    let [search_area, summary_area, list_area] = sections.as_ref() else {
         return;
     };
 
@@ -984,11 +1015,54 @@ fn render_session_picker(
     let filtered_indices = session_picker.picker.filtered_indices();
     let visible_rows = usize::from(list_area.height.max(1));
     let scroll_offset = session_picker.picker.list_scroll_offset;
+    let filtered_count = filtered_indices.len();
+    let provisional_visible_end = scroll_offset
+        .saturating_add(visible_rows)
+        .min(filtered_count);
+    let provisional_has_more_above = scroll_offset > 0;
+    let provisional_has_more_below = provisional_visible_end < filtered_count;
+    let marker_rows =
+        usize::from(provisional_has_more_above) + usize::from(provisional_has_more_below);
+    let item_rows = visible_rows.saturating_sub(marker_rows).max(1);
+    let visible_end = scroll_offset.saturating_add(item_rows).min(filtered_count);
+    let has_more_above = scroll_offset > 0;
+    let has_more_below = visible_end < filtered_count;
     let visible_indices = filtered_indices
         .into_iter()
         .skip(scroll_offset)
-        .take(visible_rows)
+        .take(item_rows)
         .collect::<Vec<_>>();
+    let selected_position = if filtered_count == 0 {
+        0
+    } else {
+        session_picker
+            .picker
+            .selected_index
+            .min(filtered_count.saturating_sub(1))
+            + 1
+    };
+    let summary_label = if filtered_count == 0 {
+        format!(" {} · no matches", session_picker.picker.mode.title())
+    } else {
+        format!(
+            " {} {selected_position}/{filtered_count}",
+            session_picker.picker.mode.title()
+        )
+    };
+    let summary_line = Line::from(vec![
+        Span::styled(
+            summary_label,
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
+        Span::styled(
+            session_picker_summary_detail(session_picker.picker.mode, filtered_count),
+            Style::default().fg(palette.dim),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(summary_line), *summary_area);
 
     if visible_indices.is_empty() {
         let empty_text = Paragraph::new(vec![Line::from(Span::styled(
@@ -1001,6 +1075,14 @@ fn render_session_picker(
 
     let picker_mode = session_picker.picker.mode;
     let mut lines = Vec::new();
+    if has_more_above {
+        let above_count = scroll_offset;
+        let above_line = Line::styled(
+            format!("  ↑ {above_count} more"),
+            Style::default().fg(palette.dim),
+        );
+        lines.push(above_line);
+    }
     let locale = SessionPresentationLocale::detect_from_env();
     for (visible_row, session_index) in visible_indices.into_iter().enumerate() {
         let Some(session) = session_picker.picker.sessions.get(session_index) else {
@@ -1075,8 +1157,27 @@ fn render_session_picker(
         lines.push(line);
     }
 
+    if has_more_below {
+        let below_count = filtered_count.saturating_sub(visible_end);
+        let below_line = Line::styled(
+            format!("  ↓ {below_count} more"),
+            Style::default().fg(palette.dim),
+        );
+        lines.push(below_line);
+    }
+
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, *list_area);
+}
+
+fn session_picker_summary_detail(
+    picker_mode: state::SessionPickerMode,
+    filtered_count: usize,
+) -> String {
+    match picker_mode {
+        state::SessionPickerMode::Resume => format!("{filtered_count} visible sessions"),
+        state::SessionPickerMode::Subagents => format!("{filtered_count} active threads"),
+    }
 }
 
 fn session_picker_primary_label(
@@ -3186,6 +3287,10 @@ mod tests {
         assert!(text.contains("Auto"), "theme picker should list Auto");
         assert!(text.contains("Light"), "theme picker should list Light");
         assert!(
+            text.contains("Choose the text style"),
+            "theme picker should show codex-style intro copy"
+        );
+        assert!(
             text.contains("Preview"),
             "theme picker should explain preview"
         );
@@ -3715,6 +3820,10 @@ mod tests {
             "picker title should render: {text:?}"
         );
         assert!(
+            text.contains("Subagents 1/2"),
+            "picker summary should include position and count: {text:?}"
+        );
+        assert!(
             text.contains("Main thread"),
             "custom root thread label should render: {text:?}"
         );
@@ -3730,6 +3839,52 @@ mod tests {
             text.contains("gpt-5 · high"),
             "subagent provider label should render: {text:?}"
         );
+    }
+
+    #[test]
+    fn draw_session_picker_shows_more_markers_when_filtered_results_overflow() {
+        let backend = TestBackend::new(90, 14);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::SessionPicker);
+        let sessions = (0..10)
+            .map(|index| state::VisibleSessionSuggestion {
+                session_id: format!("delegate-{index}"),
+                label: Some(format!("Thread {index}")),
+                agent_presentation: None,
+                state: "running".to_owned(),
+                kind: "delegate_child".to_owned(),
+                task_phase: Some("running".to_owned()),
+                overdue: false,
+                pending_approval_count: 0,
+                attention_approval_count: 0,
+            })
+            .collect();
+        let session_picker = state::SessionPickerState {
+            mode: state::SessionPickerMode::Subagents,
+            sessions,
+            query: String::new(),
+            selected_index: 5,
+            list_scroll_offset: 3,
+        };
+        let shell = TestShell {
+            focus,
+            session_picker: Some(session_picker),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("↑"), "text={text:?}");
+        assert!(text.contains("↓"), "text={text:?}");
+        assert!(text.contains("Subagents 6/10"), "text={text:?}");
     }
 
     #[test]
