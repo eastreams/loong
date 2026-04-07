@@ -372,6 +372,167 @@ pub fn verify_jsonl_audit_journal(path: &Path) -> Result<AuditVerificationReport
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditRepairOutcome {
+    Healthy,
+    Repaired,
+    Refused { line: usize, reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditRepairReport {
+    pub total_events: usize,
+    pub repaired_events: usize,
+    pub already_valid_events: usize,
+    pub outcome: AuditRepairOutcome,
+}
+
+pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, AuditError> {
+    if !path.exists() {
+        return Ok(AuditRepairReport {
+            total_events: 0,
+            repaired_events: 0,
+            already_valid_events: 0,
+            outcome: AuditRepairOutcome::Healthy,
+        });
+    }
+
+    let verify_report = verify_jsonl_audit_journal(path)?;
+    if verify_report.valid {
+        return Ok(AuditRepairReport {
+            total_events: verify_report.total_events,
+            repaired_events: 0,
+            already_valid_events: verify_report.verified_events,
+            outcome: AuditRepairOutcome::Healthy,
+        });
+    }
+
+    let file = File::open(path).map_err(|error| {
+        AuditError::Sink(format!(
+            "failed to open audit journal `{}` for repair: {error}",
+            path.display()
+        ))
+    })?;
+    let reader = BufReader::new(file);
+    let mut repaired_lines: Vec<Vec<u8>> = Vec::new();
+    let mut previous_hash: Option<String> = None;
+    let mut total_events = 0usize;
+    let mut repaired_events = 0usize;
+    let mut already_valid_events = 0usize;
+
+    for (index, line_result) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = line_result.map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to read audit journal `{}` at line {line_number}: {error}",
+                path.display()
+            ))
+        })?;
+        if line.trim().is_empty() {
+            repaired_lines.push(b"\n".to_vec());
+            continue;
+        }
+
+        total_events += 1;
+        let line_label = format!("line {line_number}");
+        let persisted = decode_persisted_audit_event_line(&line, path, &line_label)?;
+        let event = persisted.event;
+
+        if let Some(integrity) = persisted.integrity.as_ref() {
+            if integrity.algorithm.trim() != "sha256" {
+                return Ok(AuditRepairReport {
+                    total_events,
+                    repaired_events,
+                    already_valid_events,
+                    outcome: AuditRepairOutcome::Refused {
+                        line: line_number,
+                        reason: format!(
+                            "unsupported integrity algorithm `{}`",
+                            integrity.algorithm
+                        ),
+                    },
+                });
+            }
+
+            let expected_hash =
+                compute_audit_event_entry_hash(&event, previous_hash.as_deref(), path)?;
+
+            if integrity.prev_hash != previous_hash || integrity.entry_hash != expected_hash {
+                return Ok(AuditRepairReport {
+                    total_events,
+                    repaired_events,
+                    already_valid_events,
+                    outcome: AuditRepairOutcome::Refused {
+                        line: line_number,
+                        reason: "hash mismatch — journal may be tampered".to_owned(),
+                    },
+                });
+            }
+
+            previous_hash = Some(integrity.entry_hash.clone());
+            already_valid_events += 1;
+            let mut encoded = line.into_bytes();
+            encoded.push(b'\n');
+            repaired_lines.push(encoded);
+        } else {
+            let entry_hash =
+                compute_audit_event_entry_hash(&event, previous_hash.as_deref(), path)?;
+            let repaired = event_with_integrity(event, previous_hash.clone(), entry_hash.clone());
+            let encoded = serialize_audit_event_line(&repaired, path)?;
+            repaired_lines.push(encoded);
+            previous_hash = Some(entry_hash);
+            repaired_events += 1;
+        }
+    }
+
+    if repaired_events == 0 {
+        return Ok(AuditRepairReport {
+            total_events,
+            repaired_events: 0,
+            already_valid_events,
+            outcome: AuditRepairOutcome::Healthy,
+        });
+    }
+
+    let temp_path = path.with_extension("jsonl.repair-tmp");
+    {
+        let mut temp_file = File::create(&temp_path).map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to create repair temp file `{}`: {error}",
+                temp_path.display()
+            ))
+        })?;
+        for line_bytes in &repaired_lines {
+            temp_file.write_all(line_bytes).map_err(|error| {
+                AuditError::Sink(format!(
+                    "failed to write repair temp file `{}`: {error}",
+                    temp_path.display()
+                ))
+            })?;
+        }
+        temp_file.flush().map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to flush repair temp file `{}`: {error}",
+                temp_path.display()
+            ))
+        })?;
+    }
+
+    fs::rename(&temp_path, path).map_err(|error| {
+        AuditError::Sink(format!(
+            "failed to replace journal with repaired file `{}`: {error}",
+            path.display()
+        ))
+    })?;
+
+    Ok(AuditRepairReport {
+        total_events,
+        repaired_events,
+        already_valid_events,
+        outcome: AuditRepairOutcome::Repaired,
+    })
+}
+
 fn serialize_audit_event_line(
     event: &PersistedAuditEvent,
     journal_path: &Path,

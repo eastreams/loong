@@ -5,7 +5,10 @@ use std::path::Path;
 
 use clap::Subcommand;
 
-use crate::kernel::{AuditEvent, AuditEventKind, PluginTrustTier, verify_jsonl_audit_journal};
+use crate::kernel::{
+    AuditEvent, AuditEventKind, AuditRepairOutcome, PluginTrustTier,
+    repair_jsonl_audit_journal, verify_jsonl_audit_journal,
+};
 use loongclaw_spec::CliResult;
 use serde_json::{Map, Value, json};
 
@@ -103,6 +106,8 @@ pub enum AuditCommands {
     },
     /// Verify the integrity chain of the durable audit journal
     Verify,
+    /// Repair legacy journals missing integrity sidecars
+    Repair,
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +272,14 @@ pub enum AuditCommandResult {
         first_invalid_line: Option<usize>,
         reason: Option<String>,
     },
+    Repair {
+        total_events: usize,
+        repaired_events: usize,
+        already_valid_events: usize,
+        outcome: String,
+        refused_line: Option<usize>,
+        refused_reason: Option<String>,
+    },
 }
 
 pub fn run_audit_cli(options: AuditCommandOptions) -> CliResult<()> {
@@ -416,13 +429,27 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
             None,
             "audit verify",
         ),
+        AuditCommands::Repair => (
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "audit repair",
+        ),
     };
-    let _limit = if matches!(command, AuditCommands::Verify) {
+    let _limit = if matches!(command, AuditCommands::Verify | AuditCommands::Repair) {
         0
     } else {
         validate_audit_limit(limit, command_name)?
     };
-    if !matches!(command, AuditCommands::Verify) {
+    if !matches!(command, AuditCommands::Verify | AuditCommands::Repair) {
         validate_audit_time_range(since_epoch_s_filter, until_epoch_s_filter, command_name)?;
     }
     let filter = AuditEventFilter {
@@ -500,6 +527,26 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
                 last_entry_hash: report.last_entry_hash,
                 first_invalid_line: report.first_invalid_line,
                 reason: report.reason,
+            }
+        }
+        AuditCommands::Repair => {
+            ensure_audit_journal_preflight(&config.audit, &journal_path)?;
+            let report = repair_jsonl_audit_journal(&journal_path)
+                .map_err(|error| format!("repair audit journal failed: {error}"))?;
+            let (outcome_str, refused_line, refused_reason) = match &report.outcome {
+                AuditRepairOutcome::Healthy => ("healthy".to_owned(), None, None),
+                AuditRepairOutcome::Repaired => ("repaired".to_owned(), None, None),
+                AuditRepairOutcome::Refused { line, reason } => {
+                    ("refused".to_owned(), Some(*line), Some(reason.clone()))
+                }
+            };
+            AuditCommandResult::Repair {
+                total_events: report.total_events,
+                repaired_events: report.repaired_events,
+                already_valid_events: report.already_valid_events,
+                outcome: outcome_str,
+                refused_line,
+                refused_reason,
             }
         }
     };
@@ -838,6 +885,26 @@ pub fn audit_cli_json(execution: &AuditCommandExecution) -> Value {
             payload.insert("last_entry_hash".to_owned(), json!(last_entry_hash));
             payload.insert("first_invalid_line".to_owned(), json!(first_invalid_line));
             payload.insert("reason".to_owned(), json!(reason));
+            Value::Object(payload)
+        }
+        AuditCommandResult::Repair {
+            total_events,
+            repaired_events,
+            already_valid_events,
+            outcome,
+            refused_line,
+            refused_reason,
+        } => {
+            let mut payload = audit_cli_base_json(execution, "repair");
+            payload.insert("total_events".to_owned(), json!(total_events));
+            payload.insert("repaired_events".to_owned(), json!(repaired_events));
+            payload.insert(
+                "already_valid_events".to_owned(),
+                json!(already_valid_events),
+            );
+            payload.insert("outcome".to_owned(), json!(outcome));
+            payload.insert("refused_line".to_owned(), json!(refused_line));
+            payload.insert("refused_reason".to_owned(), json!(refused_reason));
             Value::Object(payload)
         }
     }
@@ -1733,6 +1800,27 @@ pub fn render_audit_cli_text(execution: &AuditCommandExecution) -> CliResult<Str
                     .unwrap_or_else(|| "-".to_owned()),
                 reason.as_deref().unwrap_or("-")
             ));
+        }
+        AuditCommandResult::Repair {
+            total_events,
+            repaired_events,
+            already_valid_events,
+            outcome,
+            refused_line,
+            refused_reason,
+        } => {
+            lines.push(format!(
+                "audit repair config={} journal={} total_events={} repaired_events={} already_valid_events={} outcome={}",
+                execution.resolved_config_path,
+                execution.journal_path,
+                total_events,
+                repaired_events,
+                already_valid_events,
+                outcome
+            ));
+            if let (Some(line), Some(reason)) = (refused_line, refused_reason) {
+                lines.push(format!("refused_line={line} refused_reason={reason}"));
+            }
         }
     }
     Ok(lines.join("\n"))
