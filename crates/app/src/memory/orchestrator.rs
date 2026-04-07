@@ -377,21 +377,7 @@ pub async fn run_compact_stage(
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
 ) -> Result<StageDiagnostics, String> {
-    let selected_system_id = super::registered_memory_system_id(Some(config.selected_system_id()))
-        .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
-
-    match selected_system_id.as_str() {
-        DEFAULT_MEMORY_SYSTEM_ID => {
-            run_builtin_compact_stage(session_id, workspace_root, config).await
-        }
-        _ => Ok(skipped_stage_diagnostics(
-            MemoryStageFamily::Compact,
-            Some(
-                "memory system is registered but has no compact-stage execution adapter yet"
-                    .to_owned(),
-            ),
-        )),
-    }
+    run_builtin_compact_stage(session_id, workspace_root, config).await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -1636,7 +1622,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
-    async fn compact_stage_skips_for_registry_selected_system_without_executor() {
+    async fn compact_stage_remains_runtime_owned_for_registry_selected_system_without_executor() {
         register_memory_system("registry-retrieve-only", || {
             Box::new(RegistryRetrieveOnlyMemorySystem)
         })
@@ -1677,7 +1663,7 @@ mod tests {
         .expect("run compact stage");
 
         assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
-        assert_eq!(diagnostics.outcome, StageOutcome::Skipped);
+        assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);
         assert!(!diagnostics.fallback_activated);
 
         let _ = std::fs::remove_file(&db_path);

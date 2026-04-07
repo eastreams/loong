@@ -471,28 +471,7 @@ impl MemorySystem for WorkspaceRecallMemorySystem {
         entries: Vec<MemoryContextEntry>,
         _config: &MemoryRuntimeConfig,
     ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
-        let mut profile_entries = Vec::new();
-        let mut retrieved_entries = Vec::new();
-        let mut summary_entries = Vec::new();
-        let mut history_entries = Vec::new();
-
-        for entry in entries {
-            match entry.kind {
-                MemoryContextKind::Profile => profile_entries.push(entry),
-                MemoryContextKind::RetrievedMemory => retrieved_entries.push(entry),
-                MemoryContextKind::Summary => summary_entries.push(entry),
-                MemoryContextKind::Turn => history_entries.push(entry),
-            }
-        }
-
-        let has_retrieved_entries = !retrieved_entries.is_empty();
-        let mut ranked_entries = Vec::new();
-        ranked_entries.extend(profile_entries);
-        ranked_entries.extend(retrieved_entries);
-        if !has_retrieved_entries {
-            ranked_entries.extend(summary_entries);
-        }
-        ranked_entries.extend(history_entries);
+        let ranked_entries = rank_recall_first_entries(entries);
 
         Ok(Some(ranked_entries))
     }
@@ -770,6 +749,57 @@ mod tests {
         assert_eq!(
             kinds,
             vec![MemoryContextKind::RetrievedMemory, MemoryContextKind::Turn]
+        );
+    }
+
+    #[test]
+    fn recall_first_rank_stage_drops_summary_when_retrieved_entries_exist() {
+        let entries = vec![
+            MemoryContextEntry {
+                kind: MemoryContextKind::Summary,
+                role: "system".to_owned(),
+                content: "summary".to_owned(),
+                provenance: Vec::new(),
+            },
+            MemoryContextEntry {
+                kind: MemoryContextKind::Profile,
+                role: "system".to_owned(),
+                content: "profile".to_owned(),
+                provenance: Vec::new(),
+            },
+            MemoryContextEntry {
+                kind: MemoryContextKind::RetrievedMemory,
+                role: "system".to_owned(),
+                content: "retrieved".to_owned(),
+                provenance: Vec::new(),
+            },
+            MemoryContextEntry {
+                kind: MemoryContextKind::Turn,
+                role: "user".to_owned(),
+                content: "turn".to_owned(),
+                provenance: Vec::new(),
+            },
+        ];
+
+        let runtime_config = MemoryRuntimeConfig::default();
+        let ranked_entries_result =
+            RecallFirstMemorySystem.run_rank_stage(entries, &runtime_config);
+        let ranked_entries_option = ranked_entries_result.expect("rank stage should succeed");
+        let ranked_entries =
+            ranked_entries_option.expect("recall-first rank stage should return entries");
+
+        let kinds = ranked_entries
+            .into_iter()
+            .map(|entry| entry.kind)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            kinds,
+            vec![
+                MemoryContextKind::Profile,
+                MemoryContextKind::RetrievedMemory,
+                MemoryContextKind::Turn,
+            ]
         );
     }
 }
