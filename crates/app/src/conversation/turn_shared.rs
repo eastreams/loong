@@ -1707,7 +1707,12 @@ fn render_tool_failure_repair_guidance(
 }
 
 fn suggested_shell_command_name(command: &str) -> String {
-    let candidate = first_shell_command_segment(command);
+    let candidate = first_shell_command_segment(command).trim();
+    let candidate = if !candidate.contains('/') && !candidate.contains('\\') {
+        candidate.split_whitespace().next().unwrap_or(candidate)
+    } else {
+        candidate
+    };
     candidate
         .rsplit(['/', '\\'])
         .next()
@@ -2698,6 +2703,31 @@ mod tests {
 
         assert!(user_prompt.contains("Repair guidance for shell.exec"));
         assert!(user_prompt.contains("The failed request used `ls -la`; retry with `ls`"));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_strips_quoted_shell_arguments_from_repair_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"\"ls -la\" "}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "list the current directory",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("The failed request used `\"ls -la\" `; retry with `ls`"));
     }
 
     #[test]
