@@ -13619,6 +13619,46 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
     }
 }
 
+#[cfg(feature = "tool-shell")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_marks_repairable_shell_preflight_failure_retryable() {
+    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnFailureKind, TurnResult};
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let engine = TurnEngine::new(1);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![provider_tool_intent(
+            "shell.exec",
+            json!({"command": "/bin/echo", "args": ["hello"]}),
+            "s1",
+            "t1",
+            "c1",
+        )],
+        raw_meta: Value::Null,
+    };
+
+    let result = engine.execute_turn(&turn, &harness.kernel_ctx).await;
+
+    match result {
+        TurnResult::ToolError(failure) => {
+            assert_eq!(failure.kind, TurnFailureKind::Retryable);
+            assert_eq!(failure.code, "tool_preflight_denied");
+            assert!(failure.retryable);
+            assert!(failure.reason.contains("tool input needs repair"));
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolError, got {:?}", other)
+        }
+    }
+}
+
 #[test]
 fn kernel_error_classification_table_is_stable() {
     use crate::conversation::turn_engine::{KernelFailureClass, classify_kernel_error};

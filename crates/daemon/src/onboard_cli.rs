@@ -7615,12 +7615,24 @@ mod tests {
         assert!(error.contains("unknown-provider"));
     }
 
+    fn clear_web_search_credential_envs(env: &mut ScopedEnv) {
+        for descriptor in mvp::config::web_search_provider_descriptors() {
+            if let Some(default_env) = descriptor.default_api_key_env {
+                env.remove(default_env);
+            }
+            for env_name in descriptor.api_key_env_names {
+                env.remove(*env_name);
+            }
+        }
+    }
+
     #[test]
     fn recommend_web_search_provider_from_available_credentials_prefers_unique_ready_provider() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("PERPLEXITY_API_KEY", "perplexity-test-token");
 
         let recommendation = recommend_web_search_provider_from_available_credentials(&config)
@@ -7647,6 +7659,7 @@ mod tests {
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
         env.set("PERPLEXITY_API_KEY", "perplexity-test-token");
 
@@ -7700,6 +7713,7 @@ mod tests {
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
 
         let mut ui = TestOnboardUi::with_inputs([""]);
@@ -7812,6 +7826,8 @@ mod tests {
             skip_model_probe: false,
         };
         let config = mvp::config::LoongClawConfig::default();
+        let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         let recommendation = WebSearchProviderRecommendation {
             provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
             reason: "domestic locale or timezone was detected".to_owned(),
