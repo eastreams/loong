@@ -90,10 +90,7 @@ impl ImportEnvironmentGuard {
             }
         }
         if !explicit_loongclaw_home {
-            saved.push((
-                "LOONG_HOME".to_owned(),
-                std::env::var_os("LOONG_HOME"),
-            ));
+            saved.push(("LOONG_HOME".to_owned(), std::env::var_os("LOONG_HOME")));
             match home_override {
                 Some(home) => unsafe {
                     std::env::set_var("LOONG_HOME", home.join(mvp::config::HOME_DIR_NAME))
