@@ -1,0 +1,62 @@
+---
+title: Qianfan
+description: Configure the Qianfan provider profile in Loong.
+---
+
+# Qianfan
+
+Use this when your team already runs on Qianfan and you want that vendor family to stay explicit in Loong config instead of disappearing behind a generic compatibility route.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `qianfan` |
+| Provider group | Direct Hosted Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | QIANFAN_API_KEY |
+| Aliases | `qianfan_compatible`, `baidu` |
+| Default base URL | `https://qianfan.baidubce.com` |
+| Request endpoint | `https://qianfan.baidubce.com/v2/chat/completions` |
+| Models endpoint | `https://qianfan.baidubce.com/v2/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "qianfan"
+
+[providers.qianfan]
+kind = "qianfan"
+api_key = { env = "QIANFAN_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `QIANFAN_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://qianfan.baidubce.com/v2/chat/completions` |
+| Primary model-catalog route | `https://qianfan.baidubce.com/v2/models` |
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

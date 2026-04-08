@@ -201,13 +201,13 @@ detect_release_host_platform() {
 prefix="${HOME}/.local/bin"
 run_onboard=0
 install_source=0
-release_version="${LOONGCLAW_INSTALL_VERSION:-latest}"
-release_repo="${LOONGCLAW_INSTALL_REPO:-loongclaw-ai/loongclaw}"
-release_base_url="${LOONGCLAW_INSTALL_RELEASE_BASE_URL:-https://github.com/${release_repo}/releases}"
-target_libc="${LOONGCLAW_INSTALL_TARGET_LIBC:-auto}"
+release_version="${LOONG_INSTALL_VERSION:-latest}"
+release_repo="${LOONG_INSTALL_REPO:-eastreams/loong}"
+release_base_url="${LOONG_INSTALL_RELEASE_BASE_URL:-https://github.com/${release_repo}/releases}"
+target_libc="${LOONG_INSTALL_TARGET_LIBC:-auto}"
 package_name="loong"
 bin_name="loong"
-legacy_bin_name="loongclaw"
+legacy_bin_name="loong"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -298,7 +298,7 @@ resolve_latest_release_tag() {
   if ! response="$(
     curl -fsSL \
       -H 'Accept: application/vnd.github+json' \
-      -H 'User-Agent: LoongClaw-Install' \
+      -H 'User-Agent: Loong-Install' \
       "${api_url}"
   )"; then
     print_missing_release_guidance
@@ -405,7 +405,7 @@ probe_install_duckduckgo_route() {
     --retry 0 \
     --max-time 2 \
     -o /dev/null \
-    "https://html.duckduckgo.com/html/?q=loongclaw" >/dev/null 2>&1
+    "https://html.duckduckgo.com/html/?q=loong" >/dev/null 2>&1
 }
 
 probe_install_tavily_route() {
@@ -422,7 +422,7 @@ probe_install_tavily_route() {
       -o /dev/null \
       -w '%{http_code}' \
       -H 'Content-Type: application/json' \
-      -d '{"query":"loongclaw","max_results":1}' \
+      -d '{"query":"loong","max_results":1}' \
       "https://api.tavily.com/search" 2>/dev/null || true
   )"
 
@@ -768,7 +768,7 @@ install_from_source() {
     repo_root="$(cd "${script_dir}/.." && pwd)"
   fi
   if [[ -z "${repo_root}" ]]; then
-    echo "error: --source requires running this installer from a loongclaw repository checkout" >&2
+    echo "error: --source requires running this installer from a loong repository checkout" >&2
     exit 1
   fi
 
@@ -780,7 +780,7 @@ install_from_source() {
   (
     cd "${repo_root}"
     LOONGCLAW_RELEASE_BUILD=1 \
-      cargo build -p loongclaw --bin "${bin_name}" --release --locked
+      cargo build -p loong --bin "${bin_name}" --release --locked
   )
 
   source_binary="${repo_root}/target/release/${primary_binary_name}"
@@ -856,7 +856,7 @@ else
 fi
 
 printf '==> Installed loong to %s\n' "${prefix}/${bin_name}"
-printf '==> Installed compatible loongclaw command to %s\n' "${prefix}/${legacy_bin_name}"
+printf '==> Installed compatible loong command to %s\n' "${prefix}/${legacy_bin_name}"
 
 if [[ "${run_onboard}" -eq 1 ]]; then
   printf '==> Running guided onboarding\n'

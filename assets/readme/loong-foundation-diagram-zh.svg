@@ -1,0 +1,93 @@
+<svg width="1280" height="960" viewBox="0 0 1280 960" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Loong 基座图</title>
+  <desc id="desc">展示 Loong 如何帮助团队在稳定的 Rust 内核之上塑造垂域智能体。</desc>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
+      <polygon points="0 0, 10 5, 0 10" fill="#9CA9B8" />
+    </marker>
+  </defs>
+
+  <rect width="1280" height="960" fill="#FCFDFE" />
+  <rect x="16" y="16" width="1248" height="928" rx="24" fill="#FCFDFE" stroke="#DCE5EE" stroke-width="2" />
+
+  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong 如何成为垂域智能体基座</text>
+  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">从可运行的 Rust 智能体基座出发，塑造领域智能体，无需重写内核。</text>
+
+  <rect x="60" y="160" width="340" height="110" rx="16" fill="#E7F0FF" stroke="#93B5E2" stroke-width="1.5" />
+  <text x="84" y="196" fill="#243E63" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">构建者与团队</text>
+  <text x="84" y="224" fill="#48617A" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="84" dy="0">交付目标、信任边界</tspan>
+    <tspan x="84" dy="21">与工作流设计</tspan>
+  </text>
+
+  <rect x="470" y="160" width="340" height="110" rx="16" fill="#E8F5EC" stroke="#A8D2B2" stroke-width="1.5" />
+  <text x="494" y="196" fill="#224A36" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">领域知识</text>
+  <text x="494" y="224" fill="#4D6858" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="494" dy="0">策略、提示词、技能</tspan>
+    <tspan x="494" dy="21">与运行模式</tspan>
+  </text>
+
+  <rect x="880" y="160" width="340" height="110" rx="16" fill="#FFF1E5" stroke="#EDC099" stroke-width="1.5" />
+  <text x="904" y="196" fill="#5A351D" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">交付界面</text>
+  <text x="904" y="224" fill="#735238" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="904" dy="0">CLI、通道、运维流程</tspan>
+    <tspan x="904" dy="21">与未来产品</tspan>
+  </text>
+
+  <line x1="230" y1="270" x2="230" y2="320" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="640" y1="270" x2="640" y2="320" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1050" y1="270" x2="1050" y2="320" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+
+  <rect x="76" y="346" width="308" height="108" rx="16" fill="#F4F7FB" stroke="#D5DFEA" stroke-width="1.5" />
+  <text x="100" y="382" fill="#2B4662" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">研究智能体</text>
+  <text x="100" y="410" fill="#566C82" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="100" dy="0">检索、综合</tspan>
+    <tspan x="100" dy="21">与受控行动</tspan>
+  </text>
+
+  <rect x="486" y="346" width="308" height="108" rx="16" fill="#F4F7FB" stroke="#D5DFEA" stroke-width="1.5" />
+  <text x="510" y="382" fill="#2B4662" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">服务智能体</text>
+  <text x="510" y="410" fill="#566C82" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="510" dy="0">审批、支持</tspan>
+    <tspan x="510" dy="21">与可重复工作流</tspan>
+  </text>
+
+  <rect x="896" y="346" width="308" height="108" rx="16" fill="#F4F7FB" stroke="#D5DFEA" stroke-width="1.5" />
+  <text x="920" y="382" fill="#2B4662" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">运维智能体</text>
+  <text x="920" y="410" fill="#566C82" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="920" dy="0">工具、诊断</tspan>
+    <tspan x="920" dy="21">与受控执行</tspan>
+  </text>
+
+  <line x1="230" y1="454" x2="230" y2="516" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="640" y1="454" x2="640" y2="516" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1050" y1="454" x2="1050" y2="516" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+
+  <rect x="60" y="534" width="760" height="78" rx="16" fill="#FFF7D8" stroke="#D8B54B" stroke-width="1.5" />
+  <text x="440" y="568" text-anchor="middle" fill="#402B00" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">塑形层</text>
+  <text x="440" y="592" text-anchor="middle" fill="#6C5720" font-size="15" font-family="Arial, Helvetica, sans-serif">包、提示词、配置、技能</text>
+
+  <rect x="860" y="534" width="360" height="78" rx="16" fill="#EEF3F8" stroke="#B7C6D6" stroke-width="1.5" />
+  <text x="1040" y="568" text-anchor="middle" fill="#29415C" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Rust 内核</text>
+  <text x="1040" y="592" text-anchor="middle" fill="#5B7188" font-size="15" font-family="Arial, Helvetica, sans-serif">稳定、编译型基础</text>
+
+  <line x1="640" y1="612" x2="640" y2="646" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+
+  <rect x="60" y="664" width="1160" height="252" rx="18" fill="#F9FBFD" stroke="#D7DFE8" stroke-width="2" />
+  <text x="84" y="706" fill="#122033" font-size="26" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong 基座</text>
+
+  <rect x="80" y="726" width="1120" height="38" rx="10" fill="#FFF7D8" />
+  <text x="100" y="750" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">治理层：策略、审批、审计与安全态势</text>
+
+  <rect x="80" y="772" width="1120" height="38" rx="10" fill="#E7F0FF" />
+  <text x="100" y="796" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">运行时层：CLI、通道、浏览器、文件、Shell 与 Web 工具</text>
+
+  <rect x="80" y="818" width="1120" height="38" rx="10" fill="#E8F5EC" />
+  <text x="100" y="842" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">上下文与记忆：配置、摘要、迁移与规范历史</text>
+
+  <rect x="80" y="864" width="1120" height="38" rx="10" fill="#FFF1E5" />
+  <text x="100" y="888" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">供应方与集成：模型后端、适配器与外部系统</text>
+
+  <text x="640" y="932" text-anchor="middle" fill="#73879B" font-size="18" font-family="Arial, Helvetica, sans-serif" font-style="italic" font-weight="600">替换接缝，而非内核。</text>
+</svg>

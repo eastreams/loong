@@ -211,7 +211,7 @@ def semantic_regression_cases() -> list[dict]:
     )
     cases.append(
         {
-            "path": "docs/design-docs/provider-runtime-roadmap.md",
+            "path": "docs/design-docs/index.md",
             "labels": ["documentation", "spec"],
         }
     )
@@ -622,7 +622,7 @@ def render_bug_template(taxonomy: dict) -> str:
     options = render_surface_options(taxonomy)
     return f"""\
 {GENERATED_HEADER}name: Bug Report
-description: Report a reproducible defect in LoongClaw's active `dev` branch or latest stable release.
+description: Report a reproducible defect in Loong's active `dev` branch or latest stable release.
 title: "[Bug]: "
 labels:
   - bug
@@ -675,7 +675,7 @@ body:
     attributes:
       label: Summary
       description: What happened?
-      placeholder: After updating provider profiles, LoongClaw selects the wrong active provider for a channel turn.
+      placeholder: After updating provider profiles, Loong selects the wrong active provider for a channel turn.
     validations:
       required: true
 
@@ -991,6 +991,17 @@ def render_docs_reference(taxonomy: dict) -> str:
 {MARKDOWN_GENERATED_HEADER}# GitHub Collaboration Reference
 
 This document defines the active GitHub collaboration baseline for the `dev` branch.
+It is repository-native support material for maintainers, issue triage, and
+GitHub automation. Normal contributors should usually start with
+`CONTRIBUTING.md` or the public contribution pages under `site/`.
+
+## Route By Audience
+
+| If you are trying to... | Start here | Why |
+| --- | --- | --- |
+| follow the normal public contribution path | [`../../site/build-on-loong/contribution-workflow.mdx`](../../site/build-on-loong/contribution-workflow.mdx) and [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) | those are the primary contributor-facing guides |
+| understand where your background is most useful | [`contribution-areas.md`](contribution-areas.md) | this is the contributor-facing reference |
+| inspect maintainer intake wiring, branch governance, labels, and automation | this file | this is the repository support reference used by templates and automation |
 
 ## Active Branch Model
 

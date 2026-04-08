@@ -1,6 +1,27 @@
-# LoongClaw Roadmap
+# Loong Roadmap
 
 Last updated: 2026-03-29
+
+The reader-facing summary for this material lives in
+[`../site/reference/roadmap-and-product.mdx`](../site/reference/roadmap-and-product.mdx).
+This file remains the repository-native roadmap source for maintainers and
+source readers.
+
+## Route By Audience
+
+| If you are trying to... | Start here |
+| --- | --- |
+| read the public roadmap and product summary first | [`../site/reference/roadmap-and-product.mdx`](../site/reference/roadmap-and-product.mdx) |
+| inspect the full repository-native roadmap source | this file |
+| understand the broader repository docs layering | [`README.md`](README.md) |
+
+## Read This File When
+
+- you need the full repository-native execution roadmap instead of the public summary
+- you are reviewing stage exit criteria, not just public positioning
+- you are checking whether a roadmap item is already delivered, in progress, or still next
+
+## How To Read This File
 
 This roadmap is execution-focused. Every stage has:
 
@@ -8,13 +29,29 @@ This roadmap is execution-focused. Every stage has:
 - explicit security and stability gates
 - test and CI acceptance criteria
 
+## Current Stage Summary
+
+| Stage | Status | Use the detailed section when... |
+| --- | --- | --- |
+| Stage 0: Kernel Contract Freeze | Done | you need the original core-boundary baseline |
+| Stage 1: Baseline Security & Governance | In Progress | you are working on policy, approval, scan, or audit hardening |
+| Stage 2: Safe Hotplug Runtime | Next | you are planning runtime isolation or hotplug hardening work |
+| Stage 3: Autonomous Integration Expansion | In Progress | you are working on protocol, provider, channel, or discovery expansion |
+| Stage 4: Community Plugin Supply Chain | Next | you are working on package intake, trust, or plugin verification |
+| Stage 5: Vertical Pack Productization | Next | you are shaping reusable vertical-pack authoring and hardening flows |
+| Stage M: End-User MVP Product Layer | In Progress | you are touching the first-run product surface, local operator UX, or gateway-owned delivery |
+
+The discussion section at the end stays intentionally narrower than the internal
+backlog. It only keeps cross-cutting public follow-up items that still matter to
+source readers.
+
 ## North Star
 
 Build a layered Agentic OS kernel that is:
 
 - minimal at the core
 - strong at policy and safety boundaries
-- deeply integrable in both directions (others integrate LoongClaw, LoongClaw integrates others)
+- deeply integrable in both directions (others integrate Loong, Loong integrates others)
 - hot-pluggable and community-extensible without core mutation
 - customizable into vertical domain systems through declarative packs
 
@@ -85,10 +122,10 @@ Exit criteria:
 
 ## Stage 2: Safe Hotplug Runtime (Next)
 
-Status: in progress
+Status: next
 Focus: runtime-grade isolation for untrusted extension execution.
 
-Delivered in current baseline:
+Current baseline already in place:
 
 - WASM runtime execution lane wired into `bridge_execution` with Wasmtime backend.
 - Core-module WASM host ABI v0 for plugin data exchange:
@@ -136,7 +173,9 @@ Acceptance criteria:
 Status: in progress
 Focus: dynamic provider/channel integration without hardcoding.
 
-Delivered in current baseline:
+Current baseline already in place:
+
+### Protocol Foundation And Bridge Contract
 
 - protocol foundation crate (`crates/protocol`) with:
   - transport contract (`Transport` trait + typed frame envelopes)
@@ -145,134 +184,86 @@ Delivered in current baseline:
     auth/capability gates before handler dispatch
   - json-line stream transport (`JsonLineTransport`) for stdio/pipe integration
     with deterministic decode/error handling and close semantics
-  - daemon `process_stdio` bridge now executes through protocol json-line frames
-    (request/response method + payload envelope), with runtime evidence
-    (`transport_kind`, request/response frame metadata) and deterministic
-    failure surfacing for malformed frame responses
-  - daemon `process_stdio` bridge hardening:
-    - protocol route authorization gate before process execution
-    - response contract checks (method/id must match request)
-    - bounded send/close/recv/exit timeouts (`process_timeout_ms`)
-  - daemon `http_json` bridge hardening:
-    - protocol route authorization gate before HTTP request
-    - protocol runtime evidence (`request_method/id`, required capability)
-    - optional strict response contract mode (`http_enforce_protocol_contract`)
-      validating response `method` + `id`
-    - bounded HTTP timeout parsing with deterministic clamp (`http_timeout_ms`)
-  - shared protocol context builder for bridge executors to keep
-    authorization/route semantics consistent across transport lanes
-  - shared runtime evidence appender for protocol request/route/capability
-    fields to keep bridge telemetry schemas aligned across executors
-  - bridge protocol helpers split into a dedicated module include
-    (`spec_bridge_protocol.inc.rs`) to reduce spec runtime file growth
-  - bridge-focused spec runtime tests split into dedicated module
-    (`tests/spec_runtime_bridge.rs`) to reduce test-file maintenance debt
-  - typed bridge runtime evidence structs with shared serialization path to
-    reduce ad-hoc JSON field drift across executors
-  - explicit runtime evidence state variants (`BaseOnly`/`RequestOnly`/
-    `Response` or `Execution`) to avoid impossible field combinations
-  - strict/lenient custom route control to avoid ad-hoc string dispatch at call sites
-  - linked in-memory `ChannelTransport` primitive with:
-    - bounded queue backpressure
-    - explicit close semantics
-    - deterministic async transport tests (roundtrip, close behavior, backpressure)
-- `tool_search` operation for runtime tool discovery over:
-  - loaded providers in integration catalog
-  - scanned-but-not-absorbed plugin descriptors
-  - explicit trust-aware filtering via query prefixes (`trust:official`, `tier:verified-community`)
-    and structured `trust_tiers` spec fields for deterministic operator workflows
-  - operator-visible `trust_filter_summary` output so filtered scope and fail-closed
-    conflicts are auditable in `run-spec` reports
-  - top-level `tool_search_summary` on spec run reports so operators can review
-    trust scope and top matches without digging through raw `outcome.results`
-  - `run-spec --render-summary` stderr rendering for operator-facing trust review
-    and discovery summaries without breaking stdout JSON consumers
-  - typed audit emission for trust-aware discovery (`ToolSearchEvaluated`) so
-    audit triage can flag conflicting trust filters and trust-filtered empty
-    result sets
-  - operator-facing audit summary hints (`last_triage_label`,
-    `last_triage_summary`, `last_triage_hint`) so trust-aware discovery failures
-    remain actionable after the original `run-spec` output is gone
-  - audit browser filters (`audit recent/summary --kind`, `--triage-label`) so
-    operators can inspect trust-sensitive discovery failures without manually
-    scanning unrelated audit history
-  - dedicated `audit discovery` operator view so trust-aware tool search
-    failures can be triaged by query substring, requested/effective trust tier,
-    and last filtered discovery context without hand-composing event-kind
-    filters
-  - inclusive audit time-window filters (`--since-epoch-s`,
-    `--until-epoch-s`) across recent/summary/discovery so retained operator
-    review can isolate a single rollout or incident window
-  - pack/agent scoped audit filters (`--pack-id`, `--agent-id`) so retained
-    review can collapse to one workload or one operator session without raw
-    journal post-processing
-  - event/token scoped audit drill-down (`--event-id`, `--token-id`) across
-    recent/summary/discovery so operators can isolate one retained event or
-    follow a token across `TokenIssued`, `TokenRevoked`, and
-    `AuthorizationDenied` without journal post-processing
-  - grouped `audit summary --group-by pack|agent|token` rollups so retained
-    audit windows can be collapsed into per-identity event/triage summaries
-    before operators jump into one incident trail
-  - grouped `audit discovery --group-by pack|agent` rollups so trust-aware
-    tool-search history can be collapsed into per-workload trust/triage
-    summaries before operators inspect one filtered event slice
-  - grouped discovery `drill_down_command` handoff plus `audit recent`
-    trust-aware filters (`--query-contains`, `--trust-tier`) so grouped
-    hotspots can be replayed directly as exact retained event windows
-  - grouped discovery `correlated_summary_command` handoff so the same hotspot
-    can be widened into workload-scoped `audit summary` review without
-    discovery-only filters masking adjacent audit failures
-  - grouped discovery correlated summary preview so widened audit triage is
-    visible inline before operators leave the discovery surface
-  - grouped discovery focus signals (`additional_events`,
-    `non_discovery_*_counts`, `attention_hint`) so adjacent audit degradation
-    is highlighted instead of being hidden inside the full correlated preview
-  - grouped discovery `remediation_hint` so adjacent audit signals can point to
-    the next operator action instead of only surfacing more widened evidence
-  - grouped discovery `correlated_remediation_command` so the strongest
-    adjacent signal can jump straight into the next retained-audit command
-  - dedicated `audit token-trail` lifecycle view so one retained token can be
-    reconstructed with issued/denied/revoked summary fields, full matching
-    timeline entries, and explicit truncation reporting when the selected
-    window is too small
+- daemon bridge hardening and shared helpers:
+  - `process_stdio` now executes through protocol json-line frames with runtime
+    evidence (`transport_kind`, request/response frame metadata) and
+    deterministic malformed-response surfacing
+  - `process_stdio` route authorization, response contract checks, and bounded
+    send/close/recv/exit timeouts (`process_timeout_ms`)
+  - `http_json` route authorization, protocol runtime evidence, optional
+    strict response contract mode (`http_enforce_protocol_contract`), and
+    bounded timeout parsing (`http_timeout_ms`)
+  - shared protocol context builder and shared runtime evidence appender for
+    consistent bridge semantics across transport lanes
+  - dedicated bridge helper and test modules
+    (`spec_bridge_protocol.inc.rs`, `tests/spec_runtime_bridge.rs`) to reduce
+    runtime and spec maintenance drift
+  - typed bridge runtime evidence structs and explicit evidence state variants
+    (`BaseOnly` / `RequestOnly` / `Response` / `Execution`) to avoid impossible
+    field combinations
+  - strict/lenient custom route control to avoid ad-hoc string dispatch
+- linked in-memory `ChannelTransport` primitive with bounded queue backpressure,
+  explicit close semantics, and deterministic async tests
+
+### Tool Discovery And Retained Audit Review
+
+- `tool_search` operation for runtime tool discovery over loaded providers and
+  scanned-but-not-absorbed plugin descriptors
+- trust-aware discovery controls and summaries:
+  - query prefixes such as `trust:official` and `tier:verified-community`
+  - structured `trust_tiers` fields
+  - operator-visible `trust_filter_summary`
+  - top-level `tool_search_summary`
+  - `run-spec --render-summary` stderr rendering that preserves stdout JSON consumers
+- typed discovery audit emission (`ToolSearchEvaluated`) plus retained-review aids:
+  - summary hints (`last_triage_label`, `last_triage_summary`, `last_triage_hint`)
+  - audit filters on kind, triage label, query substring, requested/effective
+    trust tier, pack, agent, event, and token
+  - dedicated `audit discovery` and `audit token-trail` operator views
+  - inclusive time-window filters across recent/summary/discovery
+  - grouped rollups for `audit summary --group-by pack|agent|token`
+  - grouped rollups for `audit discovery --group-by pack|agent`
+  - grouped discovery drill-down, correlated summary, remediation hint, and
+    remediation command handoff so hotspots stay actionable
+
+### Retrieval Payload Alignment
+
 - translation-aligned retrieval payloads:
   - runtime profile hints (`bridge_kind`, `adapter_family`, `entrypoint_hint`, `source_language`)
   - plugin semantic fields (`summary`, `tags`, `input_examples`, `output_examples`, `defer_loading`)
-  - plugin provenance/trust fields (`provenance_summary`, `trust_tier`)
+  - plugin provenance and trust fields (`provenance_summary`, `trust_tier`)
+
+### Programmatic Orchestration Surface
+
 - `programmatic_tool_call` operation for server-side tool orchestration:
   - step model (`set_literal`, `json_pointer`, `connector_call`, `connector_batch`, `conditional`)
   - connector allowlist and call-budget enforcement
   - batch execution controls (`parallel`, `continue_on_error`) with per-call structured outcomes
   - branch predicates (`equals`, `exists`) for deterministic conditional routing
-  - per-call retry/backoff policy (`max_attempts`, `initial_backoff_ms`, `max_backoff_ms`)
-  - deterministic adaptive retry jitter (`jitter_ratio`, `adaptive_jitter`)
-  - per-connector rate shaping policy (`connector_rate_limits.<connector>.min_interval_ms`)
-  - per-connector circuit breaker policy (`failure_threshold`, `cooldown_ms`,
-    `half_open_max_calls`, `success_threshold`)
-  - adaptive concurrency policy (`concurrency`) with:
-    - global in-flight cap (`max_in_flight`)
-    - explicit floor and ramp profile (`min_in_flight`, adaptive up/down steps)
-    - fair scheduling policy (`weighted_round_robin` / `strict_round_robin`)
-    - per-call priority classes (`high` / `normal` / `low`)
-    - policy-driven adaptive budget contraction/recovery triggers (`adaptive_reduce_on`)
-  - scheduler telemetry for fanout (`dispatch_order`, `peak_in_flight`,
-    `budget_reductions`, `budget_increases`, `final_in_flight_budget`)
-  - typed programmatic error taxonomy (`programmatic_error[code]`, batch `error_code`)
-  - return-step targeting and optional intermediate traces
-  - payload templating (`{{step_id}}`, `{{step_id#/json/pointer}}`)
+  - retry/backoff policy plus deterministic adaptive jitter
+  - per-connector rate shaping and circuit-breaker policy
+  - adaptive concurrency policy with global cap, explicit floor/ramp profile,
+    fair scheduling, priority classes, and policy-driven budget contraction or recovery
+  - scheduler telemetry (`dispatch_order`, `peak_in_flight`, `budget_reductions`,
+    `budget_increases`, `final_in_flight_budget`)
+  - typed programmatic error taxonomy, return-step targeting, optional
+    intermediate traces, and payload templating
 - dynamic connector caller ACL:
   - `allowed_callers` and `allowed_callers_json` metadata gates
-  - automatic `_loongclaw.caller` provenance injection for programmatic calls
+  - automatic `_loong.caller` provenance injection for programmatic calls
+
+### Active Runtime Lanes And Foundations
+
 - active `http_json` runtime execution lane (no longer plan-only):
   - timeout-controlled request execution
   - structured runtime evidence (`status_code`, `response_json`)
 - builtin-only memory-system foundation for `dev`:
   - typed memory-system metadata and registry seam
-  - hydrated memory orchestration over LoongClaw-owned canonical history
+  - hydrated memory orchestration over Loong-owned canonical history
   - operator diagnostics for selected system, capability set, and effective
     memory fail-open policy
 
-Planned deliverables:
+### Planned Next Deliverables
 
 - connector contract versioning and compatibility matrix
 - provider/channel auto-provision enhancements:
@@ -296,13 +287,13 @@ Acceptance criteria:
 Status: planned
 Focus: open ecosystem without sacrificing trust boundaries.
 
-Delivered in current baseline:
+Current baseline already in place:
 
-- `loongclaw plugins init <package_root>` scaffolds a manifest-first plugin
-  package root with a canonical `loongclaw.plugin.json`, current host
+- `loong plugins init <package_root>` scaffolds a manifest-first plugin
+  package root with a canonical `loong.plugin.json`, current host
   compatibility defaults, and a README that routes authors into shared
   package diagnosis instead of internal crate spelunking
-- `loongclaw plugins doctor --root <package_root>` reuses the shared
+- `loong plugins doctor --root <package_root>` reuses the shared
   `plugin_preflight` contract for author-facing package diagnosis, defaulting
   to the `sdk_release` profile while surfacing setup truth, remediation
   classes, and required operator follow-up actions
@@ -310,7 +301,7 @@ Delivered in current baseline:
   `metadata.source_language`, so language-specific scaffolded packages keep
   canonical bridge, adapter-family, and preflight language semantics
 
-Planned deliverables:
+### Package Intake Direction
 
 - multi-language plugin intake pipeline:
   - manifest-first package discovery with file contract precedence over
@@ -321,6 +312,9 @@ Planned deliverables:
   install, and doctor
 - slot-aware ownership model for exclusive vs shared plugin-provided runtime
   surfaces
+
+### Trust And Verification Direction
+
 - plugin packaging and signing metadata
 - trust policy tiers (`official`, `verified-community`, `unverified`)
 - reproducible plugin artifact verification in CI
@@ -339,16 +333,26 @@ Acceptance criteria:
 Status: planned
 Focus: 15-minute vertical customization workflow.
 
-Planned deliverables:
+This stage is still outcome-first rather than package-first. It depends on the
+runtime, plugin, and product-surface foundations above being explicit before
+Loong turns them into reusable vertical-pack flows.
+
+### Pack Authoring Direction
 
 - pack template generator:
   - domain prompt baseline
   - tool/connector policy presets
   - evaluation set bootstrap
+
+### Runtime Quality Direction
+
 - pack-level SLO/quality dashboard:
   - latency
   - success ratio
   - safety violations
+
+### Hardening Direction
+
 - guided hardening checklist per vertical pack
 
 Acceptance criteria:
@@ -362,29 +366,37 @@ Acceptance criteria:
 Status: in progress
 Focus: ship a low-friction daily-usable daemon entry for non-developers.
 
-Delivered in current baseline:
+### Core Operator Path
 
 - `onboard` command as the primary first-run configuration and diagnostics flow
 - `ask` command as the one-shot assistant fast path
 - `chat` command as baseline CLI channel
 - `doctor` repair loop with `--fix` and machine-readable output
 - ask-first first-run handoff from onboarding and doctor with concrete next-step guidance
+- release-first install flow with checksum-verified prebuilt binaries and explicit source fallback (`scripts/install.sh`, `scripts/install.ps1`)
+- public product specs for installation, onboarding, one-shot ask, doctor, browser automation, tool surface, channel setup, prompt and personality, memory profiles, and shell completion
+
+### Runtime And Delivery Baseline
+
 - first-party Telegram polling channel adapter
 - first-party Feishu webhook channel adapter
 - SQLite-backed conversation memory with sliding-window retrieval
 - core tool execution for `browser.open`, `browser.extract`, `browser.click`, `web.fetch`, `shell.exec`, `file.read`, `file.write`, `file.edit`
-- release-first install flow with checksum-verified prebuilt binaries and explicit source fallback (`scripts/install.sh`, `scripts/install.ps1`)
 - runtime-visible tool advertising so capability snapshots and provider tool schemas follow the actually enabled tool surface
 - Cargo feature flags for MVP packaging controls
-- product specs for installation, onboarding, one-shot ask, doctor, browser automation, tool surface, channel setup, runtime experiment, the local product control plane, and Web UI expectations
-- experiment-state operator surface foundation:
-  - `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
-  - `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
-  - `runtime-experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
-  - `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, explicit operator review, and any recorded snapshot-backed delta evidence without mutating live runtime state
-  - `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
-  - `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, and the same family-level delta evidence digest
-  - `runtime-capability apply` materializes one deterministic governed `memory_stage_profile` artifact from a promotable capability family, keeps the output idempotent, and rejects conflicting or unsupported apply paths instead of mutating live runtime state directly
+
+### Experiment-State Foundation
+
+- `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
+- `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
+- `runtime-experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
+- `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, explicit operator review, and any recorded snapshot-backed delta evidence without mutating live runtime state
+- `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
+- `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, and the same family-level delta evidence digest
+- `runtime-capability apply` materializes one deterministic governed `memory_stage_profile` artifact from a promotable capability family, keeps the output idempotent, and rejects conflicting or unsupported apply paths instead of mutating live runtime state directly
+
+### Runtime Architecture Hardening
+
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification
@@ -396,15 +408,27 @@ Delivered in current baseline:
   - heavy spec execution/security/approval pipeline extracted to `spec_execution.inc.rs`
   - keeps behavior stable while removing multi-thousand-line single-file coupling
 
-Remaining deliverables:
+### Next Public Product Tracks
+
+The roadmap keeps the public direction visible here without turning this file
+into a backlog dump. Fuller implementation packages stay out of the
+reader-facing docs flow until their public contracts are ready.
+
+#### Install And Provider Hardening
 
 - OpenAI-compatible protocol adapter hardening and Volcengine custom adapter profile
 - beginner installation hardening:
   - sustain tagged release publishing across macOS/Linux/Windows
   - expand beyond installer scripts into package-manager distribution only after release adoption is stable
+
+#### Experiment-State Follow-Through
+
 - experiment-state operator surface follow-through:
   - use the shipped snapshot/restore/experiment/capability record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
   - keep the new promotion planner as the contract for governed executors; only the explicit `memory_stage_profile` apply lane is shipped today, and other promotion targets stay read-only until their executor contracts exist
+
+#### Task, Skills, And Retrieval UX
+
 - runtime productization over already-shipped substrate:
   - background task UX on top of session runtime:
     - expose task-shaped create, inspect, wait, follow, cancel, and recover flows over the current async delegate child-session substrate
@@ -418,6 +442,9 @@ Remaining deliverables:
     - add query-aware retrieval and broaden beyond session-summary-only hydration
     - make provenance and injection reason operator-visible
     - ship local text search before embedding-dependent retrieval
+
+#### Browser And Product Surfaces
+
 - managed browser automation companion:
   - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
   - partial governed adapter skeleton now exists for richer page actions:
@@ -429,6 +456,9 @@ Remaining deliverables:
   - Web UI implementation as a thin shell over the local product control plane plus existing ask/chat, onboarding, dashboard, and browser semantics, not a separate assistant runtime
   - current product mode stays same-origin and localhost-only by default, but
     that operating boundary is not the long-term architecture endpoint
+
+#### Gateway-Owned Service Foundation
+
 - gateway service foundation:
   - land the first explicit daemon-owned gateway owner contract through
     `gateway run`, `gateway status`, and `gateway stop`, while keeping
@@ -466,7 +496,9 @@ All roadmap stages must keep these gates green:
 
 ## Discussion: Post-MVP Foundation Items
 
-These items emerged from the Phase 0–3 restructure (PR #15). They are candidates for near-term work but need prioritization discussion before commitment.
+These items emerged from the Phase 0–3 restructure (PR #15). This section is a
+public cross-cutting tail, not the full internal backlog. Keep it short and use
+it only when the direction still matters to source readers.
 
 ### D1: Wire Phase 3 primitives into production paths
 
@@ -501,26 +533,23 @@ Trade-off: low risk, moderate churn. Unblocks single-threaded runtime compatibil
 
 ### D4: Route `build_messages` memory window through kernel
 
-`build_messages_for_session` in the MVP provider layer couples system prompt construction with SQLite memory window loading. The memory-read portion should route through the kernel's memory plane for policy/audit coverage.
-
-Approach: split `build_messages_for_session` into prompt construction + kernel-routed memory read. Requires new `MemoryCoreRequest` operation (e.g., `read_window`).
-
-Trade-off: improves audit coverage for memory reads, but requires splitting a tightly coupled function.
-
 Status (`dev`): implemented.
-- Added `ConversationContextEngine` seam and default implementation.
-- `build_messages` now assembles through context engine and routes memory window reads via `kernel.execute_memory_core(..., Capability::MemoryRead, ...)` when kernel context is present.
-- Added registry/selection hooks (`register_context_engine`, `resolve_context_engine`, `LOONGCLAW_CONTEXT_ENGINE`) plus config-based selector (`[conversation].context_engine`) for future multi-engine evolution without invasive runtime refactors.
-- Added built-in `legacy` engine for rollback and behavior comparison against pre-seam assembly path.
-- Added engine metadata surface (`id`, `api_version`, `capabilities`) for diagnostics and compatibility checks before introducing more advanced engines.
-- Added explicit post-turn context compaction hook (`compact_context`) to reserve an upgrade seam for summarization/compression without rewriting orchestrator flow.
-- Added reserved context-engine lifecycle hooks (`bootstrap`, `ingest`) as default no-op seams so future engine-owned import/indexing flows do not require another trait/runtime rewrite.
-- Added reserved subagent lifecycle hooks (`prepare_subagent_spawn`, `on_subagent_ended`) as default no-op seams so future multi-agent context wiring avoids trait-breaking refactors.
-- Added richer context assembly output (`messages`, optional `estimated_tokens`, optional `system_prompt_addition`) to pre-wire policy/runtime prompt augmentation without revisiting runtime boundaries.
-- Added compaction policy controls (`compact_enabled`, `compact_min_messages`, `compact_trigger_estimated_tokens`, `compact_fail_open`) so heavy future summarization can be enabled/tuned without orchestrator rewrites.
-- Added daemon observability command (`list-context-engines`) to show selected engine source (env/config/default) and available engine capabilities.
-- Added unified runtime snapshot assembly for context engine diagnostics (selected + available + compaction policy) to keep CLI/channel observability outputs consistent.
-- Added regression tests for kernel-routed window reads, runtime injection, and registry resolution.
+
+Why this note still matters:
+- it was the first full provider-side context assembly slice to move from
+  direct SQLite coupling onto a kernel-routed seam
+- future compaction, context engines, and multi-agent context work should build
+  on that seam instead of reintroducing hidden direct reads
+
+Delivered:
+- `ConversationContextEngine` seam plus registry and selector hooks
+- kernel-routed memory-window reads when kernel authority is present
+- rollback and diagnostics support through built-in `legacy` engine,
+  observability commands, and runtime snapshot reporting
+- reserved lifecycle and compaction hooks so future context evolution does not
+  require another trait rewrite
+- regression coverage for kernel-routed reads, runtime injection, and registry
+  resolution
 
 ### D5: Upgrade `InMemoryAuditSink` to queryable snapshot
 
@@ -556,25 +585,27 @@ instead of feature-driven growth inside large files.
 
 ### D8: Local product control plane foundation
 
-LoongClaw now has enough real runtime substrate that the next platform risk is
+Loong now has enough real runtime substrate that the next platform risk is
 surface drift rather than missing primitives.
 
-The repo already has:
+Current baseline:
 
 - a real ACP control plane
 - a durable session repository
 - operator-facing `onboard`, `doctor`, `acp-status`, and observability surfaces
 
-What it still lacks is one localhost-only product control plane contract that
-future HTTP and Web UI work can consume.
+Missing contract:
 
-Without that layer, `#217`, `#296`, and `#403` can drift into:
+- one localhost-only product control plane that future HTTP and Web UI work can
+  consume
+
+Risk if skipped:
 
 - browser-only runtime semantics
 - a gateway-local session model
 - a giant product gateway that starts stealing authority from the kernel
 
-The preferred path is smaller:
+Preferred path:
 
 - keep the kernel as authority
 - keep ACP internal and real
@@ -604,7 +635,7 @@ Current first-slice mapping:
 
 ### D10: First-party workflow packs on hardened primitives
 
-Once the runtime base is harder, LoongClaw should turn that into a small set of first-party
+Once the runtime base is harder, Loong should turn that into a small set of first-party
 workflow packs that prove the kernel's value in operator-facing tasks such as release/review work,
 issue triage, or channel support.
 
@@ -622,6 +653,5 @@ instead of preceding it.
 
 Execution package for this order:
 
-- the 2026-03-17 internal runtime hardening design in `docs/plans/`
-- the 2026-03-17 internal runtime hardening implementation plan in `docs/plans/`
-- the 2026-03-17 internal runtime hardening GitHub backlog in `docs/plans/`
+- the public roadmap above remains the OSS-facing source of truth for priority order
+- the deeper implementation packages and internal backlog artifacts now live outside the public repository docs flow

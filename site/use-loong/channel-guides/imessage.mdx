@@ -1,0 +1,63 @@
+---
+title: iMessage
+description: Configure the iMessage channel surface in Loong.
+---
+
+# iMessage
+
+This is a shipped config-backed outbound surface. Imessage bridge sync runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `imessage` |
+| Config key | `imessage` |
+| Implementation status | `config_backed` |
+| Transport | `imessage_bridge_api` |
+| Aliases | `bluebubbles`, `blue-bubbles` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[imessage]
+enabled = true
+bridge_url_env = "IMESSAGE_BRIDGE_URL"
+bridge_token_env = "IMESSAGE_BRIDGE_TOKEN"
+```
+
+## Smoke Test
+
+```bash
+loong imessage-send --target "+15551234567" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| chat send | `imessage-send` | Usage: loong imessage-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| bridge sync service | `imessage-serve` | imessage bridge sync runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `imessage.enabled`<br/>`imessage.accounts.<account>.enabled` | none | none |
+| bridge url | `imessage.bridge_url`<br/>`imessage.accounts.<account>.bridge_url` | `imessage.bridge_url_env`<br/>`imessage.accounts.<account>.bridge_url_env` | `IMESSAGE_BRIDGE_URL` |
+| bridge token | `imessage.bridge_token`<br/>`imessage.accounts.<account>.bridge_token` | `imessage.bridge_token_env`<br/>`imessage.accounts.<account>.bridge_token_env` | `IMESSAGE_BRIDGE_TOKEN` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- This surface assumes a BlueBubbles bridge rather than direct iMessage credentials inside Loong.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

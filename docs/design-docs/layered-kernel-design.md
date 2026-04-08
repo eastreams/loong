@@ -1,4 +1,4 @@
-# LoongClaw Kernel Layered Design (v0.1)
+# Loong Kernel Layered Design (v0.1)
 
 This document defines the low-level layering model for a minimal but extensible Agentic OS kernel.
 

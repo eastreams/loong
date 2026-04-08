@@ -14,7 +14,7 @@ This plan is the provider-specific execution slice of Phase 1 in
 
 ## Why This Slice Exists
 
-LoongClaw has already done meaningful provider-runtime decomposition:
+Loong has already done meaningful provider-runtime decomposition:
 
 - request-session assembly
 - payload shaping
@@ -52,7 +52,7 @@ projection layer.
 
 ## Core Decision
 
-LoongClaw should not introduce a second parallel provider registry.
+Loong should not introduce a second parallel provider registry.
 
 The right move is:
 

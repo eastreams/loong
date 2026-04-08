@@ -1,10 +1,67 @@
-# Contributing to LoongClaw
+# Contributing to Loong
 
-Thanks for spending time on LoongClaw. This guide defines the baseline workflow for external and
-internal contributors. We care about clear ownership, thoughtful engineering, and kind
-collaboration.
+Thanks for spending time on Loong.
 
-## Prerequisites
+This file is the repository-native contributor guide. The shorter public
+contributor entrypoint lives under
+[`site/build-on-loong/contributing.mdx`](site/build-on-loong/contributing.mdx).
+This guide stays in the repository because contributors and maintainers still
+need the deeper workflow, validation, and recipe material behind that public
+entrypoint.
+
+We care about clear ownership, thoughtful engineering, and kind collaboration.
+
+## Read This Guide When
+
+- you are preparing a real patch against this repository
+- you need the repository-native validation, branch, or PR rules
+- you want crate-level contribution recipes instead of the shorter public docs
+  summary
+
+## Choose A Start Path
+
+| If you want to... | Start here | Then continue to... |
+| --- | --- | --- |
+| land a small docs, test, or contained bug-fix patch | [Contribution Workflow](site/build-on-loong/contribution-workflow.mdx) and [Contribution Tracks](#contribution-tracks) | [Standard Workflow](#standard-workflow) |
+| improve docs placement, Mintlify structure, or public docs wording | [Docs Workflow](site/build-on-loong/docs-workflow.mdx) | [Documentation Language Scope](#documentation-language-scope) and [Standard Workflow](#standard-workflow) |
+| change runtime behavior, policy, or architecture-sensitive code | [Architecture](site/build-on-loong/architecture.mdx) | [Contribution Tracks](#contribution-tracks), [CI And Required Checks](#ci-and-required-checks), and [Repository Recipes](#repository-recipes) |
+| understand where your background is most useful | [Contribution Areas We Especially Welcome](docs/references/contribution-areas.md) | [How To Join In](#how-to-join-in) |
+| read the full repository-native contributor guide directly | this file | the [Section Map](#section-map) and the sections below |
+
+## Quick Start Checklist
+
+1. Branch from `dev`.
+2. Decide whether the work is Track A or Track B.
+3. Run the relevant validation bar before opening a PR.
+4. Open the PR against `dev`.
+5. Start with an issue or discussion first if the work is large, risky, or architecture-sensitive.
+
+## Section Map
+
+- [Core Workflow And Validation](#core-workflow-and-validation)
+- [Starting Areas And Contribution Scope](#starting-areas-and-contribution-scope)
+- [Repository Recipes](#repository-recipes)
+- [Agent-Assisted Work And Observability](#agent-assisted-work-and-observability)
+- [PR, Review, And Security Boundaries](#pr-review-and-security-boundaries)
+
+## What Stays Here
+
+This guide intentionally carries the deeper repository-native contributor
+material:
+
+- branch, release, CI, and review expectations
+- source-level contribution tracks and validation rules
+- crate-level contribution recipes
+- responsible agent-assisted contribution guidance
+- repository observability and maintainer-facing contribution boundaries
+
+It stays single-file on purpose so contributors can scan one repository-native
+guide without chasing a split maintainer handbook. It is not meant to replace
+the shorter Mintlify contributor entrypoint.
+
+## Core Workflow And Validation
+
+### Environment Prerequisites
 
 - Rust stable toolchain installed.
 - `cargo` available in shell.
@@ -16,9 +73,9 @@ collaboration.
 - Convention checks require the `convention-engineering` skill script at
   `~/.claude/skills/convention-engineering/scripts/main.go` (see `Taskfile.yml`).
 
-## Contribution Tracks
+### Contribution Tracks
 
-LoongClaw uses two tracks for OSS contribution risk.
+Loong uses two tracks for OSS contribution risk.
 
 ### Track A: Routine and low-risk changes
 
@@ -69,7 +126,7 @@ Track B flow:
 
 If you are unsure which track applies, open an issue and ask maintainers for triage.
 
-## Branch Model
+### Branch Model
 
 - `dev` is the active integration branch for day-to-day development.
 - Contributors should branch from `dev` and target `dev` with normal pull requests.
@@ -79,7 +136,7 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - Maintainers aim to promote stable slices from `dev` into `main` on a regular cadence. Exact
   timing depends on validation status, scope completion, and operational readiness.
 
-## Release Model
+### Release Model
 
 - Tagged releases are published from stable promotion points rather than from arbitrary in-flight
   commits.
@@ -89,7 +146,7 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - Release readiness normally includes green CI, required validation, install flow sanity, and docs
   or changelog updates for shipped user-facing changes.
 
-## CI and Required Checks
+### CI And Required Checks
 
 - `CI`, `CodeQL`, and `Security` run for pull requests and pushes targeting `dev`, `main`,
   `release`, and `release/*`.
@@ -100,21 +157,51 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - If branch protection is enabled for `dev`, `main`, or `release` lanes, require `build` instead
   of tracking the internal job names individually.
 
-## Where Do I Start?
+### Standard Workflow
+
+1. Fork the repository.
+2. Create a branch from `dev`.
+3. Make focused commits.
+4. Run required checks.
+5. Open a pull request against `dev` using the PR template unless a maintainer explicitly asks you
+   to help with a focused promotion PR from `dev` into `main`.
+6. Address review feedback and keep PR scope focused.
+
+### Issue Intake
+
+- Use the bug report form for reproducible runtime or workflow defects.
+- Use the feature request form for new capabilities, behavior changes, or meaningful product/runtime improvements.
+- Use the documentation improvement form for contributor guide drift, missing references, or confusing review workflow docs.
+- Use GitHub Discussions for setup questions and general troubleshooting.
+- Use community channels such as Discord and Telegram. If you are already active in Feishu or
+  WeChat community spaces, those are also good places to ask.
+- If you want to introduce yourself directly or talk about where you could help most, email
+  [contact@loongclaw.ai](mailto:contact@loongclaw.ai).
+- Use the private security advisory flow for vulnerabilities instead of public issues.
+
+The public workflow in this guide is the contributor-facing source of truth.
+Maintainer-managed GitHub label automation, intake wiring, and branch-governance
+support docs remain repository-native support material and do not need to be part
+of the normal reader path.
+
+## Starting Areas And Contribution Scope
+
+### Where To Start
 
 Use [Core Beliefs](docs/design-docs/core-beliefs.md) and [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) for architecture principles and dependency boundaries.
 
 If you are unsure where your background fits, start with
 [Contribution Areas We Especially Welcome](docs/references/contribution-areas.md). We warmly
 welcome help across design, frontend work, hardware / robotics / embodied AI, systems engineering,
-cross-platform delivery, testing and operations, docs and i18n, and community care.
+cross-platform delivery, testing and operations, docs and public docs-site clarity, and community
+care.
 
-## How to Join In
+### How To Join In
 
 - If you already know what you want to work on, open or join the relevant Issue and link your plan.
 - If you want to take on a large feature or architecture change, start with an Issue or Discussion
   first so maintainers can help shape scope early.
-- If your strengths are design, docs, translation, QA, operations, support, or community work,
+- If your strengths are design, docs, docs-site editing, QA, operations, support, or community work,
   those are first-class contributions here, not second-tier work.
 - If you would rather start with a direct introduction, email
   [contact@loongclaw.ai](mailto:contact@loongclaw.ai). A short note is enough. You do not need a
@@ -122,21 +209,35 @@ cross-platform delivery, testing and operations, docs and i18n, and community ca
 - If you are unsure where to begin, open a Discussion or send that introduction email and we will
   help point you toward good starting areas.
 
-## A Short Introduction That Helps
+### Documentation Language Scope
+
+- The repository keeps Simplified Chinese support only for `README.zh-CN.md`.
+- The Mintlify source under `site/` is the main English reader-facing documentation surface.
+- Public markdown under `docs/` remains in the repository as supporting reference and source-facing
+  documentation unless maintainers intentionally add a broader docs-site workflow later.
+- If broader docs i18n is introduced in the future, it should happen at the Mintlify docs layer
+  rather than by expanding repository-wide markdown translation.
+
+### A Short Introduction That Helps
 
 If you email us, it is especially helpful to include:
 
 - where you are based or what time zone you usually work in
 - your strongest skills or the kinds of problems you are best at
 - the area you would most like to own or help push forward
-- what you hope LoongClaw could become, or what part of the project excites you
+- what you hope Loong could become, or what part of the project excites you
 - roughly how much time or energy you expect to contribute
 - any links to GitHub, past work, writing, design, demos, or projects you want us to see
 
 That does not need to be long. A thoughtful, honest introduction is much more useful than a formal
 pitch.
 
-**Common contribution areas:**
+## Repository Recipes
+
+This section keeps the source-level repository recipes that are too specific
+for the shorter public contributor docs entrypoint.
+
+### Common Repository Lanes
 
 | Area | Directory | Feature flag |
 |------|-----------|-------------|
@@ -147,7 +248,7 @@ pitch.
 | Kernel policy | `crates/kernel/src/policy.rs` | — |
 | Shared types | `crates/contracts/src/` | — |
 
-### How to Run Tests for Your Module
+### How To Run Tests For Your Module
 
 ```bash
 # All tests
@@ -195,34 +296,11 @@ cargo test --workspace --all-features
 
 The shipped channel reference implementations are `telegram`, `feishu`, and `matrix`.
 
-## Standard Workflow
+## Agent-Assisted Work And Observability
 
-1. Fork the repository.
-2. Create a branch from `dev`.
-3. Make focused commits.
-4. Run required checks.
-5. Open a pull request against `dev` using the PR template unless a maintainer explicitly asks you
-   to help with a focused promotion PR from `dev` into `main`.
-6. Address review feedback and keep PR scope focused.
+### Responsible Agent-Assisted Contribution
 
-## Issue Intake
-
-- Use the bug report form for reproducible runtime or workflow defects.
-- Use the feature request form for new capabilities, behavior changes, or meaningful product/runtime improvements.
-- Use the documentation improvement form for contributor guide drift, missing references, or confusing review workflow docs.
-- Use GitHub Discussions for setup questions and general troubleshooting.
-- Use community channels such as Discord and Telegram. If you are already active in Feishu or
-  WeChat community spaces, those are also good places to ask.
-- If you want to introduce yourself directly or talk about where you could help most, email
-  [contact@loongclaw.ai](mailto:contact@loongclaw.ai).
-- Use the private security advisory flow for vulnerabilities instead of public issues.
-
-See [docs/references/github-collaboration.md](docs/references/github-collaboration.md) for the
-current label baseline, issue routing, community paths, and review flow.
-
-## Responsible Agent-Assisted Contribution
-
-LoongClaw is built with the expectation that human engineers and agents will increasingly work
+Loong is built with the expectation that human engineers and agents will increasingly work
 together. We think that trend is real, durable, and worth embracing. Used well, agent-assisted
 coding can significantly improve iteration speed, reduce routine friction, and help contributors
 cover more ground across design, implementation, testing, docs, and review.
@@ -254,7 +332,7 @@ If you like "vibe coding," use it as a way to explore and iterate faster, not as
 engineering accountability. The bar here is still that a human contributor understands what is
 being merged and can stand behind it during review, release, and follow-up maintenance.
 
-## Developer Observability
+### Developer Observability
 
 When you want an agent to help debug a repository issue or prepare review
 findings, start from the built-in observability surfaces instead of external
@@ -272,17 +350,24 @@ if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/ev
 The app runtime defaults to durable audit retention with
 `[audit].mode = "fanout"`, so security-critical audit events persist across
 restarts under `~/.loongclaw/audit/events.jsonl`. Use `doctor --fix` if you
-want LoongClaw to pre-create the audit journal directory before a debugging
+want Loong to pre-create the audit journal directory before a debugging
 session. Reach for `audit recent` when you need the latest bounded event window
 and `audit summary` when you need a quick rollup before diving into raw JSONL.
 
 For Rust workspaces, keep one agent per worktree or target directory so cargo
 lock contention does not invalidate the debugging signal.
 
-## PRs We Are Unlikely to Merge
+## PR, Review, And Security Boundaries
+
+### PRs We Are Unlikely To Merge
 
 The following pull requests are unlikely to be accepted unless maintainers have explicitly aligned
 on them in advance:
+
+This is a statement of current review posture, not a promise that these areas
+are permanently closed forever. If the project direction changes, maintainers
+can choose to revisit them, but we want that move to happen through explicit
+alignment rather than by letting a surprise PR redefine the boundary.
 
 1. AI-assisted changes that the author does not understand or cannot defend. We welcome AI tooling
    as a force multiplier, but contributors are expected to understand every line they submit and to
@@ -298,7 +383,7 @@ on them in advance:
    and ecosystem-specific additions are usually better maintained in separate repositories instead
    of being merged into the main repository.
 
-## Commit and PR Expectations
+### Commit And PR Expectations
 
 - Use clear, scoped commit messages.
 - Keep one logical change per PR when possible.
@@ -309,12 +394,21 @@ on them in advance:
 - Promotion PRs from `dev` into `main` should stay narrow and focus on stabilization rather than
   mixed feature development.
 
-## Review Policy
+### Review Policy
 
 - At least one maintainer review is required.
 - Track B changes require explicit maintainer approval.
 - Maintainers may request design clarification before merge.
 
-## Reporting Security Issues
+### Reporting Security Issues
 
 Do not open public issues for security vulnerabilities. Follow [SECURITY.md](SECURITY.md).
+
+### Do Not Use This Guide For
+
+- maintainer-only GitHub intake automation details that belong in
+  `docs/references/github-collaboration.md`
+- public docs landing-page reading that is already covered by Mintlify under
+  `site/`
+- internal planning bundles or private governance material that does not belong
+  in the OSS repository

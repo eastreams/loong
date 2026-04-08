@@ -1,16 +1,16 @@
 param(
     [string]$Prefix = "$HOME/.local/bin",
     [switch]$Onboard,
-    [string]$Version = $(if ($env:LOONGCLAW_INSTALL_VERSION) { $env:LOONGCLAW_INSTALL_VERSION } else { "latest" }),
+    [string]$Version = $(if ($env:LOONG_INSTALL_VERSION) { $env:LOONG_INSTALL_VERSION } else { "latest" }),
     [switch]$Source,
-    [string]$Repository = $(if ($env:LOONGCLAW_INSTALL_REPO) { $env:LOONGCLAW_INSTALL_REPO } else { "loongclaw-ai/loongclaw" })
+    [string]$Repository = $(if ($env:LOONG_INSTALL_REPO) { $env:LOONG_INSTALL_REPO } else { "eastreams/loong" })
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-$ReleaseBaseUrl = if ($env:LOONGCLAW_INSTALL_RELEASE_BASE_URL) { $env:LOONGCLAW_INSTALL_RELEASE_BASE_URL } else { "https://github.com/$Repository/releases" }
+$ReleaseBaseUrl = if ($env:LOONG_INSTALL_RELEASE_BASE_URL) { $env:LOONG_INSTALL_RELEASE_BASE_URL } else { "https://github.com/$Repository/releases" }
 $BinName = "loong"
-$LegacyBinName = "loongclaw"
+$LegacyBinName = "loong"
 
 function Write-Usage {
     @"
@@ -52,7 +52,7 @@ Install from a local checkout instead:
 }
 
 function Resolve-LatestReleaseTag([string]$Repo) {
-    $headers = @{ "User-Agent" = "LoongClaw-Install" }
+    $headers = @{ "User-Agent" = "Loong-Install" }
     try {
         $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$Repo/releases/latest"
     } catch {
@@ -106,7 +106,7 @@ function Install-FromSource {
     $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
     $cargoToml = Join-Path $repoRoot "Cargo.toml"
     if (-not (Test-Path $cargoToml)) {
-        throw "-Source requires running this installer from a loongclaw repository checkout"
+        throw "-Source requires running this installer from a loong repository checkout"
     }
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         throw "cargo not found in PATH. Install Rust first: https://rustup.rs"
@@ -118,7 +118,7 @@ function Install-FromSource {
     $previousReleaseBuild = $env:LOONGCLAW_RELEASE_BUILD
     try {
         $env:LOONGCLAW_RELEASE_BUILD = "1"
-        cargo build -p loongclaw --bin $BinName --release --locked | Out-Host
+        cargo build -p loong --bin $BinName --release --locked | Out-Host
     } finally {
         if ($hadReleaseBuild) {
             $env:LOONGCLAW_RELEASE_BUILD = $previousReleaseBuild
@@ -159,8 +159,8 @@ function Install-FromRelease {
         $checksumPath = Join-Path $tmpRoot $checksumName
 
         Write-Host "==> Downloading loong $releaseTag for $target"
-        Invoke-WebRequest -Headers @{ "User-Agent" = "LoongClaw-Install" } -Uri $archiveUrl -OutFile $archivePath
-        Invoke-WebRequest -Headers @{ "User-Agent" = "LoongClaw-Install" } -Uri $checksumUrl -OutFile $checksumPath
+        Invoke-WebRequest -Headers @{ "User-Agent" = "Loong-Install" } -Uri $archiveUrl -OutFile $archivePath
+        Invoke-WebRequest -Headers @{ "User-Agent" = "Loong-Install" } -Uri $checksumUrl -OutFile $checksumPath
 
         $checksumText = (Get-Content -Raw -Path $checksumPath).Trim()
         if ([string]::IsNullOrWhiteSpace($checksumText)) {
@@ -189,7 +189,7 @@ function Install-FromRelease {
 $installResult = if ($Source) { Install-FromSource } else { Install-FromRelease }
 
 Write-Host "==> Installed loong to $($installResult.Primary)"
-Write-Host "==> Installed compatible loongclaw command to $($installResult.Legacy)"
+Write-Host "==> Installed compatible loong command to $($installResult.Legacy)"
 
 if ($Onboard) {
     Write-Host "==> Running guided onboarding"

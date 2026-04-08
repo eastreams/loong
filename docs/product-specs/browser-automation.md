@@ -2,13 +2,13 @@
 
 ## User Story
 
-As a LoongClaw operator, I want a minimal browser-like assistant capability so
+As a Loong operator, I want a minimal browser-like assistant capability so
 that the agent can open public pages, extract structured content, and follow
 safe links without needing a full desktop browser runtime.
 
 ## Acceptance Criteria
 
-- [ ] LoongClaw exposes `browser.open`, `browser.extract`, and `browser.click`
+- [ ] Loong exposes `browser.open`, `browser.extract`, and `browser.click`
       as bounded assistant tools.
 - [ ] Browser tools share the same public-web safety model as `web.fetch`,
       including SSRF, private-host, domain-policy, redirect, and response-size

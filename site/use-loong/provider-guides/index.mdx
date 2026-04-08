@@ -1,0 +1,106 @@
+---
+title: Provider Guides
+description: One setup page per built-in Loong provider kind.
+---
+
+# Provider Guides
+
+Loong currently ships 41 built-in provider kinds. This hub exists so the README and chooser pages can stay compact while every built-in provider still has a truthful setup page.
+
+Use [Providers And Models](/use-loong/providers-and-models) when you are still choosing a lane. Use this hub when you already know the provider family and want the exact built-in contract, minimal config, and verification path.
+
+## Quick Picks
+
+Use this short list when you want a fast starting point before scanning the full matrix below.
+
+| If you want... | Start here | Why |
+| --- | --- | --- |
+| the shortest common hosted path | [Volcengine](/use-loong/provider-guides/volcengine) | the platform-first hosted lane stays explicit and well-supported in the public docs |
+| another common hosted path with the same shape | [BytePlus](/use-loong/provider-guides/byteplus) | it keeps the hosted setup path short without hiding the broader provider inventory |
+| a named direct hosted vendor your team already uses | [OpenAI](/use-loong/provider-guides/openai) | the built-in direct hosted contract stays explicit instead of being flattened into one generic story |
+| a coding-dedicated lane | [BytePlus Coding](/use-loong/provider-guides/byteplus-coding) or [Kimi Coding](/use-loong/provider-guides/kimi-coding) | coding quota and model choice can stay separate from the main assistant lane |
+| a local or self-hosted model server | [Ollama](/use-loong/provider-guides/ollama) | the operator-owned server boundary stays visible from the start |
+| a gateway or compatibility endpoint | [OpenRouter](/use-loong/provider-guides/openrouter) or [Bedrock](/use-loong/provider-guides/bedrock) | route ownership stays explicit when another layer sits in front of the model vendor |
+
+## Platform-First Hosted
+
+Common hosted first-run lanes when you want a short reviewed path without hiding the provider family.
+
+| Provider | Kind | Default auth env | Model note |
+| --- | --- | --- | --- |
+| [Volcengine](/use-loong/provider-guides/volcengine) | `volcengine` | `ARK_API_KEY` | operator chooses model strategy |
+| [BytePlus](/use-loong/provider-guides/byteplus) | `byteplus` | `BYTEPLUS_API_KEY` | operator chooses model strategy |
+
+## Direct Hosted Providers
+
+Direct hosted provider families when your team already has a vendor choice and wants it to stay explicit in config.
+
+| Provider | Kind | Default auth env | Model note |
+| --- | --- | --- | --- |
+| [OpenAI](/use-loong/provider-guides/openai) | `openai` | `OPENAI_API_KEY` | operator chooses model strategy |
+| [Anthropic](/use-loong/provider-guides/anthropic) | `anthropic` | `ANTHROPIC_API_KEY` | operator chooses model strategy |
+| [Gemini](/use-loong/provider-guides/gemini) | `gemini` | `GEMINI_API_KEY` | operator chooses model strategy |
+| [DeepSeek](/use-loong/provider-guides/deepseek) | `deepseek` | `DEEPSEEK_API_KEY` | reviewed fallback `deepseek-chat` |
+| [MiniMax](/use-loong/provider-guides/minimax) | `minimax` | `MINIMAX_API_KEY` | reviewed fallback `MiniMax-M2.7` |
+| [Mistral](/use-loong/provider-guides/mistral) | `mistral` | `MISTRAL_API_KEY` | operator chooses model strategy |
+| [Cohere](/use-loong/provider-guides/cohere) | `cohere` | `COHERE_API_KEY` | operator chooses model strategy |
+| [xAI](/use-loong/provider-guides/xai) | `xai` | `XAI_API_KEY` | operator chooses model strategy |
+| [Z.ai](/use-loong/provider-guides/zai) | `zai` | `ZAI_API_KEY` | operator chooses model strategy |
+| [Zhipu](/use-loong/provider-guides/zhipu) | `zhipu` | `ZHIPUAI_API_KEY` | operator chooses model strategy |
+| [Qwen](/use-loong/provider-guides/qwen) | `qwen` | `DASHSCOPE_API_KEY` | operator chooses model strategy |
+| [Kimi](/use-loong/provider-guides/kimi) | `kimi` | `MOONSHOT_API_KEY` | operator chooses model strategy |
+| [Groq](/use-loong/provider-guides/groq) | `groq` | `GROQ_API_KEY` | operator chooses model strategy |
+| [Fireworks](/use-loong/provider-guides/fireworks) | `fireworks` | `FIREWORKS_API_KEY` | operator chooses model strategy |
+| [Together](/use-loong/provider-guides/together) | `together` | `TOGETHER_API_KEY` | operator chooses model strategy |
+| [Perplexity](/use-loong/provider-guides/perplexity) | `perplexity` | `PERPLEXITY_API_KEY` | operator chooses model strategy |
+| [Qianfan](/use-loong/provider-guides/qianfan) | `qianfan` | `QIANFAN_API_KEY` | operator chooses model strategy |
+| [Cerebras](/use-loong/provider-guides/cerebras) | `cerebras` | `CEREBRAS_API_KEY` | operator chooses model strategy |
+| [NVIDIA](/use-loong/provider-guides/nvidia) | `nvidia` | `NVIDIA_API_KEY` | operator chooses model strategy |
+| [SambaNova](/use-loong/provider-guides/sambanova) | `sambanova` | `SAMBANOVA_API_KEY` | operator chooses model strategy |
+| [Novita](/use-loong/provider-guides/novita) | `novita` | `NOVITA_API_KEY` | operator chooses model strategy |
+| [SiliconFlow](/use-loong/provider-guides/siliconflow) | `siliconflow` | `SILICONFLOW_API_KEY` | operator chooses model strategy |
+| [StepFun](/use-loong/provider-guides/stepfun) | `stepfun` | `STEP_API_KEY` | operator chooses model strategy |
+| [Venice](/use-loong/provider-guides/venice) | `venice` | `VENICE_API_KEY` | operator chooses model strategy |
+
+## Coding-Specialized Providers
+
+Dedicated coding lanes that keep coding quota, pricing, or route ownership separate from the general assistant lane.
+
+| Provider | Kind | Default auth env | Model note |
+| --- | --- | --- | --- |
+| [Volcengine Coding](/use-loong/provider-guides/volcengine-coding) | `volcengine_coding` | `ARK_API_KEY` | operator chooses model strategy |
+| [BytePlus Coding](/use-loong/provider-guides/byteplus-coding) | `byteplus_coding` | `BYTEPLUS_API_KEY` | operator chooses model strategy |
+| [Kimi Coding](/use-loong/provider-guides/kimi-coding) | `kimi_coding` | `KIMI_CODING_API_KEY` | default model `kimi-for-coding` |
+| [Step Plan](/use-loong/provider-guides/step-plan) | `step_plan` | `STEP_API_KEY` | operator chooses model strategy |
+| [Bailian Coding](/use-loong/provider-guides/bailian-coding) | `bailian_coding` | `BAILIAN_API_KEY` | operator chooses model strategy |
+
+## Gateway And Compatibility Providers
+
+Gateway, proxy, or compatibility endpoints that sit between Loong and upstream model vendors.
+
+| Provider | Kind | Default auth env | Model note |
+| --- | --- | --- | --- |
+| [OpenRouter](/use-loong/provider-guides/openrouter) | `openrouter` | `OPENROUTER_API_KEY` | operator chooses model strategy |
+| [Cloudflare AI Gateway](/use-loong/provider-guides/cloudflare-ai-gateway) | `cloudflare_ai_gateway` | `CLOUDFLARE_API_KEY` | operator chooses model strategy |
+| [Vercel AI Gateway](/use-loong/provider-guides/vercel-ai-gateway) | `vercel_ai_gateway` | `AI_GATEWAY_API_KEY` | operator chooses model strategy |
+| [Bedrock](/use-loong/provider-guides/bedrock) | `bedrock` | `AWS_BEARER_TOKEN_BEDROCK` | operator chooses model strategy |
+| [Custom](/use-loong/provider-guides/custom) | `custom` | `CUSTOM_PROVIDER_API_KEY` | operator chooses model strategy |
+
+## Local And Self-Hosted Providers
+
+Local or self-hosted servers where the model boundary stays operator-owned.
+
+| Provider | Kind | Default auth env | Model note |
+| --- | --- | --- | --- |
+| [Ollama](/use-loong/provider-guides/ollama) | `ollama` | local or explicit auth | operator chooses model strategy |
+| [LM Studio](/use-loong/provider-guides/lm-studio) | `lm_studio` | local or explicit auth | operator chooses model strategy |
+| [llama.cpp](/use-loong/provider-guides/llamacpp) | `llamacpp` | local or explicit auth | operator chooses model strategy |
+| [vLLM](/use-loong/provider-guides/vllm) | `vllm` | local or explicit auth | operator chooses model strategy |
+| [SGLang](/use-loong/provider-guides/sglang) | `sglang` | local or explicit auth | operator chooses model strategy |
+
+## Reading Rule
+
+- Start with [Providers And Models](/use-loong/providers-and-models) when the provider choice is still open.
+- Use the individual guide page when one provider kind is already decided.
+- Keep [Provider Recipes](/use-loong/provider-recipes) for representative rollout paths rather than the full provider inventory.
+- Keep [Configuration Patterns](/use-loong/configuration-patterns) open when you need the shared `active_provider` plus `providers.<id>` shape.
