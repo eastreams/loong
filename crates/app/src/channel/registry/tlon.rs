@@ -36,13 +36,7 @@ const TLON_CODE_REQUIREMENT: ChannelCatalogOperationRequirement =
         env_pointer_paths: &["tlon.code_env", "tlon.accounts.<account>.code_env"],
         default_env_var: Some(TLON_CODE_ENV),
     };
-const TLON_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
-    TLON_ENABLED_REQUIREMENT,
-    TLON_SHIP_REQUIREMENT,
-    TLON_URL_REQUIREMENT,
-    TLON_CODE_REQUIREMENT,
-];
-const TLON_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+const TLON_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     TLON_ENABLED_REQUIREMENT,
     TLON_SHIP_REQUIREMENT,
     TLON_URL_REQUIREMENT,
@@ -54,7 +48,7 @@ pub(super) const TLON_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOp
     command: "tlon-send",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
-    requirements: TLON_SEND_REQUIREMENTS,
+    requirements: TLON_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 pub(super) const TLON_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -62,8 +56,8 @@ pub(super) const TLON_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogO
     label: "ship event service",
     command: "tlon-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
-    tracks_runtime: true,
-    requirements: TLON_SERVE_REQUIREMENTS,
+    tracks_runtime: false,
+    requirements: TLON_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 

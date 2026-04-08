@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::registry::{
-    ChannelRuntimeCommandDescriptor, resolve_channel_command_family_descriptor,
-    resolve_channel_selection_order,
+    ChannelCatalogEntry, ChannelRuntimeCommandDescriptor, resolve_channel_catalog_entry,
+    resolve_channel_command_family_descriptor, resolve_channel_selection_order,
 };
 
 #[cfg(feature = "channel-feishu")]
@@ -315,9 +315,8 @@ fn build_channel_descriptor(
     channel_id: &'static str,
     background_runtime: Option<ChannelRuntimeCommandDescriptor>,
 ) -> ChannelDescriptor {
-    let label = channel_id;
-    let surface_label_text = channel_surface_label_text(channel_id);
-    let surface_label = leak_channel_string(surface_label_text);
+    let label = channel_display_label(channel_id);
+    let surface_label = channel_surface_label(channel_id);
     let runtime_kind = channel_runtime_kind(channel_id);
     let serve_subcommand = channel_serve_subcommand(channel_id, background_runtime);
 
@@ -330,16 +329,41 @@ fn build_channel_descriptor(
     }
 }
 
-fn channel_surface_label_text(channel_id: &str) -> String {
-    let normalized = channel_id.replace('-', " ");
-    let surface_label = format!("{normalized} channel");
-    surface_label
+fn channel_catalog_entry(channel_id: &'static str) -> Option<ChannelCatalogEntry> {
+    if channel_id == "cli" {
+        return None;
+    }
+
+    resolve_channel_catalog_entry(channel_id)
 }
 
-fn leak_channel_string(value: String) -> &'static str {
-    let boxed = value.into_boxed_str();
-    let leaked = Box::leak(boxed);
-    leaked
+fn channel_display_label(channel_id: &'static str) -> &'static str {
+    if channel_id == "cli" {
+        return "cli";
+    }
+
+    let catalog_entry = channel_catalog_entry(channel_id);
+    let Some(catalog_entry) = catalog_entry else {
+        return channel_id;
+    };
+
+    catalog_entry.id
+}
+
+fn channel_surface_label(channel_id: &'static str) -> &'static str {
+    if channel_id == "cli" {
+        return "cli channel";
+    }
+
+    let catalog_entry = channel_catalog_entry(channel_id);
+    let Some(catalog_entry) = catalog_entry else {
+        return "cli channel";
+    };
+
+    let normalized = catalog_entry.id.replace('-', " ");
+    let surface_label = format!("{normalized} channel");
+    let boxed = surface_label.into_boxed_str();
+    Box::leak(boxed)
 }
 
 fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
@@ -354,9 +378,7 @@ fn channel_serve_subcommand(
     channel_id: &str,
     background_runtime: Option<ChannelRuntimeCommandDescriptor>,
 ) -> Option<&'static str> {
-    if background_runtime.is_none() {
-        return None;
-    }
+    background_runtime?;
 
     let family_descriptor = resolve_channel_command_family_descriptor(channel_id)?;
     let serve_operation = family_descriptor.serve();
@@ -389,7 +411,11 @@ fn channel_integration_order_key(
         ChannelRuntimeKind::Interactive => 0_u8,
         ChannelRuntimeKind::Service => 1_u8,
     };
-    let selection_order = resolve_channel_selection_order(channel_id).unwrap_or(u16::MAX);
+    let selection_order = if channel_id == "cli" {
+        u16::MAX
+    } else {
+        resolve_channel_selection_order(channel_id).unwrap_or(u16::MAX)
+    };
     (runtime_group, selection_order, channel_id)
 }
 
@@ -811,6 +837,56 @@ mod tests {
         let expected_ids = expected_background_channel_ids();
 
         assert_eq!(ids, expected_ids);
+    }
+
+    #[test]
+    fn non_cli_integrations_resolve_catalog_entries() {
+        for integration in CHANNEL_INTEGRATIONS {
+            let channel_id = integration.channel_id;
+            if channel_id == "cli" {
+                continue;
+            }
+
+            let catalog_entry = super::super::registry::resolve_channel_catalog_entry(channel_id);
+            assert!(
+                catalog_entry.is_some(),
+                "missing catalog entry for integrated channel `{channel_id}`"
+            );
+        }
+    }
+
+    #[test]
+    fn non_cli_integrations_resolve_selection_order() {
+        for integration in CHANNEL_INTEGRATIONS {
+            let channel_id = integration.channel_id;
+            if channel_id == "cli" {
+                continue;
+            }
+
+            let selection_order =
+                super::super::registry::resolve_channel_selection_order(channel_id);
+            assert!(
+                selection_order.is_some(),
+                "missing selection order metadata for integrated channel `{channel_id}`"
+            );
+        }
+    }
+
+    #[test]
+    fn background_runtime_integrations_resolve_command_family_descriptors() {
+        for integration in CHANNEL_INTEGRATIONS {
+            let channel_id = integration.channel_id;
+            if integration.background_runtime.is_none() {
+                continue;
+            }
+
+            let family_descriptor =
+                super::super::registry::resolve_channel_command_family_descriptor(channel_id);
+            assert!(
+                family_descriptor.is_some(),
+                "missing command family descriptor for background runtime channel `{channel_id}`"
+            );
+        }
     }
 
     #[test]

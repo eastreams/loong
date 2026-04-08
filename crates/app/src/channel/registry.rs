@@ -6654,6 +6654,21 @@ mod tests {
     }
 
     #[test]
+    fn channel_registry_physical_order_is_non_decreasing_by_selection_order() {
+        let mut previous_order = 0_u16;
+
+        for descriptor in CHANNEL_REGISTRY {
+            let current_order = descriptor.selection_order;
+            assert!(
+                current_order >= previous_order,
+                "channel registry order regressed: {} ({current_order}) after prior selection_order {previous_order}",
+                descriptor.id
+            );
+            previous_order = current_order;
+        }
+    }
+
+    #[test]
     fn resolve_channel_runtime_command_descriptor_returns_runtime_surface_metadata() {
         let telegram = resolve_channel_runtime_command_descriptor("telegram")
             .expect("telegram runtime command descriptor");

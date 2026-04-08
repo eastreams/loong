@@ -80,7 +80,7 @@ const ZALO_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     label: "official account webhook service",
     command: "zalo-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
-    tracks_runtime: true,
+    tracks_runtime: false,
     requirements: ZALO_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
@@ -160,7 +160,7 @@ const ZALO_PERSONAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOpe
     label: "personal message bridge",
     command: "zalo-personal-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
-    tracks_runtime: true,
+    tracks_runtime: false,
     requirements: ZALO_PERSONAL_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
@@ -254,7 +254,7 @@ const WEBCHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     label: "browser session service",
     command: "webchat-serve",
     availability: ChannelCatalogOperationAvailability::Stub,
-    tracks_runtime: true,
+    tracks_runtime: false,
     requirements: WEBCHAT_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
