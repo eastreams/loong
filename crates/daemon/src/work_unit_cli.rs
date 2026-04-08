@@ -31,6 +31,8 @@ pub enum WorkUnitCommands {
     Archive(WorkUnitArchiveCommandOptions),
     /// Assign or clear a durable work-unit owner without taking a runtime lease
     Assign(WorkUnitAssignCommandOptions),
+    /// Update mutable orchestration fields on a durable work unit
+    Update(WorkUnitUpdateCommandOptions),
     /// Add one blocking dependency edge between two durable work units
     Depend(WorkUnitDependCommandOptions),
     /// Remove one blocking dependency edge between two durable work units
@@ -240,6 +242,34 @@ pub struct WorkUnitAssignCommandOptions {
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct WorkUnitUpdateCommandOptions {
+    #[arg(long)]
+    pub config: Option<String>,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub description: Option<String>,
+    #[arg(long, value_enum)]
+    pub status: Option<WorkUnitStatusArg>,
+    #[arg(long, value_enum)]
+    pub priority: Option<WorkUnitPriorityArg>,
+    #[arg(long)]
+    pub next_run_at_ms: Option<i64>,
+    #[arg(long)]
+    pub blocking_reason: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub clear_blocking_reason: bool,
+    #[arg(long)]
+    pub actor: Option<String>,
+    #[arg(long)]
+    pub now_ms: Option<i64>,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct WorkUnitDependCommandOptions {
     #[arg(long)]
     pub config: Option<String>,
@@ -419,6 +449,7 @@ pub fn run_work_unit_cli(command: WorkUnitCommands) -> CliResult<()> {
         WorkUnitCommands::Recover(options) => run_recover_command(options),
         WorkUnitCommands::Archive(options) => run_archive_command(options),
         WorkUnitCommands::Assign(options) => run_assign_command(options),
+        WorkUnitCommands::Update(options) => run_update_command(options),
         WorkUnitCommands::Depend(options) => run_depend_command(options),
         WorkUnitCommands::Undepend(options) => run_undepend_command(options),
         WorkUnitCommands::Note(options) => run_note_command(options),
@@ -585,6 +616,24 @@ fn run_assign_command(options: WorkUnitAssignCommandOptions) -> CliResult<()> {
     };
     let snapshot = repository.assign_work_unit(request)?;
     render_optional_snapshot("assign", snapshot, options.json)
+}
+
+fn run_update_command(options: WorkUnitUpdateCommandOptions) -> CliResult<()> {
+    let repository = load_work_unit_repository(options.config.as_deref())?;
+    let request = mvp::work::repository::UpdateWorkUnitRequest {
+        work_unit_id: options.id,
+        title: options.title,
+        description: options.description,
+        status: options.status.map(WorkUnitStatus::from),
+        priority: options.priority.map(WorkUnitPriority::from),
+        next_run_at_ms: options.next_run_at_ms,
+        blocking_reason: options.blocking_reason,
+        clear_blocking_reason: options.clear_blocking_reason,
+        actor: options.actor,
+        now_ms: options.now_ms,
+    };
+    let snapshot = repository.update_work_unit(request)?;
+    render_optional_snapshot("update", snapshot, options.json)
 }
 
 fn run_depend_command(options: WorkUnitDependCommandOptions) -> CliResult<()> {

@@ -27,6 +27,7 @@ const WORK_UNIT_ASSIGNED_EVENT_KIND: &str = "work_unit_assigned";
 const WORK_UNIT_DEPENDENCY_ADDED_EVENT_KIND: &str = "work_unit_dependency_added";
 const WORK_UNIT_DEPENDENCY_REMOVED_EVENT_KIND: &str = "work_unit_dependency_removed";
 const WORK_UNIT_NOTE_ADDED_EVENT_KIND: &str = "work_unit_note_added";
+const WORK_UNIT_UPDATED_EVENT_KIND: &str = "work_unit_updated";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewWorkUnitRecord {
@@ -140,6 +141,20 @@ pub struct AppendWorkUnitNoteRequest {
     pub work_unit_id: String,
     pub actor: Option<String>,
     pub note: String,
+    pub now_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateWorkUnitRequest {
+    pub work_unit_id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<WorkUnitStatus>,
+    pub priority: Option<WorkUnitPriority>,
+    pub next_run_at_ms: Option<i64>,
+    pub blocking_reason: Option<String>,
+    pub clear_blocking_reason: bool,
+    pub actor: Option<String>,
     pub now_ms: Option<i64>,
 }
 
@@ -704,6 +719,170 @@ impl WorkUnitRepository {
         transaction
             .commit()
             .map_err(|error| format!("commit work unit archive transaction failed: {error}"))?;
+
+        self.load_work_unit_snapshot(&work_unit_id)
+    }
+
+    pub fn update_work_unit(
+        &self,
+        request: UpdateWorkUnitRequest,
+    ) -> Result<Option<WorkUnitSnapshot>, String> {
+        let work_unit_id = normalize_required_text(&request.work_unit_id, "work_unit_id")?;
+        let actor = normalize_optional_text(request.actor);
+        let now_ms = request.now_ms.unwrap_or_else(current_unix_ms);
+        let mut connection = self.open_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("open work unit update transaction failed: {error}"))?;
+        let Some(raw_record) = load_raw_work_unit_with_conn(&transaction, &work_unit_id)? else {
+            return Ok(None);
+        };
+        if raw_record.archived_at_ms.is_some() {
+            return Ok(None);
+        }
+
+        let current_status = WorkUnitStatus::parse(&raw_record.status)
+            .ok_or_else(|| format!("unknown work unit status `{}`", raw_record.status))?;
+        let mut changed_fields = Vec::new();
+
+        let next_title = match request.title {
+            Some(title) => {
+                let title = normalize_required_text(title.as_str(), "title")?;
+                if title != raw_record.title {
+                    changed_fields.push("title".to_owned());
+                }
+                title
+            }
+            None => raw_record.title.clone(),
+        };
+
+        let next_description = match request.description {
+            Some(description) => {
+                let description = normalize_required_text(description.as_str(), "description")?;
+                if description != raw_record.description {
+                    changed_fields.push("description".to_owned());
+                }
+                description
+            }
+            None => raw_record.description.clone(),
+        };
+
+        let next_status = match request.status {
+            Some(status) => {
+                validate_manual_update_status(current_status, status)?;
+                let status_label = status.as_str().to_owned();
+                if status_label != raw_record.status {
+                    changed_fields.push("status".to_owned());
+                }
+                status_label
+            }
+            None => raw_record.status.clone(),
+        };
+
+        let next_priority = match request.priority {
+            Some(priority) => {
+                let priority_label = priority.as_str().to_owned();
+                if priority_label != raw_record.priority {
+                    changed_fields.push("priority".to_owned());
+                }
+                priority_label
+            }
+            None => raw_record.priority.clone(),
+        };
+        let next_priority_rank = priority_rank(
+            WorkUnitPriority::parse(next_priority.as_str())
+                .ok_or_else(|| format!("unknown work unit priority `{}`", next_priority))?,
+        );
+
+        let next_next_run_at_ms = match request.next_run_at_ms {
+            Some(next_run_at_ms) => {
+                if next_run_at_ms != raw_record.next_run_at_ms {
+                    changed_fields.push("next_run_at_ms".to_owned());
+                }
+                next_run_at_ms
+            }
+            None => raw_record.next_run_at_ms,
+        };
+
+        let explicit_blocking_reason = request
+            .blocking_reason
+            .map(Some)
+            .unwrap_or_else(|| raw_record.blocking_reason.clone());
+        let normalized_blocking_reason = normalize_optional_text(explicit_blocking_reason);
+        let next_blocking_reason = if request.clear_blocking_reason {
+            None
+        } else {
+            normalized_blocking_reason
+        };
+        if next_blocking_reason != raw_record.blocking_reason {
+            changed_fields.push("blocking_reason".to_owned());
+        }
+
+        if changed_fields.is_empty() {
+            transaction.commit().map_err(|error| {
+                format!("commit unchanged work unit update transaction failed: {error}")
+            })?;
+            return self.load_work_unit_snapshot(&work_unit_id);
+        }
+
+        transaction
+            .execute(
+                "UPDATE work_units
+                 SET title = ?1,
+                     description = ?2,
+                     status = ?3,
+                     priority = ?4,
+                     priority_rank = ?5,
+                     next_run_at_ms = ?6,
+                     blocking_reason = ?7,
+                     updated_at_ms = ?8
+                 WHERE work_unit_id = ?9
+                   AND archived_at_ms IS NULL",
+                params![
+                    next_title,
+                    next_description,
+                    next_status,
+                    next_priority,
+                    next_priority_rank,
+                    next_next_run_at_ms,
+                    next_blocking_reason,
+                    now_ms,
+                    work_unit_id,
+                ],
+            )
+            .map_err(|error| format!("update work unit fields failed: {error}"))?;
+
+        let event_payload = json!({
+            "changed_fields": changed_fields,
+            "previous": {
+                "title": raw_record.title,
+                "description": raw_record.description,
+                "status": raw_record.status,
+                "priority": raw_record.priority,
+                "next_run_at_ms": raw_record.next_run_at_ms,
+                "blocking_reason": raw_record.blocking_reason,
+            },
+            "current": {
+                "title": next_title,
+                "description": next_description,
+                "status": next_status,
+                "priority": next_priority,
+                "next_run_at_ms": next_next_run_at_ms,
+                "blocking_reason": next_blocking_reason,
+            }
+        });
+        insert_event_in_tx(
+            &transaction,
+            &work_unit_id,
+            WORK_UNIT_UPDATED_EVENT_KIND,
+            actor.as_deref(),
+            &event_payload,
+            now_ms,
+        )?;
+
+        transaction
+            .commit()
+            .map_err(|error| format!("commit work unit update transaction failed: {error}"))?;
 
         self.load_work_unit_snapshot(&work_unit_id)
     }
@@ -1951,6 +2130,47 @@ fn validate_initial_status(status: WorkUnitStatus) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_manual_update_status(
+    current_status: WorkUnitStatus,
+    next_status: WorkUnitStatus,
+) -> Result<(), String> {
+    let next_is_allowed = matches!(
+        next_status,
+        WorkUnitStatus::Captured
+            | WorkUnitStatus::Triaged
+            | WorkUnitStatus::Ready
+            | WorkUnitStatus::WaitingExternal
+            | WorkUnitStatus::WaitingReview
+            | WorkUnitStatus::RetryPending
+            | WorkUnitStatus::Cancelled
+    );
+    if !next_is_allowed {
+        return Err(format!(
+            "manual work unit update does not allow target status `{}`",
+            next_status.as_str()
+        ));
+    }
+
+    let current_is_mutable = matches!(
+        current_status,
+        WorkUnitStatus::Captured
+            | WorkUnitStatus::Triaged
+            | WorkUnitStatus::Ready
+            | WorkUnitStatus::WaitingExternal
+            | WorkUnitStatus::WaitingReview
+            | WorkUnitStatus::RetryPending
+            | WorkUnitStatus::Cancelled
+    );
+    if !current_is_mutable {
+        return Err(format!(
+            "manual work unit update cannot change status from `{}`",
+            current_status.as_str()
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_retry_policy(retry_policy: &WorkUnitRetryPolicy) -> Result<(), String> {
     if retry_policy.max_attempts == 0 {
         return Err("work unit retry policy requires max_attempts >= 1".to_owned());
@@ -2085,9 +2305,10 @@ mod tests {
     use super::{
         AcquireWorkUnitLeaseRequest, AddWorkUnitDependencyRequest, AppendWorkUnitNoteRequest,
         ArchiveWorkUnitRequest, AssignWorkUnitRequest, CompleteWorkUnitRequest, NewWorkUnitRecord,
-        RemoveWorkUnitDependencyRequest, StartWorkUnitLeaseRequest, WORK_UNIT_ASSIGNED_EVENT_KIND,
-        WORK_UNIT_DEPENDENCY_ADDED_EVENT_KIND, WORK_UNIT_DEPENDENCY_REMOVED_EVENT_KIND,
-        WORK_UNIT_NOTE_ADDED_EVENT_KIND, WorkUnitCompletionDisposition, WorkUnitHeartbeatRequest,
+        RemoveWorkUnitDependencyRequest, StartWorkUnitLeaseRequest, UpdateWorkUnitRequest,
+        WORK_UNIT_ASSIGNED_EVENT_KIND, WORK_UNIT_DEPENDENCY_ADDED_EVENT_KIND,
+        WORK_UNIT_DEPENDENCY_REMOVED_EVENT_KIND, WORK_UNIT_NOTE_ADDED_EVENT_KIND,
+        WORK_UNIT_UPDATED_EVENT_KIND, WorkUnitCompletionDisposition, WorkUnitHeartbeatRequest,
         WorkUnitListQuery, WorkUnitRepository,
     };
     use loongclaw_contracts::{
@@ -2166,6 +2387,106 @@ mod tests {
             .expect("list work unit events");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_kind, "work_unit_created");
+    }
+
+    #[test]
+    fn update_work_unit_mutates_editable_fields_and_records_event() {
+        let config = isolated_memory_config("update-fields");
+        let repository = WorkUnitRepository::new(&config).expect("repository");
+        repository
+            .create_work_unit(sample_work_unit(WorkUnitStatus::Triaged), Some("operator"))
+            .expect("create work unit");
+
+        let updated = repository
+            .update_work_unit(UpdateWorkUnitRequest {
+                work_unit_id: "wu-test".to_owned(),
+                title: Some("Durable runtime foundation v2".to_owned()),
+                description: Some("Refine orchestration surface".to_owned()),
+                status: Some(WorkUnitStatus::WaitingReview),
+                priority: Some(WorkUnitPriority::Critical),
+                next_run_at_ms: Some(2_500),
+                blocking_reason: Some("waiting for design review".to_owned()),
+                clear_blocking_reason: false,
+                actor: Some("planner".to_owned()),
+                now_ms: Some(2_000),
+            })
+            .expect("update work unit")
+            .expect("updated snapshot");
+        assert_eq!(updated.work_unit.title, "Durable runtime foundation v2");
+        assert_eq!(
+            updated.work_unit.description,
+            "Refine orchestration surface"
+        );
+        assert_eq!(updated.work_unit.status, WorkUnitStatus::WaitingReview);
+        assert_eq!(updated.work_unit.priority, WorkUnitPriority::Critical);
+        assert_eq!(updated.work_unit.next_run_at_ms, 2_500);
+        assert_eq!(
+            updated.work_unit.blocking_reason.as_deref(),
+            Some("waiting for design review")
+        );
+
+        let ready = repository
+            .update_work_unit(UpdateWorkUnitRequest {
+                work_unit_id: "wu-test".to_owned(),
+                title: None,
+                description: None,
+                status: Some(WorkUnitStatus::Ready),
+                priority: None,
+                next_run_at_ms: None,
+                blocking_reason: None,
+                clear_blocking_reason: true,
+                actor: Some("planner".to_owned()),
+                now_ms: Some(2_100),
+            })
+            .expect("clear blocking reason")
+            .expect("ready snapshot");
+        assert_eq!(ready.work_unit.status, WorkUnitStatus::Ready);
+        assert_eq!(ready.work_unit.blocking_reason, None);
+
+        let events = repository
+            .list_work_unit_events("wu-test", 10)
+            .expect("list work unit events");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_kind == WORK_UNIT_UPDATED_EVENT_KIND),
+            "expected work-unit update event"
+        );
+    }
+
+    #[test]
+    fn update_work_unit_rejects_runtime_owned_status_transition() {
+        let config = isolated_memory_config("update-runtime-owned-status");
+        let repository = WorkUnitRepository::new(&config).expect("repository");
+        repository
+            .create_work_unit(sample_work_unit(WorkUnitStatus::Ready), Some("operator"))
+            .expect("create work unit");
+        repository
+            .acquire_next_ready_lease(AcquireWorkUnitLeaseRequest {
+                owner: "worker-a".to_owned(),
+                ttl_ms: 5_000,
+                actor: Some("scheduler".to_owned()),
+                now_ms: Some(1_000),
+            })
+            .expect("acquire lease")
+            .expect("leased snapshot");
+
+        let error = repository
+            .update_work_unit(UpdateWorkUnitRequest {
+                work_unit_id: "wu-test".to_owned(),
+                title: None,
+                description: None,
+                status: Some(WorkUnitStatus::WaitingReview),
+                priority: None,
+                next_run_at_ms: None,
+                blocking_reason: None,
+                clear_blocking_reason: false,
+                actor: Some("planner".to_owned()),
+                now_ms: Some(1_100),
+            })
+            .expect_err("runtime-owned status transition should be rejected");
+
+        assert!(error.contains("cannot change status from `leased`"));
     }
 
     #[test]

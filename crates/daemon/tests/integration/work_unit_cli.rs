@@ -58,6 +58,10 @@ fn cli_work_unit_help_mentions_durable_runtime_commands() {
         help.contains("assign"),
         "work-unit help should expose orchestration assignment: {help}"
     );
+    assert!(
+        help.contains("update"),
+        "work-unit help should expose general work-unit mutation: {help}"
+    );
 }
 
 #[test]
@@ -105,6 +109,62 @@ fn cli_work_unit_parse_accepts_full_complete_command_shape() {
     assert_eq!(options.actor.as_deref(), Some("scheduler"));
     assert_eq!(options.now_ms, Some(1500));
     assert_eq!(options.next_run_at_ms, Some(2500));
+    assert!(options.json);
+}
+
+#[test]
+fn cli_work_unit_parse_accepts_update_command_shape() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "work-unit",
+        "update",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "--id",
+        "wu-demo",
+        "--title",
+        "Refined title",
+        "--description",
+        "Refined description",
+        "--status",
+        "waiting-review",
+        "--priority",
+        "critical",
+        "--next-run-at-ms",
+        "3333",
+        "--blocking-reason",
+        "awaiting review",
+        "--actor",
+        "planner",
+        "--now-ms",
+        "2222",
+        "--json",
+    ])
+    .expect("work-unit update CLI should parse");
+
+    let command = cli.command.expect("CLI should parse a subcommand");
+    let Commands::WorkUnit { command } = command else {
+        panic!("unexpected CLI parse result: {command:?}");
+    };
+    let work_unit_runtime::WorkUnitCommands::Update(options) = command else {
+        panic!("unexpected work-unit update parse result: {command:?}");
+    };
+
+    assert_eq!(options.id, "wu-demo");
+    assert_eq!(options.title.as_deref(), Some("Refined title"));
+    assert_eq!(options.description.as_deref(), Some("Refined description"));
+    assert_eq!(
+        options.status,
+        Some(work_unit_runtime::WorkUnitStatusArg::WaitingReview)
+    );
+    assert_eq!(
+        options.priority,
+        Some(work_unit_runtime::WorkUnitPriorityArg::Critical)
+    );
+    assert_eq!(options.next_run_at_ms, Some(3333));
+    assert_eq!(options.blocking_reason.as_deref(), Some("awaiting review"));
+    assert_eq!(options.actor.as_deref(), Some("planner"));
+    assert_eq!(options.now_ms, Some(2222));
     assert!(options.json);
 }
 
@@ -180,6 +240,24 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
     ))
     .expect("assign work unit via CLI");
 
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Update(
+        work_unit_runtime::WorkUnitUpdateCommandOptions {
+            config: Some(config_path_string.clone()),
+            id: "wu-cli".to_owned(),
+            title: Some("Durable runtime slice v2".to_owned()),
+            description: Some("Refine the orchestration-ready slice".to_owned()),
+            status: Some(work_unit_runtime::WorkUnitStatusArg::WaitingReview),
+            priority: Some(work_unit_runtime::WorkUnitPriorityArg::Critical),
+            next_run_at_ms: Some(1_060),
+            blocking_reason: Some("needs review before execution".to_owned()),
+            clear_blocking_reason: false,
+            actor: Some("planner".to_owned()),
+            now_ms: Some(1_055),
+            json: true,
+        },
+    ))
+    .expect("update work unit via CLI");
+
     work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Depend(
         work_unit_runtime::WorkUnitDependCommandOptions {
             config: Some(config_path_string.clone()),
@@ -217,6 +295,20 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
     .expect("claim work unit via CLI");
 
     let repository = load_work_unit_repository(&config_path);
+    let updated_snapshot = repository
+        .load_work_unit_snapshot("wu-cli")
+        .expect("load updated snapshot")
+        .expect("updated snapshot");
+    assert_eq!(updated_snapshot.work_unit.title, "Durable runtime slice v2");
+    assert_eq!(
+        updated_snapshot.work_unit.status,
+        loongclaw_contracts::WorkUnitStatus::WaitingReview
+    );
+    assert_eq!(
+        updated_snapshot.work_unit.blocking_reason.as_deref(),
+        Some("needs review before execution")
+    );
+
     let blocker_snapshot = repository
         .load_work_unit_snapshot("wu-blocker")
         .expect("load blocker snapshot")
@@ -256,6 +348,24 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
         },
     ))
     .expect("remove dependency via CLI");
+
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Update(
+        work_unit_runtime::WorkUnitUpdateCommandOptions {
+            config: Some(config_path_string.clone()),
+            id: "wu-cli".to_owned(),
+            title: None,
+            description: None,
+            status: Some(work_unit_runtime::WorkUnitStatusArg::Ready),
+            priority: None,
+            next_run_at_ms: Some(1_100),
+            blocking_reason: None,
+            clear_blocking_reason: true,
+            actor: Some("planner".to_owned()),
+            now_ms: Some(1_095),
+            json: true,
+        },
+    ))
+    .expect("clear review block via CLI");
 
     work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Claim(
         work_unit_runtime::WorkUnitClaimCommandOptions {
@@ -332,6 +442,12 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
             .iter()
             .any(|event| event.event_kind == "work_unit_created"),
         "expected create event in work-unit ledger"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_kind == "work_unit_updated"),
+        "expected update event in work-unit ledger"
     );
     assert!(
         events
