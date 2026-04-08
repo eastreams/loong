@@ -1144,7 +1144,7 @@ fn compute_family_id(proposal: &RuntimeCapabilityProposal) -> CliResult<String> 
         "required_capabilities": required_capabilities,
     }))
     .map_err(|error| format!("serialize runtime capability family_id input failed: {error}"))?;
-    Ok(format!("{:x}", sha2::Sha256::digest(encoded)))
+    Ok(hex::encode(sha2::Sha256::digest(encoded)))
 }
 
 fn build_family_evidence_digest(
@@ -1479,7 +1479,7 @@ fn compute_candidate_id(
         "required_capabilities": required_capabilities,
     }))
     .map_err(|error| format!("serialize runtime capability candidate_id input failed: {error}"))?;
-    Ok(format!("{:x}", sha2::Sha256::digest(encoded)))
+    Ok(hex::encode(sha2::Sha256::digest(encoded)))
 }
 
 fn persist_runtime_capability_artifact(
@@ -2441,7 +2441,8 @@ fn build_runtime_capability_activation_id(
         hasher.update(item.as_bytes());
     }
     let digest = hasher.finalize();
-    let activation_id = format!("runtime-capability-activation-{:x}", digest);
+    let activation_digest = hex::encode(digest);
+    let activation_id = format!("runtime-capability-activation-{activation_digest}");
     Ok(activation_id)
 }
 

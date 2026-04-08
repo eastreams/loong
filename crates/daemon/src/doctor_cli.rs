@@ -2928,7 +2928,6 @@ mod tests {
     use std::ffi::OsString;
     use std::fs::Permissions;
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     #[cfg(unix)]
     use std::sync::MutexGuard;

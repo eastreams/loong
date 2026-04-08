@@ -195,7 +195,6 @@ fn runtime_trajectory_cli_parses_export_flags() {
         "/tmp/loongclaw.toml",
         "--session",
         "root-session",
-        "--lineage",
         "--output",
         "/tmp/runtime-trajectory.json",
         "--json",
@@ -208,8 +207,12 @@ fn runtime_trajectory_cli_parses_export_flags() {
                 loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Export(options),
         }) => {
             assert_eq!(options.config.as_deref(), Some("/tmp/loongclaw.toml"));
-            assert_eq!(options.session, "root-session");
-            assert!(options.lineage);
+            assert_eq!(options.session.as_deref(), Some("root-session"));
+            assert_eq!(options.turn_limit, None);
+            assert_eq!(
+                options.event_page_limit,
+                loongclaw_daemon::runtime_trajectory_cli::ARTIFACT_MODE_EVENT_PAGE_LIMIT_DEFAULT
+            );
             assert_eq!(
                 options.output.as_deref(),
                 Some("/tmp/runtime-trajectory.json")
