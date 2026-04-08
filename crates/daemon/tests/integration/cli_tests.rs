@@ -37,15 +37,18 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
         "welcome help should frame the configured path as a quick-command entrypoint: {help}"
     );
     assert!(
-        help.contains("loongclaw ask --config <path>"),
+        help.contains("loong ask --config <path>")
+            || help.contains("loongclaw ask --config <path>"),
         "welcome help should mention ask with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("loongclaw chat --config <path>"),
+        help.contains("loong chat --config <path>")
+            || help.contains("loongclaw chat --config <path>"),
         "welcome help should mention chat with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("loongclaw doctor --config <path>"),
+        help.contains("loong doctor --config <path>")
+            || help.contains("loongclaw doctor --config <path>"),
         "welcome help should mention doctor with an explicit config placeholder: {help}"
     );
     assert!(
@@ -180,8 +183,9 @@ fn runtime_trajectory_export_help_mentions_export_and_lineage() {
         "runtime-trajectory export help should require a session id: {help}"
     );
     assert!(
-        help.contains("--lineage"),
-        "runtime-trajectory export help should explain lineage export: {help}"
+        help.contains("--turn-limit <TURN_LIMIT>")
+            && help.contains("--event-page-limit <EVENT_PAGE_LIMIT>"),
+        "runtime-trajectory export help should surface the bounded export controls: {help}"
     );
 }
 

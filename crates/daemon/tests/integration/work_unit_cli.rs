@@ -196,6 +196,7 @@ fn cli_work_unit_parse_accepts_update_command_shape() {
 
 #[test]
 fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
+    let _env_lock = super::lock_daemon_test_environment();
     let root = unique_temp_dir("loongclaw-work-unit-cli");
     let config_path = write_work_unit_config(&root);
     let config_path_string = config_path.display().to_string();
@@ -498,6 +499,7 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
 
 #[test]
 fn work_unit_cli_update_text_output_uses_snake_case_status_labels() {
+    let _env_lock = super::lock_daemon_test_environment();
     let root = unique_temp_dir("loongclaw-work-unit-cli-text");
     let config_path = write_work_unit_config(&root);
     let repository = load_work_unit_repository(&config_path);

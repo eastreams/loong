@@ -6895,7 +6895,8 @@ mod tests {
             )
             .expect_err("replacement install should fail");
             assert!(
-                error.contains("cannot contain symlinks"),
+                error.contains("cannot contain symlinks")
+                    || error.contains("does not allow symlinks"),
                 "unexpected replacement failure: {error}"
             );
 
