@@ -1126,41 +1126,14 @@ fn render_session_picker(
         };
         let absolute_index = scroll_offset.saturating_add(visible_row);
         let is_selected = absolute_index == session_picker.picker.selected_index;
-        let is_current = session.session_id == session_picker.current_session_id;
 
         let primary = session_picker_primary_label(session, picker_mode, locale);
-        let mut detail_parts = vec![session_picker_detail_label(session, picker_mode)];
-        let maybe_provider_label = session
-            .agent_presentation
-            .as_ref()
-            .and_then(|presentation| presentation.provider_label(locale));
-        if let Some(provider_label) = maybe_provider_label {
-            detail_parts.push(provider_label);
-        }
-        if picker_mode == state::SessionPickerMode::Subagents
-            && session.kind == "root"
-            && session.label.is_some()
-        {
-            detail_parts.push(localized_root_thread_label(locale).to_owned());
-        }
-        if let Some(label) = session.label.as_deref() {
-            let label_text = label.to_owned();
-            if primary != label_text {
-                detail_parts.push(label_text);
-            }
-        }
-        if session.attention_approval_count > 0 {
-            detail_parts.push(format!("APR! {}", session.attention_approval_count));
-        }
-        let remaining_pending = session
-            .pending_approval_count
-            .saturating_sub(session.attention_approval_count);
-        if remaining_pending > 0 {
-            detail_parts.push(format!("APR {remaining_pending}"));
-        }
-        if is_current {
-            detail_parts.push("current".to_owned());
-        }
+        let detail_parts = session_picker_detail_parts(
+            session,
+            picker_mode,
+            locale,
+            session_picker.current_session_id,
+        );
         let detail = detail_parts.join(" · ");
 
         let marker = if is_selected { "›" } else { " " };
@@ -1247,6 +1220,26 @@ fn session_picker_summary_detail(
             let filtered_count = filtered_indices.len();
             format!("{filtered_count} delegate tasks")
         }
+        state::SessionPickerMode::Approvals => {
+            let filtered_count = filtered_indices.len();
+            let mut attention_count = 0usize;
+
+            for session_index in filtered_indices {
+                let maybe_session = sessions.get(*session_index);
+                let Some(session) = maybe_session else {
+                    continue;
+                };
+                if session.attention_approval_count > 0 {
+                    attention_count = attention_count.saturating_add(1);
+                }
+            }
+
+            if attention_count > 0 {
+                return format!("{filtered_count} requests · {attention_count} attention");
+            }
+
+            format!("{filtered_count} approval requests")
+        }
     }
 }
 
@@ -1285,6 +1278,7 @@ fn session_picker_detail_label(
         .unwrap_or(session.state.as_str());
     let kind_label = match picker_mode {
         state::SessionPickerMode::Tasks => "task",
+        state::SessionPickerMode::Approvals => "request",
         state::SessionPickerMode::Resume | state::SessionPickerMode::Subagents => {
             match session.kind.as_str() {
                 "root" => "thread",
@@ -1295,6 +1289,62 @@ fn session_picker_detail_label(
     };
 
     format!("{status_label} · {kind_label}")
+}
+
+fn session_picker_detail_parts(
+    session: &state::VisibleSessionSuggestion,
+    picker_mode: state::SessionPickerMode,
+    locale: SessionPresentationLocale,
+    current_session_id: &str,
+) -> Vec<String> {
+    if picker_mode == state::SessionPickerMode::Approvals {
+        let mut parts = Vec::new();
+        parts.push(session_picker_detail_label(session, picker_mode));
+        parts.push(session.session_id.clone());
+        if let Some(label) = session.label.as_deref() {
+            parts.push(label.to_owned());
+        }
+        if session.attention_approval_count > 0 {
+            parts.push("attention".to_owned());
+        }
+        return parts;
+    }
+
+    let mut detail_parts = vec![session_picker_detail_label(session, picker_mode)];
+    let maybe_provider_label = session
+        .agent_presentation
+        .as_ref()
+        .and_then(|presentation| presentation.provider_label(locale));
+    if let Some(provider_label) = maybe_provider_label {
+        detail_parts.push(provider_label);
+    }
+    if picker_mode == state::SessionPickerMode::Subagents
+        && session.kind == "root"
+        && session.label.is_some()
+    {
+        detail_parts.push(localized_root_thread_label(locale).to_owned());
+    }
+    if let Some(label) = session.label.as_deref() {
+        let primary = session_picker_primary_label(session, picker_mode, locale);
+        let label_text = label.to_owned();
+        if primary != label_text {
+            detail_parts.push(label_text);
+        }
+    }
+    if session.attention_approval_count > 0 {
+        detail_parts.push(format!("APR! {}", session.attention_approval_count));
+    }
+    let remaining_pending = session
+        .pending_approval_count
+        .saturating_sub(session.attention_approval_count);
+    if remaining_pending > 0 {
+        detail_parts.push(format!("APR {remaining_pending}"));
+    }
+    if session.session_id == current_session_id {
+        detail_parts.push("current".to_owned());
+    }
+
+    detail_parts
 }
 
 fn render_stats_tab_row(
@@ -3982,6 +4032,64 @@ mod tests {
         assert!(text.contains("2 delegate tasks"), "text={text:?}");
         assert!(text.contains("running · task"), "text={text:?}");
         assert!(text.contains("APR! 1"), "text={text:?}");
+    }
+
+    #[test]
+    fn draw_renders_approvals_picker_with_attention_summary_details() {
+        let backend = TestBackend::new(100, 26);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::SessionPicker);
+        let session_picker = state::SessionPickerState {
+            mode: state::SessionPickerMode::Approvals,
+            sessions: vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "apr-123".to_owned(),
+                    label: Some("delegate_async".to_owned()),
+                    agent_presentation: None,
+                    state: "pending".to_owned(),
+                    kind: "approval_request".to_owned(),
+                    task_phase: None,
+                    overdue: false,
+                    pending_approval_count: 1,
+                    attention_approval_count: 1,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "apr-456".to_owned(),
+                    label: Some("shell.exec".to_owned()),
+                    agent_presentation: None,
+                    state: "approved".to_owned(),
+                    kind: "approval_request".to_owned(),
+                    task_phase: None,
+                    overdue: false,
+                    pending_approval_count: 1,
+                    attention_approval_count: 0,
+                },
+            ],
+            query: String::new(),
+            selected_index: 0,
+            list_scroll_offset: 0,
+        };
+        let shell = TestShell {
+            focus,
+            session_picker: Some(session_picker),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Approvals 1/2"), "text={text:?}");
+        assert!(text.contains("2 requests · 1 attention"), "text={text:?}");
+        assert!(text.contains("pending · request"), "text={text:?}");
+        assert!(text.contains("apr-123"), "text={text:?}");
+        assert!(text.contains("attention"), "text={text:?}");
     }
 
     #[test]

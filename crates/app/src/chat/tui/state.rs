@@ -147,6 +147,7 @@ pub(super) enum SessionPickerMode {
     Resume,
     Subagents,
     Tasks,
+    Approvals,
 }
 
 impl SessionPickerMode {
@@ -155,6 +156,7 @@ impl SessionPickerMode {
             Self::Resume => "Resume",
             Self::Subagents => "Subagents",
             Self::Tasks => "Tasks",
+            Self::Approvals => "Approvals",
         }
     }
 
@@ -163,6 +165,7 @@ impl SessionPickerMode {
             Self::Resume => " Type to search · Enter switch · Esc close ",
             Self::Subagents => " Type to search · Enter switch thread · Esc close ",
             Self::Tasks => " Type to search · Enter inspect task · Esc close ",
+            Self::Approvals => " Type to search · Enter inspect request · Esc close ",
         }
     }
 
@@ -171,6 +174,7 @@ impl SessionPickerMode {
             Self::Resume => " No visible sessions match the current search.",
             Self::Subagents => " No subagent threads match the current search.",
             Self::Tasks => " No delegate tasks match the current search.",
+            Self::Approvals => " No approval requests match the current search.",
         }
     }
 
@@ -179,6 +183,7 @@ impl SessionPickerMode {
             Self::Resume => "Resume picker opened",
             Self::Subagents => "Subagent picker opened",
             Self::Tasks => "Tasks picker opened",
+            Self::Approvals => "Approvals picker opened",
         }
     }
 
@@ -187,6 +192,7 @@ impl SessionPickerMode {
             Self::Resume => "Switching sessions...",
             Self::Subagents => "Switching subagent thread...",
             Self::Tasks => "Inspecting task session...",
+            Self::Approvals => "Inspecting approval request...",
         }
     }
 
@@ -195,6 +201,7 @@ impl SessionPickerMode {
             Self::Resume => format!("/resume {session_id}"),
             Self::Subagents => format!("/subagents {session_id}"),
             Self::Tasks => format!("/tasks {session_id}"),
+            Self::Approvals => format!("/approvals {session_id}"),
         }
     }
 }

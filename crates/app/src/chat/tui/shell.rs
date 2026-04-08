@@ -4114,54 +4114,58 @@ fn show_approvals_surface(shell: &mut state::Shell, args: &str) {
                 }
             };
 
-            let matched_count = outcome
-                .payload
-                .get("matched_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let returned_count = outcome
-                .payload
-                .get("returned_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let needs_attention_count = outcome
-                .payload
-                .get("attention_summary")
-                .and_then(|value| value.get("needs_attention_count"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let scope_label = if filter.is_empty() {
-                "pending"
-            } else {
-                filter.as_str()
-            };
-            let mut lines = vec![
-                format!("- scope: {scope_label}"),
-                format!("- matched requests: {returned_count}/{matched_count}"),
-                format!("- needs attention: {needs_attention_count}"),
-            ];
             let requests = outcome
                 .payload
                 .get("requests")
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            if requests.is_empty() {
-                lines.push("- no approval requests matched".to_owned());
-            } else {
-                for request in &requests {
-                    lines.extend(approval_request_lines(request));
-                }
-                lines.push(
-                    "- resolve with `/approvals resolve <request-id> <approve-once|approve-always|deny>`"
-                        .to_owned(),
-                );
+            let mut sessions = approval_request_picker_sessions(requests.as_slice());
+
+            if sessions.is_empty() {
+                let matched_count = outcome
+                    .payload
+                    .get("matched_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let returned_count = outcome
+                    .payload
+                    .get("returned_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let needs_attention_count = outcome
+                    .payload
+                    .get("attention_summary")
+                    .and_then(|value| value.get("needs_attention_count"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let scope_label = if filter.is_empty() {
+                    "pending"
+                } else {
+                    filter.as_str()
+                };
+                let lines = vec![
+                    format!("- scope: {scope_label}"),
+                    format!("- matched requests: {returned_count}/{matched_count}"),
+                    format!("- needs attention: {needs_attention_count}"),
+                    "- no approval requests matched".to_owned(),
+                ];
+
+                append_surface_message(shell, "approval requests", lines.as_slice());
+                shell
+                    .pane
+                    .set_status("Approval requests added to transcript".to_owned());
+                return;
             }
 
-            append_surface_message(shell, "approval requests", lines.as_slice());
-            shell
-                .pane
-                .set_status("Approval requests added to transcript".to_owned());
+            sessions.sort_by_key(|session| {
+                (
+                    usize::from(session.attention_approval_count == 0),
+                    session.state.clone(),
+                    session.session_id.clone(),
+                )
+            });
+            open_session_picker(shell, state::SessionPickerMode::Approvals, sessions);
         }
         Ok(ApprovalsAction::Resolve {
             approval_request_id,
@@ -4175,6 +4179,47 @@ fn show_approvals_surface(shell: &mut state::Shell, args: &str) {
             shell.pane.add_system_message(&error);
         }
     }
+}
+
+fn approval_request_picker_sessions(requests: &[Value]) -> Vec<state::VisibleSessionSuggestion> {
+    requests
+        .iter()
+        .filter_map(|request| {
+            let approval_request_id = request.get("approval_request_id")?.as_str()?.to_owned();
+            let tool_name = request
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned();
+            let status = request
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned();
+            let session_id = request
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned();
+            let needs_attention = request
+                .get("attention")
+                .and_then(|value| value.get("needs_attention"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
+            Some(state::VisibleSessionSuggestion {
+                session_id: approval_request_id,
+                label: Some(tool_name),
+                agent_presentation: None,
+                state: status,
+                kind: "approval_request".to_owned(),
+                task_phase: Some(session_id),
+                overdue: false,
+                pending_approval_count: 1,
+                attention_approval_count: usize::from(needs_attention),
+            })
+        })
+        .collect()
 }
 
 fn session_history_limit(shell: &state::Shell) -> usize {
@@ -9327,11 +9372,67 @@ mod tests {
             },
         );
 
-        let rendered_surface = latest_message_text(&shell);
+        let session_picker = shell.session_picker.as_ref().expect("session picker");
 
-        assert!(rendered_surface.contains("approval requests"));
-        assert!(rendered_surface.contains(approval_request_id.as_str()));
-        assert!(rendered_surface.contains("delegate_async"));
+        assert_eq!(shell.focus.top(), FocusLayer::SessionPicker);
+        assert_eq!(session_picker.mode, state::SessionPickerMode::Approvals);
+        assert!(
+            session_picker
+                .sessions
+                .iter()
+                .any(|session| session.session_id == approval_request_id)
+        );
+    }
+
+    #[test]
+    fn approvals_picker_enter_inspects_selected_request() {
+        let mut shell = state::Shell::new("root-session");
+        shell.session_picker = Some(state::SessionPickerState::new(
+            state::SessionPickerMode::Approvals,
+            vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "apr-1".to_owned(),
+                    label: Some("delegate_async".to_owned()),
+                    agent_presentation: None,
+                    state: "pending".to_owned(),
+                    kind: "approval_request".to_owned(),
+                    task_phase: Some("root-session".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 1,
+                    attention_approval_count: 1,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "apr-2".to_owned(),
+                    label: Some("shell.exec".to_owned()),
+                    agent_presentation: None,
+                    state: "approved".to_owned(),
+                    kind: "approval_request".to_owned(),
+                    task_phase: Some("delegate-session".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 1,
+                    attention_approval_count: 0,
+                },
+            ],
+        ));
+        if let Some(session_picker) = shell.session_picker.as_mut() {
+            session_picker.selected_index = 1;
+        }
+        shell.focus.push(FocusLayer::SessionPicker);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(submit_text.as_deref(), Some("/approvals apr-2"));
+        assert!(shell.session_picker.is_none());
+        assert_eq!(shell.focus.top(), FocusLayer::Composer);
     }
 
     #[test]
