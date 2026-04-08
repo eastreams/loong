@@ -15,6 +15,22 @@ use super::{
     state::{GatewayOwnerStatus, default_gateway_runtime_state_dir, load_gateway_owner_status},
 };
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GatewayAcpSessionsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GatewayAcpStatusRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_session_id: Option<&'a str>,
+}
+
 #[derive(Debug, Clone)]
 pub struct GatewayLocalDiscovery {
     runtime_dir: PathBuf,
@@ -128,6 +144,23 @@ impl GatewayLocalClient {
         self.request_json(Method::GET, path).await
     }
 
+    pub async fn acp_sessions(&self, request: &GatewayAcpSessionsRequest) -> CliResult<Value> {
+        let path = "/api/gateway/acp/sessions";
+        self.request_json_with_query(Method::GET, path, request)
+            .await
+    }
+
+    pub async fn acp_status(&self, request: &GatewayAcpStatusRequest<'_>) -> CliResult<Value> {
+        let path = "/api/gateway/acp/status";
+        self.request_json_with_query(Method::GET, path, request)
+            .await
+    }
+
+    pub async fn acp_observability(&self) -> CliResult<Value> {
+        let path = "/api/gateway/acp/observability";
+        self.request_json(Method::GET, path).await
+    }
+
     pub async fn stop(&self) -> CliResult<GatewayStopResponse> {
         let path = "/api/gateway/stop";
         self.request_json(Method::POST, path).await
@@ -169,12 +202,58 @@ impl GatewayLocalClient {
         let method_name = method.as_str().to_owned();
         let request_builder = self.http_client.request(method, endpoint.as_str());
         let request_builder = request_builder.bearer_auth(self.discovery.bearer_token());
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), method_name.as_str(), path)
+            .await
+    }
+
+    async fn request_json_with_query<T, Q>(
+        &self,
+        method: Method,
+        path: &str,
+        query: &Q,
+    ) -> CliResult<T>
+    where
+        T: DeserializeOwned,
+        Q: Serialize + ?Sized,
+    {
+        let endpoint = self.endpoint_url(path)?;
+        let method_name = method.as_str().to_owned();
+        let request_builder = self.http_client.request(method, endpoint.as_str());
+        let request_builder = request_builder.query(query);
+        let request_builder = request_builder.bearer_auth(self.discovery.bearer_token());
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), method_name.as_str(), path)
+            .await
+    }
+
+    async fn send_gateway_request(
+        &self,
+        request_builder: reqwest::RequestBuilder,
+        endpoint: &str,
+    ) -> CliResult<Response> {
         let response = request_builder
             .send()
             .await
             .map_err(|error| format!("send gateway request failed for {endpoint}: {error}"))?;
-        let status = response.status();
+        Ok(response)
+    }
 
+    async fn decode_gateway_json_response<T>(
+        &self,
+        response: Response,
+        endpoint: &str,
+        method_name: &str,
+        path: &str,
+    ) -> CliResult<T>
+    where
+        T: DeserializeOwned,
+    {
+        let status = response.status();
         if !status.is_success() {
             let error_message = decode_gateway_error_message(response).await;
             let error = format!(

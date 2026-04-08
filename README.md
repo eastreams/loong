@@ -573,8 +573,8 @@ The current gateway slice now includes:
 - `loongclaw gateway status` for cross-process owner inspection
 - `loongclaw gateway stop` for cooperative shutdown
 - a localhost-only authenticated control surface that publishes status,
-  channel inventory, runtime snapshot, operator summary, and cooperative stop
-  endpoints from the same `gateway run` owner
+  channel inventory, runtime snapshot, ACP session/operator views, operator
+  summary, and cooperative stop endpoints from the same `gateway run` owner
 
 `gateway run` starts headless by default. Pass `--session` when you want the
 concurrent CLI host attached to the same runtime owner.
@@ -587,8 +587,9 @@ without introducing a second service lifecycle.
 
 The daemon now also carries a reusable localhost gateway client/discovery layer
 that centralizes loopback validation, bearer-token loading, and route helpers
-for `status`, `channels`, `runtime-snapshot`, `operator-summary`, and `stop`.
-That keeps dashboard and Web UI bootstrap logic out of ad-hoc file reads.
+for `status`, `channels`, `runtime-snapshot`, `acp/sessions`, `acp/status`,
+`acp/observability`, `operator-summary`, and `stop`. That keeps dashboard,
+ACP inspection, and Web UI bootstrap logic out of ad-hoc file reads.
 
 ```bash
 loongclaw gateway run --config ~/.loongclaw/config.toml

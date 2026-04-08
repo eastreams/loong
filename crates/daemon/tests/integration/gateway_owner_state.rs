@@ -510,6 +510,66 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
             .is_some()
     );
 
+    let unauthorized_acp_sessions_response = client
+        .get(format!("{base_url}/api/gateway/acp/sessions"))
+        .send()
+        .await
+        .expect("send unauthorized gateway ACP sessions request");
+    assert_eq!(
+        unauthorized_acp_sessions_response.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+
+    let authorized_acp_sessions_response = client
+        .get(format!("{base_url}/api/gateway/acp/sessions"))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .expect("send gateway ACP sessions request");
+    assert_eq!(
+        authorized_acp_sessions_response.status(),
+        reqwest::StatusCode::OK
+    );
+    let authorized_acp_sessions_json: Value = authorized_acp_sessions_response
+        .json()
+        .await
+        .expect("decode gateway ACP sessions response");
+    assert_eq!(
+        authorized_acp_sessions_json["returned_count"].as_u64(),
+        Some(0)
+    );
+
+    let authorized_acp_observability_response = client
+        .get(format!("{base_url}/api/gateway/acp/observability"))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .expect("send gateway ACP observability request");
+    assert_eq!(
+        authorized_acp_observability_response.status(),
+        reqwest::StatusCode::OK
+    );
+    let authorized_acp_observability_json: Value = authorized_acp_observability_response
+        .json()
+        .await
+        .expect("decode gateway ACP observability response");
+    assert_eq!(
+        authorized_acp_observability_json["snapshot"]["runtime_cache"]["active_sessions"].as_u64(),
+        Some(0)
+    );
+
+    let missing_status_response = client
+        .get(format!("{base_url}/api/gateway/acp/status"))
+        .bearer_auth(token.as_str())
+        .query(&[("session", "missing-session")])
+        .send()
+        .await
+        .expect("send missing gateway ACP status request");
+    assert_eq!(
+        missing_status_response.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+
     let stop_response = client
         .post(format!("{base_url}/api/gateway/stop"))
         .bearer_auth(token.as_str())
