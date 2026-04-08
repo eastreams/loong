@@ -146,6 +146,7 @@ pub(super) struct DiffOverlayState {
 pub(super) enum SessionPickerMode {
     Resume,
     Subagents,
+    Tasks,
 }
 
 impl SessionPickerMode {
@@ -153,6 +154,7 @@ impl SessionPickerMode {
         match self {
             Self::Resume => "Resume",
             Self::Subagents => "Subagents",
+            Self::Tasks => "Tasks",
         }
     }
 
@@ -160,6 +162,7 @@ impl SessionPickerMode {
         match self {
             Self::Resume => " Type to search · Enter switch · Esc close ",
             Self::Subagents => " Type to search · Enter switch thread · Esc close ",
+            Self::Tasks => " Type to search · Enter inspect task · Esc close ",
         }
     }
 
@@ -167,6 +170,7 @@ impl SessionPickerMode {
         match self {
             Self::Resume => " No visible sessions match the current search.",
             Self::Subagents => " No subagent threads match the current search.",
+            Self::Tasks => " No delegate tasks match the current search.",
         }
     }
 
@@ -174,6 +178,7 @@ impl SessionPickerMode {
         match self {
             Self::Resume => "Resume picker opened",
             Self::Subagents => "Subagent picker opened",
+            Self::Tasks => "Tasks picker opened",
         }
     }
 
@@ -181,6 +186,7 @@ impl SessionPickerMode {
         match self {
             Self::Resume => "Switching sessions...",
             Self::Subagents => "Switching subagent thread...",
+            Self::Tasks => "Inspecting task session...",
         }
     }
 
@@ -188,6 +194,7 @@ impl SessionPickerMode {
         match self {
             Self::Resume => format!("/resume {session_id}"),
             Self::Subagents => format!("/subagents {session_id}"),
+            Self::Tasks => format!("/tasks {session_id}"),
         }
     }
 }

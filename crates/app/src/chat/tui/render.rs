@@ -1129,7 +1129,7 @@ fn render_session_picker(
         let is_current = session.session_id == session_picker.current_session_id;
 
         let primary = session_picker_primary_label(session, picker_mode, locale);
-        let mut detail_parts = vec![session_picker_detail_label(session)];
+        let mut detail_parts = vec![session_picker_detail_label(session, picker_mode)];
         let maybe_provider_label = session
             .agent_presentation
             .as_ref()
@@ -1243,6 +1243,10 @@ fn session_picker_summary_detail(
 
             format!("{delegate_count} delegate threads")
         }
+        state::SessionPickerMode::Tasks => {
+            let filtered_count = filtered_indices.len();
+            format!("{filtered_count} delegate tasks")
+        }
     }
 }
 
@@ -1271,15 +1275,23 @@ fn session_picker_primary_label(
         .unwrap_or_else(|| session.session_id.clone())
 }
 
-fn session_picker_detail_label(session: &state::VisibleSessionSuggestion) -> String {
+fn session_picker_detail_label(
+    session: &state::VisibleSessionSuggestion,
+    picker_mode: state::SessionPickerMode,
+) -> String {
     let status_label = session
         .task_phase
         .as_deref()
         .unwrap_or(session.state.as_str());
-    let kind_label = match session.kind.as_str() {
-        "root" => "thread",
-        "delegate_child" => "subagent",
-        _ => session.kind.as_str(),
+    let kind_label = match picker_mode {
+        state::SessionPickerMode::Tasks => "task",
+        state::SessionPickerMode::Resume | state::SessionPickerMode::Subagents => {
+            match session.kind.as_str() {
+                "root" => "thread",
+                "delegate_child" => "subagent",
+                _ => session.kind.as_str(),
+            }
+        }
     };
 
     format!("{status_label} · {kind_label}")
@@ -3913,6 +3925,63 @@ mod tests {
             text.contains("gpt-5 · high"),
             "subagent provider label should render: {text:?}"
         );
+    }
+
+    #[test]
+    fn draw_renders_tasks_picker_with_task_summary_details() {
+        let backend = TestBackend::new(100, 26);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::SessionPicker);
+        let session_picker = state::SessionPickerState {
+            mode: state::SessionPickerMode::Tasks,
+            sessions: vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "delegate-task-1".to_owned(),
+                    label: Some("Long-running task".to_owned()),
+                    agent_presentation: None,
+                    state: "running".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("running".to_owned()),
+                    overdue: true,
+                    pending_approval_count: 1,
+                    attention_approval_count: 1,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "delegate-task-2".to_owned(),
+                    label: Some("Settled task".to_owned()),
+                    agent_presentation: None,
+                    state: "completed".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("completed".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+            ],
+            query: String::new(),
+            selected_index: 0,
+            list_scroll_offset: 0,
+        };
+        let shell = TestShell {
+            focus,
+            session_picker: Some(session_picker),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Tasks 1/2"), "text={text:?}");
+        assert!(text.contains("2 delegate tasks"), "text={text:?}");
+        assert!(text.contains("running · task"), "text={text:?}");
+        assert!(text.contains("APR! 1"), "text={text:?}");
     }
 
     #[test]

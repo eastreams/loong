@@ -4011,38 +4011,45 @@ fn show_tasks_surface(shell: &mut state::Shell, args: &str) {
         .get("matched_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let returned_count = outcome
-        .payload
-        .get("returned_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let scope_label = if filter.is_empty() {
-        "all"
-    } else {
-        filter.as_str()
-    };
-    let mut lines = vec![
-        format!("- scope: {scope_label}"),
-        format!("- matched tasks: {returned_count}/{matched_count}"),
-    ];
     let sessions = outcome
         .payload
         .get("sessions")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if sessions.is_empty() {
-        lines.push("- no delegate task sessions matched".to_owned());
+    let returned_count = outcome
+        .payload
+        .get("returned_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(sessions.len() as u64);
+    let scope_label = if filter.is_empty() {
+        "all"
     } else {
-        for session in &sessions {
-            push_session_summary_lines(&mut lines, session, shell.pane.session_id.as_str());
-        }
+        filter.as_str()
+    };
+    let mut visible_sessions = parse_visible_session_suggestions(&outcome);
+    let approval_outcome =
+        execute_shell_app_tool(shell, "approval_requests_list", json!({ "limit": 8 })).ok();
+    let approvals = approval_outcome
+        .as_ref()
+        .map(parse_approval_request_suggestions)
+        .unwrap_or_default();
+    annotate_session_approval_counts(visible_sessions.as_mut_slice(), approvals.as_slice());
+
+    if visible_sessions.is_empty() {
+        let lines = vec![
+            format!("- scope: {scope_label}"),
+            format!("- matched tasks: {returned_count}/{matched_count}"),
+            "- no delegate task sessions matched".to_owned(),
+        ];
+        append_surface_message(shell, "delegate tasks", lines.as_slice());
+        shell
+            .pane
+            .set_status("Delegate tasks added to transcript".to_owned());
+        return;
     }
 
-    append_surface_message(shell, "delegate tasks", lines.as_slice());
-    shell
-        .pane
-        .set_status("Delegate tasks added to transcript".to_owned());
+    open_session_picker(shell, state::SessionPickerMode::Tasks, visible_sessions);
 }
 
 fn show_approvals_surface(shell: &mut state::Shell, args: &str) {
@@ -9216,11 +9223,67 @@ mod tests {
             },
         );
 
-        let rendered_surface = latest_message_text(&shell);
+        let session_picker = shell.session_picker.as_ref().expect("session picker");
 
-        assert!(rendered_surface.contains("delegate tasks"));
-        assert!(rendered_surface.contains(delegate_session_id.as_str()));
-        assert!(rendered_surface.contains("task running"));
+        assert_eq!(shell.focus.top(), FocusLayer::SessionPicker);
+        assert_eq!(session_picker.mode, state::SessionPickerMode::Tasks);
+        assert!(
+            session_picker
+                .sessions
+                .iter()
+                .any(|session| session.session_id == delegate_session_id)
+        );
+    }
+
+    #[test]
+    fn tasks_picker_enter_inspects_selected_task_session() {
+        let mut shell = state::Shell::new("root-session");
+        shell.session_picker = Some(state::SessionPickerState::new(
+            state::SessionPickerMode::Tasks,
+            vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "delegate-a".to_owned(),
+                    label: Some("Task A".to_owned()),
+                    agent_presentation: None,
+                    state: "running".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("running".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "delegate-b".to_owned(),
+                    label: Some("Task B".to_owned()),
+                    agent_presentation: None,
+                    state: "completed".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("completed".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+            ],
+        ));
+        if let Some(session_picker) = shell.session_picker.as_mut() {
+            session_picker.selected_index = 1;
+        }
+        shell.focus.push(FocusLayer::SessionPicker);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(submit_text.as_deref(), Some("/tasks delegate-b"));
+        assert!(shell.session_picker.is_none());
+        assert_eq!(shell.focus.top(), FocusLayer::Composer);
     }
 
     #[test]
