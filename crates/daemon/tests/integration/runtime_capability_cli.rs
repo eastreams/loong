@@ -1777,6 +1777,27 @@ fn runtime_capability_plan_builds_promotable_managed_skill_plan() {
         plan.planned_payload.provenance.accepted_candidate_ids.len(),
         2
     );
+    match &plan.planned_payload.payload {
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ManagedSkillBundle {
+            files,
+        } => {
+            let skill_markdown = files.get("SKILL.md").expect("SKILL.md should exist");
+            assert!(
+                skill_markdown.contains(
+                    "Codify browser preview onboarding as a reusable managed skill"
+                )
+            );
+            assert!(
+                skill_markdown.contains(
+                    "Browser preview onboarding and companion readiness checks only"
+                )
+            );
+        }
+        other @ (
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. }
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProfileNoteAddendum { .. }
+        ) => panic!("unexpected managed skill payload: {other:?}"),
+    }
     assert!(
         plan.blockers.is_empty(),
         "ready family should have no blockers"
@@ -2037,6 +2058,23 @@ fn runtime_capability_plan_reports_missing_evidence_for_programmatic_flow_family
         loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProgrammaticFlow
     );
     assert_eq!(plan.planned_payload.artifact_kind, "programmatic_flow_spec");
+    match &plan.planned_payload.payload {
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec {
+            files,
+        } => {
+            let flow_json = files.get("flow.json").expect("flow.json should exist");
+            assert!(
+                flow_json.contains(
+                    "\"summary\": \"Codify runtime compare summarization as a reusable flow\""
+                )
+            );
+            assert!(flow_json.contains("\"steps\": []"));
+        }
+        other @ (
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ManagedSkillBundle { .. }
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProfileNoteAddendum { .. }
+        ) => panic!("unexpected programmatic flow payload: {other:?}"),
+    }
     assert!(
         plan.blockers.iter().any(|blocker| {
             blocker.dimension == "stability"
@@ -2150,6 +2188,20 @@ fn runtime_capability_plan_reports_blocked_profile_note_family() {
         loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum
     );
     assert_eq!(plan.planned_payload.artifact_kind, "profile_note_addendum");
+    match &plan.planned_payload.payload {
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProfileNoteAddendum {
+            content,
+        } => {
+            assert!(
+                content.contains("Record browser preview operator guidance in profile memory")
+            );
+            assert!(content.contains("Browser preview operator guidance only"));
+        }
+        other @ (
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ManagedSkillBundle { .. }
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. }
+        ) => panic!("unexpected profile note payload: {other:?}"),
+    }
     assert!(
         plan.blockers.iter().any(|blocker| {
             blocker.dimension == "review_consensus"
@@ -2394,6 +2446,18 @@ fn runtime_capability_apply_materializes_managed_skill_artifact_and_is_idempoten
     >(&fs::read_to_string(&output_path).expect("read apply output"))
     .expect("decode apply output");
     assert_eq!(persisted, report.applied_artifact);
+    match &report.applied_artifact.payload {
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ManagedSkillBundle {
+            files,
+        } => {
+            let skill_markdown = files.get("SKILL.md").expect("SKILL.md should exist");
+            assert!(skill_markdown.contains("runtime capability family"));
+        }
+        other @ (
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. }
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProfileNoteAddendum { .. }
+        ) => panic!("unexpected applied managed skill payload: {other:?}"),
+    }
 
     let second_report =
         loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_apply_command(
@@ -2509,6 +2573,18 @@ fn runtime_capability_apply_materializes_programmatic_flow_artifact() {
         report.applied_artifact.delivery_surface,
         "programmatic_flows"
     );
+    match &report.applied_artifact.payload {
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec {
+            files,
+        } => {
+            let flow_json = files.get("flow.json").expect("flow.json should exist");
+            assert!(flow_json.contains("\"steps\": []"));
+        }
+        other @ (
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ManagedSkillBundle { .. }
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProfileNoteAddendum { .. }
+        ) => panic!("unexpected applied programmatic flow payload: {other:?}"),
+    }
 
     fs::remove_dir_all(&root).ok();
 }
@@ -2600,6 +2676,17 @@ fn runtime_capability_apply_materializes_profile_note_addendum_artifact() {
         "profile_note_addendum"
     );
     assert_eq!(report.applied_artifact.delivery_surface, "profile_note");
+    match &report.applied_artifact.payload {
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProfileNoteAddendum {
+            content,
+        } => {
+            assert!(content.contains("Runtime Capability Draft"));
+        }
+        other @ (
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ManagedSkillBundle { .. }
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. }
+        ) => panic!("unexpected applied profile note payload: {other:?}"),
+    }
 
     fs::remove_dir_all(&root).ok();
 }
