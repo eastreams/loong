@@ -1430,7 +1430,7 @@ impl LoongClawConfig {
         if let Some(report) = selection_report {
             issues.extend(report.validation_issues());
         }
-        issues.extend(super::channels::collect_channel_validation_issues(self));
+        issues.extend(crate::channel::collect_channel_validation_issues(self));
         issues.extend(self.feishu_integration.validate());
         issues.extend(self.memory.validate());
         issues.extend(self.tools.validate());
@@ -1479,11 +1479,11 @@ impl LoongClawConfig {
     }
 
     pub fn enabled_channel_ids(&self) -> Vec<String> {
-        super::channels::enabled_channel_ids(self)
+        crate::channel::enabled_channel_ids(self, None)
     }
 
     pub fn enabled_service_channel_ids(&self) -> Vec<String> {
-        super::channels::enabled_service_channel_ids(self)
+        crate::channel::enabled_channel_ids(self, Some(crate::channel::ChannelRuntimeKind::Service))
     }
 
     pub fn active_provider_id(&self) -> Option<&str> {

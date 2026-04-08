@@ -386,7 +386,7 @@ fn channel_serve_subcommand(
     Some(serve_command)
 }
 
-pub(crate) fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
+pub fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
     let integration = find_channel_integration(id)?;
     let descriptor_id = integration.channel_id;
     let descriptors = channel_descriptors();
@@ -419,7 +419,7 @@ fn channel_integration_order_key(
     (runtime_group, selection_order, channel_id)
 }
 
-pub(crate) fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+pub fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
     ordered_channel_integrations()
         .into_iter()
         .filter_map(|integration| channel_descriptor(integration.channel_id))
