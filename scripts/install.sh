@@ -891,8 +891,13 @@ case ":${PATH}:" in
     ;;
 esac
 
+printf '\n'
+printf 'Note: if loong is not found after this script exits, run:\n'
+printf '  source "%s"\n' "${rc_file:-\$HOME/.profile}"
+printf 'or open a new terminal.\n'
+
 if [[ "${run_onboard}" -eq 1 ]]; then
-  printf '==> Running guided onboarding\n'
+  printf '\n==> Running guided onboarding\n'
   run_guided_onboarding
 fi
 
