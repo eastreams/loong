@@ -6,10 +6,11 @@ use crate::CliResult;
 
 use super::system_runtime::{BuiltinMemorySystemRuntime, MemorySystemRuntime};
 use super::{
-    CanonicalMemoryKind, CanonicalMemorySearchHit, DerivedMemoryKind, MemoryContextEntry,
-    MemoryContextKind, MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
-    MemoryRetrievalRequest, MemoryScope, MemoryStageFamily, WindowTurn,
-    builtin_pre_assembly_stage_families, durable_recall, runtime_config::MemoryRuntimeConfig,
+    CanonicalMemoryKind, CanonicalMemorySearchHit, DerivedMemoryKind, MemoryAuthority,
+    MemoryContextEntry, MemoryContextKind, MemoryContextProvenance, MemoryProvenanceSourceKind,
+    MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryScope, MemoryStageFamily,
+    MemoryTrustLevel, WindowTurn, builtin_pre_assembly_stage_families, durable_recall,
+    runtime_config::MemoryRuntimeConfig,
 };
 
 pub const MEMORY_SYSTEM_API_VERSION: u16 = 1;
@@ -324,6 +325,7 @@ fn run_builtin_retrieve_stage(
 
 fn rank_recall_first_entries(entries: Vec<MemoryContextEntry>) -> Vec<MemoryContextEntry> {
     let mut profile_entries = Vec::new();
+    let mut derived_entries = Vec::new();
     let mut retrieved_entries = Vec::new();
     let mut summary_entries = Vec::new();
     let mut history_entries = Vec::new();
@@ -331,6 +333,7 @@ fn rank_recall_first_entries(entries: Vec<MemoryContextEntry>) -> Vec<MemoryCont
     for entry in entries {
         match entry.kind {
             MemoryContextKind::Profile => profile_entries.push(entry),
+            MemoryContextKind::Derived => derived_entries.push(entry),
             MemoryContextKind::RetrievedMemory => retrieved_entries.push(entry),
             MemoryContextKind::Summary => summary_entries.push(entry),
             MemoryContextKind::Turn => history_entries.push(entry),
@@ -340,6 +343,7 @@ fn rank_recall_first_entries(entries: Vec<MemoryContextEntry>) -> Vec<MemoryCont
     let has_retrieved_entries = !retrieved_entries.is_empty();
     let mut ranked_entries = Vec::new();
     ranked_entries.extend(profile_entries);
+    ranked_entries.extend(derived_entries);
     ranked_entries.extend(retrieved_entries);
     if !has_retrieved_entries {
         ranked_entries.extend(summary_entries);
@@ -407,11 +411,14 @@ impl MemorySystem for BuiltinMemorySystem {
 
     fn run_derive_stage(
         &self,
-        _session_id: &str,
+        session_id: &str,
         _config: &MemoryRuntimeConfig,
-        _recent_window: &[WindowTurn],
+        recent_window: &[WindowTurn],
     ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
-        Ok(Some(Vec::new()))
+        let maybe_entry = derive_session_overview_entry(session_id, recent_window, self.id());
+        let entries = maybe_entry.into_iter().collect::<Vec<_>>();
+
+        Ok(Some(entries))
     }
 
     fn run_retrieve_stage(
@@ -429,7 +436,9 @@ impl MemorySystem for BuiltinMemorySystem {
         entries: Vec<MemoryContextEntry>,
         _config: &MemoryRuntimeConfig,
     ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
-        Ok(Some(entries))
+        let ranked_entries = rank_builtin_entries(entries);
+
+        Ok(Some(ranked_entries))
     }
 }
 
@@ -542,6 +551,249 @@ fn build_cross_session_recall_provenance(
         Some(hit.record.scope),
         recall_mode,
     )
+    .with_trust_level(MemoryTrustLevel::Session)
+    .with_authority(MemoryAuthority::Advisory)
+    .with_derived_kind(derived_memory_kind_for_canonical_kind(hit.record.kind))
+    .with_record_status(MemoryRecordStatus::Active)
+}
+
+fn derive_session_overview_entry(
+    session_id: &str,
+    recent_window: &[WindowTurn],
+    memory_system_id: &str,
+) -> Option<MemoryContextEntry> {
+    let records = collect_structured_canonical_records(session_id, recent_window);
+    if records.is_empty() {
+        return None;
+    }
+
+    let content = render_session_overview_block(records.as_slice());
+    let maybe_freshness_ts = recent_window.iter().filter_map(|turn| turn.ts).max();
+    let mut provenance = MemoryContextProvenance::new(
+        memory_system_id,
+        MemoryProvenanceSourceKind::DerivedSessionOverview,
+        Some("session_local_overview".to_owned()),
+        None,
+        Some(MemoryScope::Session),
+        MemoryRecallMode::PromptAssembly,
+    )
+    .with_trust_level(MemoryTrustLevel::Derived)
+    .with_authority(MemoryAuthority::Advisory)
+    .with_derived_kind(DerivedMemoryKind::Overview)
+    .with_record_status(MemoryRecordStatus::Active);
+
+    if let Some(freshness_ts) = maybe_freshness_ts {
+        provenance = provenance.with_freshness_ts(freshness_ts);
+    }
+
+    let entry = MemoryContextEntry {
+        kind: MemoryContextKind::Derived,
+        role: "system".to_owned(),
+        content,
+        provenance: vec![provenance],
+    };
+
+    Some(entry)
+}
+
+fn collect_structured_canonical_records(
+    session_id: &str,
+    recent_window: &[WindowTurn],
+) -> Vec<super::CanonicalMemoryRecord> {
+    let mut records = Vec::new();
+
+    for turn in recent_window {
+        let record = super::canonical_memory_record_from_persisted_turn(
+            session_id,
+            turn.role.as_str(),
+            turn.content.as_str(),
+        );
+        let is_structured_kind = matches!(
+            record.kind,
+            CanonicalMemoryKind::ToolDecision
+                | CanonicalMemoryKind::ToolOutcome
+                | CanonicalMemoryKind::ConversationEvent
+                | CanonicalMemoryKind::AcpRuntimeEvent
+                | CanonicalMemoryKind::AcpFinalEvent
+        );
+        if !is_structured_kind {
+            continue;
+        }
+
+        records.push(record);
+    }
+
+    records
+}
+
+fn render_session_overview_block(records: &[super::CanonicalMemoryRecord]) -> String {
+    let mut sections = Vec::new();
+    let mut lines = Vec::new();
+    let tool_decision_count = count_canonical_kind(records, CanonicalMemoryKind::ToolDecision);
+    let tool_outcome_count = count_canonical_kind(records, CanonicalMemoryKind::ToolOutcome);
+    let conversation_event_count =
+        count_canonical_kind(records, CanonicalMemoryKind::ConversationEvent);
+    let acp_runtime_event_count =
+        count_canonical_kind(records, CanonicalMemoryKind::AcpRuntimeEvent);
+    let acp_final_event_count = count_canonical_kind(records, CanonicalMemoryKind::AcpFinalEvent);
+    let record_kinds = collect_record_kind_names(records);
+
+    sections.push("## Session Local Overview".to_owned());
+    sections.push(
+        "Advisory session-local overview derived from persisted internal records. It preserves runtime continuity without replacing runtime-self guidance, resolved runtime identity, or the session profile."
+            .to_owned(),
+    );
+
+    if tool_decision_count > 0 {
+        lines.push(format!("- tool_decisions: {tool_decision_count}"));
+    }
+    if tool_outcome_count > 0 {
+        lines.push(format!("- tool_outcomes: {tool_outcome_count}"));
+    }
+    if conversation_event_count > 0 {
+        lines.push(format!("- conversation_events: {conversation_event_count}"));
+    }
+    if acp_runtime_event_count > 0 {
+        lines.push(format!("- acp_runtime_events: {acp_runtime_event_count}"));
+    }
+    if acp_final_event_count > 0 {
+        lines.push(format!("- acp_final_events: {acp_final_event_count}"));
+    }
+    if !record_kinds.is_empty() {
+        let record_kind_summary = record_kinds.join(", ");
+        lines.push(format!("- observed_record_kinds: {record_kind_summary}"));
+    }
+
+    sections.push(lines.join("\n"));
+
+    sections.join("\n\n")
+}
+
+fn count_canonical_kind(
+    records: &[super::CanonicalMemoryRecord],
+    kind: CanonicalMemoryKind,
+) -> usize {
+    records.iter().filter(|record| record.kind == kind).count()
+}
+
+fn collect_record_kind_names(records: &[super::CanonicalMemoryRecord]) -> Vec<String> {
+    let mut names = BTreeSet::new();
+
+    for record in records {
+        names.insert(record.kind.as_str().to_owned());
+    }
+
+    names.into_iter().collect()
+}
+
+fn rank_builtin_entries(entries: Vec<MemoryContextEntry>) -> Vec<MemoryContextEntry> {
+    let mut advisory_entries = Vec::new();
+    let mut turn_entries = Vec::new();
+
+    for entry in entries {
+        let is_turn = entry.kind == MemoryContextKind::Turn;
+        if is_turn {
+            turn_entries.push(entry);
+            continue;
+        }
+
+        if !memory_entry_is_active(&entry) {
+            continue;
+        }
+
+        advisory_entries.push(entry);
+    }
+
+    advisory_entries.sort_by(rank_builtin_entry_cmp);
+
+    let mut ranked_entries = advisory_entries;
+    ranked_entries.extend(turn_entries);
+
+    ranked_entries
+}
+
+fn memory_entry_is_active(entry: &MemoryContextEntry) -> bool {
+    let maybe_status = entry
+        .provenance
+        .first()
+        .and_then(|provenance| provenance.record_status);
+
+    match maybe_status {
+        Some(status) => status.is_active(),
+        None => true,
+    }
+}
+
+fn rank_builtin_entry_cmp(
+    left: &MemoryContextEntry,
+    right: &MemoryContextEntry,
+) -> std::cmp::Ordering {
+    let left_kind_priority = memory_entry_kind_priority(left.kind);
+    let right_kind_priority = memory_entry_kind_priority(right.kind);
+    let kind_order = left_kind_priority.cmp(&right_kind_priority);
+    if kind_order != std::cmp::Ordering::Equal {
+        return kind_order;
+    }
+
+    let left_trust_priority = memory_entry_trust_priority(left);
+    let right_trust_priority = memory_entry_trust_priority(right);
+    let trust_order = left_trust_priority.cmp(&right_trust_priority);
+    if trust_order != std::cmp::Ordering::Equal {
+        return trust_order;
+    }
+
+    let left_freshness = memory_entry_freshness(left);
+    let right_freshness = memory_entry_freshness(right);
+    let freshness_order = right_freshness.cmp(&left_freshness);
+    if freshness_order != std::cmp::Ordering::Equal {
+        return freshness_order;
+    }
+
+    let left_label = memory_entry_label(left);
+    let right_label = memory_entry_label(right);
+    left_label.cmp(right_label)
+}
+
+fn memory_entry_kind_priority(kind: MemoryContextKind) -> u8 {
+    match kind {
+        MemoryContextKind::Profile => 0,
+        MemoryContextKind::Summary => 1,
+        MemoryContextKind::Derived => 2,
+        MemoryContextKind::RetrievedMemory => 3,
+        MemoryContextKind::Turn => 4,
+    }
+}
+
+fn memory_entry_trust_priority(entry: &MemoryContextEntry) -> u8 {
+    let maybe_trust_level = entry
+        .provenance
+        .first()
+        .and_then(|provenance| provenance.trust_level);
+    let trust_level = maybe_trust_level.unwrap_or(MemoryTrustLevel::Derived);
+
+    match trust_level {
+        MemoryTrustLevel::WorkspaceCurated => 0,
+        MemoryTrustLevel::Derived => 1,
+        MemoryTrustLevel::WorkspaceLog => 2,
+        MemoryTrustLevel::Session => 3,
+    }
+}
+
+fn memory_entry_freshness(entry: &MemoryContextEntry) -> i64 {
+    let maybe_freshness = entry
+        .provenance
+        .first()
+        .and_then(|provenance| provenance.freshness_ts);
+
+    maybe_freshness.unwrap_or_default()
+}
+
+fn memory_entry_label(entry: &MemoryContextEntry) -> &str {
+    entry
+        .provenance
+        .first()
+        .and_then(|provenance| provenance.source_label.as_deref())
+        .unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -562,6 +814,7 @@ impl MemorySystem for WorkspaceRecallMemorySystem {
             "Workspace-document recall system with provenance-aware retrieval and rank-stage reordering.",
         )
         .with_supported_pre_assembly_stage_families([
+            MemoryStageFamily::Derive,
             MemoryStageFamily::Retrieve,
             MemoryStageFamily::Rank,
         ])
@@ -595,6 +848,18 @@ impl MemorySystem for WorkspaceRecallMemorySystem {
             budget_items: normalized_budget_items,
             allowed_kinds: vec![crate::memory::DerivedMemoryKind::Reference],
         })
+    }
+
+    fn run_derive_stage(
+        &self,
+        session_id: &str,
+        _config: &MemoryRuntimeConfig,
+        recent_window: &[WindowTurn],
+    ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
+        let maybe_entry = derive_session_overview_entry(session_id, recent_window, self.id());
+        let entries = maybe_entry.into_iter().collect::<Vec<_>>();
+
+        Ok(Some(entries))
     }
 
     fn run_retrieve_stage(
@@ -644,6 +909,7 @@ impl MemorySystem for RecallFirstMemorySystem {
             "Recall-first memory system with provenance-aware retrieval and summary suppression when recall is available.",
         )
         .with_supported_pre_assembly_stage_families([
+            MemoryStageFamily::Derive,
             MemoryStageFamily::Retrieve,
             MemoryStageFamily::Rank,
         ])
@@ -664,6 +930,18 @@ impl MemorySystem for RecallFirstMemorySystem {
             config,
             recent_window,
         )
+    }
+
+    fn run_derive_stage(
+        &self,
+        session_id: &str,
+        _config: &MemoryRuntimeConfig,
+        recent_window: &[WindowTurn],
+    ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
+        let maybe_entry = derive_session_overview_entry(session_id, recent_window, self.id());
+        let entries = maybe_entry.into_iter().collect::<Vec<_>>();
+
+        Ok(Some(entries))
     }
 
     fn run_retrieve_stage(
@@ -784,7 +1062,11 @@ mod tests {
         );
         assert_eq!(
             metadata.supported_pre_assembly_stage_families,
-            vec![MemoryStageFamily::Retrieve, MemoryStageFamily::Rank]
+            vec![
+                MemoryStageFamily::Derive,
+                MemoryStageFamily::Retrieve,
+                MemoryStageFamily::Rank,
+            ]
         );
         assert_eq!(
             metadata.supported_recall_modes,
@@ -802,7 +1084,11 @@ mod tests {
         );
         assert_eq!(
             metadata.supported_pre_assembly_stage_families,
-            vec![MemoryStageFamily::Retrieve, MemoryStageFamily::Rank]
+            vec![
+                MemoryStageFamily::Derive,
+                MemoryStageFamily::Retrieve,
+                MemoryStageFamily::Rank,
+            ]
         );
         assert_eq!(
             metadata.supported_recall_modes,
@@ -1035,6 +1321,145 @@ mod tests {
             MemoryProvenanceSourceKind::CanonicalMemoryRecord
         );
         assert_eq!(entries[0].provenance[0].scope, Some(MemoryScope::Session));
+        assert_eq!(
+            entries[0].provenance[0].trust_level,
+            Some(MemoryTrustLevel::Session)
+        );
+        assert_eq!(
+            entries[0].provenance[0].record_status,
+            Some(MemoryRecordStatus::Active)
+        );
+    }
+
+    #[test]
+    fn builtin_memory_system_derives_session_local_overview_from_structured_turns() {
+        let recent_window = vec![
+            WindowTurn {
+                role: "assistant".to_owned(),
+                content: crate::memory::build_tool_decision_content(
+                    "turn-1",
+                    "call-1",
+                    json!({"tool": "memory_search"}),
+                ),
+                ts: Some(10),
+            },
+            WindowTurn {
+                role: "assistant".to_owned(),
+                content: crate::memory::build_conversation_event_content(
+                    "tool_discovery",
+                    json!({"state": "visible"}),
+                ),
+                ts: Some(20),
+            },
+        ];
+
+        let derived_entries = BuiltinMemorySystem
+            .run_derive_stage(
+                "session-local-overview-session",
+                &MemoryRuntimeConfig::default(),
+                recent_window.as_slice(),
+            )
+            .expect("derive stage should succeed")
+            .expect("derive stage should return entries");
+
+        assert_eq!(derived_entries.len(), 1);
+        assert_eq!(derived_entries[0].kind, MemoryContextKind::Derived);
+        assert!(
+            derived_entries[0]
+                .content
+                .contains("## Session Local Overview")
+        );
+        assert_eq!(
+            derived_entries[0].provenance[0].source_kind,
+            MemoryProvenanceSourceKind::DerivedSessionOverview
+        );
+        assert_eq!(
+            derived_entries[0].provenance[0].derived_kind,
+            Some(DerivedMemoryKind::Overview)
+        );
+    }
+
+    #[test]
+    fn builtin_rank_stage_filters_inactive_workspace_entries_and_orders_advisory_blocks() {
+        let inactive_entry = MemoryContextEntry {
+            kind: MemoryContextKind::RetrievedMemory,
+            role: "system".to_owned(),
+            content: "inactive".to_owned(),
+            provenance: vec![
+                MemoryContextProvenance::new(
+                    DEFAULT_MEMORY_SYSTEM_ID,
+                    MemoryProvenanceSourceKind::WorkspaceDocument,
+                    Some("MEMORY.md".to_owned()),
+                    None,
+                    Some(MemoryScope::Workspace),
+                    MemoryRecallMode::PromptAssembly,
+                )
+                .with_trust_level(MemoryTrustLevel::WorkspaceCurated)
+                .with_record_status(MemoryRecordStatus::Tombstoned),
+            ],
+        };
+        let summary_entry = MemoryContextEntry {
+            kind: MemoryContextKind::Summary,
+            role: "system".to_owned(),
+            content: "summary".to_owned(),
+            provenance: vec![
+                MemoryContextProvenance::new(
+                    DEFAULT_MEMORY_SYSTEM_ID,
+                    MemoryProvenanceSourceKind::SummaryCheckpoint,
+                    Some("summary_checkpoint".to_owned()),
+                    None,
+                    Some(MemoryScope::Session),
+                    MemoryRecallMode::PromptAssembly,
+                )
+                .with_trust_level(MemoryTrustLevel::Derived)
+                .with_record_status(MemoryRecordStatus::Active),
+            ],
+        };
+        let derived_entry = MemoryContextEntry {
+            kind: MemoryContextKind::Derived,
+            role: "system".to_owned(),
+            content: "derived".to_owned(),
+            provenance: vec![
+                MemoryContextProvenance::new(
+                    DEFAULT_MEMORY_SYSTEM_ID,
+                    MemoryProvenanceSourceKind::DerivedSessionOverview,
+                    Some("session_local_overview".to_owned()),
+                    None,
+                    Some(MemoryScope::Session),
+                    MemoryRecallMode::PromptAssembly,
+                )
+                .with_trust_level(MemoryTrustLevel::Derived)
+                .with_record_status(MemoryRecordStatus::Active),
+            ],
+        };
+        let turn_entry = MemoryContextEntry {
+            kind: MemoryContextKind::Turn,
+            role: "user".to_owned(),
+            content: "turn".to_owned(),
+            provenance: Vec::new(),
+        };
+
+        let ranked_entries = BuiltinMemorySystem
+            .run_rank_stage(
+                vec![turn_entry, inactive_entry, derived_entry, summary_entry],
+                &MemoryRuntimeConfig::default(),
+            )
+            .expect("rank stage should succeed")
+            .expect("rank stage should return entries");
+
+        let kinds = ranked_entries
+            .into_iter()
+            .map(|entry| entry.kind)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            kinds,
+            vec![
+                MemoryContextKind::Summary,
+                MemoryContextKind::Derived,
+                MemoryContextKind::Turn,
+            ]
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]

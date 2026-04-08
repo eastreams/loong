@@ -27,6 +27,7 @@ mod system_registry;
 mod system_runtime;
 #[cfg(test)]
 mod tests;
+mod workspace_document;
 mod workspace_files;
 
 pub use canonical::{
@@ -60,8 +61,9 @@ pub(crate) use sqlite::CanonicalMemorySearchHit;
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
 pub use stage::{
-    DerivedMemoryKind, MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
-    MemoryRetrievalRequest, MemoryStageFamily, StageDiagnostics, StageEnvelope, StageOutcome,
+    DerivedMemoryKind, MemoryAuthority, MemoryContextProvenance, MemoryProvenanceSourceKind,
+    MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryStageFamily,
+    MemoryTrustLevel, StageDiagnostics, StageEnvelope, StageOutcome,
     builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
 };
 pub use system::{
@@ -82,6 +84,9 @@ pub use system_registry::{
 pub use system_runtime::{
     BuiltinMemorySystemRuntime, MemorySystemRuntime, MetadataOnlyMemorySystemRuntime,
     SystemBackedMemorySystemRuntime,
+};
+pub(crate) use workspace_document::{
+    ParsedWorkspaceMemoryDocument, parse_workspace_memory_document,
 };
 pub(crate) use workspace_files::{
     WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,

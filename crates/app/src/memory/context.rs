@@ -7,8 +7,9 @@ use crate::runtime_identity;
 #[cfg(feature = "memory-sqlite")]
 use super::sqlite;
 use super::{
-    MEMORY_OP_READ_CONTEXT, MEMORY_OP_READ_STAGE_ENVELOPE, MemoryContextProvenance,
-    MemoryProvenanceSourceKind, MemoryRecallMode, MemoryScope, encode_stage_envelope_payload,
+    DerivedMemoryKind, MEMORY_OP_READ_CONTEXT, MEMORY_OP_READ_STAGE_ENVELOPE, MemoryAuthority,
+    MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode, MemoryRecordStatus,
+    MemoryScope, MemoryTrustLevel, encode_stage_envelope_payload,
     orchestrator::hydrate_stage_envelope_with_workspace_root,
     protocol::{MemoryContextEntry, MemoryContextKind},
     runtime_config::MemoryRuntimeConfig,
@@ -219,29 +220,41 @@ pub fn load_prompt_context(
                 kind: MemoryContextKind::Summary,
                 role: "system".to_owned(),
                 content: summary,
-                provenance: vec![MemoryContextProvenance::new(
-                    selected_system_id.as_str(),
-                    MemoryProvenanceSourceKind::SummaryCheckpoint,
-                    Some(session_id.to_owned()),
-                    None,
-                    Some(MemoryScope::Session),
-                    MemoryRecallMode::PromptAssembly,
-                )],
+                provenance: vec![
+                    MemoryContextProvenance::new(
+                        selected_system_id.as_str(),
+                        MemoryProvenanceSourceKind::SummaryCheckpoint,
+                        Some("summary_checkpoint".to_owned()),
+                        None,
+                        Some(MemoryScope::Session),
+                        MemoryRecallMode::PromptAssembly,
+                    )
+                    .with_trust_level(MemoryTrustLevel::Derived)
+                    .with_authority(MemoryAuthority::Advisory)
+                    .with_derived_kind(DerivedMemoryKind::Summary)
+                    .with_record_status(MemoryRecordStatus::Active),
+                ],
             });
         }
         for turn in snapshot.window_turns {
+            let turn_role = turn.role;
+            let turn_content = turn.content;
+            let provenance = MemoryContextProvenance::new(
+                selected_system_id.as_str(),
+                MemoryProvenanceSourceKind::RecentWindowTurn,
+                Some("recent_window_turn".to_owned()),
+                None,
+                Some(MemoryScope::Session),
+                MemoryRecallMode::PromptAssembly,
+            )
+            .with_trust_level(MemoryTrustLevel::Session)
+            .with_authority(MemoryAuthority::Advisory)
+            .with_record_status(MemoryRecordStatus::Active);
             entries.push(MemoryContextEntry {
                 kind: MemoryContextKind::Turn,
-                role: turn.role,
-                content: turn.content,
-                provenance: vec![MemoryContextProvenance::new(
-                    selected_system_id.as_str(),
-                    MemoryProvenanceSourceKind::RecentWindowTurn,
-                    Some(session_id.to_owned()),
-                    None,
-                    Some(MemoryScope::Session),
-                    MemoryRecallMode::PromptAssembly,
-                )],
+                role: turn_role,
+                content: turn_content,
+                provenance: vec![provenance],
             });
         }
     }
@@ -269,14 +282,20 @@ pub(super) fn build_profile_entry(config: &MemoryRuntimeConfig) -> Option<Memory
         kind: MemoryContextKind::Profile,
         role: "system".to_owned(),
         content: profile_section,
-        provenance: vec![MemoryContextProvenance::new(
-            super::selected_prompt_hydration_system_id(config).as_str(),
-            MemoryProvenanceSourceKind::ProfileNote,
-            None,
-            None,
-            Some(MemoryScope::Session),
-            MemoryRecallMode::PromptAssembly,
-        )],
+        provenance: vec![
+            MemoryContextProvenance::new(
+                super::selected_prompt_hydration_system_id(config).as_str(),
+                MemoryProvenanceSourceKind::ProfileNote,
+                Some("profile_note".to_owned()),
+                None,
+                Some(MemoryScope::Session),
+                MemoryRecallMode::PromptAssembly,
+            )
+            .with_trust_level(MemoryTrustLevel::Derived)
+            .with_authority(MemoryAuthority::Advisory)
+            .with_derived_kind(DerivedMemoryKind::Profile)
+            .with_record_status(MemoryRecordStatus::Active),
+        ],
     })
 }
 
@@ -343,8 +362,16 @@ mod tests {
             MemoryProvenanceSourceKind::SummaryCheckpoint
         );
         assert_eq!(
+            summary_entry.provenance[0].source_label.as_deref(),
+            Some("summary_checkpoint")
+        );
+        assert_eq!(
             summary_entry.provenance[0].scope,
             Some(MemoryScope::Session)
+        );
+        assert_eq!(
+            summary_entry.provenance[0].record_status,
+            Some(MemoryRecordStatus::Active)
         );
         let turn_entry = hydrated
             .iter()
@@ -354,6 +381,14 @@ mod tests {
         assert_eq!(
             turn_entry.provenance[0].source_kind,
             MemoryProvenanceSourceKind::RecentWindowTurn
+        );
+        assert_eq!(
+            turn_entry.provenance[0].source_label.as_deref(),
+            Some("recent_window_turn")
+        );
+        assert_eq!(
+            turn_entry.provenance[0].record_status,
+            Some(MemoryRecordStatus::Active)
         );
 
         let _ = std::fs::remove_file(&db_path);
@@ -408,8 +443,16 @@ mod tests {
             MemoryProvenanceSourceKind::ProfileNote
         );
         assert_eq!(
+            profile_entry.provenance[0].source_label.as_deref(),
+            Some("profile_note")
+        );
+        assert_eq!(
             profile_entry.provenance[0].scope,
             Some(MemoryScope::Session)
+        );
+        assert_eq!(
+            profile_entry.provenance[0].record_status,
+            Some(MemoryRecordStatus::Active)
         );
 
         let _ = std::fs::remove_file(&db_path);
@@ -678,6 +721,15 @@ mod tests {
                 .any(|entry| entry.get("kind") == Some(&json!("summary"))),
             "expected read_context payload to include a summary entry"
         );
+        let maybe_summary_entry = entries
+            .iter()
+            .find(|entry| entry.get("kind") == Some(&json!("summary")));
+        let summary_entry = maybe_summary_entry.expect("summary entry");
+        assert_eq!(
+            summary_entry["provenance"][0]["source_label"],
+            "summary_checkpoint"
+        );
+        assert_eq!(summary_entry["provenance"][0]["record_status"], "active");
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);
@@ -726,6 +778,20 @@ mod tests {
         assert!(!envelope.hydrated.entries.is_empty());
         assert!(!envelope.diagnostics.is_empty());
         assert_eq!(envelope.hydrated.diagnostics.system_id, "builtin");
+        let maybe_summary_entry = envelope
+            .hydrated
+            .entries
+            .iter()
+            .find(|entry| entry.kind == MemoryContextKind::Summary);
+        let summary_entry = maybe_summary_entry.expect("summary entry");
+        assert_eq!(
+            summary_entry.provenance[0].source_label.as_deref(),
+            Some("summary_checkpoint")
+        );
+        assert_eq!(
+            summary_entry.provenance[0].record_status,
+            Some(MemoryRecordStatus::Active)
+        );
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);

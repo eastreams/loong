@@ -1659,6 +1659,7 @@ fn memory_context_shape(entries: &[MemoryContextEntry]) -> MemoryContextShape {
                 summary_chars = summary_chars.saturating_add(entry.content.len());
             }
             MemoryContextKind::Profile => {}
+            MemoryContextKind::Derived => {}
             MemoryContextKind::RetrievedMemory => {}
         }
     }
@@ -1830,16 +1831,25 @@ mod tests {
             content: "hello".to_owned(),
             provenance: Vec::new(),
         };
-        let entries = vec![retrieved_entry, summary_entry, turn_entry];
+        let derived_entry = MemoryContextEntry {
+            kind: MemoryContextKind::Derived,
+            role: "system".to_owned(),
+            content: "derived overview".to_owned(),
+            provenance: Vec::new(),
+        };
+        let entries = vec![retrieved_entry, summary_entry, turn_entry, derived_entry];
         let retrieved_payload_chars = "system".len() + "durable recall".len();
         let summary_payload_chars = "system".len() + "summary block".len();
         let turn_payload_chars = "user".len() + "hello".len();
-        let expected_payload_chars =
-            retrieved_payload_chars + summary_payload_chars + turn_payload_chars;
+        let derived_payload_chars = "system".len() + "derived overview".len();
+        let expected_payload_chars = retrieved_payload_chars
+            + summary_payload_chars
+            + turn_payload_chars
+            + derived_payload_chars;
 
         let shape = memory_context_shape(entries.as_slice());
 
-        assert_eq!(shape.entry_count, 3);
+        assert_eq!(shape.entry_count, 4);
         assert_eq!(shape.turn_entries, 1);
         assert_eq!(shape.summary_chars, "summary block".len());
         assert_eq!(shape.payload_chars, expected_payload_chars);

@@ -1,14 +1,13 @@
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs;
 use std::path::Path;
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Map, Value, json};
 
 use crate::memory::{
-    MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode, MemoryScope,
-    WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
-    collect_workspace_memory_document_locations,
+    MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
+    ParsedWorkspaceMemoryDocument, WorkspaceMemoryDocumentLocation,
+    collect_workspace_memory_document_locations, parse_workspace_memory_document,
 };
 
 const DEFAULT_MEMORY_SEARCH_MAX_RESULTS: usize = 5;
@@ -30,6 +29,7 @@ struct MemorySearchResult {
     snippet: String,
     score: u32,
     provenance: MemoryContextProvenance,
+    metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,17 +161,35 @@ pub(super) fn execute_memory_get_tool_with_config(
             )
         })?;
 
+    let raw_content = read_workspace_memory_text_lossy(matched_location.path.as_path())?;
+    let maybe_parsed_document = parse_workspace_memory_document(
+        raw_content.as_str(),
+        matched_location,
+        config.selected_memory_system_id.as_str(),
+        MemoryRecallMode::OperatorInspection,
+    )?;
+    let Some(parsed_document) = maybe_parsed_document else {
+        return Err(format!("memory file `{}` is empty", matched_location.label));
+    };
+
+    let record_status = parsed_document
+        .provenance
+        .record_status
+        .unwrap_or(crate::memory::MemoryRecordStatus::Active);
+    if !record_status.is_active() {
+        return Err(format!(
+            "memory file `{}` is inactive and cannot be inspected",
+            matched_location.label
+        ));
+    }
+
     let file_window = read_memory_file_window(
-        matched_location.path.as_path(),
+        parsed_document.body.as_str(),
         requested_start_line,
         requested_line_count,
-    )?;
+    );
     let total_lines = file_window.total_lines;
     let selected_lines = file_window.selected_lines;
-
-    if total_lines == 0 {
-        return Err(format!("memory file `{}` is empty", matched_location.label));
-    }
     if requested_start_line > total_lines {
         return Err(format!(
             "memory_get start line {} exceeds file length {} for `{}`",
@@ -185,6 +203,7 @@ pub(super) fn execute_memory_get_tool_with_config(
         .saturating_add(selected_line_count)
         .saturating_sub(1);
     let text = selected_lines.join("\n");
+    let provenance = &parsed_document.provenance;
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -195,7 +214,8 @@ pub(super) fn execute_memory_get_tool_with_config(
             "start_line": start_line,
             "end_line": end_line,
             "text": text,
-            "provenance": workspace_memory_location_provenance(config, matched_location),
+            "provenance": provenance,
+            "metadata": memory_document_metadata_payload(&parsed_document),
         }),
     })
 }
@@ -233,27 +253,13 @@ fn workspace_root_from_config(
 }
 
 fn read_memory_file_window(
-    path: &Path,
+    content: &str,
     requested_start_line: usize,
     requested_line_count: usize,
-) -> Result<MemoryFileWindow, String> {
-    let file = File::open(path)
-        .map_err(|error| format!("failed to read memory file {}: {error}", path.display()))?;
-    let mut reader = BufReader::new(file);
+) -> MemoryFileWindow {
     let mut total_lines = 0usize;
     let mut selected_lines = Vec::new();
-    let mut buffer = String::new();
-
-    loop {
-        buffer.clear();
-
-        let bytes_read = reader
-            .read_line(&mut buffer)
-            .map_err(|error| format!("failed to read memory file {}: {error}", path.display()))?;
-        if bytes_read == 0 {
-            break;
-        }
-
+    for line in content.lines() {
         total_lines = total_lines.saturating_add(1);
 
         if total_lines < requested_start_line {
@@ -263,22 +269,13 @@ fn read_memory_file_window(
             break;
         }
 
-        let line = trim_trailing_line_endings(&buffer);
-        let owned_line = line.to_owned();
-
-        selected_lines.push(owned_line);
-
-        if selected_lines.len() >= requested_line_count {
-            break;
-        }
+        selected_lines.push(line.to_owned());
     }
 
-    let file_window = MemoryFileWindow {
+    MemoryFileWindow {
         total_lines,
         selected_lines,
-    };
-
-    Ok(file_window)
+    }
 }
 
 fn parse_optional_usize_field(
@@ -351,13 +348,26 @@ fn search_memory_location(
     config: &super::runtime_config::ToolRuntimeConfig,
     location: &WorkspaceMemoryDocumentLocation,
 ) -> Result<Option<MemorySearchResult>, String> {
-    let content = fs::read_to_string(location.path.as_path()).map_err(|error| {
-        format!(
-            "failed to read memory file {}: {error}",
-            location.path.display()
-        )
-    })?;
-    let lines = content.lines().collect::<Vec<_>>();
+    let content = read_workspace_memory_text_lossy(location.path.as_path())?;
+    let maybe_parsed_document = parse_workspace_memory_document(
+        content.as_str(),
+        location,
+        config.selected_memory_system_id.as_str(),
+        MemoryRecallMode::OperatorInspection,
+    )?;
+    let Some(parsed_document) = maybe_parsed_document else {
+        return Ok(None);
+    };
+
+    let record_status = parsed_document
+        .provenance
+        .record_status
+        .unwrap_or(crate::memory::MemoryRecordStatus::Active);
+    if !record_status.is_active() {
+        return Ok(None);
+    }
+
+    let lines = parsed_document.body.lines().collect::<Vec<_>>();
     if lines.is_empty() {
         return Ok(None);
     }
@@ -389,7 +399,8 @@ fn search_memory_location(
         end_line: Some(end_line),
         snippet,
         score: best_match.score,
-        provenance: workspace_memory_location_provenance(config, location),
+        provenance: parsed_document.provenance.clone(),
+        metadata: Some(memory_document_metadata_payload(&parsed_document)),
     };
 
     Ok(Some(result))
@@ -532,6 +543,7 @@ fn search_canonical_memory_results(
                 snippet: hit.record.content,
                 score,
                 provenance,
+                metadata: None,
             }
         })
         .collect())
@@ -578,28 +590,8 @@ fn memory_search_result_payload(result: &MemorySearchResult) -> Value {
         "snippet": result.snippet,
         "score": result.score,
         "provenance": result.provenance,
+        "metadata": result.metadata,
     })
-}
-
-fn workspace_memory_location_provenance(
-    config: &super::runtime_config::ToolRuntimeConfig,
-    location: &WorkspaceMemoryDocumentLocation,
-) -> MemoryContextProvenance {
-    let scope = match location.kind {
-        WorkspaceMemoryDocumentKind::Curated => MemoryScope::Workspace,
-        WorkspaceMemoryDocumentKind::DailyLog => MemoryScope::Session,
-    };
-    let source_label = Some(location.label.clone());
-    let source_path = Some(location.path.display().to_string());
-
-    MemoryContextProvenance::new(
-        config.selected_memory_system_id.as_str(),
-        MemoryProvenanceSourceKind::WorkspaceDocument,
-        source_label,
-        source_path,
-        Some(scope),
-        MemoryRecallMode::OperatorInspection,
-    )
 }
 
 fn canonical_memory_hit_provenance(
@@ -618,12 +610,43 @@ fn canonical_memory_hit_provenance(
         scope,
         MemoryRecallMode::OperatorInspection,
     )
+    .with_trust_level(crate::memory::MemoryTrustLevel::Session)
+    .with_authority(crate::memory::MemoryAuthority::Advisory)
+    .with_record_status(crate::memory::MemoryRecordStatus::Active)
 }
 
-fn trim_trailing_line_endings(line: &str) -> &str {
-    let without_newline = line.strip_suffix('\n').unwrap_or(line);
-    let without_carriage_return = without_newline.strip_suffix('\r');
-    without_carriage_return.unwrap_or(without_newline)
+fn read_workspace_memory_text_lossy(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("failed to read memory file {}: {error}", path.display()))?;
+    let text = String::from_utf8_lossy(bytes.as_slice()).into_owned();
+
+    Ok(text)
+}
+
+fn memory_document_metadata_payload(document: &ParsedWorkspaceMemoryDocument) -> Value {
+    let provenance = &document.provenance;
+    let derived_kind = provenance.derived_kind.map(|kind| kind.as_str().to_owned());
+    let freshness_ts = provenance.freshness_ts;
+    let record_status = provenance
+        .record_status
+        .map(|status| status.as_str().to_owned());
+    let trust_level = provenance
+        .trust_level
+        .map(|trust| trust.as_str().to_owned());
+    let authority = provenance
+        .authority
+        .map(|authority| authority.as_str().to_owned());
+    let superseded_by = provenance.superseded_by.clone();
+
+    json!({
+        "derived_kind": derived_kind,
+        "freshness_ts": freshness_ts,
+        "record_status": record_status,
+        "trust_level": trust_level,
+        "authority": authority,
+        "superseded_by": superseded_by,
+        "body_line_offset": document.body_line_offset,
+    })
 }
 
 #[cfg(test)]
@@ -764,5 +787,104 @@ mod tests {
             results[0]["score"].as_u64().is_some_and(|value| value > 0),
             "metadata-only matches should keep a stable score: {results:?}"
         );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_search_tool_skips_tombstoned_workspace_memory_files() {
+        let root = unique_temp_dir("loongclaw-memory-search-tombstoned");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(
+            root.join("MEMORY.md"),
+            concat!(
+                "---\n",
+                "status: tombstoned\n",
+                "---\n",
+                "Deploy freeze window is Friday.\n",
+            ),
+        )
+        .expect("write tombstoned memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "Deploy freeze window remains Friday for customer migration.\n",
+        )
+        .expect("write daily log");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy freeze window",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            results.iter().any(|entry| entry["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("2026-03-23.md"))),
+            "expected a matching active document to remain searchable: {results:?}"
+        );
+        assert!(
+            results.iter().all(|entry| entry["path"] != "MEMORY.md"),
+            "tombstoned documents should be filtered from search results: {results:?}"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_strips_frontmatter_and_surfaces_workspace_metadata() {
+        let root = unique_temp_dir("loongclaw-memory-get-frontmatter");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            &memory_path,
+            concat!(
+                "---\n",
+                "kind: procedure\n",
+                "trust: workspace_curated\n",
+                "status: active\n",
+                "---\n",
+                "line one\n",
+                "line two\n",
+            ),
+        )
+        .expect("write root memory");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 1,
+                    "lines": 2
+                }),
+            },
+            &config,
+        )
+        .expect("memory get should succeed");
+
+        assert_eq!(outcome.payload["text"], "line one\nline two");
+        assert_eq!(outcome.payload["metadata"]["derived_kind"], "procedure");
+        assert_eq!(
+            outcome.payload["metadata"]["trust_level"],
+            "workspace_curated"
+        );
+        assert_eq!(outcome.payload["metadata"]["body_line_offset"], 5);
     }
 }

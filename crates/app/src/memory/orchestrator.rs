@@ -1419,7 +1419,7 @@ mod tests {
         assert_eq!(
             diagnostics,
             vec![
-                (MemoryStageFamily::Derive, StageOutcome::Skipped),
+                (MemoryStageFamily::Derive, StageOutcome::Succeeded),
                 (MemoryStageFamily::Retrieve, StageOutcome::Succeeded),
                 (MemoryStageFamily::Rank, StageOutcome::Succeeded),
             ]
@@ -1467,7 +1467,7 @@ mod tests {
             envelope.hydrated.diagnostics.system_id,
             crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID
         );
-        assert_eq!(envelope.diagnostics[0].outcome, StageOutcome::Skipped);
+        assert_eq!(envelope.diagnostics[0].outcome, StageOutcome::Succeeded);
         assert_eq!(envelope.diagnostics[1].outcome, StageOutcome::Succeeded);
         assert_eq!(envelope.diagnostics[2].outcome, StageOutcome::Succeeded);
         assert_eq!(

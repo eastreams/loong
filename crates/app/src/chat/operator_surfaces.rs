@@ -935,6 +935,10 @@ fn format_prompt_context_history_lines(entries: &[memory::MemoryContextEntry]) -
                 lines.push("[summary]".to_owned());
                 lines.push(entry.content.clone());
             }
+            memory::MemoryContextKind::Derived => {
+                lines.push("[derived]".to_owned());
+                lines.push(entry.content.clone());
+            }
             memory::MemoryContextKind::RetrievedMemory => {
                 lines.push("[retrieved_memory]".to_owned());
                 lines.push(entry.content.clone());

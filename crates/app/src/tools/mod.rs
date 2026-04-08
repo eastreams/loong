@@ -2806,6 +2806,13 @@ mod tests {
             }),
             "expected structured operator-inspection provenance: {results:?}"
         );
+        assert!(
+            results.iter().all(|entry| {
+                entry["metadata"]["record_status"] == "active"
+                    && entry["metadata"]["body_line_offset"].as_u64().is_some()
+            }),
+            "expected structured workspace metadata: {results:?}"
+        );
     }
 
     #[cfg(feature = "tool-file")]
@@ -2850,6 +2857,7 @@ mod tests {
             outcome.payload["provenance"]["recall_mode"],
             "operator_inspection"
         );
+        assert_eq!(outcome.payload["metadata"]["record_status"], "active");
     }
 
     #[cfg(feature = "tool-file")]

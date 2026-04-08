@@ -1494,7 +1494,7 @@ fn render_memory_system_snapshot_text_reports_fail_open_policy() {
         "- builtin api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly,operator_inspection"
     ));
     assert!(rendered.contains(
-        "- recall_first api_version=1 capabilities=prompt_hydration,retrieval_provenance pre_assembly_stages=retrieve,rank recall_modes=prompt_assembly"
+        "- recall_first api_version=1 capabilities=prompt_hydration,retrieval_provenance pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly"
     ));
 }
 
