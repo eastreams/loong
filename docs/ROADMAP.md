@@ -302,7 +302,8 @@ Delivered in current baseline:
   - `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
   - `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, family-level delta evidence digest, and a structured draft payload preview
   - `runtime-capability apply` materializes one governed draft artifact under the planned delivery surface for a promotable family, reuses the planned payload shape, and keeps repeated applies idempotent while leaving live runtime state untouched
-  - `runtime-capability activate` turns one applied draft artifact into a governed activation dry-run or real activation for supported target kinds while remaining explicit, target-aware, idempotent, and backed by surfaced verification evidence plus rollback guidance
+  - `runtime-capability activate` turns one applied draft artifact into a governed activation dry-run or real activation for supported target kinds while remaining explicit, target-aware, idempotent, and backed by surfaced verification evidence, rollback guidance, and one persisted activation record
+  - `runtime-capability rollback` replays one persisted activation record as a dry-run or real rollback for supported target kinds so operators can restore the recorded pre-activation state without ad hoc manual cleanup
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification

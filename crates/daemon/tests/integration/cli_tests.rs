@@ -823,7 +823,7 @@ fn runtime_experiment_cli_rejects_compare_recorded_snapshots_with_manual_paths()
 }
 
 #[test]
-fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activate() {
+fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_activate_and_rollback() {
     let propose = try_parse_cli([
         "loongclaw",
         "runtime-capability",
@@ -892,7 +892,8 @@ fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activa
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -942,7 +943,8 @@ fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activa
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -974,7 +976,8 @@ fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activa
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -1004,7 +1007,8 @@ fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activa
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -1037,7 +1041,8 @@ fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activa
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -1070,7 +1075,8 @@ fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activa
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)) => {
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },
@@ -1109,6 +1115,45 @@ fn runtime_capability_cli_parses_propose_review_show_index_plan_apply_and_activa
                 | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
                 | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
                 | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)
+                | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(_)
+            ) => {
+                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+
+    let rollback = try_parse_cli([
+        "loongclaw",
+        "runtime-capability",
+        "rollback",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "--record",
+        "/tmp/runtime-capability-activation.json",
+        "--apply",
+        "--json",
+    ])
+    .expect("`runtime-capability rollback` should parse");
+
+    match rollback.command {
+        Some(Commands::RuntimeCapability { command }) => match command {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Rollback(
+                options,
+            ) => {
+                assert_eq!(options.config.as_deref(), Some("/tmp/loongclaw.toml"));
+                assert_eq!(options.record, "/tmp/runtime-capability-activation.json");
+                assert!(options.apply);
+                assert!(options.json);
+            }
+            other @ (
+                loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(_)
+                | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(_)
+                | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
+                | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
+                | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
+                | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)
+                | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Activate(_)
             ) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }

@@ -9,7 +9,7 @@ experiment should be crystallized into a reusable lower-layer capability.
 ## Acceptance Criteria
 
 - [ ] LoongClaw exposes a `runtime-capability` command family with `propose`,
-      `review`, `show`, `index`, `plan`, `apply`, and `activate`
+      `review`, `show`, `index`, `plan`, `apply`, `activate`, and `rollback`
       subcommands.
 - [ ] `runtime-capability propose` creates a persisted capability-candidate
       artifact from one finished `runtime-experiment` run.
@@ -46,11 +46,16 @@ experiment should be crystallized into a reusable lower-layer capability.
 - [ ] `runtime-capability activate` consumes one applied draft artifact and
       either dry-runs or applies one governed activation path for the supported
       target kind, remains idempotent when the live runtime already matches the
-      draft, and surfaces explicit verification evidence plus rollback hints.
+      draft, surfaces explicit verification evidence plus rollback hints, and
+      persists one activation record before reporting success.
+- [ ] `runtime-capability rollback` consumes one persisted activation record
+      and either dry-runs or restores the recorded pre-activation state for the
+      supported target kind, remaining idempotent when the live runtime already
+      matches the recorded rollback target.
 - [ ] Product docs describe `runtime-capability` as the governed review layer
-      above `runtime-experiment`, with `index`/readiness, `plan`, `apply`, and
-      `activate` forming the promotion ladder below any future automated
-      promotion loop.
+      above `runtime-experiment`, with `index`/readiness, `plan`, `apply`,
+      `activate`, and `rollback` forming the operator-facing promotion ladder
+      below any future automated promotion loop.
 
 ## Out of Scope
 
@@ -58,7 +63,7 @@ experiment should be crystallized into a reusable lower-layer capability.
 - Automatically generating or activating programmatic flows
 - Automatically mutating `profile_note` or runtime config without an explicit
   operator activation step
-- Automatic promotion, rollback, or optimizer orchestration
+- Automatic promotion or optimizer orchestration
 - Persisted capability-family state or background indexing daemons
 - Persisted promotion-plan artifacts or plan caches
 - Candidate queues, dashboards, or autonomous ranking systems

@@ -3240,6 +3240,286 @@ fn runtime_capability_activate_managed_skill_dry_run_reports_install_target() {
 }
 
 #[test]
+fn runtime_capability_rollback_managed_skill_restores_pre_activation_state_and_is_idempotent() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-rollback-managed-skill");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "rollback-managed-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "rollback-managed-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_a_path = root.join("artifacts/runtime-capability-rollback-managed-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-rollback-managed-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "rollback-managed-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "rollback-managed-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "rollback-managed-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "rollback-managed-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    let apply_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_apply_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityApplyCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                family_id: family.family_id.clone(),
+                json: false,
+            },
+        )
+        .expect("runtime capability apply should succeed");
+
+    let activate_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateCommandOptions {
+                config: Some(config_path.display().to_string()),
+                artifact: apply_report.output_path,
+                apply: true,
+                replace: false,
+                json: false,
+            },
+        )
+        .expect("managed skill activation should succeed");
+
+    let record_path = activate_report
+        .activation_record_path
+        .expect("activation should persist a rollback record");
+    assert!(
+        Path::new(record_path.as_str()).exists(),
+        "rollback record should be written to disk"
+    );
+
+    let rollback_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_rollback_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackCommandOptions {
+                config: Some(config_path.display().to_string()),
+                record: record_path.clone(),
+                apply: true,
+                json: false,
+            },
+        )
+        .expect("managed skill rollback should succeed");
+
+    assert_eq!(
+        rollback_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackOutcome::RolledBack
+    );
+    assert!(
+        rollback_report
+            .verification
+            .iter()
+            .any(|item| item.contains("is absent")),
+        "rollback should verify managed skill removal"
+    );
+    let installed_skill_path = root
+        .join("external-skills-installed")
+        .join(activate_report.artifact_id.as_str());
+    assert!(
+        !installed_skill_path.exists(),
+        "rollback should remove the installed managed skill when no prior bundle existed"
+    );
+
+    let second_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_rollback_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackCommandOptions {
+                config: Some(config_path.display().to_string()),
+                record: record_path,
+                apply: true,
+                json: false,
+            },
+        )
+        .expect("managed skill rollback should be idempotent");
+    assert_eq!(
+        second_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackOutcome::AlreadyRolledBack
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_rollback_profile_note_restores_pre_activation_state_and_is_idempotent() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-rollback-profile-note");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "rollback-profile-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "rollback-profile-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_a_path = root.join("artifacts/runtime-capability-rollback-profile-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-rollback-profile-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "rollback-profile-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum,
+        "Capture browser preview onboarding guidance as advisory profile context",
+        "Browser preview onboarding guidance only",
+        &["memory_read"],
+        &["browser", "profile"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "rollback-profile-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum,
+        "Capture browser preview onboarding guidance as advisory profile context",
+        "Browser preview onboarding guidance only",
+        &["memory_read"],
+        &["browser", "profile"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "rollback-profile-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "rollback-profile-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    let apply_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_apply_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityApplyCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                family_id: family.family_id.clone(),
+                json: false,
+            },
+        )
+        .expect("runtime capability apply should succeed");
+
+    let activate_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateCommandOptions {
+                config: Some(config_path.display().to_string()),
+                artifact: apply_report.output_path,
+                apply: true,
+                replace: false,
+                json: false,
+            },
+        )
+        .expect("profile note activation should succeed");
+
+    let record_path = activate_report
+        .activation_record_path
+        .expect("activation should persist a rollback record");
+    let rollback_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_rollback_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackCommandOptions {
+                config: Some(config_path.display().to_string()),
+                record: record_path.clone(),
+                apply: true,
+                json: false,
+            },
+        )
+        .expect("profile note rollback should succeed");
+
+    assert_eq!(
+        rollback_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackOutcome::RolledBack
+    );
+    let config_path_text = config_path.display().to_string();
+    let (_, restored_config) =
+        mvp::config::load(Some(config_path_text.as_str())).expect("load rolled back config");
+    assert_eq!(
+        restored_config.memory.profile,
+        mvp::config::MemoryProfile::WindowOnly
+    );
+    assert_eq!(
+        restored_config.memory.profile_note, None,
+        "rollback should restore the original profile note state"
+    );
+
+    let second_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_rollback_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackCommandOptions {
+                config: Some(config_path.display().to_string()),
+                record: record_path,
+                apply: true,
+                json: false,
+            },
+        )
+        .expect("profile note rollback should be idempotent");
+    assert_eq!(
+        second_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityRollbackOutcome::AlreadyRolledBack
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_capability_show_text_renders_snapshot_delta_summary() {
     let root = unique_temp_dir("loongclaw-runtime-capability-show-text-delta-summary");
     let config_path = write_runtime_capability_config(&root);
