@@ -291,6 +291,8 @@ pub struct TurnFailure {
     pub code: String,
     pub reason: String,
     pub retryable: bool,
+    #[serde(default, skip_serializing_if = "turn_failure_flag_is_false")]
+    pub supports_discovery_recovery: bool,
 }
 
 impl TurnFailure {
@@ -300,6 +302,20 @@ impl TurnFailure {
             code: code.into(),
             reason: reason.into(),
             retryable: false,
+            supports_discovery_recovery: false,
+        }
+    }
+
+    pub fn policy_denied_with_discovery_recovery(
+        code: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: TurnFailureKind::PolicyDenied,
+            code: code.into(),
+            reason: reason.into(),
+            retryable: false,
+            supports_discovery_recovery: true,
         }
     }
 
@@ -309,6 +325,7 @@ impl TurnFailure {
             code: code.into(),
             reason: reason.into(),
             retryable: true,
+            supports_discovery_recovery: false,
         }
     }
 
@@ -318,6 +335,7 @@ impl TurnFailure {
             code: code.into(),
             reason: reason.into(),
             retryable: false,
+            supports_discovery_recovery: false,
         }
     }
 
@@ -327,12 +345,17 @@ impl TurnFailure {
             code: code.into(),
             reason: reason.into(),
             retryable: false,
+            supports_discovery_recovery: false,
         }
     }
 
     pub fn as_str(&self) -> &str {
         self.reason.as_str()
     }
+}
+
+fn turn_failure_flag_is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Deref for TurnFailure {
@@ -2411,7 +2434,7 @@ fn provider_tool_denial_should_conceal_name(
 fn concealed_provider_tool_denial() -> TurnFailure {
     let base_reason = "tool_not_found: requested tool is not available";
     let reason = provider_tool_denial_reason(base_reason, "provider_tool_call");
-    TurnFailure::policy_denied("tool_not_found", reason)
+    TurnFailure::policy_denied_with_discovery_recovery("tool_not_found", reason)
 }
 
 fn tool_search_recovery_hint() -> &'static str {
@@ -3592,7 +3615,12 @@ impl TurnEngine {
                 let raw_reason = format!("tool_not_found: {}", intent.tool_name);
                 let reason =
                     provider_tool_denial_reason(raw_reason.as_str(), intent.source.as_str());
-                return Err(TurnFailure::policy_denied("tool_not_found", reason));
+                let failure = if intent.source.starts_with("provider_") {
+                    TurnFailure::policy_denied_with_discovery_recovery("tool_not_found", reason)
+                } else {
+                    TurnFailure::policy_denied("tool_not_found", reason)
+                };
+                return Err(failure);
             };
             if let Some(descriptor) = catalog.resolve(&intent.tool_name) {
                 let tool_is_visible = tool_intent_is_visible(session_context, intent, descriptor);
@@ -3930,7 +3958,15 @@ impl TurnEngine {
                         reason.as_str(),
                         prepared_intent.intent.source.as_str(),
                     );
-                    Err(TurnResult::policy_denied("tool_not_found", policy_reason))
+                    let failure = if prepared_intent.intent.source.starts_with("provider_") {
+                        TurnFailure::policy_denied_with_discovery_recovery(
+                            "tool_not_found",
+                            policy_reason,
+                        )
+                    } else {
+                        TurnFailure::policy_denied("tool_not_found", policy_reason)
+                    };
+                    Err(TurnResult::ToolDenied(failure))
                 }
                 Err(reason) if reason.starts_with("app_tool_disabled:") => {
                     Err(TurnResult::policy_denied("app_tool_disabled", reason))
@@ -4024,10 +4060,17 @@ mod tests {
             .expect_err("provider hidden tool.invoke alias should be concealed");
 
         assert_eq!(failure.code, "tool_not_found");
-        assert_eq!(
-            failure.reason,
-            "tool_not_found: requested tool is not available"
+        assert!(
+            failure
+                .reason
+                .contains("tool_not_found: requested tool is not available")
         );
+        assert!(
+            failure.reason.contains("tool.search"),
+            "concealed denial should advertise discovery recovery: {}",
+            failure.reason
+        );
+        assert!(failure.supports_discovery_recovery);
     }
 
     #[test]

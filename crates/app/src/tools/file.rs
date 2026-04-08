@@ -7,6 +7,8 @@ use std::{
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-file")]
 use serde_json::{Value, json};
+#[cfg(feature = "tool-file")]
+use std::io::Write as _;
 
 pub(super) fn execute_file_read_tool_with_config(
     request: ToolCoreRequest,
@@ -103,21 +105,11 @@ pub(super) fn execute_file_write_tool_with_config(
             .unwrap_or(false);
 
         let resolved = resolve_safe_file_path_with_config(target, config)?;
-        let target_exists = resolved.exists();
-        if target_exists {
-            let target_is_directory = resolved.is_dir();
-            if target_is_directory {
-                return Err(format!(
-                    "path '{}' is a directory, not a file",
-                    resolved.display()
-                ));
-            }
-            if !overwrite {
-                return Err(format!(
-                    "policy_denied: file.write requires overwrite=true for existing file {}",
-                    resolved.display()
-                ));
-            }
+        if resolved.is_dir() {
+            return Err(format!(
+                "path '{}' is a directory, not a file",
+                resolved.display()
+            ));
         }
         if create_dirs && let Some(parent) = resolved.parent() {
             fs::create_dir_all(parent).map_err(|error| {
@@ -127,7 +119,30 @@ pub(super) fn execute_file_write_tool_with_config(
                 )
             })?;
         }
-        fs::write(&resolved, content)
+        let mut options = fs::OpenOptions::new();
+        options.write(true);
+
+        if overwrite {
+            options.create(true);
+            options.truncate(true);
+        } else {
+            options.create_new(true);
+        }
+
+        let mut file = options.open(&resolved).map_err(|error| {
+            let error_kind = error.kind();
+
+            if error_kind == std::io::ErrorKind::AlreadyExists {
+                return format!(
+                    "policy_denied: file.write requires overwrite=true for existing file {}",
+                    resolved.display()
+                );
+            }
+
+            format!("failed to open file {}: {error}", resolved.display())
+        })?;
+
+        file.write_all(content.as_bytes())
             .map_err(|error| format!("failed to write file {}: {error}", resolved.display()))?;
 
         Ok(ToolCoreOutcome {

@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     future::Future,
@@ -1308,7 +1309,7 @@ fn execute_tool_search_tool_with_config(
         .payload
         .as_object()
         .ok_or_else(|| "tool.search payload must be an object".to_owned())?;
-    let query = tool_search_query_from_payload(payload).map(str::to_owned);
+    let query = tool_search_query_from_payload(payload).map(Cow::into_owned);
     let requested_exact_tool_id = payload
         .get("exact_tool_id")
         .and_then(Value::as_str)
@@ -1452,14 +1453,64 @@ fn tool_search_diagnostics_json(
     Value::Null
 }
 
-fn tool_search_query_from_payload(payload: &serde_json::Map<String, Value>) -> Option<&str> {
+fn tool_search_query_from_payload(
+    payload: &serde_json::Map<String, Value>,
+) -> Option<Cow<'_, str>> {
     const QUERY_KEYS: &[&str] = &["query", "input", "text", "prompt", "keyword", "keywords"];
 
-    QUERY_KEYS
-        .iter()
-        .filter_map(|key| payload.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .find(|value| !value.is_empty())
+    for key in QUERY_KEYS {
+        let Some(value) = payload.get(*key) else {
+            continue;
+        };
+
+        if let Some(query) = tool_search_query_from_value(value) {
+            return Some(query);
+        }
+    }
+
+    None
+}
+
+fn tool_search_query_from_value(value: &Value) -> Option<Cow<'_, str>> {
+    let string_value = value.as_str();
+    if let Some(string_value) = string_value {
+        let trimmed_value = string_value.trim();
+        if !trimmed_value.is_empty() {
+            return Some(Cow::Borrowed(trimmed_value));
+        }
+    }
+
+    let values = value.as_array()?;
+    let joined_value = join_tool_search_query_values(values);
+    if joined_value.is_empty() {
+        return None;
+    }
+
+    Some(Cow::Owned(joined_value))
+}
+
+fn join_tool_search_query_values(values: &[Value]) -> String {
+    let mut query_parts = Vec::new();
+
+    for value in values {
+        let query_part = tool_search_query_part(value);
+        if query_part.is_empty() {
+            continue;
+        }
+
+        query_parts.push(query_part);
+    }
+
+    query_parts.join(" ")
+}
+
+fn tool_search_query_part(value: &Value) -> String {
+    let string_value = value.as_str();
+    if let Some(string_value) = string_value {
+        return string_value.trim().to_owned();
+    }
+
+    value.to_string()
 }
 
 fn tool_search_entry_is_runtime_usable(
@@ -3860,6 +3911,34 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn tool_search_accepts_keywords_array_payloads() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-array");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "keywords": ["run", "shell", "command"],
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+
+        assert!(!results.is_empty());
+        assert_eq!(outcome.payload["query"], json!("run shell command"));
+        assert_eq!(results[0]["tool_id"], "shell.exec");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-webfetch"))]
     #[test]
     fn tool_search_uses_schema_derived_terms_for_web_fetch_modes() {
@@ -4004,6 +4083,38 @@ mod tests {
             .first()
             .and_then(|entry| entry.get("tool_id"))
             .and_then(Value::as_str);
+        assert_eq!(first_tool_id, Some("file.write"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_accepts_keywords_array_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-query");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "keywords": ["write", "file"],
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let query = outcome.payload["query"].as_str();
+        let results = outcome.payload["results"].as_array().expect("results");
+        let first_tool_id = results
+            .first()
+            .and_then(|entry| entry.get("tool_id"))
+            .and_then(Value::as_str);
+
+        assert_eq!(query, Some("write file"));
         assert_eq!(first_tool_id, Some("file.write"));
 
         std::fs::remove_dir_all(&root).ok();

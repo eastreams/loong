@@ -574,6 +574,7 @@ struct ProviderTurnLaneExecution {
     had_tool_intents: bool,
     tool_request_summary: Option<String>,
     discovery_search_turn: bool,
+    search_tool_intents: usize,
     supports_provider_turn_followup: bool,
     raw_tool_output_requested: bool,
     turn_result: TurnResult,
@@ -2863,17 +2864,16 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
 
     loop {
         let current_provider_round = provider_round_index.saturating_add(1);
-        if current_continue_phase
-            .lane_execution
-            .supports_provider_turn_followup
-        {
+        if current_continue_phase.lane_execution.discovery_search_turn {
             emit_discovery_first_event(
                 runtime,
                 session_id,
                 "discovery_first_search_round",
                 json!({
                     "provider_round": provider_round_index,
-                    "search_tool_calls": current_continue_phase.tool_intent_count(),
+                    "search_tool_calls": current_continue_phase
+                        .lane_execution
+                        .search_tool_intents,
                     "raw_tool_output_requested": current_continue_phase
                         .lane_execution
                         .raw_tool_output_requested,
@@ -4543,10 +4543,12 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     followup_chain_active: bool,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
-    let discovery_search_turn = turn
+    let search_tool_intents = turn
         .tool_intents
         .iter()
-        .any(|intent| effective_followup_tool_name(intent) == "tool.search");
+        .filter(|intent| effective_followup_tool_name(intent) == "tool.search")
+        .count();
+    let discovery_search_turn = search_tool_intents > 0;
     let supports_provider_turn_followup = followup_chain_active || discovery_search_turn;
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
@@ -4563,6 +4565,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 had_tool_intents,
                 tool_request_summary,
                 discovery_search_turn,
+                search_tool_intents,
                 supports_provider_turn_followup,
                 raw_tool_output_requested: preparation.raw_tool_output_requested,
                 turn_result,
@@ -4697,14 +4700,19 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .is_some_and(|payload| {
             matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
         });
-    let supports_provider_turn_followup =
-        followup_chain_active || discovery_search_turn || recovery_followup_turn;
+    let tool_result_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
+        .is_some_and(|payload| matches!(payload, ToolDrivenFollowupPayload::ToolResult { .. }));
+    let supports_provider_turn_followup = followup_chain_active
+        || discovery_search_turn
+        || recovery_followup_turn
+        || tool_result_followup_turn;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
         had_tool_intents,
         tool_request_summary,
         discovery_search_turn,
+        search_tool_intents,
         supports_provider_turn_followup,
         raw_tool_output_requested: preparation.raw_tool_output_requested,
         turn_result,
@@ -9407,6 +9415,7 @@ mod tests {
                 had_tool_intents: true,
                 tool_request_summary: None,
                 discovery_search_turn: false,
+                search_tool_intents: 0,
                 supports_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::ToolError(TurnFailure::retryable(
@@ -9628,6 +9637,7 @@ mod tests {
                 had_tool_intents: false,
                 tool_request_summary: None,
                 discovery_search_turn: false,
+                search_tool_intents: 0,
                 supports_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::FinalText("hello there".to_owned()),

@@ -297,7 +297,7 @@ impl ToolDrivenFollowupPayload {
 
 pub fn turn_failure_supports_discovery_recovery(failure: &TurnFailure) -> bool {
     let is_tool_not_found = failure.code == "tool_not_found";
-    let has_recovery_hint = failure.reason.contains("tool.search");
+    let has_recovery_hint = failure.supports_discovery_recovery;
     is_tool_not_found && has_recovery_hint
 }
 
@@ -1824,7 +1824,7 @@ where
         "content": build_discovery_recovery_followup_user_prompt(
             user_input,
             loop_warning_reason,
-            recovery_reason,
+            bounded_recovery.as_str(),
         ),
     }));
     messages
@@ -2444,8 +2444,8 @@ mod tests {
     }
 
     #[test]
-    fn turn_failure_supports_discovery_recovery_requires_search_hint() {
-        let recovery_failure = TurnFailure::policy_denied(
+    fn turn_failure_supports_discovery_recovery_requires_structured_metadata() {
+        let recovery_failure = TurnFailure::policy_denied_with_discovery_recovery(
             "tool_not_found",
             "tool_not_found: requested tool is not available If you need a non-core capability, call tool.search with a short natural-language description of the task.",
         );
@@ -2967,7 +2967,8 @@ mod tests {
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
         assert!(user_prompt.contains(DISCOVERY_RECOVERY_FOLLOWUP_PROMPT));
-        assert!(user_prompt.contains("Recovery reason:\ntool_not_found"));
+        assert!(user_prompt.contains("Recovery reason:\nbounded-recovery"));
+        assert!(!user_prompt.contains("tool_not_found"));
         assert!(user_prompt.contains("Loop warning:\nwarning"));
     }
 
