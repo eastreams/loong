@@ -133,6 +133,7 @@ pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
 pub mod session_cli;
 pub mod sessions_cli;
+pub mod runtime_trajectory_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
@@ -966,22 +967,10 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
-    /// Export or inspect one runtime trajectory artifact for replay, evaluation, or research workflows
+    /// Export or inspect runtime trajectory artifacts for replay, evaluation, or research workflows
     RuntimeTrajectory {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, conflicts_with = "artifact")]
-        session: Option<String>,
-        #[arg(long)]
-        artifact: Option<String>,
-        #[arg(long, conflicts_with = "artifact")]
-        output: Option<String>,
-        #[arg(long, conflicts_with = "artifact")]
-        turn_limit: Option<usize>,
-        #[arg(long, default_value_t = 200, conflicts_with = "artifact")]
-        event_page_limit: usize,
-        #[arg(long, default_value_t = false)]
-        json: bool,
+        #[command(subcommand)]
+        command: runtime_trajectory_cli::RuntimeTrajectoryCommands,
     },
     /// Send one Telegram message
     TelegramSend {

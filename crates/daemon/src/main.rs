@@ -511,23 +511,6 @@ async fn main() {
             limit,
             json,
         } => run_safe_lane_summary_cli(config.as_deref(), session.as_deref(), limit, json),
-        Commands::RuntimeTrajectory {
-            config,
-            session,
-            artifact,
-            output,
-            turn_limit,
-            event_page_limit,
-            json,
-        } => run_runtime_trajectory_cli(
-            config.as_deref(),
-            session.as_deref(),
-            artifact.as_deref(),
-            output.as_deref(),
-            turn_limit,
-            event_page_limit,
-            json,
-        ),
         Commands::SessionSearch {
             config,
             session,
@@ -561,6 +544,9 @@ async fn main() {
         ),
         Commands::TrajectoryInspect { artifact, json } => {
             run_trajectory_inspect_cli(&artifact, json)
+        }
+        Commands::RuntimeTrajectory { command } => {
+            runtime_trajectory_cli::execute_runtime_trajectory_command(command)
         }
         Commands::TelegramSend {
             config,

@@ -20,6 +20,7 @@ pub const SESSION_TRAJECTORY_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 pub const SESSION_TRAJECTORY_ARTIFACT_SURFACE: &str = "runtime_trajectory";
 pub const SESSION_TRAJECTORY_ARTIFACT_PURPOSE: &str = "runtime_trajectory_export";
 const DEFAULT_EVENT_PAGE_LIMIT: usize = 200;
+const DEFAULT_TRANSCRIPT_PAGE_SIZE: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionTrajectoryExportOptions {
@@ -150,11 +151,7 @@ pub fn export_session_trajectory(
     let root_session_id = repository.lineage_root_session_id(session_id)?;
     let lineage_depth = repository.session_lineage_depth(session_id)?;
 
-    let turns = if turn_limit == 0 {
-        Vec::new()
-    } else {
-        memory::window_direct(session_id, turn_limit, config)?
-    };
+    let turns = load_export_turns(session_id, turn_limit, config)?;
 
     let events = repository.list_all_events(session_id, options.event_page_limit)?;
     let approval_requests = repository.list_approval_requests_for_session(session_id, None)?;
@@ -197,6 +194,26 @@ pub fn export_session_trajectory(
         approval_requests: trajectory_approval_requests,
         terminal_outcome: trajectory_outcome,
     })
+}
+
+fn load_export_turns(
+    session_id: &str,
+    turn_limit: usize,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    if turn_limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let recent_turns = memory::window_direct(session_id, turn_limit, config)?;
+    if recent_turns.len() == turn_limit {
+        return Ok(recent_turns);
+    }
+
+    let transcript =
+        memory::transcript_direct_paged(session_id, DEFAULT_TRANSCRIPT_PAGE_SIZE, config)?;
+
+    Ok(transcript)
 }
 
 fn validate_export_options(options: &SessionTrajectoryExportOptions) -> Result<(), String> {

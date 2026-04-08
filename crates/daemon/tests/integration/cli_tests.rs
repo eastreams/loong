@@ -358,17 +358,17 @@ fn safe_lane_summary_cli_rejects_zero_limit() {
 #[test]
 fn runtime_trajectory_cli_rejects_invalid_limits() {
     let turn_limit_error =
-        run_runtime_trajectory_cli(None, Some("session-a"), None, None, Some(0), 10, false)
+        run_runtime_trajectory_cli(None, Some("session-a"), false, None, None, Some(0), 10, false)
             .expect_err("zero turn limit must be rejected");
     assert!(turn_limit_error.contains("turn_limit"));
 
     let event_page_error =
-        run_runtime_trajectory_cli(None, Some("session-a"), None, None, None, 0, false)
+        run_runtime_trajectory_cli(None, Some("session-a"), false, None, None, None, 0, false)
             .expect_err("zero event page limit must be rejected");
     assert!(event_page_error.contains("event_page_limit"));
 
     let missing_source_error =
-        run_runtime_trajectory_cli(None, None, None, None, None, 10, false)
+        run_runtime_trajectory_cli(None, None, false, None, None, None, 10, false)
             .expect_err("missing session and artifact must be rejected");
     assert!(missing_source_error.contains("--session or --artifact"));
 }
@@ -1694,6 +1694,76 @@ fn acp_event_summary_cli_rejects_zero_limit() {
     let error = run_acp_event_summary_cli(None, Some("session-a"), 0, false)
         .expect_err("zero limit must be rejected");
     assert!(error.contains(">= 1"));
+}
+
+#[test]
+fn runtime_trajectory_cli_parses_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "runtime-trajectory",
+        "export",
+        "--session",
+        "root-session",
+        "--output",
+        "/tmp/runtime-trajectory.json",
+        "--turn-limit",
+        "25",
+        "--event-page-limit",
+        "50",
+        "--json",
+    ])
+    .expect("runtime-trajectory flags should parse");
+
+    match cli.command {
+        Some(Commands::RuntimeTrajectory { command }) => match command {
+            loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Export(
+                options,
+            ) => {
+                assert_eq!(options.session.as_deref(), Some("root-session"));
+                assert_eq!(
+                    options.output.as_deref(),
+                    Some("/tmp/runtime-trajectory.json")
+                );
+                assert_eq!(options.turn_limit, Some(25));
+                assert_eq!(options.event_page_limit, 50);
+                assert!(options.json);
+            }
+            other => panic!("unexpected runtime-trajectory subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_trajectory_cli_parses_artifact_show_mode() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "runtime-trajectory",
+        "show",
+        "--artifact",
+        "/tmp/runtime-trajectory.json",
+        "--json",
+    ])
+    .expect("runtime-trajectory artifact mode should parse");
+
+    match cli.command {
+        Some(Commands::RuntimeTrajectory { command }) => match command {
+            loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Show(options) => {
+                assert_eq!(options.artifact, "/tmp/runtime-trajectory.json");
+                assert!(options.json);
+            }
+            other => panic!("unexpected runtime-trajectory subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_trajectory_help_mentions_export_and_show_subcommands() {
+    let help = render_cli_help(["runtime-trajectory"]);
+
+    assert!(help.contains("export"));
+    assert!(help.contains("show"));
 }
 
 #[test]

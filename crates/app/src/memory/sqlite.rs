@@ -253,6 +253,12 @@ const SQL_QUERY_RECENT_PROMPT_TURNS_WITH_OVERFLOW_PROBE_FALLBACK: &str = "SELECT
              WHERE session_id = ?1
              ORDER BY id DESC
              LIMIT ?2";
+const SQL_QUERY_TURNS_AFTER_ID_WITH_LIMIT: &str = "SELECT id, role, content, ts
+             FROM turns
+             WHERE session_id = ?1
+               AND id > ?2
+             ORDER BY id ASC
+             LIMIT ?3";
 const SQL_QUERY_TURNS_UP_TO_ID: &str = "SELECT id, role, content
              FROM turns
              WHERE session_id = ?1 AND id <= ?2
@@ -435,6 +441,13 @@ struct WindowLoadResult {
     limit: usize,
     turns: Vec<ConversationTurn>,
     turn_count: Option<usize>,
+}
+
+struct TranscriptPageRow {
+    id: i64,
+    role: String,
+    content: String,
+    ts: i64,
 }
 
 enum ReplaceTurnsFailure {
@@ -730,6 +743,46 @@ pub(super) fn window_direct(
     window_direct_with_options(session_id, limit, true, config)
 }
 
+pub(super) fn transcript_direct_paged(
+    session_id: &str,
+    page_size: usize,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    if page_size == 0 {
+        return Err("memory transcript page_size must be >= 1".to_owned());
+    }
+
+    let runtime = acquire_memory_runtime(config)?;
+    runtime.with_connection("memory.transcript_direct_paged", |conn| {
+        let mut transcript = Vec::new();
+        let mut last_seen_turn_id = 0_i64;
+
+        loop {
+            let page =
+                query_transcript_page_after_id(conn, session_id, last_seen_turn_id, page_size)?;
+
+            if page.is_empty() {
+                break;
+            }
+
+            let next_last_seen_turn_id = page.last().map(|row| row.id).unwrap_or(last_seen_turn_id);
+
+            for row in page {
+                let turn = ConversationTurn {
+                    role: row.role,
+                    content: row.content,
+                    ts: row.ts,
+                };
+                transcript.push(turn);
+            }
+
+            last_seen_turn_id = next_last_seen_turn_id;
+        }
+
+        Ok(transcript)
+    })
+}
+
 pub(super) fn window_direct_with_options(
     session_id: &str,
     limit: usize,
@@ -903,6 +956,42 @@ fn lexical_normalize_runtime_db_path(path: &Path) -> PathBuf {
     } else {
         normalized
     }
+}
+
+fn query_transcript_page_after_id(
+    conn: &Connection,
+    session_id: &str,
+    after_id: i64,
+    page_size: usize,
+) -> Result<Vec<TranscriptPageRow>, String> {
+    let mut statement = prepare_cached_sqlite_statement(
+        conn,
+        SQL_QUERY_TURNS_AFTER_ID_WITH_LIMIT,
+        "prepare transcript page query failed",
+    )?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![session_id, after_id, page_size as i64],
+            |row| {
+                Ok(TranscriptPageRow {
+                    id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    ts: row.get(3)?,
+                })
+            },
+        )
+        .map_err(|error| format!("query transcript page failed: {error}"))?;
+
+    let mut page = Vec::new();
+
+    for row in rows {
+        let transcript_row =
+            row.map_err(|error| format!("decode transcript page row failed: {error}"))?;
+        page.push(transcript_row);
+    }
+
+    Ok(page)
 }
 
 /// Walk up the directory tree to find the deepest existing ancestor, canonicalize it

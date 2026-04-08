@@ -239,6 +239,15 @@ pub fn window_direct(
 }
 
 #[cfg(feature = "memory-sqlite")]
+pub fn transcript_direct_paged(
+    session_id: &str,
+    page_size: usize,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    sqlite::transcript_direct_paged(session_id, page_size, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub fn window_direct_extended(
     session_id: &str,
     limit: usize,
