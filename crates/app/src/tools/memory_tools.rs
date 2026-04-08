@@ -496,13 +496,14 @@ fn normalized_requested_path_key(path: &Path) -> String {
 }
 
 fn normalized_existing_path_key(path: &Path) -> Result<String, String> {
-    let canonical_path = path.canonicalize().map_err(|error| {
+    let canonical_path = dunce::canonicalize(path).map_err(|error| {
         format!(
             "failed to canonicalize workspace memory path {}: {error}",
             path.display()
         )
     })?;
-    Ok(canonical_path.display().to_string())
+    let normalized_path = dunce::simplified(&canonical_path);
+    Ok(normalized_path.display().to_string())
 }
 
 fn search_canonical_memory_results(

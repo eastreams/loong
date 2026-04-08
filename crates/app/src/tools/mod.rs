@@ -8356,7 +8356,7 @@ mod tests {
 
         let expected_path = file_root.join("artifacts/specs/spec-sheet.pdf");
         let canonical_expected_path =
-            std::fs::canonicalize(&expected_path).expect("canonicalize downloaded file");
+            dunce::canonicalize(&expected_path).expect("canonicalize downloaded file");
         assert_eq!(
             outcome.payload["path"].as_str(),
             Some(canonical_expected_path.display().to_string().as_str())
@@ -14045,7 +14045,7 @@ mod tests {
                 outcome.payload["output_path"]
                     .as_str()
                     .expect("output path should exist"),
-                fs::canonicalize(&output_path)
+                dunce::canonicalize(&output_path)
                     .expect("output path should canonicalize")
                     .display()
                     .to_string()
