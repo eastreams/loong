@@ -227,7 +227,7 @@ pub(super) fn resolve_safe_file_path_with_config(
 
 fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
     if path.exists() {
-        return fs::canonicalize(&path)
+        return dunce::canonicalize(&path)
             .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()));
     }
     Ok(super::normalize_without_fs(&path))
@@ -237,7 +237,7 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
     ensure_path_within_root(root, normalized)?;
 
     if normalized.exists() {
-        let canonical = fs::canonicalize(normalized).map_err(|error| {
+        let canonical = dunce::canonicalize(normalized).map_err(|error| {
             format!(
                 "failed to canonicalize target file path {}: {error}",
                 normalized.display()
@@ -248,7 +248,7 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
     }
 
     let (ancestor, suffix) = split_existing_ancestor(normalized)?;
-    let canonical_ancestor = fs::canonicalize(&ancestor).map_err(|error| {
+    let canonical_ancestor = dunce::canonicalize(&ancestor).map_err(|error| {
         format!(
             "failed to canonicalize ancestor {}: {error}",
             ancestor.display()
