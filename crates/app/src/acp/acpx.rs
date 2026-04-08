@@ -9,10 +9,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{Duration, Instant, sleep_until, timeout};
 
 use crate::CliResult;
 use crate::config::{AcpxMcpServerConfig, LoongClawConfig};
+use crate::process_launch::retry_executable_file_busy_async;
+#[cfg(test)]
+use crate::process_launch::retry_executable_file_busy_blocking as retry_spawn_blocking;
 
 #[cfg(test)]
 pub(crate) use super::acpx_mcp::probe_mcp_proxy_support_with_runtime;
@@ -1367,48 +1370,21 @@ async fn spawn_acpx_child(
     .map_err(|error| map_spawn_error(command, cwd, error))
 }
 
-async fn retry_executable_file_busy<T, F>(mut operation: F) -> std::io::Result<T>
+async fn retry_executable_file_busy<T, F>(operation: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
 {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if should_retry_spawn_error(&error) && attempt < ACPX_SPAWN_RETRY_ATTEMPTS =>
-            {
-                sleep(ACPX_SPAWN_RETRY_DELAY).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    retry_executable_file_busy_async(operation, ACPX_SPAWN_RETRY_ATTEMPTS, ACPX_SPAWN_RETRY_DELAY)
+        .await
 }
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
-fn retry_executable_file_busy_blocking<T, F>(mut operation: F) -> std::io::Result<T>
+fn retry_executable_file_busy_blocking<T, F>(operation: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
 {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if should_retry_spawn_error(&error) && attempt < ACPX_SPAWN_RETRY_ATTEMPTS =>
-            {
-                std::thread::sleep(ACPX_SPAWN_RETRY_DELAY);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-fn should_retry_spawn_error(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::ExecutableFileBusy
+    retry_spawn_blocking(operation, ACPX_SPAWN_RETRY_ATTEMPTS, ACPX_SPAWN_RETRY_DELAY)
 }
 
 fn parse_json_lines(stdout: &str) -> Vec<Value> {

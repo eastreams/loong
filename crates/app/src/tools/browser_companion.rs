@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use wait_timeout::ChildExt;
 
 use crate::process_launch::resolve_command_invocation;
+use crate::process_launch::retry_executable_file_busy_with_pause as retry_spawn_with_pause;
 
 const DEFAULT_BROWSER_COMPANION_SCOPE_ID: &str = "__global";
 const BROWSER_COMPANION_PROTOCOL: &str = "loongclaw.browser_companion.v1";
@@ -174,37 +175,21 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
     }
 }
 
-fn retry_executable_file_busy<T, F>(mut operation: F) -> std::io::Result<T>
+fn retry_executable_file_busy<T, F>(operation: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
 {
-    retry_executable_file_busy_with_pause(&mut operation, || {
-        pause_before_browser_companion_spawn_retry(BROWSER_COMPANION_SPAWN_RETRY_DELAY)
-    })
+    let pause = || pause_before_browser_companion_spawn_retry(BROWSER_COMPANION_SPAWN_RETRY_DELAY);
+
+    retry_executable_file_busy_with_pause(operation, pause)
 }
 
-fn retry_executable_file_busy_with_pause<T, F, P>(
-    mut operation: F,
-    mut pause: P,
-) -> std::io::Result<T>
+fn retry_executable_file_busy_with_pause<T, F, P>(operation: F, pause: P) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
     P: FnMut() -> std::io::Result<()>,
 {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if should_retry_spawn_error(&error)
-                    && attempt < BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS =>
-            {
-                pause()?;
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    retry_spawn_with_pause(operation, BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS, pause)
 }
 
 fn pause_before_browser_companion_spawn_retry(delay: Duration) -> std::io::Result<()> {
@@ -253,10 +238,6 @@ fn pause_before_browser_companion_spawn_retry(delay: Duration) -> std::io::Resul
             Ok(())
         }
     }
-}
-
-fn should_retry_spawn_error(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::ExecutableFileBusy
 }
 
 fn write_browser_companion_request<W, C>(

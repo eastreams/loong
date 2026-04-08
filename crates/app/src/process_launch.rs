@@ -1,14 +1,105 @@
 use std::ffi::OsString;
+use std::io;
 #[cfg(unix)]
 use std::io::Read;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct ResolvedCommandInvocation {
     pub program: OsString,
     pub args: Vec<OsString>,
+}
+
+#[doc(hidden)]
+pub fn should_retry_executable_file_busy(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::ExecutableFileBusy
+}
+
+#[doc(hidden)]
+pub async fn retry_executable_file_busy_async<T, F>(
+    mut operation: F,
+    max_attempts: usize,
+    delay: Duration,
+) -> io::Result<T>
+where
+    F: FnMut() -> io::Result<T>,
+{
+    let mut attempt = 0;
+
+    loop {
+        attempt += 1;
+        let result = operation();
+
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let retryable = should_retry_executable_file_busy(&error);
+                let within_retry_budget = attempt < max_attempts;
+
+                if retryable && within_retry_budget {
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+
+                return Err(error);
+            }
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn retry_executable_file_busy_with_pause<T, F, P>(
+    mut operation: F,
+    max_attempts: usize,
+    mut pause: P,
+) -> io::Result<T>
+where
+    F: FnMut() -> io::Result<T>,
+    P: FnMut() -> io::Result<()>,
+{
+    let mut attempt = 0;
+
+    loop {
+        attempt += 1;
+        let result = operation();
+
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let retryable = should_retry_executable_file_busy(&error);
+                let within_retry_budget = attempt < max_attempts;
+
+                if retryable && within_retry_budget {
+                    pause()?;
+                    continue;
+                }
+
+                return Err(error);
+            }
+        }
+    }
+}
+
+#[doc(hidden)]
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+pub fn retry_executable_file_busy_blocking<T, F>(
+    operation: F,
+    max_attempts: usize,
+    delay: Duration,
+) -> io::Result<T>
+where
+    F: FnMut() -> io::Result<T>,
+{
+    let pause = || {
+        std::thread::sleep(delay);
+        Ok(())
+    };
+
+    retry_executable_file_busy_with_pause(operation, max_attempts, pause)
 }
 
 #[doc(hidden)]
@@ -99,12 +190,19 @@ fn read_shebang(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Error, ErrorKind};
     #[cfg(unix)]
     use std::path::Path;
     #[cfg(unix)]
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
-    use super::resolve_command_invocation;
+    use super::{
+        resolve_command_invocation, retry_executable_file_busy_async,
+        retry_executable_file_busy_blocking, retry_executable_file_busy_with_pause,
+        should_retry_executable_file_busy,
+    };
 
     #[cfg(unix)]
     #[test]
@@ -225,5 +323,91 @@ mod tests {
                 std::ffi::OsString::from("--flag"),
             ]
         );
+    }
+
+    #[test]
+    fn should_retry_executable_file_busy_matches_executable_file_busy() {
+        let busy_error = Error::from(ErrorKind::ExecutableFileBusy);
+        let missing_error = Error::from(ErrorKind::NotFound);
+
+        assert!(should_retry_executable_file_busy(&busy_error));
+        assert!(!should_retry_executable_file_busy(&missing_error));
+    }
+
+    #[tokio::test]
+    async fn retry_executable_file_busy_async_retries_until_success() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = retry_executable_file_busy_async(
+            || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+
+                if attempt < 2 {
+                    return Err(Error::from(ErrorKind::ExecutableFileBusy));
+                }
+
+                Ok("spawned")
+            },
+            5,
+            Duration::ZERO,
+        )
+        .await
+        .expect("executable-file-busy errors should retry");
+
+        let total_attempts = attempts.load(Ordering::Relaxed);
+
+        assert_eq!(result, "spawned");
+        assert_eq!(total_attempts, 3);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_with_pause_records_retry_boundaries() {
+        let attempts = AtomicUsize::new(0);
+        let pauses = AtomicUsize::new(0);
+
+        let result = retry_executable_file_busy_with_pause(
+            || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+
+                if attempt < 2 {
+                    return Err(Error::from(ErrorKind::ExecutableFileBusy));
+                }
+
+                Ok("spawned")
+            },
+            5,
+            || {
+                pauses.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        )
+        .expect("retry helper should recover after retryable failures");
+
+        let total_attempts = attempts.load(Ordering::Relaxed);
+        let total_pauses = pauses.load(Ordering::Relaxed);
+
+        assert_eq!(result, "spawned");
+        assert_eq!(total_attempts, 3);
+        assert_eq!(total_pauses, 2);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_blocking_stops_after_retry_budget() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_executable_file_busy_blocking(
+            || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                Err::<(), Error>(Error::from(ErrorKind::ExecutableFileBusy))
+            },
+            4,
+            Duration::ZERO,
+        )
+        .expect_err("retry helper should stop after exhausting the retry budget");
+
+        let total_attempts = attempts.load(Ordering::Relaxed);
+
+        assert_eq!(error.kind(), ErrorKind::ExecutableFileBusy);
+        assert_eq!(total_attempts, 4);
     }
 }
