@@ -153,6 +153,68 @@ fn shell_exec_rejects_cwd_that_is_not_directory() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+#[cfg(all(unix, feature = "tool-shell"))]
+#[test]
+fn shell_exec_rejects_cwd_symlink_outside_file_root() {
+    use std::os::unix::fs::symlink;
+
+    let root = unique_tool_temp_dir("loongclaw-shell-cwd-symlink-root");
+    let outside_root = unique_tool_temp_dir("loongclaw-shell-cwd-symlink-outside");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&outside_root).expect("create outside root");
+
+    let link_path = root.join("outside-link");
+    symlink(&outside_root, &link_path).expect("create cwd symlink");
+
+    let config = test_tool_runtime_config(root.clone());
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "ls",
+                "cwd": "outside-link",
+            }),
+        },
+        &config,
+    )
+    .expect_err("symlink cwd should be denied");
+
+    assert!(
+        error.contains("escapes configured file root"),
+        "expected file-root escape denial, got: {error}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&outside_root).ok();
+}
+
+#[cfg(feature = "tool-shell")]
+#[test]
+fn shell_exec_rejects_missing_cwd_directory() {
+    let root = unique_tool_temp_dir("loongclaw-shell-cwd-missing");
+    std::fs::create_dir_all(&root).expect("create root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "ls",
+                "cwd": "missing-dir",
+            }),
+        },
+        &config,
+    )
+    .expect_err("missing cwd should be denied");
+
+    assert!(
+        error.contains("does not exist"),
+        "expected missing cwd denial, got: {error}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[test]
 fn tool_execution_config_timeout_for_tool_prefers_per_tool() {
     use std::collections::BTreeMap;

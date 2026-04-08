@@ -2714,6 +2714,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                         .conversation
                         .turn_loop
                         .max_discovery_followup_rounds
+                        .saturating_add(1)
                         .max(1),
                     binding,
                     observer,
@@ -2870,7 +2871,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 session_id,
                 "discovery_first_search_round",
                 json!({
-                    "provider_round": provider_round_index,
+                    "provider_round": current_provider_round,
                     "search_tool_calls": current_continue_phase
                         .lane_execution
                         .search_tool_intents,
@@ -2902,6 +2903,9 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 } else if current_continue_phase
                     .lane_execution
                     .supports_provider_turn_followup
+                    && !current_continue_phase
+                        .lane_execution
+                        .raw_tool_output_requested
                     && let Some(payload) = latest_tool_payload
                 {
                     ReplyLoopDecision::Followup {
@@ -4700,12 +4704,8 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .is_some_and(|payload| {
             matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
         });
-    let tool_result_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
-        .is_some_and(|payload| matches!(payload, ToolDrivenFollowupPayload::ToolResult { .. }));
-    let supports_provider_turn_followup = followup_chain_active
-        || discovery_search_turn
-        || recovery_followup_turn
-        || tool_result_followup_turn;
+    let supports_provider_turn_followup =
+        followup_chain_active || discovery_search_turn || recovery_followup_turn;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,

@@ -1111,7 +1111,7 @@ fn discoverable_capability_tag_line(
     }
 
     let joined_tags = discoverable_tags.join(", ");
-    let line = format!("Discoverable capability tags currently available: {joined_tags}.");
+    let line = format!("Discoverable capability tags currently discoverable: {joined_tags}.");
     Some(line)
 }
 
@@ -2111,7 +2111,7 @@ mod tests {
         assert!(snapshot.starts_with("[tool_discovery_runtime]"));
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
-        assert!(snapshot.contains("Discoverable capability tags currently available:"));
+        assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
         assert!(snapshot.contains("tool.search accepts multilingual queries"));
         assert!(!snapshot.contains("shell.exec"));
         assert!(!snapshot.contains("file.read"));
@@ -2185,7 +2185,7 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Non-core tools are intentionally hidden"));
-        assert!(snapshot.contains("Discoverable capability tags currently available:"));
+        assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
         assert!(snapshot.contains("tool.search accepts multilingual queries"));
         assert!(!snapshot.contains("claw.migrate"));
         assert!(!snapshot.contains("external_skills.fetch"));
@@ -2657,10 +2657,16 @@ mod tests {
         let properties = definition["function"]["parameters"]["properties"]
             .as_object()
             .expect("file.write parameters");
+        let required_fields = definition["function"]["parameters"]["required"].as_array();
 
         assert!(
             properties.contains_key("overwrite"),
             "file.write schema should expose overwrite parameter"
+        );
+        assert!(
+            required_fields
+                .is_none_or(|fields| !fields.contains(&Value::String("overwrite".to_owned()))),
+            "file.write schema should keep overwrite optional"
         );
 
         let entry = catalog::find_tool_catalog_entry("file.write")
@@ -3387,6 +3393,7 @@ mod tests {
         )
         .expect("tool search should succeed without a query");
 
+        let diagnostics = &outcome.payload["diagnostics"];
         let results = outcome.payload["results"].as_array().expect("results");
         assert!(
             !results.is_empty(),
@@ -3400,6 +3407,8 @@ mod tests {
                     .any(|reason| reason.as_str() == Some("coarse_fallback")))),
             "missing-query fallback should explain its coarse listing mode: {results:?}"
         );
+        assert_eq!(diagnostics["reason"], "coarse_fallback");
+        assert_eq!(diagnostics["query"], "");
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -3470,7 +3479,7 @@ mod tests {
         let snapshot = capability_snapshot();
         let discoverable_tag_line = snapshot
             .lines()
-            .find(|line| line.starts_with("Discoverable capability tags currently available:"))
+            .find(|line| line.starts_with("Discoverable capability tags currently discoverable:"))
             .expect("discoverable capability tag line");
 
         assert!(

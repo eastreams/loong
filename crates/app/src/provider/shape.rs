@@ -1429,14 +1429,17 @@ fn parse_invoke_block_sequence(
 
 fn find_unquoted_tag_close(raw: &str) -> Option<usize> {
     let mut active_quote = None;
+    let bytes = raw.as_bytes();
 
     for (index, ch) in raw.char_indices() {
-        if active_quote == Some(ch) {
+        let is_escaped = quote_byte_is_escaped(bytes, index);
+
+        if active_quote == Some(ch) && !is_escaped {
             active_quote = None;
             continue;
         }
 
-        if active_quote.is_none() && (ch == '"' || ch == '\'') {
+        if active_quote.is_none() && !is_escaped && (ch == '"' || ch == '\'') {
             active_quote = Some(ch);
             continue;
         }
@@ -1447,6 +1450,24 @@ fn find_unquoted_tag_close(raw: &str) -> Option<usize> {
     }
 
     None
+}
+
+fn quote_byte_is_escaped(bytes: &[u8], index: usize) -> bool {
+    let mut slash_count = 0usize;
+    let mut cursor = index;
+
+    while cursor > 0 {
+        let previous_index = cursor - 1;
+        let previous_byte = bytes[previous_index];
+        if previous_byte != b'\\' {
+            break;
+        }
+
+        slash_count += 1;
+        cursor = previous_index;
+    }
+
+    slash_count % 2 == 1
 }
 
 fn parse_invoke_attributes(raw: &str) -> Result<BTreeMap<String, String>, InvokeBlockParseError> {
@@ -1504,7 +1525,14 @@ fn parse_invoke_attributes(raw: &str) -> Result<BTreeMap<String, String>, Invoke
         }
         cursor += 1;
         let value_start = cursor;
-        while bytes.get(cursor).copied().is_some_and(|byte| byte != quote) {
+        while let Some(byte) = bytes.get(cursor).copied() {
+            let is_closing_quote = byte == quote;
+            let is_escaped = quote_byte_is_escaped(bytes, cursor);
+
+            if is_closing_quote && !is_escaped {
+                break;
+            }
+
             cursor += 1;
         }
         if cursor >= raw.len() {
@@ -1529,14 +1557,39 @@ fn parse_invoke_arguments(
         return Ok(json!({}));
     }
 
-    match serde_json::from_str::<Value>(trimmed) {
-        Ok(Value::String(query)) if canonical_tool_name == "tool.search" => {
+    let parsed = serde_json::from_str::<Value>(trimmed);
+    if let Ok(value) = parsed {
+        return normalize_invoke_arguments_value(canonical_tool_name, value);
+    }
+
+    let backslash_unescaped = decode_backslash_escaped_quotes(trimmed);
+    let reparsed = serde_json::from_str::<Value>(backslash_unescaped.as_str());
+    if let Ok(value) = reparsed {
+        return normalize_invoke_arguments_value(canonical_tool_name, value);
+    }
+
+    if canonical_tool_name == "tool.search" {
+        return Ok(json!({ "query": trimmed }));
+    }
+
+    Err(InvokeBlockParseError::InvalidArgumentsJson)
+}
+
+fn normalize_invoke_arguments_value(
+    canonical_tool_name: &str,
+    value: Value,
+) -> Result<Value, InvokeBlockParseError> {
+    match value {
+        Value::String(query) if canonical_tool_name == "tool.search" => {
             Ok(json!({ "query": query }))
         }
-        Ok(value) => Ok(value),
-        Err(_) if canonical_tool_name == "tool.search" => Ok(json!({ "query": trimmed })),
-        Err(_) => Err(InvokeBlockParseError::InvalidArgumentsJson),
+        other => Ok(other),
     }
+}
+
+fn decode_backslash_escaped_quotes(raw: &str) -> String {
+    let single_quotes_unescaped = raw.replace("\\'", "'");
+    single_quotes_unescaped.replace("\\\"", "\"")
 }
 
 fn extract_inline_function_call_turn(
@@ -2747,6 +2800,33 @@ mod tests {
             json!({
                 "command": "sh",
                 "args": ["-lc", "echo hi > out.txt"]
+            })
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_parses_invoke_blocks_with_backslash_escaped_quotes() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": r#"let me search the catalog.
+<function_calls>
+<invoke name="tool.search" arguments="{\"query\":\"a > b\",\"limit\":3}"></invoke>
+</function_calls>"#
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+
+        assert_eq!(turn.assistant_text, "let me search the catalog.");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "tool.search");
+        assert_eq!(
+            turn.tool_intents[0].args_json,
+            json!({
+                "query": "a > b",
+                "limit": 3
             })
         );
     }

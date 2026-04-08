@@ -2063,12 +2063,10 @@ fn build_tool_loop_guard_prompt(
 
 fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
     let tool_result_line = ToolResultLine::parse(line)?;
-    if tool_result_line.tool_name() != "external_skills.invoke" {
-        return None;
-    }
     let envelope = serde_json::to_value(tool_result_line.envelope()).ok()?;
     let uses_external_skill_context = envelope_uses_external_skill_context(&envelope);
-    if !uses_external_skill_context {
+    let uses_legacy_carrier = tool_result_line.tool_name() == "external_skills.invoke";
+    if !uses_legacy_carrier && !uses_external_skill_context {
         return None;
     }
     if tool_result_line.payload_truncated() {
