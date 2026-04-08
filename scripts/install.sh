@@ -858,17 +858,42 @@ fi
 printf '==> Installed loong to %s\n' "${prefix}/${bin_name}"
 printf '==> Installed compatible loongclaw command to %s\n' "${prefix}/${legacy_bin_name}"
 
-if [[ "${run_onboard}" -eq 1 ]]; then
-  printf '==> Running guided onboarding\n'
-  run_guided_onboarding
-fi
-
 case ":${PATH}:" in
   *":${prefix}:"*)
     ;;
   *)
-    printf '\nAdd to PATH if needed:\n  export PATH="%s:$PATH"\n' "${prefix}"
+    path_line="export PATH=\"${prefix}:\$PATH\""
+    # Pick the rc file for the user's current shell
+    case "${SHELL:-}" in
+      */zsh)  rc_file="${HOME}/.zshrc" ;;
+      */bash) rc_file="${HOME}/.bashrc" ;;
+      *)      rc_file="" ;;
+    esac
+    if [[ -n "${rc_file}" ]]; then
+      if [[ ! -f "${rc_file}" ]]; then
+        touch "${rc_file}"
+      fi
+      if ! grep -qF "${path_line}" "${rc_file}"; then
+        # Ensure existing content ends with a newline before appending
+        if [[ -s "${rc_file}" ]] && [[ "$(tail -c 1 "${rc_file}" | wc -l)" -eq 0 ]]; then
+          printf '\n' >> "${rc_file}"
+        fi
+        printf '\n# Added by Loong installer\n%s\n' "${path_line}" >> "${rc_file}"
+        printf '==> Added %s to PATH in %s\n' "${prefix}" "${rc_file}"
+      else
+        printf '==> PATH entry already present in %s\n' "${rc_file}"
+      fi
+    else
+      printf '\nAdd to PATH if needed:\n  export PATH="%s:$PATH"\n' "${prefix}"
+    fi
+    # Make loong available for the onboarding step below
+    export PATH="${prefix}:${PATH}"
     ;;
 esac
+
+if [[ "${run_onboard}" -eq 1 ]]; then
+  printf '==> Running guided onboarding\n'
+  run_guided_onboarding
+fi
 
 printf '\nDone. Try:\n  loong --help\n'
