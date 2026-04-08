@@ -6,7 +6,7 @@ use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 
 use super::orchestrator::{
     BuiltinMemoryOrchestrator, hydrate_stage_envelope_without_execution_adapter,
-    skip_compact_stage_without_execution_adapter,
+    skip_compact_stage_without_execution_adapter, skipped_stage_diagnostics,
 };
 use super::runtime_config::MemoryRuntimeConfig;
 use super::{
@@ -84,13 +84,38 @@ impl MemorySystemRuntime for SystemBackedMemorySystemRuntime {
 
     async fn run_compact_stage(
         &self,
-        _session_id: &str,
-        _workspace_root: Option<&Path>,
+        session_id: &str,
+        workspace_root: Option<&Path>,
     ) -> Result<StageDiagnostics, String> {
         let family = MemoryStageFamily::Compact;
-        let diagnostics = skip_compact_stage_without_execution_adapter(family);
+        let supports_compact_stage = self.metadata.supports_stage_family(family);
+        if !supports_compact_stage {
+            let diagnostics = skipped_stage_diagnostics(family, None);
+            return Ok(diagnostics);
+        }
 
-        Ok(diagnostics)
+        let compact_stage_result =
+            self.system
+                .run_compact_stage(session_id, workspace_root, &self.config);
+        match compact_stage_result {
+            Ok(Some(diagnostics)) => Ok(diagnostics),
+            Ok(None) => {
+                let diagnostics = skip_compact_stage_without_execution_adapter(family);
+                Ok(diagnostics)
+            }
+            Err(error) if self.config.effective_fail_open() => {
+                let diagnostics = StageDiagnostics {
+                    family,
+                    outcome: super::StageOutcome::Fallback,
+                    budget_ms: None,
+                    elapsed_ms: None,
+                    fallback_activated: true,
+                    message: Some(error),
+                };
+                Ok(diagnostics)
+            }
+            Err(error) => Err(format!("memory compact stage failed: {error}")),
+        }
     }
 }
 
@@ -201,8 +226,13 @@ impl MemorySystemRuntime for MetadataOnlyMemorySystemRuntime {
         _workspace_root: Option<&Path>,
     ) -> Result<StageDiagnostics, String> {
         let family = MemoryStageFamily::Compact;
-        let diagnostics = skip_compact_stage_without_execution_adapter(family);
+        let supports_compact_stage = self.metadata.supports_stage_family(family);
+        if !supports_compact_stage {
+            let diagnostics = skipped_stage_diagnostics(family, None);
+            return Ok(diagnostics);
+        }
 
+        let diagnostics = skip_compact_stage_without_execution_adapter(family);
         Ok(diagnostics)
     }
 }

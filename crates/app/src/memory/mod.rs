@@ -50,11 +50,12 @@ pub use orchestrator::{MemoryOrchestratorTestFaults, ScopedMemoryOrchestratorTes
 pub use protocol::{
     MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_READ_CONTEXT,
     MEMORY_OP_READ_STAGE_ENVELOPE, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW, MemoryContextEntry,
-    MemoryContextKind, WindowTurn, build_append_turn_request, build_read_context_request,
-    build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
-    build_replace_turns_request, build_replace_turns_request_with_expectation,
-    build_window_request, decode_memory_context_entries, decode_stage_envelope,
-    decode_window_turn_count, decode_window_turns, encode_stage_envelope_payload,
+    MemoryContextKind, MemoryCoreOperation, WindowTurn, build_append_turn_request,
+    build_read_context_request, build_read_stage_envelope_request,
+    build_read_stage_envelope_request_with_workspace_root, build_replace_turns_request,
+    build_replace_turns_request_with_expectation, build_window_request,
+    decode_memory_context_entries, decode_stage_envelope, decode_window_turn_count,
+    decode_window_turns, encode_stage_envelope_payload,
 };
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use sqlite::CanonicalMemorySearchHit;
@@ -68,8 +69,9 @@ pub use stage::{
 };
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
-    MemorySystemCapability, MemorySystemMetadata, RECALL_FIRST_MEMORY_SYSTEM_ID,
-    RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
+    MemorySystemCapability, MemorySystemMetadata, MemorySystemRuntimeFallbackKind,
+    RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
+    WorkspaceRecallMemorySystem,
 };
 pub(crate) use system_registry::registered_memory_system_id;
 pub(crate) use system_registry::registered_memory_system_id_from_env;
@@ -106,6 +108,19 @@ pub fn execute_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutco
     execute_memory_core_with_config(request, runtime_config::get_memory_runtime_config())
 }
 
+pub fn supported_memory_core_operations(backend: MemoryBackendKind) -> Vec<MemoryCoreOperation> {
+    match backend {
+        MemoryBackendKind::Sqlite => vec![
+            MemoryCoreOperation::AppendTurn,
+            MemoryCoreOperation::Window,
+            MemoryCoreOperation::ClearSession,
+            MemoryCoreOperation::ReadContext,
+            MemoryCoreOperation::ReplaceTurns,
+            MemoryCoreOperation::ReadStageEnvelope,
+        ],
+    }
+}
+
 pub fn execute_memory_core_with_config(
     request: MemoryCoreRequest,
     config: &runtime_config::MemoryRuntimeConfig,
@@ -122,14 +137,17 @@ pub(crate) fn execute_builtin_backend_memory_core(
     request: MemoryCoreRequest,
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<MemoryCoreOutcome, String> {
+    let parsed_operation = MemoryCoreOperation::parse_id(request.operation.as_str());
     match config.backend {
-        MemoryBackendKind::Sqlite => match request.operation.as_str() {
-            MEMORY_OP_APPEND_TURN => append_turn(request, config),
-            MEMORY_OP_WINDOW => load_window(request, config),
-            MEMORY_OP_CLEAR_SESSION => clear_session(request, config),
-            MEMORY_OP_READ_CONTEXT => context::read_context(request, config),
-            MEMORY_OP_REPLACE_TURNS => replace_turns(request, config),
-            MEMORY_OP_READ_STAGE_ENVELOPE => context::read_stage_envelope(request, config),
+        MemoryBackendKind::Sqlite => match parsed_operation {
+            Some(MemoryCoreOperation::AppendTurn) => append_turn(request, config),
+            Some(MemoryCoreOperation::Window) => load_window(request, config),
+            Some(MemoryCoreOperation::ClearSession) => clear_session(request, config),
+            Some(MemoryCoreOperation::ReadContext) => context::read_context(request, config),
+            Some(MemoryCoreOperation::ReplaceTurns) => replace_turns(request, config),
+            Some(MemoryCoreOperation::ReadStageEnvelope) => {
+                context::read_stage_envelope(request, config)
+            }
             _ => Ok(MemoryCoreOutcome {
                 status: "ok".to_owned(),
                 payload: json!({

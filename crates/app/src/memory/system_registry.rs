@@ -12,8 +12,8 @@ use crate::config::{
 use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
-    RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
-    WorkspaceRecallMemorySystem,
+    MemorySystemRuntimeFallbackKind, RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem,
+    WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
 };
 use super::system_runtime::{
     MemorySystemRuntime, MetadataOnlyMemorySystemRuntime, SystemBackedMemorySystemRuntime,
@@ -56,6 +56,7 @@ pub struct MemorySystemRuntimeSnapshot {
     pub selected: MemorySystemSelection,
     pub selected_metadata: MemorySystemMetadata,
     pub available: Vec<MemorySystemMetadata>,
+    pub core_operations: Vec<super::MemoryCoreOperation>,
     pub policy: MemorySystemPolicySnapshot,
 }
 
@@ -219,20 +220,26 @@ pub fn resolve_memory_system_runtime(
     }
 
     let metadata = system.metadata();
-    let metadata_supports_stages = !metadata.supported_pre_assembly_stage_families.is_empty();
     let shared_system: Arc<dyn MemorySystem> = Arc::from(system);
+    let runtime_fallback_kind = metadata.runtime_fallback_kind;
 
-    if metadata_supports_stages {
-        let runtime_config = config.clone();
-        let runtime = SystemBackedMemorySystemRuntime::new(runtime_config, metadata, shared_system);
-        let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+    let boxed_runtime: Box<dyn MemorySystemRuntime> = match runtime_fallback_kind {
+        MemorySystemRuntimeFallbackKind::MetadataOnly => {
+            let runtime_config = config.clone();
+            let runtime = MetadataOnlyMemorySystemRuntime::new(runtime_config, metadata);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
 
-        return Ok(boxed_runtime);
-    }
+            boxed_runtime
+        }
+        MemorySystemRuntimeFallbackKind::SystemBacked => {
+            let runtime_config = config.clone();
+            let runtime =
+                SystemBackedMemorySystemRuntime::new(runtime_config, metadata, shared_system);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
 
-    let runtime_config = config.clone();
-    let runtime = MetadataOnlyMemorySystemRuntime::new(runtime_config, metadata);
-    let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+            boxed_runtime
+        }
+    };
 
     Ok(boxed_runtime)
 }
@@ -302,12 +309,14 @@ pub fn collect_memory_system_runtime_snapshot(
     let selected_metadata = describe_memory_system(Some(selected.id.as_str()))?;
     let available = list_memory_system_metadata()?;
     let runtime = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let core_operations = super::supported_memory_core_operations(runtime.backend);
     let policy = MemorySystemPolicySnapshot::from_runtime_config(&runtime);
 
     Ok(MemorySystemRuntimeSnapshot {
         selected,
         selected_metadata,
         available,
+        core_operations,
         policy,
     })
 }
@@ -408,6 +417,7 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Registry snapshot system",
             )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
             .with_supported_pre_assembly_stage_families([
                 crate::memory::MemoryStageFamily::Retrieve,
             ])
@@ -427,9 +437,41 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Registry config snapshot system",
             )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
             .with_supported_pre_assembly_stage_families([
                 crate::memory::MemoryStageFamily::Retrieve,
             ])
+        }
+    }
+
+    struct MetadataOnlyCompactRegistrySystem;
+
+    impl MemorySystem for MetadataOnlyCompactRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-metadata-only-compact"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-metadata-only-compact",
+                [MemorySystemCapability::PromptHydration],
+                "Registry compact system that should stay metadata-only",
+            )
+            .with_supported_stage_families([crate::memory::MemoryStageFamily::Compact])
+        }
+
+        fn run_compact_stage(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+            _config: &MemoryRuntimeConfig,
+        ) -> Result<Option<crate::memory::StageDiagnostics>, String> {
+            let diagnostics = crate::memory::StageDiagnostics::succeeded(
+                crate::memory::MemoryStageFamily::Compact,
+            );
+            let maybe_diagnostics = Some(diagnostics);
+
+            Ok(maybe_diagnostics)
         }
     }
 
@@ -556,6 +598,32 @@ mod tests {
             error.contains("registry-runtime-mismatch"),
             "error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn metadata_only_runtime_fallback_does_not_infer_system_backed_execution_from_stage_list()
+    {
+        register_memory_system("registry-metadata-only-compact", || {
+            Box::new(MetadataOnlyCompactRegistrySystem)
+        })
+        .expect("register metadata-only compact system");
+
+        let config = MemoryRuntimeConfig {
+            resolved_system_id: Some("registry-metadata-only-compact".to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let runtime = resolve_memory_system_runtime(&config).expect("resolve memory runtime");
+        let diagnostics = runtime
+            .run_compact_stage("metadata-only-compact-session", None)
+            .await
+            .expect("run compact stage");
+
+        assert_eq!(
+            diagnostics.family,
+            crate::memory::MemoryStageFamily::Compact
+        );
+        assert_eq!(diagnostics.outcome, crate::memory::StageOutcome::Skipped);
     }
 
     #[test]
@@ -707,6 +775,12 @@ mod tests {
 
         assert_eq!(snapshot.selected.id, DEFAULT_MEMORY_SYSTEM_ID);
         assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
+        assert_eq!(
+            snapshot.core_operations,
+            crate::memory::supported_memory_core_operations(
+                crate::config::MemoryBackendKind::Sqlite
+            )
+        );
         assert_eq!(
             snapshot.policy.profile,
             crate::config::MemoryProfile::ProfilePlusWindow

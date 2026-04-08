@@ -9,8 +9,8 @@ use super::{
     CanonicalMemoryKind, CanonicalMemorySearchHit, DerivedMemoryKind, MemoryAuthority,
     MemoryContextEntry, MemoryContextKind, MemoryContextProvenance, MemoryProvenanceSourceKind,
     MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryScope, MemoryStageFamily,
-    MemoryTrustLevel, WindowTurn, builtin_pre_assembly_stage_families, durable_recall,
-    runtime_config::MemoryRuntimeConfig,
+    MemoryTrustLevel, StageDiagnostics, WindowTurn, builtin_pre_assembly_stage_families,
+    durable_recall, runtime_config::MemoryRuntimeConfig,
 };
 
 pub const MEMORY_SYSTEM_API_VERSION: u16 = 1;
@@ -42,12 +42,29 @@ impl MemorySystemCapability {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemorySystemRuntimeFallbackKind {
+    MetadataOnly,
+    SystemBacked,
+}
+
+impl MemorySystemRuntimeFallbackKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MetadataOnly => "metadata_only",
+            Self::SystemBacked => "system_backed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemorySystemMetadata {
     pub id: &'static str,
     pub api_version: u16,
     pub capabilities: BTreeSet<MemorySystemCapability>,
     pub summary: &'static str,
+    pub runtime_fallback_kind: MemorySystemRuntimeFallbackKind,
+    pub supported_stage_families: Vec<MemoryStageFamily>,
     pub supported_pre_assembly_stage_families: Vec<MemoryStageFamily>,
     pub supported_recall_modes: Vec<MemoryRecallMode>,
 }
@@ -63,16 +80,53 @@ impl MemorySystemMetadata {
             api_version: MEMORY_SYSTEM_API_VERSION,
             capabilities: capabilities.into_iter().collect(),
             summary,
+            runtime_fallback_kind: MemorySystemRuntimeFallbackKind::MetadataOnly,
+            supported_stage_families: Vec::new(),
             supported_pre_assembly_stage_families: Vec::new(),
             supported_recall_modes: Vec::new(),
         }
+    }
+
+    pub fn with_runtime_fallback_kind(
+        mut self,
+        runtime_fallback_kind: MemorySystemRuntimeFallbackKind,
+    ) -> Self {
+        self.runtime_fallback_kind = runtime_fallback_kind;
+        self
+    }
+
+    pub fn with_supported_stage_families(
+        mut self,
+        families: impl IntoIterator<Item = MemoryStageFamily>,
+    ) -> Self {
+        let collected_families = families.into_iter().collect::<Vec<_>>();
+
+        for family in collected_families {
+            let already_present = self.supported_stage_families.contains(&family);
+            if already_present {
+                continue;
+            }
+
+            self.supported_stage_families.push(family);
+        }
+        self
     }
 
     pub fn with_supported_pre_assembly_stage_families(
         mut self,
         families: impl IntoIterator<Item = MemoryStageFamily>,
     ) -> Self {
-        self.supported_pre_assembly_stage_families = families.into_iter().collect();
+        let collected_families = families.into_iter().collect::<Vec<_>>();
+        self.supported_pre_assembly_stage_families = collected_families.clone();
+
+        for family in collected_families {
+            let already_present = self.supported_stage_families.contains(&family);
+            if already_present {
+                continue;
+            }
+
+            self.supported_stage_families.push(family);
+        }
         self
     }
 
@@ -97,6 +151,10 @@ impl MemorySystemMetadata {
 
     pub fn supports_pre_assembly_stage_family(&self, family: MemoryStageFamily) -> bool {
         self.supported_pre_assembly_stage_families.contains(&family)
+    }
+
+    pub fn supports_stage_family(&self, family: MemoryStageFamily) -> bool {
+        self.supported_stage_families.contains(&family)
     }
 }
 
@@ -148,6 +206,15 @@ pub trait MemorySystem: Send + Sync {
         _entries: Vec<MemoryContextEntry>,
         _config: &MemoryRuntimeConfig,
     ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
+        Ok(None)
+    }
+
+    fn run_compact_stage(
+        &self,
+        _session_id: &str,
+        _workspace_root: Option<&Path>,
+        _config: &MemoryRuntimeConfig,
+    ) -> Result<Option<StageDiagnostics>, String> {
         Ok(None)
     }
 }
@@ -209,6 +276,16 @@ where
         config: &MemoryRuntimeConfig,
     ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
         self.as_ref().run_rank_stage(entries, config)
+    }
+
+    fn run_compact_stage(
+        &self,
+        session_id: &str,
+        workspace_root: Option<&Path>,
+        config: &MemoryRuntimeConfig,
+    ) -> Result<Option<StageDiagnostics>, String> {
+        self.as_ref()
+            .run_compact_stage(session_id, workspace_root, config)
     }
 }
 
@@ -374,6 +451,8 @@ impl MemorySystem for BuiltinMemorySystem {
             "Built-in SQLite-backed canonical memory with deterministic prompt hydration.",
         )
         .with_supported_pre_assembly_stage_families(builtin_pre_assembly_stage_families())
+        .with_supported_stage_families([MemoryStageFamily::Compact])
+        .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::MetadataOnly)
         .with_supported_recall_modes([
             MemoryRecallMode::PromptAssembly,
             MemoryRecallMode::OperatorInspection,
@@ -818,6 +897,7 @@ impl MemorySystem for WorkspaceRecallMemorySystem {
             MemoryStageFamily::Retrieve,
             MemoryStageFamily::Rank,
         ])
+        .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
         .with_supported_recall_modes([
             MemoryRecallMode::PromptAssembly,
             MemoryRecallMode::OperatorInspection,
@@ -913,6 +993,7 @@ impl MemorySystem for RecallFirstMemorySystem {
             MemoryStageFamily::Retrieve,
             MemoryStageFamily::Rank,
         ])
+        .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
         .with_supported_recall_modes([MemoryRecallMode::PromptAssembly])
     }
 
@@ -982,6 +1063,7 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Registry stage-aware test system",
             )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
             .with_supported_pre_assembly_stage_families([MemoryStageFamily::Retrieve])
         }
     }
@@ -991,6 +1073,10 @@ mod tests {
         let metadata = BuiltinMemorySystem.metadata();
         assert_eq!(metadata.id, DEFAULT_MEMORY_SYSTEM_ID);
         assert_eq!(metadata.api_version, MEMORY_SYSTEM_API_VERSION);
+        assert_eq!(
+            metadata.runtime_fallback_kind,
+            MemorySystemRuntimeFallbackKind::MetadataOnly
+        );
         assert_eq!(
             metadata.capability_names(),
             vec![
@@ -1017,6 +1103,15 @@ mod tests {
             metadata.supported_pre_assembly_stage_families,
             builtin_pre_assembly_stage_families()
         );
+        assert_eq!(
+            metadata.supported_stage_families,
+            vec![
+                MemoryStageFamily::Derive,
+                MemoryStageFamily::Retrieve,
+                MemoryStageFamily::Rank,
+                MemoryStageFamily::Compact,
+            ]
+        );
     }
 
     #[test]
@@ -1026,6 +1121,14 @@ mod tests {
         assert_eq!(
             custom.supported_pre_assembly_stage_families,
             vec![MemoryStageFamily::Retrieve]
+        );
+        assert_eq!(
+            custom.supported_stage_families,
+            vec![MemoryStageFamily::Retrieve]
+        );
+        assert_eq!(
+            custom.runtime_fallback_kind,
+            MemorySystemRuntimeFallbackKind::SystemBacked
         );
         assert!(custom.supported_recall_modes.is_empty());
     }
@@ -1057,11 +1160,23 @@ mod tests {
         assert_eq!(metadata.id, RECALL_FIRST_MEMORY_SYSTEM_ID);
         assert_eq!(metadata.api_version, MEMORY_SYSTEM_API_VERSION);
         assert_eq!(
+            metadata.runtime_fallback_kind,
+            MemorySystemRuntimeFallbackKind::SystemBacked
+        );
+        assert_eq!(
             metadata.capability_names(),
             vec!["prompt_hydration", "retrieval_provenance"]
         );
         assert_eq!(
             metadata.supported_pre_assembly_stage_families,
+            vec![
+                MemoryStageFamily::Derive,
+                MemoryStageFamily::Retrieve,
+                MemoryStageFamily::Rank,
+            ]
+        );
+        assert_eq!(
+            metadata.supported_stage_families,
             vec![
                 MemoryStageFamily::Derive,
                 MemoryStageFamily::Retrieve,
@@ -1079,11 +1194,23 @@ mod tests {
         let metadata = WorkspaceRecallMemorySystem.metadata();
         assert_eq!(metadata.id, WORKSPACE_RECALL_MEMORY_SYSTEM_ID);
         assert_eq!(
+            metadata.runtime_fallback_kind,
+            MemorySystemRuntimeFallbackKind::SystemBacked
+        );
+        assert_eq!(
             metadata.capability_names(),
             vec!["prompt_hydration", "retrieval_provenance"]
         );
         assert_eq!(
             metadata.supported_pre_assembly_stage_families,
+            vec![
+                MemoryStageFamily::Derive,
+                MemoryStageFamily::Retrieve,
+                MemoryStageFamily::Rank,
+            ]
+        );
+        assert_eq!(
+            metadata.supported_stage_families,
             vec![
                 MemoryStageFamily::Derive,
                 MemoryStageFamily::Retrieve,
