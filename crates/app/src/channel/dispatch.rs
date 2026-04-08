@@ -3096,14 +3096,35 @@ pub(crate) async fn process_inbound_with_provider(
     let duration_ms = started_at.elapsed().as_millis();
     match &result {
         Ok(reply) => {
+            let has_conversation_id = !message.session.conversation_id.trim().is_empty();
+            let has_configured_account_id = message
+                .session
+                .configured_account_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let has_account_id = message
+                .session
+                .account_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let has_source_message_id = message
+                .delivery
+                .source_message_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let has_ack_cursor = message
+                .delivery
+                .ack_cursor
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
             tracing::debug!(
                 target: "loongclaw.channel",
                 platform = %message.session.platform.as_str(),
-                conversation_id = %message.session.conversation_id,
-                configured_account_id = ?message.session.configured_account_id.as_deref(),
-                account_id = ?message.session.account_id.as_deref(),
-                source_message_id = ?message.delivery.source_message_id.as_deref(),
-                ack_cursor = ?message.delivery.ack_cursor.as_deref(),
+                has_conversation_id,
+                has_configured_account_id,
+                has_account_id,
+                has_source_message_id,
+                has_ack_cursor,
                 text_len = message.text.chars().count(),
                 reply_len = reply.chars().count(),
                 duration_ms,
@@ -3111,14 +3132,35 @@ pub(crate) async fn process_inbound_with_provider(
             );
         }
         Err(error) => {
+            let has_conversation_id = !message.session.conversation_id.trim().is_empty();
+            let has_configured_account_id = message
+                .session
+                .configured_account_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let has_account_id = message
+                .session
+                .account_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let has_source_message_id = message
+                .delivery
+                .source_message_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            let has_ack_cursor = message
+                .delivery
+                .ack_cursor
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
             tracing::warn!(
                 target: "loongclaw.channel",
                 platform = %message.session.platform.as_str(),
-                conversation_id = %message.session.conversation_id,
-                configured_account_id = ?message.session.configured_account_id.as_deref(),
-                account_id = ?message.session.account_id.as_deref(),
-                source_message_id = ?message.delivery.source_message_id.as_deref(),
-                ack_cursor = ?message.delivery.ack_cursor.as_deref(),
+                has_conversation_id,
+                has_configured_account_id,
+                has_account_id,
+                has_source_message_id,
+                has_ack_cursor,
                 text_len = message.text.chars().count(),
                 duration_ms,
                 error = %crate::observability::summarize_error(error),

@@ -48,6 +48,7 @@ pub use loongclaw_bench::{
 };
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
+pub use runtime_trajectory_cli::{format_runtime_trajectory_summary, run_runtime_trajectory_cli};
 #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
 pub fn run_memory_context_benchmark_cli(
     output_path: &str,
@@ -131,9 +132,9 @@ pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
+pub mod runtime_trajectory_cli;
 pub mod session_cli;
 pub mod sessions_cli;
-pub mod runtime_trajectory_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;

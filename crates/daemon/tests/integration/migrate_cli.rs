@@ -390,10 +390,10 @@ fn migrate_cli_ux_discover_mode_reports_flag_level_input_requirement() {
     )
     .expect_err("discover mode without --input should fail");
 
-    assert_eq!(
-        error,
-        "`--input` is required for `loongclaw migrate --mode discover`"
-    );
+    let command_name = active_cli_command_name();
+    let expected = format!("`--input` is required for `{command_name} migrate --mode discover`");
+
+    assert_eq!(error, expected);
     assert!(
         !error.contains("payload.input_path"),
         "raw tool payload wording leaked into CLI error: {error}"

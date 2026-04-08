@@ -358,18 +358,17 @@ fn safe_lane_summary_cli_rejects_zero_limit() {
 #[test]
 fn runtime_trajectory_cli_rejects_invalid_limits() {
     let turn_limit_error =
-        run_runtime_trajectory_cli(None, Some("session-a"), false, None, None, Some(0), 10, false)
+        run_runtime_trajectory_cli(None, Some("session-a"), None, None, Some(0), 10, false)
             .expect_err("zero turn limit must be rejected");
     assert!(turn_limit_error.contains("turn_limit"));
 
     let event_page_error =
-        run_runtime_trajectory_cli(None, Some("session-a"), false, None, None, None, 0, false)
+        run_runtime_trajectory_cli(None, Some("session-a"), None, None, None, 0, false)
             .expect_err("zero event page limit must be rejected");
     assert!(event_page_error.contains("event_page_limit"));
 
-    let missing_source_error =
-        run_runtime_trajectory_cli(None, None, false, None, None, None, 10, false)
-            .expect_err("missing session and artifact must be rejected");
+    let missing_source_error = run_runtime_trajectory_cli(None, None, None, None, None, 10, false)
+        .expect_err("missing session and artifact must be rejected");
     assert!(missing_source_error.contains("--session or --artifact"));
 }
 

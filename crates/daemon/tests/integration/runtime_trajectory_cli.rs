@@ -103,6 +103,7 @@ fn seed_runtime_trajectory_session(config_path: &Path, session_id: &str) {
         event_payload_json: terminal_event_payload,
         outcome_status: "ok".to_owned(),
         outcome_payload_json: terminal_outcome_payload,
+        frozen_result: None,
     };
     repository
         .finalize_session_terminal(session_id, finalize_request)
@@ -135,7 +136,8 @@ fn runtime_trajectory_export_writes_bounded_artifact_with_lineage_and_canonical_
         .output()
         .expect("run runtime-trajectory export");
 
-    assert!(output.status.success(), "export should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "export should succeed: {stderr}");
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     let artifact = serde_json::from_str::<Value>(&stdout).expect("decode export json");
@@ -195,7 +197,8 @@ fn runtime_trajectory_show_round_trips_persisted_artifact_in_text_mode() {
         .output()
         .expect("run runtime-trajectory show");
 
-    assert!(output.status.success(), "show should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "show should succeed: {stderr}");
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     assert!(stdout.contains("runtime_trajectory session=root-session"));
@@ -203,4 +206,35 @@ fn runtime_trajectory_show_round_trips_persisted_artifact_in_text_mode() {
     assert!(stdout.contains("canonical_records=3"));
     assert!(stdout.contains("approvals=1"));
     assert!(stdout.contains("terminal_status=ok"));
+}
+
+#[test]
+fn runtime_trajectory_export_accepts_bare_output_file_in_current_directory() {
+    let root = unique_temp_dir("loongclaw-runtime-trajectory-bare-output");
+    let config_path = write_runtime_trajectory_config(root.as_path());
+    seed_runtime_trajectory_session(config_path.as_path(), "root-session");
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .current_dir(root.as_path())
+        .args([
+            "runtime-trajectory",
+            "export",
+            "--config",
+            config_path.to_str().expect("config path should be utf-8"),
+            "--session",
+            "root-session",
+            "--output",
+            "trajectory.json",
+        ])
+        .output()
+        .expect("run runtime-trajectory export with bare output path");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "export should succeed: {stderr}");
+
+    let artifact_path = root.join("trajectory.json");
+    let persisted = fs::read_to_string(artifact_path).expect("read persisted artifact");
+    let persisted_artifact = serde_json::from_str::<Value>(&persisted).expect("decode artifact");
+
+    assert_eq!(persisted_artifact["session"]["session_id"], "root-session");
 }

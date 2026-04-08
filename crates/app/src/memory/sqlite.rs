@@ -19,7 +19,7 @@ use super::{
     canonical_memory_record_from_persisted_turn, runtime_config::MemoryRuntimeConfig,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationTurn {
     pub role: String,
     pub content: String,
@@ -257,8 +257,12 @@ const SQL_QUERY_TURNS_AFTER_ID_WITH_LIMIT: &str = "SELECT id, role, content, ts
              FROM turns
              WHERE session_id = ?1
                AND id > ?2
+               AND id <= ?3
              ORDER BY id ASC
-             LIMIT ?3";
+             LIMIT ?4";
+const SQL_QUERY_MAX_TURN_ID_FOR_SESSION: &str = "SELECT COALESCE(MAX(id), 0)
+             FROM turns
+             WHERE session_id = ?1";
 const SQL_QUERY_TURNS_UP_TO_ID: &str = "SELECT id, role, content
              FROM turns
              WHERE session_id = ?1 AND id <= ?2
@@ -754,33 +758,68 @@ pub(super) fn transcript_direct_paged(
 
     let runtime = acquire_memory_runtime(config)?;
     runtime.with_connection("memory.transcript_direct_paged", |conn| {
-        let mut transcript = Vec::new();
-        let mut last_seen_turn_id = 0_i64;
+        transcript_direct_paged_with_conn(conn, session_id, page_size)
+    })
+}
 
-        loop {
-            let page =
-                query_transcript_page_after_id(conn, session_id, last_seen_turn_id, page_size)?;
+pub(crate) fn window_direct_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    let (turns, _) = query_recent_turns(conn, session_id, limit)?;
+    Ok(turns)
+}
 
-            if page.is_empty() {
-                break;
-            }
+pub(crate) fn transcript_direct_paged_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    page_size: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    if page_size == 0 {
+        return Err("memory transcript page_size must be >= 1".to_owned());
+    }
 
-            let next_last_seen_turn_id = page.last().map(|row| row.id).unwrap_or(last_seen_turn_id);
+    let upper_bound_turn_id = query_max_turn_id_for_session(conn, session_id)?;
+    if upper_bound_turn_id <= 0 {
+        return Ok(Vec::new());
+    }
 
-            for row in page {
-                let turn = ConversationTurn {
-                    role: row.role,
-                    content: row.content,
-                    ts: row.ts,
-                };
-                transcript.push(turn);
-            }
+    let mut transcript = Vec::new();
+    let mut last_seen_turn_id = 0_i64;
 
-            last_seen_turn_id = next_last_seen_turn_id;
+    loop {
+        if last_seen_turn_id >= upper_bound_turn_id {
+            break;
         }
 
-        Ok(transcript)
-    })
+        let page = query_transcript_page_after_id(
+            conn,
+            session_id,
+            last_seen_turn_id,
+            upper_bound_turn_id,
+            page_size,
+        )?;
+
+        if page.is_empty() {
+            break;
+        }
+
+        let next_last_seen_turn_id = page.last().map(|row| row.id).unwrap_or(last_seen_turn_id);
+
+        for row in page {
+            let turn = ConversationTurn {
+                role: row.role,
+                content: row.content,
+                ts: row.ts,
+            };
+            transcript.push(turn);
+        }
+
+        last_seen_turn_id = next_last_seen_turn_id;
+    }
+
+    Ok(transcript)
 }
 
 pub(super) fn window_direct_with_options(
@@ -962,8 +1001,12 @@ fn query_transcript_page_after_id(
     conn: &Connection,
     session_id: &str,
     after_id: i64,
+    upper_bound_turn_id: i64,
     page_size: usize,
 ) -> Result<Vec<TranscriptPageRow>, String> {
+    let page_size_i64 = i64::try_from(page_size).map_err(|conversion_error| {
+        format!("memory transcript page_size exceeds SQLite LIMIT range: {conversion_error}")
+    })?;
     let mut statement = prepare_cached_sqlite_statement(
         conn,
         SQL_QUERY_TURNS_AFTER_ID_WITH_LIMIT,
@@ -971,7 +1014,7 @@ fn query_transcript_page_after_id(
     )?;
     let rows = statement
         .query_map(
-            rusqlite::params![session_id, after_id, page_size as i64],
+            rusqlite::params![session_id, after_id, upper_bound_turn_id, page_size_i64],
             |row| {
                 Ok(TranscriptPageRow {
                     id: row.get(0)?,
@@ -992,6 +1035,15 @@ fn query_transcript_page_after_id(
     }
 
     Ok(page)
+}
+
+fn query_max_turn_id_for_session(conn: &Connection, session_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        SQL_QUERY_MAX_TURN_ID_FOR_SESSION,
+        rusqlite::params![session_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map_err(|error| format!("query transcript upper bound failed: {error}"))
 }
 
 /// Walk up the directory tree to find the deepest existing ancestor, canonicalize it

@@ -52,6 +52,7 @@ impl Commands {
             Self::SessionSearchInspect { .. } => "session_search_inspect",
             Self::TrajectoryExport { .. } => "trajectory_export",
             Self::TrajectoryInspect { .. } => "trajectory_inspect",
+            Self::RuntimeTrajectory { .. } => "runtime_trajectory",
             Self::TelegramSend { .. } => "telegram_send",
             Self::TelegramServe { .. } => "telegram_serve",
             Self::FeishuSend { .. } => "feishu_send",
@@ -141,6 +142,18 @@ mod tests {
             }
             .command_kind_for_logging(),
             "work_unit"
+        );
+        assert_eq!(
+            Commands::RuntimeTrajectory {
+                command: crate::runtime_trajectory_cli::RuntimeTrajectoryCommands::Show(
+                    crate::runtime_trajectory_cli::RuntimeTrajectoryShowCommandOptions {
+                        artifact: "artifact.json".to_owned(),
+                        json: false,
+                    },
+                ),
+            }
+            .command_kind_for_logging(),
+            "runtime_trajectory"
         );
     }
 }

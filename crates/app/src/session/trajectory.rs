@@ -11,6 +11,7 @@ use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::repository::ApprovalDecision;
 use super::repository::ApprovalRequestRecord;
+use super::repository::SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE;
 use super::repository::SessionEventRecord;
 use super::repository::SessionRepository;
 use super::repository::SessionSummaryRecord;
@@ -20,7 +21,6 @@ pub const SESSION_TRAJECTORY_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 pub const SESSION_TRAJECTORY_ARTIFACT_SURFACE: &str = "runtime_trajectory";
 pub const SESSION_TRAJECTORY_ARTIFACT_PURPOSE: &str = "runtime_trajectory_export";
 const DEFAULT_EVENT_PAGE_LIMIT: usize = 200;
-const DEFAULT_TRANSCRIPT_PAGE_SIZE: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionTrajectoryExportOptions {
@@ -88,6 +88,7 @@ pub struct SessionTrajectoryTerminalOutcome {
     pub session_id: String,
     pub status: String,
     pub payload_json: Value,
+    pub frozen_result: Option<super::frozen_result::FrozenResult>,
     pub recorded_at: i64,
 }
 
@@ -145,75 +146,101 @@ pub fn export_session_trajectory(
     validate_export_options(options)?;
 
     let repository = SessionRepository::new(config)?;
-    let summary_option = repository.load_session_summary_with_legacy_fallback(session_id)?;
-    let summary = summary_option.ok_or_else(|| format!("session `{session_id}` not found"))?;
-    let turn_limit = resolve_turn_limit(summary.turn_count, options.turn_limit)?;
-    let root_session_id = repository.lineage_root_session_id(session_id)?;
-    let lineage_depth = repository.session_lineage_depth(session_id)?;
+    repository.with_read_snapshot(|conn| {
+        let summary = SessionRepository::load_session_summary_with_legacy_fallback_with_conn(
+            conn, session_id,
+        )?
+        .ok_or_else(|| format!("session `{session_id}` not found"))?;
+        let total_turn_count = summary.turn_count;
+        let turn_limit = resolve_turn_limit(total_turn_count, options.turn_limit)?;
+        let root_session_id =
+            SessionRepository::lineage_root_session_id_with_conn(conn, session_id)?;
+        let lineage_depth = SessionRepository::session_lineage_depth_with_conn(conn, session_id)?;
+        let turns = load_export_turns_with_conn(conn, session_id, turn_limit)?;
+        let events = SessionRepository::list_all_events_with_conn(
+            conn,
+            session_id,
+            options.event_page_limit,
+        )?;
+        let approval_requests = SessionRepository::list_approval_requests_for_session_with_conn(
+            conn, session_id, None,
+        )?;
+        let terminal_outcome =
+            SessionRepository::load_terminal_outcome_with_conn(conn, session_id)?;
+        let turns_truncated = total_turn_count > turn_limit;
+        let exported_at = now_rfc3339()?;
+        let session = SessionTrajectorySession::from_summary(&summary);
+        let lineage = SessionTrajectoryLineage {
+            root_session_id,
+            depth: lineage_depth,
+        };
+        let exported_turn_count = turns.len();
+        let first_sequence = resolve_first_sequence(total_turn_count, exported_turn_count);
+        let trajectory_turns = build_trajectory_turns(&turns, first_sequence);
+        let canonical_records = build_canonical_records(session_id, &turns);
+        let trajectory_events = build_trajectory_events(&events);
+        let trajectory_approval_requests = build_approval_requests(&approval_requests);
+        let trajectory_outcome = terminal_outcome
+            .as_ref()
+            .map(SessionTrajectoryTerminalOutcome::from_terminal_outcome);
+        let exported_turn_count = trajectory_turns.len();
+        let canonical_record_count = canonical_records.len();
+        let event_count = trajectory_events.len();
+        let approval_request_count = trajectory_approval_requests.len();
+        let schema = SessionTrajectoryArtifactSchema::default();
 
-    let turns = load_export_turns(session_id, turn_limit, config)?;
-
-    let events = repository.list_all_events(session_id, options.event_page_limit)?;
-    let approval_requests = repository.list_approval_requests_for_session(session_id, None)?;
-    let terminal_outcome = repository.load_terminal_outcome(session_id)?;
-    let turns_truncated = summary.turn_count > turn_limit;
-    let exported_at = now_rfc3339()?;
-    let session = SessionTrajectorySession::from_summary(&summary);
-    let lineage = SessionTrajectoryLineage {
-        root_session_id,
-        depth: lineage_depth,
-    };
-    let first_sequence = resolve_first_sequence(summary.turn_count, turn_limit);
-    let trajectory_turns = build_trajectory_turns(&turns, first_sequence);
-    let canonical_records = build_canonical_records(session_id, &turns);
-    let trajectory_events = build_trajectory_events(&events);
-    let trajectory_approval_requests = build_approval_requests(&approval_requests);
-    let trajectory_outcome = terminal_outcome
-        .as_ref()
-        .map(SessionTrajectoryTerminalOutcome::from_terminal_outcome);
-    let exported_turn_count = trajectory_turns.len();
-    let canonical_record_count = canonical_records.len();
-    let event_count = trajectory_events.len();
-    let approval_request_count = trajectory_approval_requests.len();
-    let schema = SessionTrajectoryArtifactSchema::default();
-
-    Ok(SessionTrajectoryArtifact {
-        schema,
-        exported_at,
-        session,
-        lineage,
-        exported_turn_count,
-        turns_truncated,
-        turns: trajectory_turns,
-        canonical_record_count,
-        canonical_records,
-        event_count,
-        event_page_limit: options.event_page_limit,
-        events: trajectory_events,
-        approval_request_count,
-        approval_requests: trajectory_approval_requests,
-        terminal_outcome: trajectory_outcome,
+        Ok(SessionTrajectoryArtifact {
+            schema,
+            exported_at,
+            session,
+            lineage,
+            exported_turn_count,
+            turns_truncated,
+            turns: trajectory_turns,
+            canonical_record_count,
+            canonical_records,
+            event_count,
+            event_page_limit: options.event_page_limit,
+            events: trajectory_events,
+            approval_request_count,
+            approval_requests: trajectory_approval_requests,
+            terminal_outcome: trajectory_outcome,
+        })
     })
 }
 
-fn load_export_turns(
+fn load_export_turns_with_conn(
+    conn: &rusqlite::Connection,
     session_id: &str,
     turn_limit: usize,
-    config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
     if turn_limit == 0 {
         return Ok(Vec::new());
     }
 
-    let recent_turns = memory::window_direct(session_id, turn_limit, config)?;
+    let recent_turns = memory::window_direct_with_conn(conn, session_id, turn_limit)?;
     if recent_turns.len() == turn_limit {
         return Ok(recent_turns);
     }
 
-    let transcript =
-        memory::transcript_direct_paged(session_id, DEFAULT_TRANSCRIPT_PAGE_SIZE, config)?;
+    let transcript = memory::transcript_direct_paged_with_conn(
+        conn,
+        session_id,
+        SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE,
+    )?;
+    let trimmed_transcript = trim_turns_to_limit(transcript, turn_limit);
 
-    Ok(transcript)
+    Ok(trimmed_transcript)
+}
+
+fn trim_turns_to_limit(turns: Vec<ConversationTurn>, turn_limit: usize) -> Vec<ConversationTurn> {
+    let turn_count = turns.len();
+    if turn_count <= turn_limit {
+        return turns;
+    }
+
+    let start_index = turn_count.saturating_sub(turn_limit);
+    turns.into_iter().skip(start_index).collect()
 }
 
 fn validate_export_options(options: &SessionTrajectoryExportOptions) -> Result<(), String> {
@@ -385,6 +412,7 @@ impl SessionTrajectoryTerminalOutcome {
             session_id: outcome.session_id.clone(),
             status: outcome.status.clone(),
             payload_json: outcome.payload_json.clone(),
+            frozen_result: outcome.frozen_result.clone(),
             recorded_at: outcome.recorded_at,
         }
     }
@@ -436,8 +464,10 @@ impl SessionTrajectoryApprovalRequest {
 mod tests {
     use serde_json::json;
 
+    use super::ConversationTurn;
     use super::SessionTrajectoryExportOptions;
     use super::export_session_trajectory;
+    use super::trim_turns_to_limit;
     use crate::memory;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::FinalizeSessionTerminalRequest;
@@ -536,6 +566,7 @@ mod tests {
             event_payload_json: terminal_event_payload,
             outcome_status: "ok".to_owned(),
             outcome_payload_json: terminal_outcome_payload,
+            frozen_result: None,
         };
         repository
             .finalize_session_terminal("root-session", finalize_request)
@@ -617,5 +648,32 @@ mod tests {
             export_session_trajectory("root-session", &config, &invalid_event_page_options)
                 .expect_err("zero event page limit must fail");
         assert!(event_page_error.contains("event_page_limit"));
+    }
+
+    #[test]
+    fn trim_turns_to_limit_keeps_only_the_most_recent_turns() {
+        let turns = vec![
+            ConversationTurn {
+                role: "assistant".to_owned(),
+                content: "one".to_owned(),
+                ts: 1,
+            },
+            ConversationTurn {
+                role: "assistant".to_owned(),
+                content: "two".to_owned(),
+                ts: 2,
+            },
+            ConversationTurn {
+                role: "assistant".to_owned(),
+                content: "three".to_owned(),
+                ts: 3,
+            },
+        ];
+
+        let trimmed_turns = trim_turns_to_limit(turns, 2);
+
+        assert_eq!(trimmed_turns.len(), 2);
+        assert_eq!(trimmed_turns[0].content, "two");
+        assert_eq!(trimmed_turns[1].content, "three");
     }
 }

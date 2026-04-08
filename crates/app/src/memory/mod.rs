@@ -230,6 +230,9 @@ pub fn replace_session_turns_direct(
 }
 
 #[cfg(feature = "memory-sqlite")]
+use rusqlite::Connection;
+
+#[cfg(feature = "memory-sqlite")]
 pub fn window_direct(
     session_id: &str,
     limit: usize,
@@ -245,6 +248,24 @@ pub fn transcript_direct_paged(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
     sqlite::transcript_direct_paged(session_id, page_size, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn window_direct_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    sqlite::window_direct_with_conn(conn, session_id, limit)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn transcript_direct_paged_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    page_size: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    sqlite::transcript_direct_paged_with_conn(conn, session_id, page_size)
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -10,8 +10,11 @@ use serde_json::Value;
 use super::frozen_result::FrozenResult;
 use crate::config::ToolConsentMode;
 use crate::memory;
+use crate::memory::ConversationTurn;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
+
+pub(crate) const SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
@@ -362,6 +365,17 @@ pub struct SessionObservationRecord {
     pub tail_events: Vec<SessionEventRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionTrajectoryReadSnapshot {
+    pub summary: SessionSummaryRecord,
+    pub lineage_root_session_id: Option<String>,
+    pub lineage_depth: usize,
+    pub turns: Vec<ConversationTurn>,
+    pub events: Vec<SessionEventRecord>,
+    pub approval_requests: Vec<ApprovalRequestRecord>,
+    pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionSearchSourceKind {
     Turn,
@@ -463,6 +477,20 @@ impl SessionRepository {
     pub fn new(config: &MemoryRuntimeConfig) -> Result<Self, String> {
         let db_path = memory::ensure_memory_db_ready(config.sqlite_path.clone(), config)?;
         Ok(Self { db_path })
+    }
+
+    pub(crate) fn with_read_snapshot<T, F>(&self, operation: F) -> Result<T, String>
+    where
+        F: FnOnce(&Connection) -> Result<T, String>,
+    {
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session read snapshot failed: {error}"))?;
+        let result = operation(&tx)?;
+        tx.commit()
+            .map_err(|error| format!("commit session read snapshot failed: {error}"))?;
+        Ok(result)
     }
 
     pub fn create_session(&self, record: NewSessionRecord) -> Result<SessionRecord, String> {
@@ -1014,9 +1042,40 @@ impl SessionRepository {
 
     pub fn session_lineage_depth(&self, session_id: &str) -> Result<usize, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::session_lineage_depth_with_conn(&conn, &session_id)
+    }
+
+    pub fn count_active_direct_children(&self, parent_session_id: &str) -> Result<usize, String> {
+        let parent_session_id = normalize_required_text(parent_session_id, "parent_session_id")?;
+        let conn = self.open_connection()?;
+        Self::count_active_direct_children_with_conn(&conn, &parent_session_id)
+    }
+
+    pub fn lineage_root_session_id(&self, session_id: &str) -> Result<Option<String>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::lineage_root_session_id_with_conn(&conn, &session_id)
+    }
+
+    pub(crate) fn list_all_events_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        page_limit: usize,
+    ) -> Result<Vec<SessionEventRecord>, String> {
+        if page_limit == 0 {
+            return Err("page_limit must be >= 1".to_owned());
+        }
+        Self::drain_events_after_with_conn(conn, session_id, 0, page_limit)
+    }
+
+    pub(crate) fn session_lineage_depth_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<usize, String> {
         let mut seen = BTreeSet::new();
+        let mut next_session_id = Some(session_id.to_owned());
         let mut depth = 0usize;
-        let mut next_session_id = Some(session_id);
 
         while let Some(current_session_id) = next_session_id {
             if !seen.insert(current_session_id.clone()) {
@@ -1024,7 +1083,7 @@ impl SessionRepository {
                     "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing lineage depth"
                 ));
             }
-            let session = match self.load_session(&current_session_id)? {
+            let session = match Self::load_session_with_conn(conn, &current_session_id)? {
                 Some(session) => session,
                 None if depth == 0 => return Ok(0),
                 None => {
@@ -1045,16 +1104,12 @@ impl SessionRepository {
         Ok(depth)
     }
 
-    pub fn count_active_direct_children(&self, parent_session_id: &str) -> Result<usize, String> {
-        let parent_session_id = normalize_required_text(parent_session_id, "parent_session_id")?;
-        let conn = self.open_connection()?;
-        Self::count_active_direct_children_with_conn(&conn, &parent_session_id)
-    }
-
-    pub fn lineage_root_session_id(&self, session_id: &str) -> Result<Option<String>, String> {
-        let session_id = normalize_required_text(session_id, "session_id")?;
+    pub(crate) fn lineage_root_session_id_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Option<String>, String> {
         let mut seen = BTreeSet::new();
-        let mut next_session_id = Some(session_id);
+        let mut next_session_id = Some(session_id.to_owned());
 
         while let Some(current_session_id) = next_session_id {
             if !seen.insert(current_session_id.clone()) {
@@ -1062,7 +1117,7 @@ impl SessionRepository {
                     "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing lineage root"
                 ));
             }
-            let session = match self.load_session(&current_session_id)? {
+            let session = match Self::load_session_with_conn(conn, &current_session_id)? {
                 Some(session) => session,
                 None if seen.len() == 1 => return Ok(None),
                 None => {
@@ -1144,6 +1199,47 @@ impl SessionRepository {
         }
         let conn = self.open_connection()?;
         Self::drain_events_after_with_conn(&conn, &session_id, 0, page_limit)
+    }
+
+    pub fn load_session_trajectory_read_snapshot(
+        &self,
+        session_id: &str,
+        page_limit: usize,
+    ) -> Result<Option<SessionTrajectoryReadSnapshot>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        if page_limit == 0 {
+            return Err("page_limit must be >= 1".to_owned());
+        }
+
+        self.with_read_snapshot(|conn| {
+            let Some(summary) =
+                Self::load_session_summary_with_legacy_fallback_with_conn(conn, &session_id)?
+            else {
+                return Ok(None);
+            };
+            let lineage_root_session_id =
+                Self::lineage_root_session_id_with_conn(conn, &session_id)?;
+            let lineage_depth = Self::session_lineage_depth_with_conn(conn, &session_id)?;
+            let turns = memory::transcript_direct_paged_with_conn(
+                conn,
+                &session_id,
+                SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE,
+            )?;
+            let events = Self::list_all_events_with_conn(conn, &session_id, page_limit)?;
+            let approval_requests =
+                Self::list_approval_requests_for_session_with_conn(conn, &session_id, None)?;
+            let terminal_outcome = Self::load_terminal_outcome_with_conn(conn, &session_id)?;
+
+            Ok(Some(SessionTrajectoryReadSnapshot {
+                summary,
+                lineage_root_session_id,
+                lineage_depth,
+                turns,
+                events,
+                approval_requests,
+                terminal_outcome,
+            }))
+        })
     }
 
     pub fn load_terminal_outcome(
@@ -1287,6 +1383,14 @@ impl SessionRepository {
     ) -> Result<Vec<ApprovalRequestRecord>, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let conn = self.open_connection()?;
+        Self::list_approval_requests_for_session_with_conn(&conn, &session_id, status)
+    }
+
+    pub(crate) fn list_approval_requests_for_session_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        status: Option<ApprovalRequestStatus>,
+    ) -> Result<Vec<ApprovalRequestRecord>, String> {
         let mut requests = Vec::new();
         match status {
             Some(status) => {
@@ -2660,7 +2764,7 @@ impl SessionRepository {
             .map_err(|error| format!("active direct child count overflowed usize: {error}"))
     }
 
-    fn load_session_summary_with_conn(
+    pub(crate) fn load_session_summary_with_conn(
         conn: &Connection,
         session_id: &str,
     ) -> Result<Option<SessionSummaryRecord>, String> {
@@ -2719,7 +2823,7 @@ impl SessionRepository {
         raw.map(SessionSummaryRecord::try_from_raw).transpose()
     }
 
-    fn load_session_summary_with_legacy_fallback_with_conn(
+    pub(crate) fn load_session_summary_with_legacy_fallback_with_conn(
         conn: &Connection,
         session_id: &str,
     ) -> Result<Option<SessionSummaryRecord>, String> {
@@ -3162,7 +3266,7 @@ impl SessionRepository {
         Ok(results)
     }
 
-    fn load_terminal_outcome_with_conn(
+    pub(crate) fn load_terminal_outcome_with_conn(
         conn: &Connection,
         session_id: &str,
     ) -> Result<Option<SessionTerminalOutcomeRecord>, String> {
