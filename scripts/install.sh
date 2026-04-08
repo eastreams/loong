@@ -557,6 +557,7 @@ run_guided_onboarding() {
   local selected_provider
   local provider_source
   local recommendation
+  local onboard_status
 
   if [[ -n "${LOONGCLAW_WEB_SEARCH_PROVIDER:-}" ]]; then
     selected_provider="${LOONGCLAW_WEB_SEARCH_PROVIDER}"
@@ -572,7 +573,8 @@ run_guided_onboarding() {
       "$(install_web_search_provider_display_name "${selected_provider}")" \
       "$(format_install_web_search_provider_source "${provider_source}")"
     "${prefix}/${bin_name}" onboard --web-search-provider "${selected_provider}"
-    return 0
+    onboard_status="$?"
+    return "${onboard_status}"
   fi
 
   "${prefix}/${bin_name}" onboard
@@ -858,6 +860,8 @@ fi
 printf '==> Installed loong to %s\n' "${prefix}/${bin_name}"
 printf '==> Installed compatible loongclaw command to %s\n' "${prefix}/${legacy_bin_name}"
 
+should_print_source_hint=0
+
 case ":${PATH}:" in
   *":${prefix}:"*)
     ;;
@@ -883,6 +887,7 @@ case ":${PATH}:" in
       else
         printf '==> PATH entry already present in %s\n' "${rc_file}"
       fi
+      should_print_source_hint=1
     else
       printf '\nAdd to PATH if needed:\n  export PATH="%s:$PATH"\n' "${prefix}"
     fi
@@ -891,14 +896,22 @@ case ":${PATH}:" in
     ;;
 esac
 
-printf '\n'
-printf 'Note: if loong is not found after this script exits, run:\n'
-printf '  source "%s"\n' "${rc_file:-\$HOME/.profile}"
-printf 'or open a new terminal.\n'
+if [[ "${should_print_source_hint}" -eq 1 ]]; then
+  printf '\n'
+  printf 'Note: if loong is not found after this script exits, run:\n'
+  printf '  source "%s"\n' "${rc_file}"
+  printf 'or open a new terminal.\n'
+fi
 
 if [[ "${run_onboard}" -eq 1 ]]; then
   printf '\n==> Running guided onboarding\n'
-  run_guided_onboarding
+  if run_guided_onboarding; then
+    :
+  else
+    onboard_status="$?"
+    printf '==> Onboarding exited with code %s\n' "${onboard_status}"
+    printf "==> You can run 'loong onboard' later to complete setup\n"
+  fi
 fi
 
 printf '\nDone. Try:\n  loong --help\n'

@@ -187,6 +187,18 @@ function Install-FromRelease {
     }
 }
 
+function Resolve-NormalizedPathEntryOrNull([string]$PathEntry) {
+    if ([string]::IsNullOrWhiteSpace($PathEntry)) {
+        return $null
+    }
+
+    try {
+        return [IO.Path]::GetFullPath($PathEntry)
+    } catch {
+        return $null
+    }
+}
+
 $installResult = if ($Source) { Install-FromSource } else { Install-FromRelease }
 
 Write-Host "==> Installed loong to $($installResult.Primary)"
@@ -195,14 +207,16 @@ Write-Host "==> Installed compatible loongclaw command to $($installResult.Legac
 $normalizedPrefix = $Prefix
 $pathItems = ($env:PATH -split [IO.Path]::PathSeparator) |
     Where-Object { $_ } |
-    ForEach-Object { [IO.Path]::GetFullPath($_) }
+    ForEach-Object { Resolve-NormalizedPathEntryOrNull $_ } |
+    Where-Object { $_ }
 $alreadyInSessionPath = $pathItems | Where-Object { $_ -ieq $normalizedPrefix }
 if (-not $alreadyInSessionPath) {
     $currentUserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
     $userPathItems = if ($currentUserPath) {
         ($currentUserPath -split [IO.Path]::PathSeparator) |
             Where-Object { $_ } |
-            ForEach-Object { [IO.Path]::GetFullPath($_) }
+            ForEach-Object { Resolve-NormalizedPathEntryOrNull $_ } |
+            Where-Object { $_ }
     } else { @() }
     $alreadyInUserPath = $userPathItems | Where-Object { $_ -ieq $normalizedPrefix }
     if (-not $alreadyInUserPath) {
