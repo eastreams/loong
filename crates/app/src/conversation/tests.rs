@@ -1286,11 +1286,26 @@ async fn run_provider_shape_tool_search_followup(
     let harness = TurnTestHarness::new();
     std::fs::write(harness.temp_dir.join("note.md"), note_contents).expect("seed test note");
 
-    let runtime = FakeRuntime::with_turn_bodies_and_completions(
-        vec![],
-        vec![Ok(first_body), Ok(second_body)],
-        vec![completion],
-    );
+    let raw_tool_output_requested =
+        crate::conversation::turn_shared::user_requested_raw_tool_output(user_input);
+    let mut turn_bodies = vec![Ok(first_body), Ok(second_body)];
+    let completion_responses = if raw_tool_output_requested {
+        vec![completion]
+    } else {
+        if let Ok(final_reply) = &completion {
+            turn_bodies.push(Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": final_reply
+                    }
+                }]
+            })));
+        }
+        Vec::new()
+    };
+
+    let runtime =
+        FakeRuntime::with_turn_bodies_and_completions(vec![], turn_bodies, completion_responses);
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -6957,10 +6972,14 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
                 )],
                 raw_meta: Value::Null,
             }),
+            Ok(ProviderTurn {
+                assistant_text:
+                    "Summary: the note says hello from coordinator search followup test.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
         ],
-        vec![Ok(
-            "Summary: the note says hello from coordinator search followup test.".to_owned(),
-        )],
+        vec![],
     );
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -6985,16 +7004,16 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
             .completion_calls
             .lock()
             .expect("completion calls lock"),
-        1
+        0
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let requested_turn_messages = runtime
         .turn_requested_messages
         .lock()
         .expect("turn request lock")
         .clone();
-    assert_eq!(requested_turn_messages.len(), 2);
+    assert_eq!(requested_turn_messages.len(), 3);
     assert!(
         requested_turn_messages[1].iter().any(|message| {
             message.get("role").and_then(Value::as_str) == Some("assistant")
@@ -7721,6 +7740,96 @@ async fn handle_turn_with_runtime_tool_search_raw_request_still_uses_followup_pr
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_continues_multi_step_tool_chain_after_first_tool_result() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::write(
+        harness.temp_dir.join("note.md"),
+        "hello from multi-step chain followup test",
+    )
+    .expect("seed note");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for the right tool first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md and save it into response.log", "limit": 3}),
+                    "session-multi-step-chain",
+                    "turn-multi-step-chain",
+                    "call-search",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I'll read the file.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({"path": "note.md"}),
+                    "session-multi-step-chain",
+                    "turn-multi-step-chain",
+                    "call-read",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I'll save the content.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.write",
+                    json!({
+                        "path": "response.log",
+                        "content": "hello from multi-step chain followup test",
+                    }),
+                    "session-multi-step-chain",
+                    "turn-multi-step-chain",
+                    "call-write",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Saved the note into response.log.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![Ok(
+            "<function_calls><invoke name=\"file.write\" arguments=\"{}\"></invoke></function_calls>"
+                .to_owned(),
+        )],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-multi-step-chain",
+            "search for the right tool, then read note.md and save it into response.log",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("multi-step chain should succeed");
+
+    assert_eq!(reply, "Saved the note into response.log.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let written = std::fs::read_to_string(harness.temp_dir.join("response.log"))
+        .expect("response.log should be written");
+    assert_eq!(written, "hello from multi-step chain followup test");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_provider_shape_tool_search_followup_openai_chat_completions() {
     let (reply, runtime) = run_provider_shape_tool_search_followup(
         "session-provider-shape-openai",
@@ -7767,13 +7876,13 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_openai_cha
         reply,
         "Summary: the note says hello from openai provider-shape discovery followup test."
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
     assert_eq!(
         *runtime
             .completion_calls
             .lock()
             .expect("completion calls lock"),
-        1
+        0
     );
 
     let requested_turn_messages = runtime
@@ -7781,7 +7890,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_openai_cha
         .lock()
         .expect("turn request lock")
         .clone();
-    assert_eq!(requested_turn_messages.len(), 2);
+    assert_eq!(requested_turn_messages.len(), 3);
     assert!(
         requested_turn_messages[1].iter().any(|message| {
             message.get("role").and_then(Value::as_str) == Some("assistant")
@@ -7848,7 +7957,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_responses(
         reply,
         "Summary: the note says hello from responses provider-shape discovery followup test."
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     assert_discovery_first_followup_summary(&persisted, false, "file.read");
@@ -7904,7 +8013,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_anthropic(
         reply,
         "Summary: the note says hello from anthropic provider-shape discovery followup test."
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     assert_discovery_first_followup_summary(&persisted, false, "file.read");
@@ -7972,7 +8081,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_bedrock() 
         reply,
         "Summary: the note says hello from bedrock provider-shape discovery followup test."
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     assert_discovery_first_followup_summary(&persisted, false, "file.read");
@@ -8069,6 +8178,236 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_json_raw_o
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_provider_shape_function_calls_listing_fallback() {
+    let (reply, runtime) = run_provider_shape_tool_search_followup(
+        "session-provider-shape-function-calls-listing",
+        "tool.search有什么工具支持",
+        "unused note contents",
+        json!({
+            "choices": [{
+                "message": {
+                    "content": "<function_calls>\n<invoke name=\"tool.search\" arguments=\"{}\"></invoke>\n</function_calls>"
+                }
+            }]
+        }),
+        json!({
+            "choices": [{
+                "message": {
+                    "content": "当前先暴露的核心发现工具是 tool.search 和 tool.invoke；其它运行时工具需要先通过 tool.search 发现后再调用。"
+                }
+            }]
+        }),
+        Ok("unused completion".to_owned()),
+    )
+    .await;
+
+    assert_eq!(
+        reply,
+        "当前先暴露的核心发现工具是 tool.search 和 tool.invoke；其它运行时工具需要先通过 tool.search 发现后再调用。"
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 2);
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.starts_with("[tool_result]\n"))
+        }),
+        "function_calls wrapper should still drive a discovery follow-up turn: {requested_turn_messages:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_multi_step_chain_continues_after_first_tool_success() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let input_path = harness.temp_dir.join("note.md");
+    let output_path = harness.temp_dir.join("response.log");
+    let note_contents = "hello from chained tool followup test";
+
+    std::fs::write(&input_path, note_contents).expect("seed input note");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for the right tool first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read a file and write another file", "limit": 6}),
+                    "session-tool-chain",
+                    "turn-tool-chain",
+                    "call-tool-search-chain",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I'll read the source file.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({"path": "note.md"}),
+                    "session-tool-chain",
+                    "turn-tool-chain",
+                    "call-tool-read-chain",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I'll save it to the target file.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.write",
+                    json!({
+                        "path": "response.log",
+                        "content": note_contents,
+                    }),
+                    "session-tool-chain",
+                    "turn-tool-chain",
+                    "call-tool-write-chain",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Done: saved response.log.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-chain",
+            "search for the right tool, read note.md, then save it to response.log",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("multi-step chain should succeed");
+
+    assert_eq!(reply, "Done: saved response.log.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output_path).expect("response.log should exist"),
+        note_contents
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_provider_shape_function_calls_multi_step_chain_continues() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let input_path = harness.temp_dir.join("note.md");
+    let output_path = harness.temp_dir.join("response.log");
+    let note_contents = "hello from function-calls chained tool followup test";
+
+    std::fs::write(&input_path, note_contents).expect("seed input note");
+
+    let runtime = FakeRuntime::with_turn_bodies_and_completions(
+        vec![],
+        vec![
+            Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "Let me search for the read tool first.\n<function_calls>\n<invoke name=\"tool.search\" arguments=\"{&quot;query&quot;:&quot;read note.md&quot;,&quot;limit&quot;:3}\"></invoke>\n</function_calls>"
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "Now I'll read the source file.\n<function_calls>\n<invoke name=\"file_read\" arguments=\"{&quot;path&quot;:&quot;note.md&quot;}\"></invoke>\n</function_calls>"
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "Now I'll search for the write tool.\n<function_calls>\n<invoke name=\"tool.search\" arguments=\"{&quot;query&quot;:&quot;write content into a file&quot;,&quot;limit&quot;:3}\"></invoke>\n</function_calls>"
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": format!(
+                            "Now I'll save it to the target file.\n<function_calls>\n<invoke name=\"file_write\" arguments=\"{{&quot;path&quot;:&quot;response.log&quot;,&quot;content&quot;:&quot;{}&quot;}}\"></invoke>\n</function_calls>",
+                            note_contents
+                        )
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "Done: saved response.log."
+                    }
+                }]
+            })),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.conversation.turn_loop.max_discovery_followup_rounds = 4;
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-chain-function-calls",
+            "search for the right tool, read note.md, then save it to response.log",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("function_calls multi-step chain should succeed");
+
+    assert_eq!(reply, "Done: saved response.log.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 5);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output_path).expect("response.log should exist"),
+        note_contents
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_tool_turn_raw_request_skips_second_pass_completion() {
     use crate::test_support::TurnTestHarness;
 
@@ -8158,10 +8497,15 @@ async fn handle_turn_with_runtime_tool_search_followup_checkpoint_uses_visible_c
                 )],
                 raw_meta: Value::Null,
             }),
+            Ok(ProviderTurn {
+                assistant_text:
+                    "Summary: the note says hello from coordinator search checkpoint test."
+                        .to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
         ],
-        vec![Ok(
-            "Summary: the note says hello from coordinator search checkpoint test.".to_owned(),
-        )],
+        vec![],
     );
     let mut config = test_config();
     config.conversation.compact_enabled = false;
@@ -11308,7 +11652,9 @@ fn turn_engine_no_tool_intents_returns_final_text() {
     let result = engine.validate_turn(&turn);
     match result {
         Ok(TurnValidation::FinalText(text)) => assert_eq!(text, "Hello!"),
-        other => panic!("expected FinalText, got {:?}", other),
+        other => {
+            panic!("expected FinalText, got {:?}", other)
+        }
     }
 }
 
@@ -11346,6 +11692,10 @@ fn provider_direct_discoverable_alias_without_search_is_rejected() {
             assert!(
                 !failure.reason.contains("file.read"),
                 "provider denial should not confirm guessed discoverable tool names: {failure:?}"
+            );
+            assert!(
+                failure.reason.contains("tool.search"),
+                "provider denial should guide the model back toward discovery: {failure:?}"
             );
         }
         other => panic!("expected provider denial, got {:?}", other),
@@ -11388,6 +11738,10 @@ fn provider_hidden_tool_denial_does_not_leak_name() {
             assert!(
                 !failure.reason.contains("sessions_send"),
                 "provider denial should not leak hidden tool ids: {failure:?}"
+            );
+            assert!(
+                failure.reason.contains("tool.search"),
+                "provider denial should hint at discovery recovery: {failure:?}"
             );
         }
         other @ TurnResult::FinalText(_)
@@ -11450,6 +11804,10 @@ fn turn_engine_unknown_tool_exposes_structured_policy_denial() {
             assert!(
                 failure.reason.contains("tool_not_found"),
                 "failure={failure:?}"
+            );
+            assert!(
+                failure.reason.contains("tool.search"),
+                "provider unknown-tool denials should hint at discovery: {failure:?}"
             );
         }
         other => panic!("expected ToolDenied, got {:?}", other),
@@ -14035,7 +14393,159 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
                 summary.chars().count()
             );
         }
-        other => panic!("expected FinalText, got {:?}", other),
+        other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected FinalText, got {:?}", other)
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_compacts_tool_search_payload_summary_before_truncation() {
+    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct ToolSearchPayloadAdapter;
+
+    #[async_trait]
+    impl CoreToolAdapter for ToolSearchPayloadAdapter {
+        fn name(&self) -> &str {
+            "tool-search-payload-adapter"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            _request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            let results = json!([
+                {
+                    "tool_id": "file.write",
+                    "summary": "Write file contents",
+                    "argument_hint": "path:string,content:string,create_dirs?:boolean",
+                    "required_fields": ["content", "path"],
+                    "required_field_groups": [["content", "path"]],
+                    "tags": ["file", "write", "filesystem"],
+                    "why": ["argument:content", "category:mutation", "category:workspace", "concept:file"],
+                    "lease": "lease-write"
+                },
+                {
+                    "tool_id": "file.edit",
+                    "summary": "Replace text in a file",
+                    "argument_hint": "path:string,old_string:string,new_string:string,replace_all?:boolean",
+                    "required_fields": ["new_string", "old_string", "path"],
+                    "required_field_groups": [["new_string", "old_string", "path"]],
+                    "tags": ["file", "edit", "filesystem"],
+                    "why": ["category:mutation", "category:workspace", "concept:file", "name:file"],
+                    "lease": "lease-edit"
+                },
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read file contents",
+                    "argument_hint": "path:string,max_bytes?:integer",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]],
+                    "tags": ["file", "read", "filesystem", "repo"],
+                    "why": ["category:workspace", "concept:file", "name:file", "schema:file"],
+                    "lease": "lease-read"
+                }
+            ]);
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "adapter": "core-tools",
+                    "tool_name": "tool.search",
+                    "query": "write content into a file",
+                    "returned": 3,
+                    "results": results,
+                }),
+            })
+        }
+    }
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(ToolSearchPayloadAdapter);
+    kernel
+        .set_default_core_tool_adapter("tool-search-payload-adapter")
+        .expect("set default");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let engine = TurnEngine::new(5);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![provider_tool_intent(
+            "tool.search",
+            json!({"query": "write content into a file", "limit": 3}),
+            "s1",
+            "t1",
+            "c-search",
+        )],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = engine.execute_turn(&turn, &ctx).await;
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+
+            assert_eq!(envelope["tool"], "tool.search");
+            assert_eq!(envelope["payload_truncated"], false);
+
+            let payload_summary = envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should be string");
+            let payload_json: Value = serde_json::from_str(payload_summary)
+                .expect("payload summary should stay valid json");
+            let results = payload_json["results"]
+                .as_array()
+                .expect("results should remain present");
+            let first_result = results.first().expect("first search result");
+
+            assert_eq!(first_result["tool_id"], "file.write");
+            assert_eq!(first_result["lease"], "lease-write");
+            assert!(payload_json.get("query").is_some());
+        }
+        other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected FinalText, got {:?}", other)
+        }
     }
 }
 
@@ -25599,10 +26109,21 @@ async fn repair_turn_checkpoint_tail_with_runtime_recovers_discovery_followup_ch
         TurnCheckpointRecoveryAction::RunCompaction
     );
 
+    let persisted_after_failure = failing_runtime
+        .persisted
+        .lock()
+        .expect("persisted lock")
+        .clone();
+    let visible_turns_after_failure = persisted_visible_turns(&persisted_after_failure);
+    let repaired_assistant_reply = visible_turns_after_failure
+        .last()
+        .map(|(_, _, content)| content.clone())
+        .expect("assistant reply should be persisted before repair");
+
     let retry_runtime = FakeRuntime::with_turns_and_completions(
         vec![
             json!({"role": "user", "content": user_input}),
-            json!({"role": "assistant", "content": final_reply}),
+            json!({"role": "assistant", "content": repaired_assistant_reply}),
         ],
         vec![],
         vec![],

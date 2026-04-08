@@ -1984,7 +1984,7 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "English natural-language description of the tool capability you need."
+                        "description": "Natural-language description of the tool capability you need. Any language is acceptable."
                     },
                     "exact_tool_id": {
                         "type": "string",

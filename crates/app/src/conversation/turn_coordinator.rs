@@ -573,7 +573,8 @@ struct ProviderTurnLaneExecution {
     assistant_preface: String,
     had_tool_intents: bool,
     tool_request_summary: Option<String>,
-    requires_provider_turn_followup: bool,
+    discovery_search_turn: bool,
+    supports_provider_turn_followup: bool,
     raw_tool_output_requested: bool,
     turn_result: TurnResult,
     safe_lane_terminal_route: Option<SafeLaneFailureRoute>,
@@ -2861,7 +2862,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         let current_provider_round = provider_round_index.saturating_add(1);
         if current_continue_phase
             .lane_execution
-            .requires_provider_turn_followup
+            .supports_provider_turn_followup
         {
             emit_discovery_first_event(
                 runtime,
@@ -2897,7 +2898,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     }
                 } else if current_continue_phase
                     .lane_execution
-                    .requires_provider_turn_followup
+                    .supports_provider_turn_followup
                     && let Some(payload) = latest_tool_payload
                 {
                     ReplyLoopDecision::Followup {
@@ -2962,7 +2963,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 );
                 if current_continue_phase
                     .lane_execution
-                    .requires_provider_turn_followup
+                    .supports_provider_turn_followup
                     && remaining_provider_rounds > 1
                 {
                     let next_provider_round = current_provider_round.saturating_add(1);
@@ -3013,22 +3014,24 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         binding,
                     )
                     .await;
-                    emit_discovery_first_event(
-                        runtime,
-                        session_id,
-                        "discovery_first_followup_requested",
-                        json!({
-                            "provider_round": provider_round_index.saturating_add(1),
-                            "raw_tool_output_requested": current_continue_phase
-                                .lane_execution
-                                .raw_tool_output_requested,
-                            "initial_estimated_tokens": initial_estimated_tokens,
-                            "followup_estimated_tokens": followup_request_estimated_tokens,
-                            "followup_added_estimated_tokens": followup_added_estimated_tokens,
-                        }),
-                        binding,
-                    )
-                    .await;
+                    if current_continue_phase.lane_execution.discovery_search_turn {
+                        emit_discovery_first_event(
+                            runtime,
+                            session_id,
+                            "discovery_first_followup_requested",
+                            json!({
+                                "provider_round": provider_round_index.saturating_add(1),
+                                "raw_tool_output_requested": current_continue_phase
+                                    .lane_execution
+                                    .raw_tool_output_requested,
+                                "initial_estimated_tokens": initial_estimated_tokens,
+                                "followup_estimated_tokens": followup_request_estimated_tokens,
+                                "followup_added_estimated_tokens": followup_added_estimated_tokens,
+                            }),
+                            binding,
+                        )
+                        .await;
+                    }
                     match decide_provider_turn_request_action(
                         request_provider_turn_with_observer(
                             &current_continue_phase.followup_config,
@@ -3050,24 +3053,26 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 followup_preparation.turn_id.as_str(),
                             );
                             let followup_result = summarize_discovery_first_followup_turn(&turn);
-                            emit_discovery_first_event(
-                                runtime,
-                                session_id,
-                                "discovery_first_followup_result",
-                                json!({
-                                    "provider_round": provider_round_index.saturating_add(1),
-                                    "outcome": followup_result.outcome,
-                                    "followup_tool_name": followup_result.followup_tool_name,
-                                    "followup_target_tool_id": followup_result.followup_target_tool_id,
-                                    "resolved_to_tool_invoke": followup_result
-                                        .resolved_to_tool_invoke,
-                                    "raw_tool_output_requested": current_continue_phase
-                                        .lane_execution
-                                        .raw_tool_output_requested,
-                                }),
-                                binding,
-                            )
-                            .await;
+                            if current_continue_phase.lane_execution.discovery_search_turn {
+                                emit_discovery_first_event(
+                                    runtime,
+                                    session_id,
+                                    "discovery_first_followup_result",
+                                    json!({
+                                        "provider_round": provider_round_index.saturating_add(1),
+                                        "outcome": followup_result.outcome,
+                                        "followup_tool_name": followup_result.followup_tool_name,
+                                        "followup_target_tool_id": followup_result.followup_target_tool_id,
+                                        "resolved_to_tool_invoke": followup_result
+                                            .resolved_to_tool_invoke,
+                                        "raw_tool_output_requested": current_continue_phase
+                                            .lane_execution
+                                            .raw_tool_output_requested,
+                                    }),
+                                    binding,
+                                )
+                                .await;
+                            }
                             if let Some(reply) = turn_loop_state
                                 .circuit_breaker_reply(turn_loop_policy, turn.tool_intents.len())
                             {
@@ -3090,6 +3095,9 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 ingress,
                                 observer,
                                 next_provider_round,
+                                current_continue_phase
+                                    .lane_execution
+                                    .supports_provider_turn_followup,
                             )
                             .await;
                             current_preparation = followup_preparation;
@@ -3102,23 +3110,25 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         | ProviderTurnRequestAction::ReturnError {
                             error: provider_error_text,
                         } => {
-                            emit_discovery_first_event(
-                                runtime,
-                                session_id,
-                                "discovery_first_followup_result",
-                                json!({
-                                    "provider_round": provider_round_index.saturating_add(1),
-                                    "outcome": "provider_error",
-                                    "followup_tool_name": Value::Null,
-                                    "followup_target_tool_id": Value::Null,
-                                    "resolved_to_tool_invoke": false,
-                                    "raw_tool_output_requested": current_continue_phase
-                                        .lane_execution
-                                        .raw_tool_output_requested,
-                                }),
-                                binding,
-                            )
-                            .await;
+                            if current_continue_phase.lane_execution.discovery_search_turn {
+                                emit_discovery_first_event(
+                                    runtime,
+                                    session_id,
+                                    "discovery_first_followup_result",
+                                    json!({
+                                        "provider_round": provider_round_index.saturating_add(1),
+                                        "outcome": "provider_error",
+                                        "followup_tool_name": Value::Null,
+                                        "followup_target_tool_id": Value::Null,
+                                        "resolved_to_tool_invoke": false,
+                                        "raw_tool_output_requested": current_continue_phase
+                                            .lane_execution
+                                            .raw_tool_output_requested,
+                                    }),
+                                    binding,
+                                )
+                                .await;
+                            }
                             emit_provider_failover_trust_event_if_needed(
                                 config,
                                 runtime,
@@ -4529,10 +4539,11 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     ingress: Option<&ConversationIngressContext>,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
-    let requires_provider_turn_followup = turn
+    let discovery_search_turn = turn
         .tool_intents
         .iter()
         .any(|intent| effective_followup_tool_name(intent) == "tool.search");
+    let supports_provider_turn_followup = followup_chain_active || discovery_search_turn;
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
     let session_context = match runtime.session_context(config, session_id, binding) {
@@ -4547,7 +4558,8 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 assistant_preface,
                 had_tool_intents,
                 tool_request_summary,
-                requires_provider_turn_followup,
+                discovery_search_turn,
+                supports_provider_turn_followup,
                 raw_tool_output_requested: preparation.raw_tool_output_requested,
                 turn_result,
                 safe_lane_terminal_route: None,
@@ -4677,12 +4689,19 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         &turn_result,
         fast_lane_tool_batch_trace.as_ref(),
     );
+    let recovery_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
+        .is_some_and(|payload| {
+            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
+        });
+    let supports_provider_turn_followup =
+        followup_chain_active || discovery_search_turn || recovery_followup_turn;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
         had_tool_intents,
         tool_request_summary,
-        requires_provider_turn_followup,
+        discovery_search_turn,
+        supports_provider_turn_followup,
         raw_tool_output_requested: preparation.raw_tool_output_requested,
         turn_result,
         safe_lane_terminal_route,
@@ -9383,7 +9402,8 @@ mod tests {
                 assistant_preface: "preface".to_owned(),
                 had_tool_intents: true,
                 tool_request_summary: None,
-                requires_provider_turn_followup: false,
+                discovery_search_turn: false,
+                supports_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::ToolError(TurnFailure::retryable(
                     "safe_lane_plan_node_retryable_error",
@@ -9603,7 +9623,8 @@ mod tests {
                 assistant_preface: "preface".to_owned(),
                 had_tool_intents: false,
                 tool_request_summary: None,
-                requires_provider_turn_followup: false,
+                discovery_search_turn: false,
+                supports_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::FinalText("hello there".to_owned()),
                 safe_lane_terminal_route: None,

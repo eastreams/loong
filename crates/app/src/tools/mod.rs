@@ -1245,12 +1245,7 @@ fn execute_tool_search_tool_with_config(
         .payload
         .as_object()
         .ok_or_else(|| "tool.search payload must be an object".to_owned())?;
-    let query = payload
-        .get("query")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
+    let query = tool_search_query_from_payload(payload).map(str::to_owned);
     let requested_exact_tool_id = payload
         .get("exact_tool_id")
         .and_then(Value::as_str)
@@ -1263,10 +1258,6 @@ fn execute_tool_search_tool_with_config(
         .map(str::to_owned);
     let has_query = query.is_some();
     let has_exact_tool_id = requested_exact_tool_id.is_some();
-
-    if !has_query && !has_exact_tool_id {
-        return Err("tool.search requires payload.query or payload.exact_tool_id".to_owned());
-    }
 
     let limit = payload
         .get("limit")
@@ -1304,6 +1295,19 @@ fn execute_tool_search_tool_with_config(
         diagnostics_reason = ranking.diagnostics_reason;
 
         ranking
+        .results
+        .into_iter()
+        .map(|ranked_entry| {
+            let RankedSearchableToolEntry { entry, why } = ranked_entry;
+
+            tool_search_result_entry_json(&entry, why, payload)
+        })
+        .collect()
+    } else {
+        let ranking = rank_searchable_entries(searchable_entries, "", limit);
+        diagnostics_reason = ranking.diagnostics_reason;
+
+        ranking
             .results
             .into_iter()
             .map(|ranked_entry| {
@@ -1312,8 +1316,6 @@ fn execute_tool_search_tool_with_config(
                 tool_search_result_entry_json(&entry, why, payload)
             })
             .collect()
-    } else {
-        Vec::new()
     };
     let diagnostics = tool_search_diagnostics_json(
         requested_exact_tool_id.as_deref(),
@@ -1387,6 +1389,16 @@ fn tool_search_diagnostics_json(
     }
 
     Value::Null
+}
+
+fn tool_search_query_from_payload(payload: &serde_json::Map<String, Value>) -> Option<&str> {
+    const QUERY_KEYS: &[&str] = &["query", "input", "text", "prompt", "keyword", "keywords"];
+
+    QUERY_KEYS
+        .iter()
+        .filter_map(|key| payload.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
 }
 
 fn tool_search_entry_is_runtime_usable(
@@ -2059,7 +2071,8 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Non-core tools are intentionally hidden"));
-        assert!(!snapshot.contains("config.import"));
+        assert!(snapshot.contains("tool.search accepts multilingual queries"));
+        assert!(!snapshot.contains("claw.migrate"));
         assert!(!snapshot.contains("external_skills.fetch"));
         assert!(!snapshot.contains("file.read"));
         assert!(!snapshot.contains("shell.exec"));
