@@ -24,6 +24,7 @@ mod sqlite;
 mod stage;
 mod system;
 mod system_registry;
+mod system_runtime;
 #[cfg(test)]
 mod tests;
 mod workspace_files;
@@ -68,15 +69,19 @@ pub use system::{
     MemorySystemCapability, MemorySystemMetadata, RECALL_FIRST_MEMORY_SYSTEM_ID,
     RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
 };
+pub(crate) use system_registry::registered_memory_system_id;
+pub(crate) use system_registry::registered_memory_system_id_from_env;
 pub use system_registry::{
     MEMORY_SYSTEM_ENV, MemorySystemPolicySnapshot, MemorySystemRuntimeSnapshot,
     MemorySystemSelection, MemorySystemSelectionSource, collect_memory_system_runtime_snapshot,
     describe_memory_system, list_memory_system_ids, list_memory_system_metadata,
     memory_system_id_from_env, register_memory_system, resolve_memory_system,
-    resolve_memory_system_selection, supported_memory_system_kind_from_env,
+    resolve_memory_system_runtime, resolve_memory_system_selection,
+    supported_memory_system_kind_from_env,
 };
-pub(crate) use system_registry::{
-    registered_memory_system_id, registered_memory_system_id_from_env,
+pub use system_runtime::{
+    BuiltinMemorySystemRuntime, MemorySystemRuntime, MetadataOnlyMemorySystemRuntime,
+    SystemBackedMemorySystemRuntime,
 };
 pub(crate) use workspace_files::{
     WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
@@ -103,6 +108,15 @@ pub fn execute_memory_core_with_config(
     #[cfg(test)]
     test_support::record_core_dispatch();
 
+    let runtime = resolve_memory_system_runtime(config)?;
+
+    runtime.execute_core(request)
+}
+
+pub(crate) fn execute_builtin_backend_memory_core(
+    request: MemoryCoreRequest,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<MemoryCoreOutcome, String> {
     match config.backend {
         MemoryBackendKind::Sqlite => match request.operation.as_str() {
             MEMORY_OP_APPEND_TURN => append_turn(request, config),

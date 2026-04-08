@@ -2,6 +2,9 @@ use std::path::Path;
 
 use std::collections::BTreeSet;
 
+use crate::CliResult;
+
+use super::system_runtime::{BuiltinMemorySystemRuntime, MemorySystemRuntime};
 use super::{
     CanonicalMemoryKind, CanonicalMemorySearchHit, DerivedMemoryKind, MemoryContextEntry,
     MemoryContextKind, MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
@@ -101,6 +104,15 @@ pub trait MemorySystem: Send + Sync {
 
     fn metadata(&self) -> MemorySystemMetadata;
 
+    fn create_runtime(
+        &self,
+        config: &MemoryRuntimeConfig,
+    ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+        let _ = config;
+
+        Ok(None)
+    }
+
     fn build_retrieval_request(
         &self,
         _session_id: &str,
@@ -149,6 +161,13 @@ where
 
     fn metadata(&self) -> MemorySystemMetadata {
         self.as_ref().metadata()
+    }
+
+    fn create_runtime(
+        &self,
+        config: &MemoryRuntimeConfig,
+    ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+        self.as_ref().create_runtime(config)
     }
 
     fn build_retrieval_request(
@@ -355,6 +374,19 @@ impl MemorySystem for BuiltinMemorySystem {
             MemoryRecallMode::PromptAssembly,
             MemoryRecallMode::OperatorInspection,
         ])
+    }
+
+    fn create_runtime(
+        &self,
+        config: &MemoryRuntimeConfig,
+    ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+        let runtime_config = config.clone();
+        let metadata = self.metadata();
+        let system: std::sync::Arc<dyn MemorySystem> = std::sync::Arc::new(BuiltinMemorySystem);
+        let runtime = BuiltinMemorySystemRuntime::new(runtime_config, metadata, system);
+        let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+        Ok(Some(boxed_runtime))
     }
 
     fn build_retrieval_request(

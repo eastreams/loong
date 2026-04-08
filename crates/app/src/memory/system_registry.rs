@@ -15,6 +15,9 @@ use super::system::{
     RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
     WorkspaceRecallMemorySystem,
 };
+use super::system_runtime::{
+    MemorySystemRuntime, MetadataOnlyMemorySystemRuntime, SystemBackedMemorySystemRuntime,
+};
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
 
@@ -189,6 +192,37 @@ pub fn resolve_memory_system(id: Option<&str>) -> CliResult<Box<dyn MemorySystem
 
 pub fn describe_memory_system(id: Option<&str>) -> CliResult<MemorySystemMetadata> {
     resolve_memory_system(id).map(|system| system.metadata())
+}
+
+pub fn resolve_memory_system_runtime(
+    config: &MemoryRuntimeConfig,
+) -> CliResult<Box<dyn MemorySystemRuntime>> {
+    let requested_system_id = config.selected_system_id();
+    let resolved_system_id = registered_memory_system_id(Some(requested_system_id))
+        .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
+    let system = resolve_memory_system(Some(resolved_system_id.as_str()))?;
+    let custom_runtime = system.create_runtime(config)?;
+    if let Some(runtime) = custom_runtime {
+        return Ok(runtime);
+    }
+
+    let metadata = system.metadata();
+    let metadata_supports_stages = !metadata.supported_pre_assembly_stage_families.is_empty();
+    let shared_system: Arc<dyn MemorySystem> = Arc::from(system);
+
+    if metadata_supports_stages {
+        let runtime_config = config.clone();
+        let runtime = SystemBackedMemorySystemRuntime::new(runtime_config, metadata, shared_system);
+        let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+        return Ok(boxed_runtime);
+    }
+
+    let runtime_config = config.clone();
+    let runtime = MetadataOnlyMemorySystemRuntime::new(runtime_config, metadata);
+    let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+    Ok(boxed_runtime)
 }
 
 pub fn memory_system_id_from_env() -> Option<String> {
