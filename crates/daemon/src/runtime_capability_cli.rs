@@ -1661,29 +1661,54 @@ fn write_pretty_json_file_create_new(path: &Path, value: &impl Serialize) -> Cli
 
     let encoded = serde_json::to_vec_pretty(value)
         .map_err(|error| format!("serialize runtime capability apply artifact failed: {error}"))?;
-    let mut file = fs::OpenOptions::new()
+    let temp_path = runtime_capability_apply_temp_path(path);
+    let mut temp_file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path)
+        .open(&temp_path)
         .map_err(|error| {
-            if error.kind() == ErrorKind::AlreadyExists {
-                return format!(
-                    "runtime capability apply artifact {} already exists",
-                    path.display()
-                );
-            }
-
             format!(
                 "write runtime capability apply artifact {} failed: {error}",
                 path.display()
             )
         })?;
-    file.write_all(encoded.as_slice()).map_err(|error| {
-        format!(
+    let write_result = temp_file.write_all(encoded.as_slice());
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!(
             "write runtime capability apply artifact {} failed: {error}",
             path.display()
-        )
-    })?;
+        ));
+    }
+
+    let sync_result = temp_file.sync_all();
+    if let Err(error) = sync_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!(
+            "write runtime capability apply artifact {} failed: {error}",
+            path.display()
+        ));
+    }
+
+    drop(temp_file);
+
+    let publish_result = fs::hard_link(&temp_path, path);
+    let _ = fs::remove_file(&temp_path);
+    match publish_result {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "runtime capability apply artifact {} already exists",
+                path.display()
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "write runtime capability apply artifact {} failed: {error}",
+                path.display()
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -2184,6 +2209,18 @@ fn canonicalize_optional_path(path: &Path) -> CliResult<String> {
         return canonicalize_existing_path(path);
     }
     Ok(path.display().to_string())
+}
+
+fn runtime_capability_apply_temp_path(path: &Path) -> PathBuf {
+    let parent = path.parent();
+    let parent = parent.unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name();
+    let file_name = file_name.and_then(|value| value.to_str());
+    let file_name = file_name.unwrap_or("runtime-capability-apply.json");
+    let process_id = std::process::id();
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let temp_name = format!(".{file_name}.tmp.{process_id}.{timestamp}");
+    parent.join(temp_name)
 }
 
 fn canonicalize_existing_path(path: &Path) -> CliResult<String> {

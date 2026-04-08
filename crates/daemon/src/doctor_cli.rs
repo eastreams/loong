@@ -4390,23 +4390,13 @@ mod tests {
         assert!(check.detail.contains("not writable"));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn audit_retention_doctor_check_fails_when_parent_directory_is_not_writable() {
-        let temp_dir = browser_companion_temp_dir("audit-target-parent-readonly");
-        let readonly_dir = temp_dir.join("readonly-audit");
-        std::fs::create_dir_all(&readonly_dir).expect("create readonly audit directory");
-        let original_permissions = std::fs::metadata(&readonly_dir)
-            .expect("readonly audit directory metadata")
-            .permissions();
-        let mut permissions = original_permissions.clone();
-        permissions.set_mode(0o555);
-        std::fs::set_permissions(&readonly_dir, permissions)
-            .expect("mark audit directory readonly");
-        let _permission_restore =
-            PermissionRestore::new(readonly_dir.clone(), original_permissions);
+    fn audit_retention_doctor_check_fails_when_parent_path_is_not_a_directory() {
+        let temp_dir = browser_companion_temp_dir("audit-target-parent-not-directory");
+        let blocked_parent = temp_dir.join("readonly-audit");
+        std::fs::write(&blocked_parent, b"not a directory").expect("create blocking parent file");
 
-        let journal_path = readonly_dir.join("events.jsonl");
+        let journal_path = blocked_parent.join("events.jsonl");
         let check = audit_retention_doctor_check(&mvp::config::AuditConfig {
             mode: mvp::config::AuditMode::Fanout,
             path: journal_path.display().to_string(),
@@ -4415,26 +4405,22 @@ mod tests {
 
         assert_eq!(check.name, "audit retention");
         assert_eq!(check.level, DoctorCheckLevel::Fail);
-        assert!(check.detail.contains("runtime open + lock probe failed"));
+        assert!(
+            check
+                .detail
+                .contains(journal_path.display().to_string().as_str()),
+            "expected failing detail to mention the blocked journal path, got: {}",
+            check.detail
+        );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn audit_retention_doctor_check_fails_when_missing_parent_chain_is_not_creatable() {
+    fn audit_retention_doctor_check_fails_when_missing_parent_chain_runs_into_file_boundary() {
         let temp_dir = browser_companion_temp_dir("audit-target-missing-parent-chain");
-        let readonly_dir = temp_dir.join("readonly-audit");
-        std::fs::create_dir_all(&readonly_dir).expect("create readonly audit directory");
-        let original_permissions = std::fs::metadata(&readonly_dir)
-            .expect("readonly audit directory metadata")
-            .permissions();
-        let mut permissions = original_permissions.clone();
-        permissions.set_mode(0o555);
-        std::fs::set_permissions(&readonly_dir, permissions)
-            .expect("mark audit directory readonly");
-        let _permission_restore =
-            PermissionRestore::new(readonly_dir.clone(), original_permissions);
+        let blocked_parent = temp_dir.join("readonly-audit");
+        std::fs::write(&blocked_parent, b"not a directory").expect("create blocking parent file");
 
-        let journal_path = readonly_dir.join("nested").join("events.jsonl");
+        let journal_path = blocked_parent.join("nested").join("events.jsonl");
         let check = audit_retention_doctor_check(&mvp::config::AuditConfig {
             mode: mvp::config::AuditMode::Fanout,
             path: journal_path.display().to_string(),
@@ -4443,7 +4429,13 @@ mod tests {
 
         assert_eq!(check.name, "audit retention");
         assert_eq!(check.level, DoctorCheckLevel::Fail);
-        assert!(check.detail.contains("runtime open + lock probe failed"));
+        assert!(
+            check
+                .detail
+                .contains(journal_path.display().to_string().as_str()),
+            "expected failing detail to mention the blocked journal path, got: {}",
+            check.detail
+        );
     }
 
     #[test]

@@ -5,6 +5,9 @@ use std::{
     path::PathBuf,
 };
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
@@ -42,6 +45,27 @@ use super::{
     },
 };
 use crate::secrets::{canonicalize_env_secret_reference, secret_ref_env_name};
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CONFIG_WRITE_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub struct ScopedTestConfigWriteFailure;
+
+#[cfg(test)]
+impl Drop for ScopedTestConfigWriteFailure {
+    fn drop(&mut self) {
+        TEST_CONFIG_WRITE_FAILURE.with(|flag| flag.set(false));
+    }
+}
+
+#[cfg(test)]
+pub fn inject_test_config_write_failure() -> ScopedTestConfigWriteFailure {
+    TEST_CONFIG_WRITE_FAILURE.with(|flag| flag.set(true));
+    ScopedTestConfigWriteFailure
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigValidationDiagnostic {
@@ -2099,6 +2123,13 @@ pub fn write(path: Option<&str>, config: &LoongClawConfig, force: bool) -> CliRe
     }
 
     let encoded = encode_toml_config(config)?;
+    #[cfg(any(test, debug_assertions))]
+    if config_write_failure_injected(&output_path) {
+        return Err(format!(
+            "failed to write config file {}: injected test failure",
+            output_path.display()
+        ));
+    }
     fs::write(&output_path, encoded).map_err(|error| {
         format!(
             "failed to write config file {}: {error}",
@@ -2118,6 +2149,22 @@ pub fn default_config_path() -> PathBuf {
 
 pub fn default_loongclaw_home() -> PathBuf {
     shared_default_loongclaw_home()
+}
+
+#[cfg(any(test, debug_assertions))]
+fn config_write_failure_injected(output_path: &Path) -> bool {
+    #[cfg(test)]
+    if TEST_CONFIG_WRITE_FAILURE.with(Cell::get) {
+        return true;
+    }
+
+    let configured_path = std::env::var_os("LOONGCLAW_TEST_FAIL_CONFIG_WRITE_PATH");
+    let Some(configured_path) = configured_path else {
+        return false;
+    };
+
+    let configured_path = PathBuf::from(configured_path);
+    configured_path == output_path
 }
 
 #[cfg(feature = "config-toml")]

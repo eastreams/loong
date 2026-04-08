@@ -2432,8 +2432,9 @@ fn runtime_capability_apply_materializes_managed_skill_artifact_and_is_idempoten
         "managed_skill_bundle"
     );
     assert_eq!(report.applied_artifact.delivery_surface, "managed_skills");
+    let output_path_text = normalized_path_text(&report.output_path);
     assert!(
-        report.output_path.ends_with(&format!(
+        output_path_text.ends_with(&format!(
             "managed_skills/{}.json",
             report.applied_artifact.artifact_id
         )),

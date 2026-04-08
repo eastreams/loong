@@ -867,11 +867,8 @@ fn execute_skills_command_enable_browser_preview_rolls_back_config_on_install_fa
     fs::remove_dir_all(&root).ok();
 }
 
-#[cfg(unix)]
 #[test]
 fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_persist_failure() {
-    use std::os::unix::fs::PermissionsExt;
-
     let root = unique_temp_dir("loongclaw-skills-cli-browser-preview-config-failure");
     let install_root = root.join("managed-skills");
     let config_path = root.join("loongclaw.toml");
@@ -880,12 +877,11 @@ fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_pers
     config.external_skills.install_root = Some(install_root.display().to_string());
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
-
-    let mut permissions = fs::metadata(&config_path)
-        .expect("read config file metadata")
-        .permissions();
-    permissions.set_mode(0o444);
-    fs::set_permissions(&config_path, permissions).expect("lock config file");
+    let config_path_text = config_path.to_string_lossy().to_string();
+    let _env = SkillsCliEnvironmentGuard::set(&[(
+        "LOONGCLAW_TEST_FAIL_CONFIG_WRITE_PATH",
+        Some(config_path_text.as_str()),
+    )]);
 
     let error = loongclaw_daemon::skills_cli::execute_skills_command(
         loongclaw_daemon::skills_cli::SkillsCommandOptions {
@@ -899,7 +895,9 @@ fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_pers
     .expect_err("enable browser preview should fail when config persistence fails");
 
     assert!(
-        error.contains("Permission denied") || error.contains("permission denied"),
+        error.contains("Permission denied")
+            || error.contains("permission denied")
+            || error.contains("failed to write config file"),
         "error should surface the config write failure: {error}"
     );
     assert!(
@@ -907,11 +905,6 @@ fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_pers
         "failed config persistence should not leave the helper skill installed"
     );
 
-    let mut cleanup_permissions = fs::metadata(&config_path)
-        .expect("read config file metadata for cleanup")
-        .permissions();
-    cleanup_permissions.set_mode(0o644);
-    fs::set_permissions(&config_path, cleanup_permissions).expect("unlock config file");
     fs::remove_dir_all(&root).ok();
 }
 

@@ -655,13 +655,23 @@ pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution>
     None
 }
 
+fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &Value) -> String {
+    if canonical_name != "tool.invoke" {
+        return "-".to_owned();
+    }
+
+    let inner_tool_id = payload.get("tool_id");
+    let inner_tool_id = inner_tool_id.and_then(Value::as_str);
+    let inner_tool_name = inner_tool_id.map(canonical_tool_name);
+    let inner_tool_name = inner_tool_name.unwrap_or("-");
+    inner_tool_name.to_owned()
+}
+
 pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let requested_tool_name = request.tool_name.clone();
-    let payload_kind = crate::observability::json_value_kind(&request.payload);
-    let payload_keys = crate::observability::top_level_json_keys(&request.payload);
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let payload = request.payload;
     let workspace_root = trusted_workspace_root_from_payload(&payload)?;
@@ -674,6 +684,16 @@ pub fn execute_tool_core_with_config(
         effective_config = effective_config.narrowed(&runtime_narrowing);
     }
     let config = &effective_config;
+    let debug_log_enabled = tracing::enabled!(target: "loongclaw.tools", tracing::Level::DEBUG);
+    let warn_log_enabled = tracing::enabled!(target: "loongclaw.tools", tracing::Level::WARN);
+    let should_log_payload_metadata = debug_log_enabled || warn_log_enabled;
+    let mut payload_kind = "-";
+    let mut payload_keys = Vec::new();
+    if should_log_payload_metadata {
+        payload_kind = crate::observability::json_value_kind(&payload);
+        payload_keys = crate::observability::top_level_json_keys(&payload);
+    }
+    let inner_tool_name = resolved_inner_tool_name_for_logs(canonical_name, &payload);
     let started_at = std::time::Instant::now();
     let result = (|| {
         ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
@@ -699,40 +719,49 @@ pub fn execute_tool_core_with_config(
     let duration_ms = started_at.elapsed().as_millis();
     match &result {
         Ok(outcome) => {
-            tracing::debug!(
-                target: "loongclaw.tools",
-                requested_tool_name = %requested_tool_name,
-                canonical_tool_name = %canonical_name,
-                payload_kind,
-                payload_keys = ?payload_keys,
-                status = %outcome.status,
-                duration_ms,
-                "tool execution completed"
-            );
-        }
-        Err(error) => {
-            if is_expected_tool_request_error(error) {
+            if debug_log_enabled {
                 tracing::debug!(
                     target: "loongclaw.tools",
                     requested_tool_name = %requested_tool_name,
                     canonical_tool_name = %canonical_name,
+                    inner_tool_name = %inner_tool_name,
                     payload_kind,
                     payload_keys = ?payload_keys,
+                    status = %outcome.status,
                     duration_ms,
-                    error = %crate::observability::summarize_error(error),
-                    "tool execution rejected"
+                    "tool execution completed"
                 );
+            }
+        }
+        Err(error) => {
+            if is_expected_tool_request_error(error) {
+                if debug_log_enabled {
+                    tracing::debug!(
+                        target: "loongclaw.tools",
+                        requested_tool_name = %requested_tool_name,
+                        canonical_tool_name = %canonical_name,
+                        inner_tool_name = %inner_tool_name,
+                        payload_kind,
+                        payload_keys = ?payload_keys,
+                        duration_ms,
+                        error = %crate::observability::summarize_error(error),
+                        "tool execution rejected"
+                    );
+                }
             } else {
-                tracing::warn!(
-                    target: "loongclaw.tools",
-                    requested_tool_name = %requested_tool_name,
-                    canonical_tool_name = %canonical_name,
-                    payload_kind,
-                    payload_keys = ?payload_keys,
-                    duration_ms,
-                    error = %crate::observability::summarize_error(error),
-                    "tool execution failed"
-                );
+                if warn_log_enabled {
+                    tracing::warn!(
+                        target: "loongclaw.tools",
+                        requested_tool_name = %requested_tool_name,
+                        canonical_tool_name = %canonical_name,
+                        inner_tool_name = %inner_tool_name,
+                        payload_kind,
+                        payload_keys = ?payload_keys,
+                        duration_ms,
+                        error = %crate::observability::summarize_error(error),
+                        "tool execution failed"
+                    );
+                }
             }
         }
     }
