@@ -52,6 +52,7 @@ directly.
 - **Before every commit**, run CI-parity checks. Any manual edit after fmt must be re-checked.
 - Every released version must map to `docs/releases/vX.Y.Z.md` with process log and detail links.
 - Local agent debug context for a release should be recorded in `.docs/releases/vX.Y.Z-debug.md`.
+- Public-repo issues, PRs, and public-doc wording should stay LoongClaw-centric; keep detailed external project comparisons in `loongclaw-ai/knowledge-base` unless naming an external project is strictly necessary.
 
 ## 5. Verification Gates
 
