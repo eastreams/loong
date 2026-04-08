@@ -34,7 +34,9 @@ use loongclaw_protocol::{
     ControlPlaneSessionKind, ControlPlaneSessionListResponse, ControlPlaneSessionObservation,
     ControlPlaneSessionReadResponse, ControlPlaneSessionState, ControlPlaneSessionSummary,
     ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
-    ControlPlaneStateVersion, ProtocolRouter,
+    ControlPlaneStateVersion, ControlPlaneTurnEventEnvelope, ControlPlaneTurnResultResponse,
+    ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest, ControlPlaneTurnSubmitResponse,
+    ControlPlaneTurnSummary, ProtocolRouter,
 };
 use serde::Deserialize;
 
@@ -107,6 +109,7 @@ struct ControlPlaneHttpState {
     repository_view: Option<Arc<mvp::control_plane::ControlPlaneRepositoryView>>,
     #[cfg(feature = "memory-sqlite")]
     acp_view: Option<Arc<mvp::control_plane::ControlPlaneAcpView>>,
+    turn_runtime: Option<Arc<ControlPlaneTurnRuntime>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,12 +180,44 @@ struct SubscribeQuery {
     include_targeted: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct TurnResultQuery {
+    turn_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnStreamQuery {
+    turn_id: String,
+    #[serde(default)]
+    after_seq: Option<u64>,
+}
+
 struct ControlPlaneSubscribeStreamState {
     manager: Arc<mvp::control_plane::ControlPlaneManager>,
     pending_events: VecDeque<mvp::control_plane::ControlPlaneEventRecord>,
     receiver: tokio::sync::broadcast::Receiver<mvp::control_plane::ControlPlaneEventRecord>,
     last_seq: u64,
     include_targeted: bool,
+}
+
+struct ControlPlaneTurnStreamState {
+    turn_id: String,
+    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
+    pending_events: VecDeque<mvp::control_plane::ControlPlaneTurnEventRecord>,
+    receiver: tokio::sync::broadcast::Receiver<mvp::control_plane::ControlPlaneTurnEventRecord>,
+    last_seq: u64,
+}
+
+struct ControlPlaneTurnRuntime {
+    config: mvp::config::LoongClawConfig,
+    acp_manager: Arc<mvp::acp::AcpSessionManager>,
+    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
+}
+
+struct ControlPlaneTurnEventForwarder {
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
+    turn_id: String,
 }
 
 impl ControlPlaneKernelAuthority {
@@ -748,6 +783,14 @@ fn parse_pairing_status(
     }
 }
 
+fn normalize_required_text(value: &str, field_name: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field_name} is required"));
+    }
+    Ok(trimmed.to_owned())
+}
+
 fn initial_subscribe_state(
     manager: Arc<mvp::control_plane::ControlPlaneManager>,
     after_seq: u64,
@@ -844,6 +887,236 @@ fn control_plane_subscribe_stream(
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let initial_state = initial_subscribe_state(manager, after_seq, include_targeted);
     stream::unfold(initial_state, next_control_plane_sse_item)
+}
+
+impl ControlPlaneTurnRuntime {
+    fn new(config: mvp::config::LoongClawConfig) -> Result<Self, String> {
+        let acp_manager = mvp::acp::shared_acp_session_manager(&config)?;
+        Ok(Self::with_manager(config, acp_manager))
+    }
+
+    fn with_manager(
+        config: mvp::config::LoongClawConfig,
+        acp_manager: Arc<mvp::acp::AcpSessionManager>,
+    ) -> Self {
+        Self {
+            config,
+            acp_manager,
+            registry: Arc::new(mvp::control_plane::ControlPlaneTurnRegistry::new()),
+        }
+    }
+}
+
+impl mvp::acp::AcpTurnEventSink for ControlPlaneTurnEventForwarder {
+    fn on_event(&self, event: &serde_json::Value) -> CliResult<()> {
+        let recorded_event = self
+            .registry
+            .record_runtime_event(self.turn_id.as_str(), event.clone())?;
+        let payload = map_turn_event_payload(&recorded_event);
+        let _ = self.manager.record_acp_turn_event(payload, true);
+        Ok(())
+    }
+}
+
+fn extend_turn_metadata(
+    target: &mut std::collections::BTreeMap<String, String>,
+    extra: &std::collections::BTreeMap<String, String>,
+) {
+    for (key, value) in extra {
+        let normalized_key = key.trim();
+        let normalized_value = value.trim();
+        if normalized_key.is_empty() {
+            continue;
+        }
+        if normalized_value.is_empty() {
+            continue;
+        }
+
+        let normalized_key = normalized_key.to_owned();
+        let normalized_value = normalized_value.to_owned();
+        target.entry(normalized_key).or_insert(normalized_value);
+    }
+}
+
+fn map_turn_status(status: mvp::control_plane::ControlPlaneTurnStatus) -> ControlPlaneTurnStatus {
+    match status {
+        mvp::control_plane::ControlPlaneTurnStatus::Running => ControlPlaneTurnStatus::Running,
+        mvp::control_plane::ControlPlaneTurnStatus::Completed => ControlPlaneTurnStatus::Completed,
+        mvp::control_plane::ControlPlaneTurnStatus::Failed => ControlPlaneTurnStatus::Failed,
+        mvp::control_plane::ControlPlaneTurnStatus::Cancelled => ControlPlaneTurnStatus::Cancelled,
+    }
+}
+
+fn map_turn_summary(
+    snapshot: &mvp::control_plane::ControlPlaneTurnSnapshot,
+) -> ControlPlaneTurnSummary {
+    ControlPlaneTurnSummary {
+        turn_id: snapshot.turn_id.clone(),
+        session_id: snapshot.session_id.clone(),
+        status: map_turn_status(snapshot.status),
+        submitted_at_ms: snapshot.submitted_at_ms,
+        completed_at_ms: snapshot.completed_at_ms,
+        event_count: snapshot.event_count,
+    }
+}
+
+fn map_turn_result(
+    snapshot: &mvp::control_plane::ControlPlaneTurnSnapshot,
+) -> ControlPlaneTurnResultResponse {
+    ControlPlaneTurnResultResponse {
+        turn: map_turn_summary(snapshot),
+        output_text: snapshot.output_text.clone(),
+        stop_reason: snapshot.stop_reason.clone(),
+        usage: snapshot.usage.clone(),
+        error: snapshot.error.clone(),
+    }
+}
+
+fn map_turn_event_payload(
+    record: &mvp::control_plane::ControlPlaneTurnEventRecord,
+) -> serde_json::Value {
+    serde_json::json!({
+        "turn_id": record.turn_id,
+        "session_id": record.session_id,
+        "seq": record.seq,
+        "terminal": record.terminal,
+        "payload": record.payload,
+    })
+}
+
+fn map_turn_event(
+    record: mvp::control_plane::ControlPlaneTurnEventRecord,
+) -> ControlPlaneTurnEventEnvelope {
+    ControlPlaneTurnEventEnvelope {
+        turn_id: record.turn_id,
+        session_id: record.session_id,
+        seq: record.seq,
+        terminal: record.terminal,
+        payload: record.payload,
+    }
+}
+
+fn sse_event_from_turn_record(
+    record: mvp::control_plane::ControlPlaneTurnEventRecord,
+) -> Result<Event, String> {
+    let seq = record.seq;
+    let terminal = record.terminal;
+    let envelope = map_turn_event(record);
+    let event_name = if terminal {
+        "turn.terminal"
+    } else {
+        "turn.event"
+    };
+    let event_id = seq.to_string();
+    let base_event = Event::default();
+    let named_event = base_event.event(event_name);
+    let identified_event = named_event.id(event_id);
+    identified_event
+        .json_data(&envelope)
+        .map_err(|error| format!("control-plane turn SSE event encoding failed: {error}"))
+}
+
+fn fallback_turn_sse_error_event(message: &str) -> Event {
+    let error_message = format!("{{\"error\":\"{message}\"}}");
+    let base_event = Event::default();
+    let named_event = base_event.event("turn.error");
+    named_event.data(error_message)
+}
+
+fn initial_turn_stream_state(
+    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
+    turn_id: &str,
+    after_seq: u64,
+) -> Result<ControlPlaneTurnStreamState, String> {
+    let receiver = registry.subscribe();
+    let pending_events =
+        registry.recent_events_after(turn_id, after_seq, CONTROL_PLANE_DEFAULT_EVENT_LIMIT)?;
+    let pending_events = VecDeque::from(pending_events);
+    Ok(ControlPlaneTurnStreamState {
+        turn_id: turn_id.to_owned(),
+        registry,
+        pending_events,
+        receiver,
+        last_seq: after_seq,
+    })
+}
+
+async fn next_turn_sse_item(
+    mut state: ControlPlaneTurnStreamState,
+) -> Option<(Result<Event, Infallible>, ControlPlaneTurnStreamState)> {
+    loop {
+        let pending_event = state.pending_events.pop_front();
+        if let Some(record) = pending_event {
+            let terminal = record.terminal;
+            state.last_seq = record.seq;
+            let event = match sse_event_from_turn_record(record) {
+                Ok(event) => event,
+                Err(error) => fallback_turn_sse_error_event(error.as_str()),
+            };
+            if terminal {
+                return Some((Ok(event), state));
+            }
+            return Some((Ok(event), state));
+        }
+
+        let snapshot_result = state.registry.read_turn(state.turn_id.as_str());
+        let snapshot_result = snapshot_result.ok().flatten();
+        if let Some(snapshot) = snapshot_result
+            && snapshot.status.is_terminal()
+        {
+            return None;
+        }
+
+        let receive_result = state.receiver.recv().await;
+        match receive_result {
+            Ok(record) => {
+                if record.turn_id != state.turn_id {
+                    continue;
+                }
+                if record.seq <= state.last_seq {
+                    continue;
+                }
+                let terminal = record.terminal;
+                state.last_seq = record.seq;
+                let event = match sse_event_from_turn_record(record) {
+                    Ok(event) => event,
+                    Err(error) => fallback_turn_sse_error_event(error.as_str()),
+                };
+                if terminal {
+                    return Some((Ok(event), state));
+                }
+                return Some((Ok(event), state));
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                let refill_result = state.registry.recent_events_after(
+                    state.turn_id.as_str(),
+                    state.last_seq,
+                    CONTROL_PLANE_DEFAULT_EVENT_LIMIT,
+                );
+                let refill = refill_result.unwrap_or_default();
+                state.pending_events = VecDeque::from(refill);
+                continue;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
+fn control_plane_turn_stream(
+    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
+    turn_id: String,
+    after_seq: u64,
+) -> Result<impl Stream<Item = Result<Event, Infallible>>, String> {
+    let initial_state = initial_turn_stream_state(registry, turn_id.as_str(), after_seq)?;
+    Ok(stream::unfold(initial_state, next_turn_sse_item))
+}
+
+fn stop_reason_label(stop_reason: Option<mvp::acp::AcpTurnStopReason>) -> Option<&'static str> {
+    match stop_reason {
+        Some(mvp::acp::AcpTurnStopReason::Completed) => Some("completed"),
+        Some(mvp::acp::AcpTurnStopReason::Cancelled) => Some("cancelled"),
+        None => None,
+    }
 }
 
 fn connection_principal_from_connect(
@@ -1797,11 +2070,214 @@ async fn acp_session_read(
     }
 }
 
+async fn turn_submit(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Json(request): Json<ControlPlaneTurnSubmitRequest>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "turn/submit", &headers) {
+        return *response;
+    }
+
+    let Some(turn_runtime) = state.turn_runtime.as_ref() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "turn/submit requires control-plane-serve --config <path>",
+        );
+    };
+
+    if !turn_runtime.config.acp.enabled {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "turn/submit requires ACP to be enabled (`acp.enabled=true`)",
+        );
+    }
+
+    let session_id = match normalize_required_text(request.session_id.as_str(), "session_id") {
+        Ok(session_id) => session_id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let input = match normalize_required_text(request.input.as_str(), "input") {
+        Ok(input) => input,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    let turn_address = match crate::build_acp_dispatch_address(
+        session_id.as_str(),
+        request.channel_id.as_deref(),
+        request.conversation_id.as_deref(),
+        request.account_id.as_deref(),
+        request.thread_id.as_deref(),
+    ) {
+        Ok(turn_address) => turn_address,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    let working_directory = request
+        .working_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+    let turn_options = mvp::acp::AcpConversationTurnOptions::explicit();
+    let turn_options = turn_options.with_working_directory(working_directory.as_deref());
+    let prepared_turn = mvp::acp::prepare_acp_conversation_turn_for_address(
+        &turn_runtime.config,
+        &turn_address,
+        input.as_str(),
+        &turn_options,
+    );
+    let prepared_turn = match prepared_turn {
+        Ok(prepared_turn) => prepared_turn,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    let turn_snapshot = turn_runtime.registry.issue_turn(session_id.as_str());
+    let turn_id = turn_snapshot.turn_id.clone();
+    let mut bootstrap = prepared_turn.bootstrap;
+    let mut acp_request = prepared_turn.request;
+    extend_turn_metadata(&mut bootstrap.metadata, &request.metadata);
+    extend_turn_metadata(&mut acp_request.metadata, &request.metadata);
+    acp_request
+        .metadata
+        .insert("control_plane.turn_id".to_owned(), turn_id.clone());
+
+    let config = turn_runtime.config.clone();
+    let acp_manager = turn_runtime.acp_manager.clone();
+    let turn_registry = turn_runtime.registry.clone();
+    let manager = state.manager.clone();
+    let spawned_turn_id = turn_id;
+
+    tokio::spawn(async move {
+        let event_forwarder = ControlPlaneTurnEventForwarder {
+            manager: manager.clone(),
+            registry: turn_registry.clone(),
+            turn_id: spawned_turn_id.clone(),
+        };
+        let execution_result = acp_manager
+            .run_turn_with_sink(&config, &bootstrap, &acp_request, Some(&event_forwarder))
+            .await;
+
+        match execution_result {
+            Ok(result) => {
+                let stop_reason = stop_reason_label(result.stop_reason);
+                let completion = turn_registry.complete_success(
+                    spawned_turn_id.as_str(),
+                    result.output_text.as_str(),
+                    stop_reason,
+                    result.usage.clone(),
+                );
+                if let Ok(record) = completion {
+                    let payload = map_turn_event_payload(&record);
+                    let _ = manager.record_acp_turn_event(payload, true);
+                }
+            }
+            Err(error) => {
+                let completion = turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+                if let Ok(record) = completion {
+                    let payload = map_turn_event_payload(&record);
+                    let _ = manager.record_acp_turn_event(payload, true);
+                }
+            }
+        }
+    });
+
+    let response = ControlPlaneTurnSubmitResponse {
+        turn: map_turn_summary(&turn_snapshot),
+    };
+    (StatusCode::ACCEPTED, Json(response)).into_response()
+}
+
+async fn turn_result(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<TurnResultQuery>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "turn/result", &headers) {
+        return *response;
+    }
+
+    let Some(turn_runtime) = state.turn_runtime.as_ref() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "turn/result requires control-plane-serve --config <path>",
+        );
+    };
+
+    let turn_id = match normalize_required_text(query.turn_id.as_str(), "turn_id") {
+        Ok(turn_id) => turn_id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    let snapshot = match turn_runtime.registry.read_turn(turn_id.as_str()) {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => {
+            let message = format!("turn `{}` not found", turn_id);
+            return error_response(StatusCode::NOT_FOUND, message);
+        }
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+
+    Json(map_turn_result(&snapshot)).into_response()
+}
+
+async fn turn_stream(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<TurnStreamQuery>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "turn/stream", &headers) {
+        return *response;
+    }
+
+    let Some(turn_runtime) = state.turn_runtime.as_ref() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "turn/stream requires control-plane-serve --config <path>",
+        );
+    };
+
+    let turn_id = match normalize_required_text(query.turn_id.as_str(), "turn_id") {
+        Ok(turn_id) => turn_id,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+
+    let snapshot = match turn_runtime.registry.read_turn(turn_id.as_str()) {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => {
+            let message = format!("turn `{}` not found", turn_id);
+            return error_response(StatusCode::NOT_FOUND, message);
+        }
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if snapshot.status.is_terminal() && snapshot.event_count == 0 {
+        return error_response(
+            StatusCode::CONFLICT,
+            format!("turn `{}` completed without any streamable events", turn_id),
+        );
+    }
+
+    let after_seq = query.after_seq.unwrap_or(0);
+    let stream_result =
+        control_plane_turn_stream(turn_runtime.registry.clone(), turn_id, after_seq);
+    let stream = match stream_result {
+        Ok(stream) => stream,
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let keep_alive = KeepAlive::new()
+        .interval(std::time::Duration::from_millis(
+            CONTROL_PLANE_TICK_INTERVAL_MS,
+        ))
+        .text(CONTROL_PLANE_KEEPALIVE_TEXT);
+    Sse::new(stream).keep_alive(keep_alive).into_response()
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn build_control_plane_router_with_runtime(
     manager: Arc<mvp::control_plane::ControlPlaneManager>,
     repository_view: Option<Arc<mvp::control_plane::ControlPlaneRepositoryView>>,
     acp_view: Option<Arc<mvp::control_plane::ControlPlaneAcpView>>,
+    turn_runtime: Option<Arc<ControlPlaneTurnRuntime>>,
     pairing_registry: Arc<mvp::control_plane::ControlPlanePairingRegistry>,
     exposure_policy: ControlPlaneExposurePolicy,
 ) -> Result<Router, String> {
@@ -1816,6 +2292,7 @@ fn build_control_plane_router_with_runtime(
         exposure_policy: Arc::new(exposure_policy),
         repository_view,
         acp_view,
+        turn_runtime,
     };
 
     let router = Router::new()
@@ -1829,6 +2306,9 @@ fn build_control_plane_router_with_runtime(
         .route("/control/events", get(control_events))
         .route("/session/list", get(session_list))
         .route("/session/read", get(session_read))
+        .route("/turn/submit", post(turn_submit))
+        .route("/turn/result", get(turn_result))
+        .route("/turn/stream", get(turn_stream))
         .route("/approval/list", get(approval_list))
         .route("/pairing/list", get(pairing_list))
         .route("/pairing/resolve", post(pairing_resolve))
@@ -1850,6 +2330,7 @@ fn build_control_plane_router_with_views(
         manager,
         repository_view,
         acp_view,
+        None,
         pairing_registry,
         exposure_policy,
     )
@@ -1869,6 +2350,7 @@ fn build_control_plane_router_without_repository(
         pairing_registry: Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new()),
         kernel_authority,
         exposure_policy: Arc::new(exposure_policy),
+        turn_runtime: None,
     };
 
     let router = Router::new()
@@ -1882,6 +2364,9 @@ fn build_control_plane_router_without_repository(
         .route("/control/events", get(control_events))
         .route("/session/list", get(session_list))
         .route("/session/read", get(session_read))
+        .route("/turn/submit", post(turn_submit))
+        .route("/turn/result", get(turn_result))
+        .route("/turn/stream", get(turn_stream))
         .route("/approval/list", get(approval_list))
         .route("/pairing/list", get(pairing_list))
         .route("/pairing/resolve", post(pairing_resolve))
@@ -1928,6 +2413,10 @@ pub async fn run_control_plane_serve_cli(
     )?;
     let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
     manager.set_runtime_ready(true);
+    let turn_runtime = match loaded_config.as_ref() {
+        Some((_, config)) => Some(Arc::new(ControlPlaneTurnRuntime::new(config.clone())?)),
+        None => None,
+    };
     #[cfg(feature = "memory-sqlite")]
     let (repository_view, acp_view) = match loaded_config.as_ref() {
         Some((resolved_path, config)) => {
@@ -1973,6 +2462,7 @@ pub async fn run_control_plane_serve_cli(
         manager,
         repository_view,
         acp_view,
+        turn_runtime,
         pairing_registry,
         exposure_policy,
     )?;
@@ -2011,6 +2501,212 @@ mod tests {
             .expect("router")
     }
 
+    fn build_control_plane_router_with_turn_runtime(
+        manager: Arc<mvp::control_plane::ControlPlaneManager>,
+        turn_runtime: Arc<ControlPlaneTurnRuntime>,
+    ) -> Router {
+        let pairing_registry = Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new());
+        let exposure_policy = default_loopback_exposure_policy();
+        super::build_control_plane_router_with_runtime(
+            manager,
+            None,
+            None,
+            Some(turn_runtime),
+            pairing_registry,
+            exposure_policy,
+        )
+        .expect("router")
+    }
+
+    #[derive(Default)]
+    struct TestTurnBackendState {
+        sink_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    struct TestTurnBackend {
+        id: &'static str,
+        state: Arc<TestTurnBackendState>,
+    }
+
+    impl mvp::acp::AcpRuntimeBackend for TestTurnBackend {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn metadata(&self) -> mvp::acp::AcpBackendMetadata {
+            mvp::acp::AcpBackendMetadata::new(
+                self.id(),
+                [
+                    mvp::acp::AcpCapability::SessionLifecycle,
+                    mvp::acp::AcpCapability::TurnExecution,
+                    mvp::acp::AcpCapability::TurnEventStreaming,
+                ],
+                "Control-plane turn backend for daemon tests",
+            )
+        }
+
+        fn ensure_session<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 mvp::config::LoongClawConfig,
+            request: &'life2 mvp::acp::AcpSessionBootstrap,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = CliResult<mvp::acp::AcpSessionHandle>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                Ok(mvp::acp::AcpSessionHandle {
+                    session_key: request.session_key.clone(),
+                    backend_id: self.id().to_owned(),
+                    runtime_session_name: format!("test-runtime-{}", request.session_key),
+                    working_directory: request.working_directory.clone(),
+                    backend_session_id: Some(format!("backend-{}", request.session_key)),
+                    agent_session_id: Some(format!("agent-{}", request.session_key)),
+                    binding: request.binding.clone(),
+                })
+            })
+        }
+
+        fn run_turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 mvp::config::LoongClawConfig,
+            _session: &'life2 mvp::acp::AcpSessionHandle,
+            request: &'life3 mvp::acp::AcpTurnRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = CliResult<mvp::acp::AcpTurnResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            'life3: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                Ok(mvp::acp::AcpTurnResult {
+                    output_text: format!("echo: {}", request.input),
+                    state: mvp::acp::AcpSessionState::Ready,
+                    usage: None,
+                    events: Vec::new(),
+                    stop_reason: Some(mvp::acp::AcpTurnStopReason::Completed),
+                })
+            })
+        }
+
+        fn run_turn_with_sink<'life0, 'life1, 'life2, 'life3, 'life5, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 mvp::config::LoongClawConfig,
+            _session: &'life2 mvp::acp::AcpSessionHandle,
+            request: &'life3 mvp::acp::AcpTurnRequest,
+            _abort: Option<mvp::acp::AcpAbortSignal>,
+            sink: Option<&'life5 dyn mvp::acp::AcpTurnEventSink>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = CliResult<mvp::acp::AcpTurnResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            'life3: 'async_trait,
+            'life5: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                if let Some(sink) = sink {
+                    sink.on_event(&serde_json::json!({
+                        "type": "text",
+                        "content": format!("chunk:{}", request.input),
+                    }))?;
+                    sink.on_event(&serde_json::json!({
+                        "type": "done",
+                        "stopReason": "completed",
+                    }))?;
+                }
+                self.state
+                    .sink_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(mvp::acp::AcpTurnResult {
+                    output_text: format!("streamed: {}", request.input),
+                    state: mvp::acp::AcpSessionState::Ready,
+                    usage: Some(serde_json::json!({
+                        "total_tokens": 7
+                    })),
+                    events: Vec::new(),
+                    stop_reason: Some(mvp::acp::AcpTurnStopReason::Completed),
+                })
+            })
+        }
+
+        fn cancel<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 mvp::config::LoongClawConfig,
+            _session: &'life2 mvp::acp::AcpSessionHandle,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn close<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 mvp::config::LoongClawConfig,
+            _session: &'life2 mvp::acp::AcpSessionHandle,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    fn turn_runtime_test_config(backend_id: &str) -> mvp::config::LoongClawConfig {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.acp.enabled = true;
+        config.acp.backend = Some(backend_id.to_owned());
+        config
+    }
+
+    fn seeded_turn_runtime(
+        backend_id: &'static str,
+        state: Arc<TestTurnBackendState>,
+    ) -> Arc<ControlPlaneTurnRuntime> {
+        mvp::acp::register_acp_backend(backend_id, {
+            move || {
+                Box::new(TestTurnBackend {
+                    id: backend_id,
+                    state: state.clone(),
+                })
+            }
+        })
+        .expect("register control-plane turn backend");
+        let config = turn_runtime_test_config(backend_id);
+        let acp_manager = Arc::new(mvp::acp::AcpSessionManager::default());
+        Arc::new(ControlPlaneTurnRuntime::with_manager(config, acp_manager))
+    }
+
     fn remote_control_plane_config(shared_token: &str) -> mvp::config::LoongClawConfig {
         let mut config = mvp::config::LoongClawConfig::default();
         config.control_plane.allow_remote = true;
@@ -2033,6 +2729,7 @@ mod tests {
         let pairing_registry = Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new());
         super::build_control_plane_router_with_runtime(
             manager,
+            None,
             None,
             None,
             pairing_registry,
@@ -3764,6 +4461,260 @@ mod tests {
             .await
             .expect("snapshot response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn turn_submit_returns_service_unavailable_without_runtime() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router(manager);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorAdmin]),
+        )
+        .await;
+        let request = ControlPlaneTurnSubmitRequest {
+            session_id: "session-1".to_owned(),
+            input: "hello".to_owned(),
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            working_directory: None,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/turn/submit")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode turn submit request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("turn submit response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn turn_submit_rejects_insufficient_scope() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let state = Arc::new(TestTurnBackendState::default());
+        let backend_id: &'static str =
+            Box::leak(format!("control-plane-turn-scope-{}", current_time_ms()).into_boxed_str());
+        let turn_runtime = seeded_turn_runtime(backend_id, state);
+        let router = build_control_plane_router_with_turn_runtime(manager, turn_runtime);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let request = ControlPlaneTurnSubmitRequest {
+            session_id: "session-1".to_owned(),
+            input: "hello".to_owned(),
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            working_directory: None,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/turn/submit")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode turn submit request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("turn submit response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn turn_submit_and_result_fetch_complete_with_streamed_backend() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let state = Arc::new(TestTurnBackendState::default());
+        let backend_id: &'static str =
+            Box::leak(format!("control-plane-turn-success-{}", current_time_ms()).into_boxed_str());
+        let turn_runtime = seeded_turn_runtime(backend_id, state.clone());
+        let router = build_control_plane_router_with_turn_runtime(manager, turn_runtime);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorAdmin]),
+        )
+        .await;
+        let request = ControlPlaneTurnSubmitRequest {
+            session_id: "session-1".to_owned(),
+            input: "hello".to_owned(),
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            working_directory: None,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let submit_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/turn/submit")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode turn submit request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("turn submit response");
+        assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+        let submit_body = to_bytes(submit_response.into_body(), usize::MAX)
+            .await
+            .expect("submit body");
+        let submit: ControlPlaneTurnSubmitResponse =
+            serde_json::from_slice(&submit_body).expect("submit json");
+        assert_eq!(submit.turn.status, ControlPlaneTurnStatus::Running);
+
+        let turn_id = submit.turn.turn_id.clone();
+        let mut final_result = None;
+        for _ in 0..20 {
+            let result_response = router
+                .clone()
+                .oneshot(bearer_request(
+                    "GET",
+                    format!("/turn/result?turn_id={turn_id}").as_str(),
+                    &token,
+                ))
+                .await
+                .expect("turn result response");
+            assert_eq!(result_response.status(), StatusCode::OK);
+            let result_body = to_bytes(result_response.into_body(), usize::MAX)
+                .await
+                .expect("result body");
+            let result: ControlPlaneTurnResultResponse =
+                serde_json::from_slice(&result_body).expect("result json");
+            if result.turn.status.is_terminal() {
+                final_result = Some(result);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let final_result = final_result.expect("turn should reach a terminal state");
+        assert_eq!(final_result.turn.status, ControlPlaneTurnStatus::Completed);
+        assert_eq!(final_result.output_text.as_deref(), Some("streamed: hello"));
+        assert_eq!(final_result.stop_reason.as_deref(), Some("completed"));
+        assert_eq!(
+            final_result
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.get("total_tokens")),
+            Some(&serde_json::json!(7))
+        );
+        assert!(
+            final_result.turn.event_count >= 3,
+            "expected runtime events plus terminal event"
+        );
+        assert_eq!(
+            state.sink_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_stream_replays_buffered_runtime_and_terminal_events() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let state = Arc::new(TestTurnBackendState::default());
+        let backend_id: &'static str =
+            Box::leak(format!("control-plane-turn-stream-{}", current_time_ms()).into_boxed_str());
+        let turn_runtime = seeded_turn_runtime(backend_id, state);
+        let router = build_control_plane_router_with_turn_runtime(manager, turn_runtime);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorAdmin]),
+        )
+        .await;
+        let request = ControlPlaneTurnSubmitRequest {
+            session_id: "session-stream".to_owned(),
+            input: "stream me".to_owned(),
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            working_directory: None,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let submit_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/turn/submit")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode turn submit request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("turn submit response");
+        let submit_body = to_bytes(submit_response.into_body(), usize::MAX)
+            .await
+            .expect("submit body");
+        let submit: ControlPlaneTurnSubmitResponse =
+            serde_json::from_slice(&submit_body).expect("submit json");
+        let turn_id = submit.turn.turn_id;
+
+        for _ in 0..20 {
+            let result_response = router
+                .clone()
+                .oneshot(bearer_request(
+                    "GET",
+                    format!("/turn/result?turn_id={turn_id}").as_str(),
+                    &token,
+                ))
+                .await
+                .expect("turn result response");
+            let result_body = to_bytes(result_response.into_body(), usize::MAX)
+                .await
+                .expect("result body");
+            let result: ControlPlaneTurnResultResponse =
+                serde_json::from_slice(&result_body).expect("result json");
+            if result.turn.status.is_terminal() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let stream_response = router
+            .oneshot(bearer_request(
+                "GET",
+                format!("/turn/stream?turn_id={turn_id}").as_str(),
+                &token,
+            ))
+            .await
+            .expect("turn stream response");
+        assert_eq!(stream_response.status(), StatusCode::OK);
+        let stream_body = to_bytes(stream_response.into_body(), usize::MAX)
+            .await
+            .expect("stream body");
+        let stream_text = String::from_utf8(stream_body.to_vec()).expect("utf8 stream body");
+        assert!(stream_text.contains("event: turn.event"));
+        assert!(stream_text.contains("event: turn.terminal"));
+        assert!(stream_text.contains("\"type\":\"text\""));
+        assert!(stream_text.contains("chunk:stream me"));
+        assert!(stream_text.contains("\"event_type\":\"turn.completed\""));
     }
 
     #[cfg(feature = "memory-sqlite")]
