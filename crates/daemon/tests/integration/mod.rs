@@ -62,6 +62,24 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     canonical_temp_dir.join(directory_name)
 }
 
+#[cfg(unix)]
+fn integration_permission_test_running_as_root() -> bool {
+    let status = std::fs::read_to_string("/proc/self/status");
+    let Ok(status) = status else {
+        return false;
+    };
+
+    let uid_line = status.lines().find(|line| line.starts_with("Uid:"));
+    let Some(uid_line) = uid_line else {
+        return false;
+    };
+
+    uid_line
+        .split_whitespace()
+        .nth(1)
+        .is_some_and(|uid| uid == "0")
+}
+
 fn render_cli_help<const N: usize>(subcommand_path: [&str; N]) -> String {
     let owned_path = subcommand_path
         .into_iter()
