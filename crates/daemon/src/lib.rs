@@ -100,6 +100,7 @@ mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
+pub mod runtime_trajectory_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
@@ -537,6 +538,11 @@ pub enum Commands {
     RuntimeCapability {
         #[command(subcommand)]
         command: runtime_capability_cli::RuntimeCapabilityCommands,
+    },
+    /// Export and inspect one unified runtime trajectory artifact from local session state
+    RuntimeTrajectory {
+        #[command(subcommand)]
+        command: runtime_trajectory_cli::RuntimeTrajectoryCommands,
     },
     /// List available conversation context engines and selected runtime engine
     ListContextEngines {

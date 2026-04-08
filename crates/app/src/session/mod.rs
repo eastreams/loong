@@ -4,6 +4,9 @@ pub mod recovery;
 #[cfg(feature = "memory-sqlite")]
 pub mod repository;
 
+#[cfg(feature = "memory-sqlite")]
+pub mod trajectory;
+
 #[allow(dead_code)]
 pub(crate) const DELEGATE_CANCEL_REQUESTED_EVENT_KIND: &str = "delegate_cancel_requested";
 #[allow(dead_code)]

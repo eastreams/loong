@@ -58,7 +58,10 @@ pub use protocol::{
     decode_window_turn_count, decode_window_turns, encode_stage_envelope_payload,
 };
 #[cfg(feature = "memory-sqlite")]
-pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
+pub use sqlite::{
+    ConversationTurn, PersistedConversationTurnRecord, SqliteBootstrapDiagnostics,
+    SqliteContextLoadDiagnostics,
+};
 pub use stage::{
     DerivedMemoryKind, MemoryRetrievalRequest, MemoryStageFamily, StageDiagnostics, StageEnvelope,
     StageOutcome, builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
@@ -234,6 +237,14 @@ pub fn window_direct_extended(
         true,
         runtime_config::get_memory_runtime_config(),
     )
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub fn session_turn_records_direct(
+    session_id: &str,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<Vec<PersistedConversationTurnRecord>, String> {
+    sqlite::session_turn_records_direct(session_id, config)
 }
 
 #[cfg(feature = "memory-sqlite")]

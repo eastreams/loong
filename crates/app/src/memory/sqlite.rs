@@ -25,6 +25,15 @@ pub struct ConversationTurn {
     pub ts: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedConversationTurnRecord {
+    pub row_id: i64,
+    pub session_turn_index: i64,
+    pub role: String,
+    pub content: String,
+    pub ts: i64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct PromptWindowTurn {
     pub role: String,
@@ -124,6 +133,11 @@ const SQL_QUERY_RECENT_TURNS_NO_ID: &str = "SELECT role, content, ts, session_tu
              WHERE session_id = ?1
              ORDER BY id DESC
              LIMIT ?2";
+const SQL_QUERY_ALL_TURN_RECORDS_FOR_SESSION: &str =
+    "SELECT id, session_turn_index, role, content, ts
+             FROM turns
+             WHERE session_id = ?1
+             ORDER BY id ASC";
 const SQL_QUERY_RECENT_PROMPT_TURNS: &str = "SELECT role, content
              FROM turns
              WHERE session_id = ?1
@@ -646,6 +660,20 @@ pub(super) fn window_direct_with_options(
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
     load_window_internal(session_id, limit, allow_extended_limit, config).map(|window| window.turns)
+}
+
+pub(super) fn session_turn_records_direct(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<PersistedConversationTurnRecord>, String> {
+    let session_id = normalize_required_str(
+        session_id,
+        "memory.session_turn_records requires payload.session_id",
+    )?;
+    let runtime = acquire_memory_runtime(config)?;
+    runtime.with_connection("memory.session_turn_records", |conn| {
+        query_all_turn_records(conn, session_id)
+    })
 }
 
 pub(super) fn load_context_snapshot(
@@ -1870,6 +1898,50 @@ fn query_recent_turns(
     }
     turns.reverse();
     Ok((turns, turn_count))
+}
+
+fn query_all_turn_records(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<PersistedConversationTurnRecord>, String> {
+    let mut stmt = prepare_cached_sqlite_statement(
+        conn,
+        SQL_QUERY_ALL_TURN_RECORDS_FOR_SESSION,
+        "prepare session turn record query failed",
+    )?;
+    let mut rows = stmt
+        .query(rusqlite::params![session_id])
+        .map_err(|error| format!("query session turn records failed: {error}"))?;
+    let mut turns = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| format!("read session turn record row failed: {error}"))?
+    {
+        let row_id = row
+            .get(0)
+            .map_err(|error| format!("decode session turn record row id failed: {error}"))?;
+        let session_turn_index = row.get(1).map_err(|error| {
+            format!("decode session turn record session turn index failed: {error}")
+        })?;
+        let role = row
+            .get(2)
+            .map_err(|error| format!("decode session turn record role failed: {error}"))?;
+        let content = row
+            .get(3)
+            .map_err(|error| format!("decode session turn record content failed: {error}"))?;
+        let ts = row
+            .get(4)
+            .map_err(|error| format!("decode session turn record timestamp failed: {error}"))?;
+        let record = PersistedConversationTurnRecord {
+            row_id,
+            session_turn_index,
+            role,
+            content,
+            ts,
+        };
+        turns.push(record);
+    }
+    Ok(turns)
 }
 
 #[cfg(test)]

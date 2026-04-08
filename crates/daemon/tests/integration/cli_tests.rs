@@ -168,6 +168,83 @@ fn safe_lane_summary_cli_rejects_zero_limit() {
 }
 
 #[test]
+fn runtime_trajectory_export_help_mentions_export_and_lineage() {
+    let help = render_cli_help(["runtime-trajectory", "export"]);
+
+    assert!(
+        help.contains("trajectory"),
+        "runtime-trajectory export help should mention trajectory export: {help}"
+    );
+    assert!(
+        help.contains("--session <SESSION>"),
+        "runtime-trajectory export help should require a session id: {help}"
+    );
+    assert!(
+        help.contains("--lineage"),
+        "runtime-trajectory export help should explain lineage export: {help}"
+    );
+}
+
+#[test]
+fn runtime_trajectory_cli_parses_export_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "runtime-trajectory",
+        "export",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "--session",
+        "root-session",
+        "--lineage",
+        "--output",
+        "/tmp/runtime-trajectory.json",
+        "--json",
+    ])
+    .expect("`runtime-trajectory export` should parse");
+
+    match cli.command {
+        Some(Commands::RuntimeTrajectory {
+            command:
+                loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Export(options),
+        }) => {
+            assert_eq!(options.config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert_eq!(options.session, "root-session");
+            assert!(options.lineage);
+            assert_eq!(
+                options.output.as_deref(),
+                Some("/tmp/runtime-trajectory.json")
+            );
+            assert!(options.json);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_trajectory_cli_parses_show_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "runtime-trajectory",
+        "show",
+        "--artifact",
+        "/tmp/runtime-trajectory.json",
+        "--json",
+    ])
+    .expect("`runtime-trajectory show` should parse");
+
+    match cli.command {
+        Some(Commands::RuntimeTrajectory {
+            command:
+                loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Show(options),
+        }) => {
+            assert_eq!(options.artifact, "/tmp/runtime-trajectory.json");
+            assert!(options.json);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn onboard_cli_accepts_generic_api_key_flag() {
     let cli = try_parse_cli([
         "loongclaw",

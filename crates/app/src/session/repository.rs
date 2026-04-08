@@ -308,6 +308,8 @@ pub struct SessionRepository {
 }
 
 impl SessionRepository {
+    const ALL_EVENTS_PAGE_LIMIT: usize = 256;
+
     pub fn new(config: &MemoryRuntimeConfig) -> Result<Self, String> {
         let db_path = memory::ensure_memory_db_ready(config.sqlite_path.clone(), config)?;
         Ok(Self { db_path })
@@ -848,6 +850,12 @@ impl SessionRepository {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let conn = self.open_connection()?;
         Self::list_recent_events_with_conn(&conn, &session_id, limit)
+    }
+
+    pub fn list_all_events(&self, session_id: &str) -> Result<Vec<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::drain_events_after_with_conn(&conn, &session_id, 0, Self::ALL_EVENTS_PAGE_LIMIT)
     }
 
     pub fn list_events_after(
@@ -1494,6 +1502,44 @@ impl SessionRepository {
             actor_session_id,
             payload_json: event.payload_json,
             ts,
+        })
+    }
+
+    pub fn upsert_session_terminal_outcome(
+        &self,
+        session_id: &str,
+        status: &str,
+        payload_json: Value,
+    ) -> Result<SessionTerminalOutcomeRecord, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let status = normalize_required_text(status, "status")?;
+        if self
+            .load_session_summary_with_legacy_fallback(&session_id)?
+            .is_none()
+        {
+            return Err(format!("session `{session_id}` not found"));
+        }
+
+        let encoded_payload = serde_json::to_string(&payload_json)
+            .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let recorded_at = unix_ts_now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET
+                status = excluded.status,
+                payload_json = excluded.payload_json,
+                recorded_at = excluded.recorded_at",
+            params![session_id, status, encoded_payload, recorded_at],
+        )
+        .map_err(|error| format!("upsert session terminal outcome failed: {error}"))?;
+
+        Ok(SessionTerminalOutcomeRecord {
+            session_id,
+            status,
+            payload_json,
+            recorded_at,
         })
     }
 

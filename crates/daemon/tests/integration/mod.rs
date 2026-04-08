@@ -97,6 +97,7 @@ mod runtime_capability_cli;
 mod runtime_experiment_cli;
 mod runtime_restore_cli;
 mod runtime_snapshot_cli;
+mod runtime_trajectory_cli;
 mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;

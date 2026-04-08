@@ -17,6 +17,7 @@ Product specs describe **what** the product does from the user's perspective, no
 - [Channel Setup](channel-setup.md)
 - [Tool Surface](tool-surface.md)
 - [Runtime Experiment](runtime-experiment.md)
+- [Runtime Trajectory](runtime-trajectory.md)
 - [Runtime Capability](runtime-capability.md)
 - [Web UI](web-ui.md)
 - [Prompt And Personality](prompt-and-personality.md)
@@ -27,6 +28,7 @@ Product specs describe **what** the product does from the user's perspective, no
 
 - `Installation`, `Onboarding`, `One-Shot Ask`, `Doctor`, `Browser Automation`, `Tool Surface`, and `Channel Setup` define the shipped first-run and support journey for the current MVP.
 - `Runtime Experiment` defines the shipped local experiment-record surface layered on top of runtime snapshot and restore artifacts.
+- `Runtime Trajectory` defines the shipped local trajectory-export surface layered on top of persisted session, event, and approval state.
 - `Runtime Capability` defines the shipped local capability-candidate review surface layered on top of runtime experiment artifacts.
 - `Browser Automation Companion` and `Web UI` are expectation-setting specs for the next user-facing surfaces. They should not be documented as generally available before the implementation exists.
 
