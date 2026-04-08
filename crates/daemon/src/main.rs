@@ -511,6 +511,23 @@ async fn main() {
             limit,
             json,
         } => run_safe_lane_summary_cli(config.as_deref(), session.as_deref(), limit, json),
+        Commands::RuntimeTrajectory {
+            config,
+            session,
+            artifact,
+            output,
+            turn_limit,
+            event_page_limit,
+            json,
+        } => run_runtime_trajectory_cli(
+            config.as_deref(),
+            session.as_deref(),
+            artifact.as_deref(),
+            output.as_deref(),
+            turn_limit,
+            event_page_limit,
+            json,
+        ),
         Commands::SessionSearch {
             config,
             session,

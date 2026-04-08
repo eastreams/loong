@@ -966,6 +966,23 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Export or inspect one runtime trajectory artifact for replay, evaluation, or research workflows
+    RuntimeTrajectory {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, conflicts_with = "artifact")]
+        session: Option<String>,
+        #[arg(long)]
+        artifact: Option<String>,
+        #[arg(long, conflicts_with = "artifact")]
+        output: Option<String>,
+        #[arg(long, conflicts_with = "artifact")]
+        turn_limit: Option<usize>,
+        #[arg(long, default_value_t = 200, conflicts_with = "artifact")]
+        event_page_limit: usize,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Send one Telegram message
     TelegramSend {
         #[arg(long)]
