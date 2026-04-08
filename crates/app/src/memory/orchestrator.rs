@@ -3,10 +3,9 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::{
-    DEFAULT_MEMORY_SYSTEM_ID, MemoryContextEntry, MemoryRetrievalRequest, MemoryStageFamily,
-    MemorySystem, MemorySystemMetadata, StageDiagnostics, StageEnvelope, StageOutcome, WindowTurn,
-    describe_memory_system, load_prompt_context, resolve_memory_system,
-    runtime_config::MemoryRuntimeConfig,
+    MemoryContextEntry, MemoryRetrievalRequest, MemoryStageFamily, MemorySystem,
+    MemorySystemMetadata, StageDiagnostics, StageEnvelope, StageOutcome, WindowTurn,
+    load_prompt_context, resolve_memory_system_runtime, runtime_config::MemoryRuntimeConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,7 +357,7 @@ fn handle_rank_error(
     ))
 }
 
-fn skipped_stage_diagnostics(
+pub(crate) fn skipped_stage_diagnostics(
     family: MemoryStageFamily,
     message: Option<String>,
 ) -> StageDiagnostics {
@@ -372,16 +371,28 @@ fn skipped_stage_diagnostics(
     }
 }
 
+pub(crate) fn skip_compact_stage_without_execution_adapter(
+    family: MemoryStageFamily,
+) -> StageDiagnostics {
+    let message = Some(
+        "memory system is registered but has no compact-stage execution adapter yet".to_owned(),
+    );
+
+    skipped_stage_diagnostics(family, message)
+}
+
 pub async fn run_compact_stage(
     session_id: &str,
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
 ) -> Result<StageDiagnostics, String> {
-    run_builtin_compact_stage(session_id, workspace_root, config).await
+    let runtime = resolve_memory_system_runtime(config)?;
+
+    runtime.run_compact_stage(session_id, workspace_root).await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
-async fn run_builtin_compact_stage(
+pub(crate) async fn run_builtin_compact_stage(
     _session_id: &str,
     _workspace_root: Option<&Path>,
     _config: &MemoryRuntimeConfig,
@@ -397,7 +408,7 @@ async fn run_builtin_compact_stage(
 }
 
 #[cfg(feature = "memory-sqlite")]
-async fn run_builtin_compact_stage(
+pub(crate) async fn run_builtin_compact_stage(
     session_id: &str,
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
@@ -536,18 +547,43 @@ pub(crate) fn hydrate_stage_envelope_with_workspace_root(
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
 ) -> Result<StageEnvelope, String> {
-    let selected_system_id = super::registered_memory_system_id(Some(config.selected_system_id()))
-        .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
-    let system = resolve_memory_system(Some(selected_system_id.as_str()))?;
-    let metadata = describe_memory_system(Some(selected_system_id.as_str()))?;
+    let runtime = resolve_memory_system_runtime(config)?;
 
-    BuiltinMemoryOrchestrator.hydrate_stage_envelope(
-        session_id,
-        workspace_root,
+    runtime.hydrate_stage_envelope(session_id, workspace_root)
+}
+
+pub(crate) fn hydrate_stage_envelope_without_execution_adapter(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+    metadata: &MemorySystemMetadata,
+) -> Result<StageEnvelope, String> {
+    let recent_window = recent_window_records(session_id, config)?;
+    let entries = load_prompt_context(session_id, config)?;
+    let diagnostics = metadata
+        .supported_pre_assembly_stage_families
+        .iter()
+        .copied()
+        .map(|family| {
+            let message = Some(missing_execution_adapter_message(family));
+
+            skipped_stage_diagnostics(family, message)
+        })
+        .collect::<Vec<_>>();
+
+    let hydrated = HydratedMemoryContext::from_stage_parts(
+        entries,
+        recent_window,
+        &diagnostics,
+        metadata.id,
         config,
-        system.as_ref(),
-        &metadata,
-    )
+    );
+    let envelope = StageEnvelope {
+        hydrated,
+        retrieval_request: None,
+        diagnostics,
+    };
+
+    Ok(envelope)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -580,9 +616,9 @@ mod tests {
     use super::*;
     use crate::config::{MemoryMode, MemoryProfile};
     use crate::memory::{
-        DerivedMemoryKind, MemoryContextKind, MemoryRecallMode, MemoryScope, MemoryStageFamily,
-        MemorySystem, MemorySystemCapability, MemorySystemMetadata, StageOutcome,
-        WORKSPACE_RECALL_MEMORY_SYSTEM_ID, append_turn_direct, builtin_pre_assembly_stage_families,
+        DEFAULT_MEMORY_SYSTEM_ID, DerivedMemoryKind, MemoryContextKind, MemoryRecallMode,
+        MemoryScope, MemoryStageFamily, MemorySystem, MemorySystemCapability, MemorySystemMetadata,
+        StageOutcome, WORKSPACE_RECALL_MEMORY_SYSTEM_ID, append_turn_direct,
         register_memory_system,
     };
 
@@ -1255,10 +1291,11 @@ mod tests {
                 .iter()
                 .map(|diag| (diag.family, diag.outcome))
                 .collect::<Vec<_>>(),
-            builtin_pre_assembly_stage_families()
-                .into_iter()
-                .map(|family| (family, StageOutcome::Skipped))
-                .collect::<Vec<_>>()
+            vec![
+                (MemoryStageFamily::Derive, StageOutcome::Skipped),
+                (MemoryStageFamily::Retrieve, StageOutcome::Skipped),
+                (MemoryStageFamily::Rank, StageOutcome::Skipped),
+            ]
         );
         assert_eq!(
             envelope.diagnostics[1].message.as_deref(),
@@ -1647,7 +1684,7 @@ mod tests {
         .expect("run compact stage");
 
         assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
-        assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);
+        assert_eq!(diagnostics.outcome, StageOutcome::Skipped);
         assert!(!diagnostics.fallback_activated);
 
         let _ = std::fs::remove_file(&db_path);
