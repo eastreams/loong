@@ -2844,6 +2844,17 @@ fn runtime_capability_activate_managed_skill_apply_installs_skill_and_is_idempot
         activate_report.activation_surface,
         "external_skills.install"
     );
+    assert!(
+        !activate_report.rollback_hints.is_empty(),
+        "activation should surface rollback guidance"
+    );
+    assert!(
+        activate_report
+            .verification
+            .iter()
+            .any(|item| item.contains("matches the applied managed skill bundle")),
+        "activation should report managed skill verification evidence"
+    );
     let installed_skill_path = root
         .join("external-skills-installed")
         .join(apply_report.applied_artifact.artifact_id.as_str());
@@ -2861,6 +2872,13 @@ fn runtime_capability_activate_managed_skill_apply_installs_skill_and_is_idempot
     assert_eq!(
         second_report.outcome,
         loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateOutcome::AlreadyActivated
+    );
+    assert!(
+        second_report
+            .verification
+            .iter()
+            .any(|item| item.contains("matches the applied managed skill bundle")),
+        "idempotent activation should still report verification evidence"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -2967,6 +2985,17 @@ fn runtime_capability_activate_profile_note_addendum_updates_config_and_is_idemp
         updated_config.memory.profile,
         mvp::config::MemoryProfile::ProfilePlusWindow
     );
+    assert!(
+        !activate_report.rollback_hints.is_empty(),
+        "profile note activation should surface rollback guidance"
+    );
+    assert!(
+        activate_report
+            .verification
+            .iter()
+            .any(|item| item.contains("profile_plus_window")),
+        "profile note activation should report verification evidence"
+    );
     let updated_profile_note = updated_config
         .memory
         .profile_note
@@ -2985,6 +3014,13 @@ fn runtime_capability_activate_profile_note_addendum_updates_config_and_is_idemp
     assert_eq!(
         second_report.outcome,
         loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateOutcome::AlreadyActivated
+    );
+    assert!(
+        second_report
+            .verification
+            .iter()
+            .any(|item| item.contains("profile_plus_window")),
+        "idempotent profile note activation should still report verification evidence"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -3187,6 +3223,17 @@ fn runtime_capability_activate_managed_skill_dry_run_reports_install_target() {
             .target_path
             .contains("external-skills-installed"),
         "dry-run should point at the managed skill install root"
+    );
+    assert!(
+        activate_report
+            .verification
+            .iter()
+            .any(|item| item.contains("verify")),
+        "dry-run should report verification guidance"
+    );
+    assert!(
+        !activate_report.rollback_hints.is_empty(),
+        "dry-run should surface rollback guidance"
     );
 
     fs::remove_dir_all(&root).ok();

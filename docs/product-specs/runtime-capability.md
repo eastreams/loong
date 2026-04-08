@@ -45,8 +45,8 @@ experiment should be crystallized into a reusable lower-layer capability.
       when the output already matches.
 - [ ] `runtime-capability activate` consumes one applied draft artifact and
       either dry-runs or applies one governed activation path for the supported
-      target kind, remaining idempotent when the live runtime already matches
-      the draft.
+      target kind, remains idempotent when the live runtime already matches the
+      draft, and surfaces explicit verification evidence plus rollback hints.
 - [ ] Product docs describe `runtime-capability` as the governed review layer
       above `runtime-experiment`, with `index`/readiness, `plan`, `apply`, and
       `activate` forming the promotion ladder below any future automated

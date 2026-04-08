@@ -422,6 +422,8 @@ pub struct RuntimeCapabilityActivateReport {
     pub replace_requested: bool,
     pub outcome: RuntimeCapabilityActivateOutcome,
     pub notes: Vec<String>,
+    pub verification: Vec<String>,
+    pub rollback_hints: Vec<String>,
 }
 
 pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResult<()> {
@@ -1576,10 +1578,15 @@ fn execute_runtime_capability_activate_managed_skill(
         return Err("runtime capability activate --replace requires --apply".to_owned());
     }
 
-    let artifact_id = applied_artifact.artifact_id;
-    let target = applied_artifact.target;
-    let delivery_surface = applied_artifact.delivery_surface;
-    let payload = match applied_artifact.payload {
+    let RuntimeCapabilityAppliedArtifactDocument {
+        artifact_id,
+        target,
+        delivery_surface,
+        payload,
+        rollback_hints,
+        ..
+    } = applied_artifact;
+    let payload = match payload {
         RuntimeCapabilityDraftPayload::ManagedSkillBundle { files } => files,
         RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. }
         | RuntimeCapabilityDraftPayload::ProfileNoteAddendum { .. } => {
@@ -1594,9 +1601,11 @@ fn execute_runtime_capability_activate_managed_skill(
         build_runtime_capability_activation_tool_runtime(&resolved_config_path, &config, true);
     let install_root = resolve_runtime_capability_activation_install_root(&tool_runtime)?;
     let target_path = install_root.join(artifact_id.as_str());
-    let canonical_target_path = canonicalize_optional_path(target_path.as_path())?;
     let already_matches =
         managed_skill_payload_matches_install_root(&payload, target_path.as_path())?;
+    let dry_run_target_path = canonicalize_optional_path(target_path.as_path())?;
+    let dry_run_verification =
+        build_managed_skill_activation_verification_hints(target_path.as_path(), payload.len());
 
     if !options.apply {
         let notes = vec![
@@ -1612,16 +1621,21 @@ fn execute_runtime_capability_activate_managed_skill(
             target,
             delivery_surface,
             activation_surface: "external_skills.install".to_owned(),
-            target_path: canonical_target_path,
+            target_path: dry_run_target_path,
             apply_requested: false,
             replace_requested: options.replace,
             outcome: RuntimeCapabilityActivateOutcome::DryRun,
             notes,
+            verification: dry_run_verification,
+            rollback_hints,
         });
     }
 
     if already_matches {
         let notes = vec!["managed skill already matches the applied draft payload".to_owned()];
+        let verified_target_path = canonicalize_existing_path(target_path.as_path())?;
+        let verification =
+            verify_managed_skill_activation_state(&artifact_id, target_path.as_path(), &payload)?;
         return Ok(RuntimeCapabilityActivateReport {
             generated_at: now_rfc3339()?,
             artifact_path,
@@ -1630,11 +1644,13 @@ fn execute_runtime_capability_activate_managed_skill(
             target,
             delivery_surface,
             activation_surface: "external_skills.install".to_owned(),
-            target_path: canonical_target_path,
+            target_path: verified_target_path,
             apply_requested: true,
             replace_requested: options.replace,
             outcome: RuntimeCapabilityActivateOutcome::AlreadyActivated,
             notes,
+            verification,
+            rollback_hints,
         });
     }
 
@@ -1662,6 +1678,9 @@ fn execute_runtime_capability_activate_managed_skill(
     }
     install_result
         .map_err(|error| format!("activate managed skill `{}` failed: {error}", artifact_id))?;
+    let verification =
+        verify_managed_skill_activation_state(&artifact_id, target_path.as_path(), &payload)?;
+    let activated_target_path = canonicalize_existing_path(target_path.as_path())?;
 
     let notes =
         vec!["managed skill installed into the governed external skills runtime".to_owned()];
@@ -1673,11 +1692,13 @@ fn execute_runtime_capability_activate_managed_skill(
         target,
         delivery_surface,
         activation_surface: "external_skills.install".to_owned(),
-        target_path: canonical_target_path,
+        target_path: activated_target_path,
         apply_requested: true,
         replace_requested: options.replace,
         outcome: RuntimeCapabilityActivateOutcome::Activated,
         notes,
+        verification,
+        rollback_hints,
     })
 }
 
@@ -1693,10 +1714,15 @@ fn execute_runtime_capability_activate_profile_note_addendum(
         );
     }
 
-    let artifact_id = applied_artifact.artifact_id;
-    let target = applied_artifact.target;
-    let delivery_surface = applied_artifact.delivery_surface;
-    let addendum = match applied_artifact.payload {
+    let RuntimeCapabilityAppliedArtifactDocument {
+        artifact_id,
+        target,
+        delivery_surface,
+        payload,
+        rollback_hints,
+        ..
+    } = applied_artifact;
+    let addendum = match payload {
         RuntimeCapabilityDraftPayload::ProfileNoteAddendum { content } => content,
         RuntimeCapabilityDraftPayload::ManagedSkillBundle { .. }
         | RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. } => {
@@ -1712,6 +1738,10 @@ fn execute_runtime_capability_activate_profile_note_addendum(
         addendum.as_str(),
     );
     let canonical_config_path = canonicalize_optional_path(resolved_config_path.as_path())?;
+    let dry_run_verification = build_profile_note_activation_verification_hints(
+        resolved_config_path.as_path(),
+        addendum.as_str(),
+    );
 
     if !options.apply {
         let note = if merged_profile_note.is_some() {
@@ -1732,10 +1762,16 @@ fn execute_runtime_capability_activate_profile_note_addendum(
             replace_requested: false,
             outcome: RuntimeCapabilityActivateOutcome::DryRun,
             notes: vec![note],
+            verification: dry_run_verification,
+            rollback_hints,
         });
     }
 
     let Some(merged_profile_note) = merged_profile_note else {
+        let verification = verify_profile_note_addendum_activation_state(
+            resolved_config_path.as_path(),
+            addendum.as_str(),
+        )?;
         return Ok(RuntimeCapabilityActivateReport {
             generated_at: now_rfc3339()?,
             artifact_path,
@@ -1749,6 +1785,8 @@ fn execute_runtime_capability_activate_profile_note_addendum(
             replace_requested: false,
             outcome: RuntimeCapabilityActivateOutcome::AlreadyActivated,
             notes: vec!["profile note already contains the advisory addendum".to_owned()],
+            verification,
+            rollback_hints,
         });
     };
 
@@ -1756,6 +1794,10 @@ fn execute_runtime_capability_activate_profile_note_addendum(
     config.memory.profile_note = Some(merged_profile_note);
     let resolved_config_path_string = resolved_config_path.display().to_string();
     mvp::config::write(Some(resolved_config_path_string.as_str()), &config, true)?;
+    let verification = verify_profile_note_addendum_activation_state(
+        resolved_config_path.as_path(),
+        addendum.as_str(),
+    )?;
 
     Ok(RuntimeCapabilityActivateReport {
         generated_at: now_rfc3339()?,
@@ -1773,6 +1815,8 @@ fn execute_runtime_capability_activate_profile_note_addendum(
             "profile_note_addendum activation also enforces profile_plus_window memory mode"
                 .to_owned(),
         ],
+        verification,
+        rollback_hints,
     })
 }
 
@@ -1944,6 +1988,99 @@ fn canonicalize_existing_path(path: &Path) -> CliResult<String> {
                 path.display()
             )
         })
+}
+
+fn build_managed_skill_activation_verification_hints(
+    target_path: &Path,
+    file_count: usize,
+) -> Vec<String> {
+    let target_display = target_path.display().to_string();
+    let verify_bundle = format!(
+        "verify {target_display} matches the applied managed skill bundle with {file_count} file(s)"
+    );
+    vec![verify_bundle]
+}
+
+fn verify_managed_skill_activation_state(
+    artifact_id: &str,
+    target_path: &Path,
+    files: &BTreeMap<String, String>,
+) -> CliResult<Vec<String>> {
+    let matches_payload = managed_skill_payload_matches_install_root(files, target_path)?;
+    if !matches_payload {
+        let target_display = target_path.display().to_string();
+        let error = format!(
+            "activate managed skill `{artifact_id}` did not leave an installed bundle at {target_display} that matches the applied draft payload"
+        );
+        return Err(error);
+    }
+
+    let target_display = target_path.display().to_string();
+    let file_count = files.len();
+    let verification = format!(
+        "verified {target_display} matches the applied managed skill bundle with {file_count} file(s)"
+    );
+    Ok(vec![verification])
+}
+
+fn build_profile_note_activation_verification_hints(
+    config_path: &Path,
+    addendum: &str,
+) -> Vec<String> {
+    let config_display = config_path.display().to_string();
+    let addendum_length = addendum.chars().count();
+    let verify_profile =
+        format!("verify {config_display} sets memory.profile=profile_plus_window after activation");
+    let verify_addendum = format!(
+        "verify {config_display} persists the {addendum_length}-character advisory addendum in memory.profile_note"
+    );
+    vec![verify_profile, verify_addendum]
+}
+
+fn verify_profile_note_addendum_activation_state(
+    config_path: &Path,
+    addendum: &str,
+) -> CliResult<Vec<String>> {
+    let config_path_text = config_path.display().to_string();
+    let load_result = mvp::config::load(Some(config_path_text.as_str()))?;
+    let (_, reloaded_config) = load_result;
+    if reloaded_config.memory.profile != mvp::config::MemoryProfile::ProfilePlusWindow {
+        let error = format!(
+            "runtime capability activate expected {} to set memory.profile=profile_plus_window",
+            config_path.display()
+        );
+        return Err(error);
+    }
+
+    let persisted_profile_note = match reloaded_config.memory.profile_note.as_deref() {
+        Some(value) => value,
+        None => {
+            let error = format!(
+                "runtime capability activate expected {} to persist memory.profile_note",
+                config_path.display()
+            );
+            return Err(error);
+        }
+    };
+    let merged_profile_note =
+        mvp::migration::merge_profile_note_addendum(Some(persisted_profile_note), addendum);
+    if merged_profile_note.is_some() {
+        let error = format!(
+            "runtime capability activate expected {} to contain the advisory addendum in memory.profile_note",
+            config_path.display()
+        );
+        return Err(error);
+    }
+
+    let config_display = config_path.display().to_string();
+    let addendum_length = addendum.chars().count();
+    let profile_verification =
+        format!("verified {config_display} sets memory.profile=profile_plus_window");
+    let note_verification = format!(
+        "verified {config_display} persists the {addendum_length}-character advisory addendum in memory.profile_note"
+    );
+    let verification = vec![profile_verification, note_verification];
+    Ok(verification)
 }
 
 pub fn render_runtime_capability_text(artifact: &RuntimeCapabilityArtifactDocument) -> String {
@@ -2154,6 +2291,14 @@ pub fn render_runtime_capability_activate_text(report: &RuntimeCapabilityActivat
         format!(
             "notes={}",
             render_string_values_with_separator(&report.notes, " | ")
+        ),
+        format!(
+            "verification={}",
+            render_string_values_with_separator(&report.verification, " | ")
+        ),
+        format!(
+            "rollback_hints={}",
+            render_string_values_with_separator(&report.rollback_hints, " | ")
         ),
     ]
     .join("\n")
