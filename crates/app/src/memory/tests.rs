@@ -439,7 +439,7 @@ fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
     let _durable_flush_guard = durable_flush_lock.blocking_lock();
     let _guard = core_dispatch_test_lock()
         .lock()
-        .expect("core dispatch test lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
