@@ -91,6 +91,8 @@ pub use provider::{
     ProviderTransportPolicy, ProviderTransportReadiness, ProviderTransportReadinessLevel,
     ProviderWireApi, ReasoningEffort, parse_provider_kind_id,
 };
+#[cfg(test)]
+pub(crate) use runtime::inject_test_config_write_failure;
 #[allow(unused_imports)]
 pub use runtime::{
     AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
