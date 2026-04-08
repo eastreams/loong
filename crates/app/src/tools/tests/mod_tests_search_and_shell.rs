@@ -442,17 +442,8 @@ fn shell_exec_does_not_normalize_multiline_command_into_args() {
 fn shell_exec_rejects_non_lowercase_command_names_before_execution() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be after epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
-    }
-
-    let root = unique_temp_dir("loongclaw-shell-mixed-case");
+    let root = unique_tool_temp_dir("loongclaw-shell-mixed-case");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let script = root.join("MiXeDCmd");
@@ -600,6 +591,20 @@ fn shell_exec_succeeds_when_fast_command_receives_timeout_ms() {
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
 fn shell_exec_truncates_large_stdout_without_failing_command() {
+    use std::process::Command;
+
+    const SHELL_STDOUT_TRUNCATION_LIMIT: usize = 1_048_576;
+
+    let perl_available = Command::new("perl")
+        .arg("-v")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !perl_available {
+        eprintln!("skipping large stdout shell test because perl is unavailable");
+        return;
+    }
+
     let mut config = test_tool_runtime_config(std::env::temp_dir());
     config.shell_allow.insert("perl".to_owned());
 
@@ -622,7 +627,7 @@ fn shell_exec_truncates_large_stdout_without_failing_command() {
     let stdout = outcome.payload["stdout"]
         .as_str()
         .expect("stdout should be present");
-    assert_eq!(stdout.len(), 1_048_576);
+    assert_eq!(stdout.len(), SHELL_STDOUT_TRUNCATION_LIMIT);
     assert!(stdout.bytes().all(|byte| byte == b'a'));
 }
 
