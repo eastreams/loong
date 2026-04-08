@@ -97,8 +97,28 @@ pub(super) fn execute_file_write_tool_with_config(
             .get("create_dirs")
             .and_then(Value::as_bool)
             .unwrap_or(true);
+        let overwrite = payload
+            .get("overwrite")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         let resolved = resolve_safe_file_path_with_config(target, config)?;
+        let target_exists = resolved.exists();
+        if target_exists {
+            let target_is_directory = resolved.is_dir();
+            if target_is_directory {
+                return Err(format!(
+                    "path '{}' is a directory, not a file",
+                    resolved.display()
+                ));
+            }
+            if !overwrite {
+                return Err(format!(
+                    "policy_denied: file.write requires overwrite=true for existing file {}",
+                    resolved.display()
+                ));
+            }
+        }
         if create_dirs && let Some(parent) = resolved.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 format!(
@@ -223,6 +243,30 @@ pub(super) fn resolve_safe_file_path_with_config(
     };
     let normalized = super::normalize_without_fs(&combined);
     resolve_path_within_root(&root, &normalized)
+}
+
+pub(super) fn resolve_safe_directory_path_with_config(
+    raw: &str,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<PathBuf, String> {
+    let resolved = resolve_safe_file_path_with_config(raw, config)?;
+    let exists = resolved.exists();
+    if !exists {
+        let message = format!(
+            "policy_denied: shell cwd {} does not exist",
+            resolved.display()
+        );
+        return Err(message);
+    }
+    let is_directory = resolved.is_dir();
+    if !is_directory {
+        let message = format!(
+            "policy_denied: shell cwd {} is not a directory",
+            resolved.display()
+        );
+        return Err(message);
+    }
+    Ok(resolved)
 }
 
 fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
@@ -434,6 +478,70 @@ mod tests {
 
         let written = fs::read_to_string(root.join("safe/note.txt")).expect("read written file");
         assert_eq!(written, "hello");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_write_rejects_existing_file_without_overwrite_flag() {
+        let base = unique_temp_dir("loongclaw-file-overwrite-denied");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+
+        let target_path = root.join("note.txt");
+        fs::write(&target_path, "original").expect("seed original file");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "file.write".to_owned(),
+            payload: json!({
+                "path": "note.txt",
+                "content": "updated",
+                "create_dirs": true
+            }),
+        };
+        let error = execute_file_write_tool_with_config(request, &config)
+            .expect_err("existing file should require overwrite=true");
+
+        assert!(
+            error.contains("overwrite=true"),
+            "unexpected error: {error}"
+        );
+        let written = fs::read_to_string(&target_path).expect("read original file");
+        assert_eq!(written, "original");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_write_allows_existing_file_with_overwrite_true() {
+        let base = unique_temp_dir("loongclaw-file-overwrite-allowed");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+
+        let target_path = root.join("note.txt");
+        fs::write(&target_path, "original").expect("seed original file");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "file.write".to_owned(),
+            payload: json!({
+                "path": "note.txt",
+                "content": "updated",
+                "create_dirs": true,
+                "overwrite": true
+            }),
+        };
+        let outcome = execute_file_write_tool_with_config(request, &config)
+            .expect("overwrite=true should allow replacing an existing file");
+
+        assert_eq!(outcome.status, "ok");
+        let written = fs::read_to_string(&target_path).expect("read updated file");
+        assert_eq!(written, "updated");
         let _ = fs::remove_dir_all(base);
     }
 

@@ -2751,6 +2751,10 @@ fn file_write_definition(descriptor: &ToolDescriptor) -> Value {
                     "create_dirs": {
                         "type": "boolean",
                         "description": "Create parent directories when missing. Defaults to true."
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Allow replacing an existing file. Defaults to false."
                     }
                 },
                 "required": ["path", "content"],
@@ -3847,7 +3851,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "file.read" => "path:string,max_bytes?:integer",
         "memory_search" => "query:string,max_results?:integer",
         "memory_get" => "path:string,from?:integer,lines?:integer",
-        "file.write" => "path:string,content:string,create_dirs?:boolean",
+        "file.write" => "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
         "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
@@ -4254,6 +4258,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("path", "string"),
             ("content", "string"),
             ("create_dirs", "boolean"),
+            ("overwrite", "boolean"),
         ],
         "file.edit" => &[
             ("path", "string"),
