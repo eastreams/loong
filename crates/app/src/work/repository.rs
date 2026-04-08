@@ -23,6 +23,10 @@ const WORK_UNIT_FAILED_EVENT_KIND: &str = "work_unit_failed_terminal";
 const WORK_UNIT_CANCELLED_EVENT_KIND: &str = "work_unit_cancelled";
 const WORK_UNIT_ARCHIVED_EVENT_KIND: &str = "work_unit_archived";
 const WORK_UNIT_LEASE_EXPIRED_EVENT_KIND: &str = "work_unit_lease_expired_recovered";
+const WORK_UNIT_ASSIGNED_EVENT_KIND: &str = "work_unit_assigned";
+const WORK_UNIT_DEPENDENCY_ADDED_EVENT_KIND: &str = "work_unit_dependency_added";
+const WORK_UNIT_DEPENDENCY_REMOVED_EVENT_KIND: &str = "work_unit_dependency_removed";
+const WORK_UNIT_NOTE_ADDED_EVENT_KIND: &str = "work_unit_note_added";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewWorkUnitRecord {
@@ -107,6 +111,38 @@ pub struct ArchiveWorkUnitRequest {
     pub now_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignWorkUnitRequest {
+    pub work_unit_id: String,
+    pub assigned_to: Option<String>,
+    pub actor: Option<String>,
+    pub now_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddWorkUnitDependencyRequest {
+    pub blocking_work_unit_id: String,
+    pub blocked_work_unit_id: String,
+    pub actor: Option<String>,
+    pub now_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveWorkUnitDependencyRequest {
+    pub blocking_work_unit_id: String,
+    pub blocked_work_unit_id: String,
+    pub actor: Option<String>,
+    pub now_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppendWorkUnitNoteRequest {
+    pub work_unit_id: String,
+    pub actor: Option<String>,
+    pub note: String,
+    pub now_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkUnitRepository {
     db_path: PathBuf,
@@ -127,6 +163,9 @@ struct RawWorkUnitRecord {
     last_error: Option<String>,
     blocking_reason: Option<String>,
     parent_work_unit_id: Option<String>,
+    assigned_to: Option<String>,
+    blocks_work_unit_ids: Vec<String>,
+    blocked_by_work_unit_ids: Vec<String>,
     result_payload_json: Option<String>,
     lease_owner: Option<String>,
     lease_version: i64,
@@ -194,6 +233,7 @@ impl WorkUnitRepository {
                     last_error,
                     blocking_reason,
                     parent_work_unit_id,
+                    assigned_to,
                     result_payload_json,
                     lease_owner,
                     lease_version,
@@ -203,7 +243,7 @@ impl WorkUnitRepository {
                     created_at_ms,
                     updated_at_ms,
                     archived_at_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, NULL, NULL, ?11, NULL, NULL, 0, NULL, NULL, NULL, ?12, ?12, NULL)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, NULL, NULL, ?11, NULL, NULL, NULL, 0, NULL, NULL, NULL, ?12, ?12, NULL)",
                 params![
                     work_unit_id,
                     record.kind.as_str(),
@@ -668,6 +708,232 @@ impl WorkUnitRepository {
         self.load_work_unit_snapshot(&work_unit_id)
     }
 
+    pub fn assign_work_unit(
+        &self,
+        request: AssignWorkUnitRequest,
+    ) -> Result<Option<WorkUnitSnapshot>, String> {
+        let work_unit_id = normalize_required_text(&request.work_unit_id, "work_unit_id")?;
+        let assigned_to = normalize_optional_text(request.assigned_to);
+        let actor = normalize_optional_text(request.actor);
+        let now_ms = request.now_ms.unwrap_or_else(current_unix_ms);
+        let mut connection = self.open_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("open work unit assignment transaction failed: {error}"))?;
+        let Some(raw_record) = load_raw_work_unit_with_conn(&transaction, &work_unit_id)? else {
+            return Ok(None);
+        };
+        if raw_record.archived_at_ms.is_some() {
+            return Ok(None);
+        }
+
+        let previous_assigned_to = raw_record.assigned_to;
+        let changed = previous_assigned_to != assigned_to;
+        if !changed {
+            transaction.commit().map_err(|error| {
+                format!("commit unchanged work unit assignment transaction failed: {error}")
+            })?;
+            return self.load_work_unit_snapshot(&work_unit_id);
+        }
+
+        transaction
+            .execute(
+                "UPDATE work_units
+                 SET assigned_to = ?1,
+                     updated_at_ms = ?2
+                 WHERE work_unit_id = ?3
+                   AND archived_at_ms IS NULL",
+                params![assigned_to, now_ms, work_unit_id],
+            )
+            .map_err(|error| format!("assign work unit failed: {error}"))?;
+
+        let event_payload = json!({
+            "previous_assigned_to": previous_assigned_to,
+            "assigned_to": assigned_to,
+        });
+        insert_event_in_tx(
+            &transaction,
+            &work_unit_id,
+            WORK_UNIT_ASSIGNED_EVENT_KIND,
+            actor.as_deref(),
+            &event_payload,
+            now_ms,
+        )?;
+
+        transaction
+            .commit()
+            .map_err(|error| format!("commit work unit assignment transaction failed: {error}"))?;
+
+        self.load_work_unit_snapshot(&work_unit_id)
+    }
+
+    pub fn add_dependency(
+        &self,
+        request: AddWorkUnitDependencyRequest,
+    ) -> Result<Option<WorkUnitSnapshot>, String> {
+        let blocking_work_unit_id =
+            normalize_required_text(&request.blocking_work_unit_id, "blocking_work_unit_id")?;
+        let blocked_work_unit_id =
+            normalize_required_text(&request.blocked_work_unit_id, "blocked_work_unit_id")?;
+        let actor = normalize_optional_text(request.actor);
+        let now_ms = request.now_ms.unwrap_or_else(current_unix_ms);
+        validate_dependency_endpoints(
+            blocking_work_unit_id.as_str(),
+            blocked_work_unit_id.as_str(),
+        )?;
+        let mut connection = self.open_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("open work unit dependency transaction failed: {error}"))?;
+        ensure_work_unit_exists(&transaction, blocking_work_unit_id.as_str())?;
+        ensure_work_unit_exists(&transaction, blocked_work_unit_id.as_str())?;
+        let creates_cycle = would_create_dependency_cycle(
+            &transaction,
+            blocking_work_unit_id.as_str(),
+            blocked_work_unit_id.as_str(),
+        )?;
+        if creates_cycle {
+            return Err(format!(
+                "work unit dependency would create a cycle: `{}` -> `{}`",
+                blocking_work_unit_id, blocked_work_unit_id
+            ));
+        }
+
+        let inserted_rows = transaction
+            .execute(
+                "INSERT OR IGNORE INTO work_unit_dependencies(
+                    blocking_work_unit_id,
+                    blocked_work_unit_id,
+                    created_at_ms,
+                    created_by
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    blocking_work_unit_id,
+                    blocked_work_unit_id,
+                    now_ms,
+                    actor.as_deref(),
+                ],
+            )
+            .map_err(|error| format!("insert work unit dependency failed: {error}"))?;
+
+        if inserted_rows > 0 {
+            touch_work_unit(&transaction, blocked_work_unit_id.as_str(), now_ms)?;
+            let event_payload = json!({
+                "blocking_work_unit_id": blocking_work_unit_id,
+                "blocked_work_unit_id": blocked_work_unit_id,
+            });
+            insert_event_in_tx(
+                &transaction,
+                blocked_work_unit_id.as_str(),
+                WORK_UNIT_DEPENDENCY_ADDED_EVENT_KIND,
+                actor.as_deref(),
+                &event_payload,
+                now_ms,
+            )?;
+        }
+
+        transaction
+            .commit()
+            .map_err(|error| format!("commit work unit dependency transaction failed: {error}"))?;
+
+        self.load_work_unit_snapshot(&blocked_work_unit_id)
+    }
+
+    pub fn remove_dependency(
+        &self,
+        request: RemoveWorkUnitDependencyRequest,
+    ) -> Result<Option<WorkUnitSnapshot>, String> {
+        let blocking_work_unit_id =
+            normalize_required_text(&request.blocking_work_unit_id, "blocking_work_unit_id")?;
+        let blocked_work_unit_id =
+            normalize_required_text(&request.blocked_work_unit_id, "blocked_work_unit_id")?;
+        let actor = normalize_optional_text(request.actor);
+        let now_ms = request.now_ms.unwrap_or_else(current_unix_ms);
+        validate_dependency_endpoints(
+            blocking_work_unit_id.as_str(),
+            blocked_work_unit_id.as_str(),
+        )?;
+        let mut connection = self.open_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| {
+                format!("open work unit dependency removal transaction failed: {error}")
+            })?;
+        let Some(_raw_record) = load_raw_work_unit_with_conn(&transaction, &blocked_work_unit_id)?
+        else {
+            return Ok(None);
+        };
+
+        let removed_rows = transaction
+            .execute(
+                "DELETE FROM work_unit_dependencies
+                 WHERE blocking_work_unit_id = ?1
+                   AND blocked_work_unit_id = ?2",
+                params![blocking_work_unit_id, blocked_work_unit_id],
+            )
+            .map_err(|error| format!("remove work unit dependency failed: {error}"))?;
+
+        if removed_rows > 0 {
+            touch_work_unit(&transaction, blocked_work_unit_id.as_str(), now_ms)?;
+            let event_payload = json!({
+                "blocking_work_unit_id": blocking_work_unit_id,
+                "blocked_work_unit_id": blocked_work_unit_id,
+            });
+            insert_event_in_tx(
+                &transaction,
+                blocked_work_unit_id.as_str(),
+                WORK_UNIT_DEPENDENCY_REMOVED_EVENT_KIND,
+                actor.as_deref(),
+                &event_payload,
+                now_ms,
+            )?;
+        }
+
+        transaction.commit().map_err(|error| {
+            format!("commit work unit dependency removal transaction failed: {error}")
+        })?;
+
+        self.load_work_unit_snapshot(&blocked_work_unit_id)
+    }
+
+    pub fn append_note(
+        &self,
+        request: AppendWorkUnitNoteRequest,
+    ) -> Result<Option<WorkUnitEventRecord>, String> {
+        let work_unit_id = normalize_required_text(&request.work_unit_id, "work_unit_id")?;
+        let note = normalize_required_text(&request.note, "note")?;
+        let actor = normalize_optional_text(request.actor);
+        let now_ms = request.now_ms.unwrap_or_else(current_unix_ms);
+        let mut connection = self.open_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("open work unit note transaction failed: {error}"))?;
+        let Some(raw_record) = load_raw_work_unit_with_conn(&transaction, &work_unit_id)? else {
+            return Ok(None);
+        };
+        if raw_record.archived_at_ms.is_some() {
+            return Ok(None);
+        }
+
+        touch_work_unit(&transaction, work_unit_id.as_str(), now_ms)?;
+        let event_payload = json!({
+            "note": note,
+        });
+        let event = insert_event_in_tx(
+            &transaction,
+            work_unit_id.as_str(),
+            WORK_UNIT_NOTE_ADDED_EVENT_KIND,
+            actor.as_deref(),
+            &event_payload,
+            now_ms,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| format!("commit work unit note transaction failed: {error}"))?;
+
+        Ok(Some(event))
+    }
+
     pub fn recover_expired_leases(
         &self,
         actor: Option<&str>,
@@ -765,7 +1031,19 @@ impl WorkUnitRepository {
                     SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN status = 'leased' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status IN ('waiting_external', 'waiting_review') THEN 1 ELSE 0 END),
+                    SUM(CASE
+                            WHEN status IN ('waiting_external', 'waiting_review') THEN 1
+                            WHEN status IN ('ready', 'retry_pending')
+                                 AND EXISTS (
+                                     SELECT 1
+                                     FROM work_unit_dependencies dependencies
+                                     JOIN work_units blockers
+                                       ON blockers.work_unit_id = dependencies.blocking_work_unit_id
+                                     WHERE dependencies.blocked_work_unit_id = work_units.work_unit_id
+                                       AND blockers.status NOT IN ('completed', 'failed_terminal', 'cancelled', 'archived')
+                                 ) THEN 1
+                            ELSE 0
+                        END),
                     SUM(CASE WHEN status = 'retry_pending' THEN 1 ELSE 0 END),
                     SUM(CASE WHEN status IN ('completed', 'failed_terminal', 'cancelled') THEN 1 ELSE 0 END),
                     SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END),
@@ -833,6 +1111,7 @@ impl WorkUnitRepository {
                     last_error TEXT NULL,
                     blocking_reason TEXT NULL,
                     parent_work_unit_id TEXT NULL,
+                    assigned_to TEXT NULL,
                     result_payload_json TEXT NULL,
                     lease_owner TEXT NULL,
                     lease_version INTEGER NOT NULL DEFAULT 0,
@@ -849,6 +1128,15 @@ impl WorkUnitRepository {
                   ON work_units(lease_expires_at_ms, status, updated_at_ms, work_unit_id);
                 CREATE INDEX IF NOT EXISTS idx_work_units_archived_status
                   ON work_units(archived_at_ms, status, updated_at_ms, work_unit_id);
+                CREATE TABLE IF NOT EXISTS work_unit_dependencies(
+                    blocking_work_unit_id TEXT NOT NULL,
+                    blocked_work_unit_id TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    created_by TEXT NULL,
+                    PRIMARY KEY(blocking_work_unit_id, blocked_work_unit_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_work_unit_dependencies_blocked
+                  ON work_unit_dependencies(blocked_work_unit_id, blocking_work_unit_id);
                 CREATE TABLE IF NOT EXISTS work_unit_events(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     work_unit_id TEXT NOT NULL,
@@ -929,6 +1217,7 @@ fn load_raw_work_unit_with_conn(
                 last_error,
                 blocking_reason,
                 parent_work_unit_id,
+                assigned_to,
                 result_payload_json,
                 lease_owner,
                 lease_version,
@@ -956,21 +1245,28 @@ fn load_raw_work_unit_with_conn(
                     last_error: row.get(10)?,
                     blocking_reason: row.get(11)?,
                     parent_work_unit_id: row.get(12)?,
-                    result_payload_json: row.get(13)?,
-                    lease_owner: row.get(14)?,
-                    lease_version: row.get(15)?,
-                    lease_acquired_at_ms: row.get(16)?,
-                    lease_heartbeat_at_ms: row.get(17)?,
-                    lease_expires_at_ms: row.get(18)?,
-                    created_at_ms: row.get(19)?,
-                    updated_at_ms: row.get(20)?,
-                    archived_at_ms: row.get(21)?,
+                    assigned_to: row.get(13)?,
+                    blocks_work_unit_ids: Vec::new(),
+                    blocked_by_work_unit_ids: Vec::new(),
+                    result_payload_json: row.get(14)?,
+                    lease_owner: row.get(15)?,
+                    lease_version: row.get(16)?,
+                    lease_acquired_at_ms: row.get(17)?,
+                    lease_heartbeat_at_ms: row.get(18)?,
+                    lease_expires_at_ms: row.get(19)?,
+                    created_at_ms: row.get(20)?,
+                    updated_at_ms: row.get(21)?,
+                    archived_at_ms: row.get(22)?,
                 })
             },
         )
         .optional()
         .map_err(|error| format!("load work unit row failed: {error}"))?;
-    Ok(raw_record)
+    let Some(raw_record) = raw_record else {
+        return Ok(None);
+    };
+    let raw_record = hydrate_raw_work_unit_relationships(connection, raw_record)?;
+    Ok(Some(raw_record))
 }
 
 fn load_raw_work_units_with_query(
@@ -997,6 +1293,7 @@ fn load_raw_work_units_with_query(
                 last_error,
                 blocking_reason,
                 parent_work_unit_id,
+                assigned_to,
                 result_payload_json,
                 lease_owner,
                 lease_version,
@@ -1027,6 +1324,7 @@ fn load_raw_work_units_with_query(
                 last_error,
                 blocking_reason,
                 parent_work_unit_id,
+                assigned_to,
                 result_payload_json,
                 lease_owner,
                 lease_version,
@@ -1056,6 +1354,7 @@ fn load_raw_work_units_with_query(
                 last_error,
                 blocking_reason,
                 parent_work_unit_id,
+                assigned_to,
                 result_payload_json,
                 lease_owner,
                 lease_version,
@@ -1085,6 +1384,7 @@ fn load_raw_work_units_with_query(
                 last_error,
                 blocking_reason,
                 parent_work_unit_id,
+                assigned_to,
                 result_payload_json,
                 lease_owner,
                 lease_version,
@@ -1117,15 +1417,18 @@ fn load_raw_work_units_with_query(
             last_error: row.get(10)?,
             blocking_reason: row.get(11)?,
             parent_work_unit_id: row.get(12)?,
-            result_payload_json: row.get(13)?,
-            lease_owner: row.get(14)?,
-            lease_version: row.get(15)?,
-            lease_acquired_at_ms: row.get(16)?,
-            lease_heartbeat_at_ms: row.get(17)?,
-            lease_expires_at_ms: row.get(18)?,
-            created_at_ms: row.get(19)?,
-            updated_at_ms: row.get(20)?,
-            archived_at_ms: row.get(21)?,
+            assigned_to: row.get(13)?,
+            blocks_work_unit_ids: Vec::new(),
+            blocked_by_work_unit_ids: Vec::new(),
+            result_payload_json: row.get(14)?,
+            lease_owner: row.get(15)?,
+            lease_version: row.get(16)?,
+            lease_acquired_at_ms: row.get(17)?,
+            lease_heartbeat_at_ms: row.get(18)?,
+            lease_expires_at_ms: row.get(19)?,
+            created_at_ms: row.get(20)?,
+            updated_at_ms: row.get(21)?,
+            archived_at_ms: row.get(22)?,
         })
     };
     let rows = match status {
@@ -1141,10 +1444,76 @@ fn load_raw_work_units_with_query(
     for row in rows {
         let raw_record =
             row.map_err(|error| format!("decode work unit list row failed: {error}"))?;
+        let raw_record = hydrate_raw_work_unit_relationships(connection, raw_record)?;
         raw_records.push(raw_record);
     }
 
     Ok(raw_records)
+}
+
+fn hydrate_raw_work_unit_relationships(
+    connection: &Connection,
+    mut raw_record: RawWorkUnitRecord,
+) -> Result<RawWorkUnitRecord, String> {
+    let blocks_work_unit_ids =
+        load_blocked_work_unit_ids(connection, raw_record.work_unit_id.as_str())?;
+    let blocked_by_work_unit_ids =
+        load_blocking_work_unit_ids(connection, raw_record.work_unit_id.as_str())?;
+    raw_record.blocks_work_unit_ids = blocks_work_unit_ids;
+    raw_record.blocked_by_work_unit_ids = blocked_by_work_unit_ids;
+    Ok(raw_record)
+}
+
+fn load_blocked_work_unit_ids(
+    connection: &Connection,
+    work_unit_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT blocked_work_unit_id
+             FROM work_unit_dependencies
+             WHERE blocking_work_unit_id = ?1
+             ORDER BY blocked_work_unit_id ASC",
+        )
+        .map_err(|error| format!("prepare blocked work unit query failed: {error}"))?;
+    let rows = statement
+        .query_map(params![work_unit_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("query blocked work units failed: {error}"))?;
+    let mut work_unit_ids = Vec::new();
+
+    for row in rows {
+        let blocked_work_unit_id =
+            row.map_err(|error| format!("decode blocked work unit row failed: {error}"))?;
+        work_unit_ids.push(blocked_work_unit_id);
+    }
+
+    Ok(work_unit_ids)
+}
+
+fn load_blocking_work_unit_ids(
+    connection: &Connection,
+    work_unit_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT blocking_work_unit_id
+             FROM work_unit_dependencies
+             WHERE blocked_work_unit_id = ?1
+             ORDER BY blocking_work_unit_id ASC",
+        )
+        .map_err(|error| format!("prepare blocking work unit query failed: {error}"))?;
+    let rows = statement
+        .query_map(params![work_unit_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("query blocking work units failed: {error}"))?;
+    let mut work_unit_ids = Vec::new();
+
+    for row in rows {
+        let blocking_work_unit_id =
+            row.map_err(|error| format!("decode blocking work unit row failed: {error}"))?;
+        work_unit_ids.push(blocking_work_unit_id);
+    }
+
+    Ok(work_unit_ids)
 }
 
 fn select_next_ready_raw_work_unit(
@@ -1167,6 +1536,7 @@ fn select_next_ready_raw_work_unit(
                 last_error,
                 blocking_reason,
                 parent_work_unit_id,
+                assigned_to,
                 result_payload_json,
                 lease_owner,
                 lease_version,
@@ -1181,6 +1551,14 @@ fn select_next_ready_raw_work_unit(
                AND archived_at_ms IS NULL
                AND next_run_at_ms <= ?1
                AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?1)
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM work_unit_dependencies dependencies
+                    JOIN work_units blockers
+                      ON blockers.work_unit_id = dependencies.blocking_work_unit_id
+                    WHERE dependencies.blocked_work_unit_id = work_units.work_unit_id
+                      AND blockers.status NOT IN ('completed', 'failed_terminal', 'cancelled', 'archived')
+               )
              ORDER BY priority_rank DESC, next_run_at_ms ASC, updated_at_ms ASC, work_unit_id ASC
              LIMIT 1",
         )
@@ -1201,20 +1579,26 @@ fn select_next_ready_raw_work_unit(
                 last_error: row.get(10)?,
                 blocking_reason: row.get(11)?,
                 parent_work_unit_id: row.get(12)?,
-                result_payload_json: row.get(13)?,
-                lease_owner: row.get(14)?,
-                lease_version: row.get(15)?,
-                lease_acquired_at_ms: row.get(16)?,
-                lease_heartbeat_at_ms: row.get(17)?,
-                lease_expires_at_ms: row.get(18)?,
-                created_at_ms: row.get(19)?,
-                updated_at_ms: row.get(20)?,
-                archived_at_ms: row.get(21)?,
+                assigned_to: row.get(13)?,
+                blocks_work_unit_ids: Vec::new(),
+                blocked_by_work_unit_ids: Vec::new(),
+                result_payload_json: row.get(14)?,
+                lease_owner: row.get(15)?,
+                lease_version: row.get(16)?,
+                lease_acquired_at_ms: row.get(17)?,
+                lease_heartbeat_at_ms: row.get(18)?,
+                lease_expires_at_ms: row.get(19)?,
+                created_at_ms: row.get(20)?,
+                updated_at_ms: row.get(21)?,
+                archived_at_ms: row.get(22)?,
             })
         })
         .optional()
         .map_err(|error| format!("query next ready work unit failed: {error}"))?;
-    Ok(raw_record)
+    let hydrated = raw_record
+        .map(|raw_record| hydrate_raw_work_unit_relationships(connection, raw_record))
+        .transpose()?;
+    Ok(hydrated)
 }
 
 fn load_expired_raw_work_units_with_conn(
@@ -1237,6 +1621,7 @@ fn load_expired_raw_work_units_with_conn(
                 last_error,
                 blocking_reason,
                 parent_work_unit_id,
+                assigned_to,
                 result_payload_json,
                 lease_owner,
                 lease_version,
@@ -1269,15 +1654,18 @@ fn load_expired_raw_work_units_with_conn(
                 last_error: row.get(10)?,
                 blocking_reason: row.get(11)?,
                 parent_work_unit_id: row.get(12)?,
-                result_payload_json: row.get(13)?,
-                lease_owner: row.get(14)?,
-                lease_version: row.get(15)?,
-                lease_acquired_at_ms: row.get(16)?,
-                lease_heartbeat_at_ms: row.get(17)?,
-                lease_expires_at_ms: row.get(18)?,
-                created_at_ms: row.get(19)?,
-                updated_at_ms: row.get(20)?,
-                archived_at_ms: row.get(21)?,
+                assigned_to: row.get(13)?,
+                blocks_work_unit_ids: Vec::new(),
+                blocked_by_work_unit_ids: Vec::new(),
+                result_payload_json: row.get(14)?,
+                lease_owner: row.get(15)?,
+                lease_version: row.get(16)?,
+                lease_acquired_at_ms: row.get(17)?,
+                lease_heartbeat_at_ms: row.get(18)?,
+                lease_expires_at_ms: row.get(19)?,
+                created_at_ms: row.get(20)?,
+                updated_at_ms: row.get(21)?,
+                archived_at_ms: row.get(22)?,
             })
         })
         .map_err(|error| format!("query expired work units failed: {error}"))?;
@@ -1286,6 +1674,7 @@ fn load_expired_raw_work_units_with_conn(
     for row in rows {
         let raw_record =
             row.map_err(|error| format!("decode expired work unit row failed: {error}"))?;
+        let raw_record = hydrate_raw_work_unit_relationships(connection, raw_record)?;
         raw_records.push(raw_record);
     }
 
@@ -1320,12 +1709,15 @@ fn try_work_unit_snapshot_from_raw(
         source_ref,
         status,
         priority,
+        assigned_to: raw_record.assigned_to.clone(),
         retry_policy,
         attempt_count,
         next_run_at_ms: raw_record.next_run_at_ms,
         last_error: raw_record.last_error.clone(),
         blocking_reason: raw_record.blocking_reason.clone(),
         parent_work_unit_id: raw_record.parent_work_unit_id.clone(),
+        blocks_work_unit_ids: raw_record.blocks_work_unit_ids.clone(),
+        blocked_by_work_unit_ids: raw_record.blocked_by_work_unit_ids.clone(),
         result_payload_json,
         created_at_ms: raw_record.created_at_ms,
         updated_at_ms: raw_record.updated_at_ms,
@@ -1469,6 +1861,75 @@ fn build_expired_lease_error(raw_record: &RawWorkUnitRecord) -> Result<String, S
     Ok(format!(
         "lease expired for owner `{owner}` at {expires_at_ms}"
     ))
+}
+
+fn ensure_work_unit_exists(connection: &Connection, work_unit_id: &str) -> Result<(), String> {
+    let exists = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM work_units WHERE work_unit_id = ?1)",
+            params![work_unit_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("check work unit existence failed: {error}"))?;
+    if exists == 0 {
+        return Err(format!("work unit `{work_unit_id}` not found"));
+    }
+    Ok(())
+}
+
+fn touch_work_unit(connection: &Connection, work_unit_id: &str, now_ms: i64) -> Result<(), String> {
+    connection
+        .execute(
+            "UPDATE work_units
+             SET updated_at_ms = ?1
+             WHERE work_unit_id = ?2",
+            params![now_ms, work_unit_id],
+        )
+        .map_err(|error| format!("touch work unit failed: {error}"))?;
+    Ok(())
+}
+
+fn validate_dependency_endpoints(
+    blocking_work_unit_id: &str,
+    blocked_work_unit_id: &str,
+) -> Result<(), String> {
+    if blocking_work_unit_id == blocked_work_unit_id {
+        return Err("work unit dependency cannot target the same work unit".to_owned());
+    }
+    Ok(())
+}
+
+fn would_create_dependency_cycle(
+    connection: &Connection,
+    blocking_work_unit_id: &str,
+    blocked_work_unit_id: &str,
+) -> Result<bool, String> {
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE dependency_chain(work_unit_id) AS (
+                 SELECT blocked_work_unit_id
+                 FROM work_unit_dependencies
+                 WHERE blocking_work_unit_id = ?1
+                 UNION
+                 SELECT dependencies.blocked_work_unit_id
+                 FROM work_unit_dependencies dependencies
+                 JOIN dependency_chain chain
+                   ON chain.work_unit_id = dependencies.blocking_work_unit_id
+             )
+             SELECT EXISTS(
+                 SELECT 1
+                 FROM dependency_chain
+                 WHERE work_unit_id = ?2
+             )",
+        )
+        .map_err(|error| format!("prepare dependency cycle query failed: {error}"))?;
+    let exists = statement
+        .query_row(
+            params![blocked_work_unit_id, blocking_work_unit_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("query dependency cycle failed: {error}"))?;
+    Ok(exists != 0)
 }
 
 fn validate_initial_status(status: WorkUnitStatus) -> Result<(), String> {
@@ -1622,9 +2083,12 @@ mod tests {
     use crate::memory::runtime_config::MemoryRuntimeConfig;
 
     use super::{
-        AcquireWorkUnitLeaseRequest, ArchiveWorkUnitRequest, CompleteWorkUnitRequest,
-        NewWorkUnitRecord, StartWorkUnitLeaseRequest, WorkUnitCompletionDisposition,
-        WorkUnitHeartbeatRequest, WorkUnitListQuery, WorkUnitRepository,
+        AcquireWorkUnitLeaseRequest, AddWorkUnitDependencyRequest, AppendWorkUnitNoteRequest,
+        ArchiveWorkUnitRequest, AssignWorkUnitRequest, CompleteWorkUnitRequest, NewWorkUnitRecord,
+        RemoveWorkUnitDependencyRequest, StartWorkUnitLeaseRequest, WORK_UNIT_ASSIGNED_EVENT_KIND,
+        WORK_UNIT_DEPENDENCY_ADDED_EVENT_KIND, WORK_UNIT_DEPENDENCY_REMOVED_EVENT_KIND,
+        WORK_UNIT_NOTE_ADDED_EVENT_KIND, WorkUnitCompletionDisposition, WorkUnitHeartbeatRequest,
+        WorkUnitListQuery, WorkUnitRepository,
     };
     use loongclaw_contracts::{
         WorkSourceKind, WorkUnitKind, WorkUnitPriority, WorkUnitRetryPolicy, WorkUnitSourceRef,
@@ -1692,6 +2156,9 @@ mod tests {
             WorkSourceKind::Discord
         );
         assert_eq!(created.work_unit.attempt_count, 0);
+        assert_eq!(created.work_unit.assigned_to, None);
+        assert!(created.work_unit.blocks_work_unit_ids.is_empty());
+        assert!(created.work_unit.blocked_by_work_unit_ids.is_empty());
         assert!(created.lease.is_none());
 
         let events = repository
@@ -2104,5 +2571,161 @@ mod tests {
             })
             .expect("list work units including archived");
         assert_eq!(with_archived.len(), 2);
+    }
+
+    #[test]
+    fn assignment_dependency_and_note_actions_round_trip_through_snapshot() {
+        let config = isolated_memory_config("assignment-dependency-note");
+        let repository = WorkUnitRepository::new(&config).expect("repository");
+        let blocker = NewWorkUnitRecord {
+            work_unit_id: Some("wu-blocker".to_owned()),
+            title: "Blocker".to_owned(),
+            description: "Complete prerequisite".to_owned(),
+            priority: WorkUnitPriority::Low,
+            ..sample_work_unit(WorkUnitStatus::Ready)
+        };
+        let blocked = sample_work_unit(WorkUnitStatus::Ready);
+
+        repository
+            .create_work_unit(blocker, Some("operator"))
+            .expect("create blocker work unit");
+        repository
+            .create_work_unit(blocked, Some("operator"))
+            .expect("create blocked work unit");
+
+        let assigned = repository
+            .assign_work_unit(AssignWorkUnitRequest {
+                work_unit_id: "wu-test".to_owned(),
+                assigned_to: Some("designer".to_owned()),
+                actor: Some("operator".to_owned()),
+                now_ms: Some(1_200),
+            })
+            .expect("assign work unit")
+            .expect("assigned snapshot");
+        assert_eq!(assigned.work_unit.assigned_to.as_deref(), Some("designer"));
+
+        let dependency_added = repository
+            .add_dependency(AddWorkUnitDependencyRequest {
+                blocking_work_unit_id: "wu-blocker".to_owned(),
+                blocked_work_unit_id: "wu-test".to_owned(),
+                actor: Some("operator".to_owned()),
+                now_ms: Some(1_300),
+            })
+            .expect("add dependency")
+            .expect("dependency snapshot");
+        assert_eq!(
+            dependency_added.work_unit.blocked_by_work_unit_ids,
+            vec!["wu-blocker".to_owned()]
+        );
+
+        let note = repository
+            .append_note(AppendWorkUnitNoteRequest {
+                work_unit_id: "wu-test".to_owned(),
+                actor: Some("operator".to_owned()),
+                note: "needs design review".to_owned(),
+                now_ms: Some(1_350),
+            })
+            .expect("append note")
+            .expect("note event");
+        assert_eq!(note.event_kind, WORK_UNIT_NOTE_ADDED_EVENT_KIND);
+
+        let leased = repository
+            .acquire_next_ready_lease(AcquireWorkUnitLeaseRequest {
+                owner: "worker-a".to_owned(),
+                ttl_ms: 5_000,
+                actor: Some("scheduler".to_owned()),
+                now_ms: Some(1_400),
+            })
+            .expect("acquire lease")
+            .expect("leased snapshot");
+        assert_eq!(leased.work_unit.work_unit_id, "wu-blocker");
+
+        let dependency_removed = repository
+            .remove_dependency(RemoveWorkUnitDependencyRequest {
+                blocking_work_unit_id: "wu-blocker".to_owned(),
+                blocked_work_unit_id: "wu-test".to_owned(),
+                actor: Some("operator".to_owned()),
+                now_ms: Some(1_500),
+            })
+            .expect("remove dependency")
+            .expect("dependency removed snapshot");
+        assert!(
+            dependency_removed
+                .work_unit
+                .blocked_by_work_unit_ids
+                .is_empty()
+        );
+
+        let snapshot = repository
+            .load_work_unit_snapshot("wu-test")
+            .expect("load work unit snapshot")
+            .expect("work unit snapshot");
+        assert_eq!(snapshot.work_unit.assigned_to.as_deref(), Some("designer"));
+        assert!(snapshot.work_unit.blocked_by_work_unit_ids.is_empty());
+
+        let blocker_snapshot = repository
+            .load_work_unit_snapshot("wu-blocker")
+            .expect("load blocker snapshot")
+            .expect("blocker snapshot");
+        assert!(
+            blocker_snapshot.work_unit.blocks_work_unit_ids.is_empty(),
+            "dependency removal should clear blocker-side relation view"
+        );
+
+        let events = repository
+            .list_work_unit_events("wu-test", 20)
+            .expect("list work unit events");
+        let event_kinds = events
+            .iter()
+            .map(|event| event.event_kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_kinds.contains(&WORK_UNIT_ASSIGNED_EVENT_KIND));
+        assert!(event_kinds.contains(&WORK_UNIT_DEPENDENCY_ADDED_EVENT_KIND));
+        assert!(event_kinds.contains(&WORK_UNIT_DEPENDENCY_REMOVED_EVENT_KIND));
+        assert!(event_kinds.contains(&WORK_UNIT_NOTE_ADDED_EVENT_KIND));
+    }
+
+    #[test]
+    fn dependency_cycle_is_rejected_before_persisting_edge() {
+        let config = isolated_memory_config("dependency-cycle");
+        let repository = WorkUnitRepository::new(&config).expect("repository");
+        let first = NewWorkUnitRecord {
+            work_unit_id: Some("wu-first".to_owned()),
+            title: "First".to_owned(),
+            description: "First work unit".to_owned(),
+            ..sample_work_unit(WorkUnitStatus::Ready)
+        };
+        let second = NewWorkUnitRecord {
+            work_unit_id: Some("wu-second".to_owned()),
+            title: "Second".to_owned(),
+            description: "Second work unit".to_owned(),
+            ..sample_work_unit(WorkUnitStatus::Ready)
+        };
+
+        repository
+            .create_work_unit(first, Some("operator"))
+            .expect("create first work unit");
+        repository
+            .create_work_unit(second, Some("operator"))
+            .expect("create second work unit");
+        repository
+            .add_dependency(AddWorkUnitDependencyRequest {
+                blocking_work_unit_id: "wu-first".to_owned(),
+                blocked_work_unit_id: "wu-second".to_owned(),
+                actor: Some("operator".to_owned()),
+                now_ms: Some(1_000),
+            })
+            .expect("add first dependency");
+
+        let error = repository
+            .add_dependency(AddWorkUnitDependencyRequest {
+                blocking_work_unit_id: "wu-second".to_owned(),
+                blocked_work_unit_id: "wu-first".to_owned(),
+                actor: Some("operator".to_owned()),
+                now_ms: Some(1_100),
+            })
+            .expect_err("dependency cycle should be rejected");
+
+        assert!(error.contains("would create a cycle"));
     }
 }
