@@ -303,7 +303,16 @@ pub struct RuntimeCapabilityPromotionPlannedPayload {
     pub review_scope: String,
     pub required_capabilities: Vec<String>,
     pub tags: Vec<String>,
+    pub payload: RuntimeCapabilityDraftPayload,
     pub provenance: RuntimeCapabilityPromotionPlannedPayloadProvenance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeCapabilityDraftPayload {
+    ManagedSkillBundle { files: BTreeMap<String, String> },
+    ProgrammaticFlowSpec { files: BTreeMap<String, String> },
+    ProfileNoteAddendum { content: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -342,6 +351,7 @@ pub struct RuntimeCapabilityAppliedArtifactDocument {
     pub bounded_scope: String,
     pub required_capabilities: Vec<String>,
     pub tags: Vec<String>,
+    pub payload: RuntimeCapabilityDraftPayload,
     pub approval_checklist: Vec<String>,
     pub rollback_hints: Vec<String>,
     pub delta_candidate_count: usize,
@@ -563,7 +573,7 @@ pub fn execute_runtime_capability_plan_command(
             &planned_artifact,
             &family_artifacts,
             &family.evidence,
-        ),
+        )?,
     })
 }
 
@@ -1337,6 +1347,7 @@ fn build_runtime_capability_apply_artifact(
         bounded_scope: planned_payload.review_scope.clone(),
         required_capabilities: planned_payload.required_capabilities.clone(),
         tags: planned_payload.tags.clone(),
+        payload: planned_payload.payload.clone(),
         approval_checklist: plan.approval_checklist.clone(),
         rollback_hints: plan.rollback_hints.clone(),
         delta_candidate_count: evidence.delta_candidate_count,
@@ -1659,6 +1670,10 @@ pub fn render_runtime_capability_apply_text(report: &RuntimeCapabilityApplyRepor
             "experiment_ids={}",
             render_string_values(&artifact.experiment_ids)
         ),
+        format!(
+            "payload={}",
+            render_runtime_capability_draft_payload(&artifact.payload)
+        ),
     ]
     .join("\n")
 }
@@ -1747,14 +1762,33 @@ fn render_runtime_capability_planned_payload(
 ) -> String {
     let accepted_candidate_ids = render_string_values(&payload.provenance.accepted_candidate_ids);
     let changed_surfaces = render_string_values(&payload.provenance.changed_surfaces);
+    let draft_payload = render_runtime_capability_draft_payload(&payload.payload);
     format!(
-        "target={} draft_id={} review_scope={} accepted_candidate_ids={} changed_surfaces={}",
+        "target={} draft_id={} review_scope={} accepted_candidate_ids={} changed_surfaces={} payload={}",
         render_target(payload.target),
         payload.draft_id,
         payload.review_scope,
         accepted_candidate_ids,
-        changed_surfaces
+        changed_surfaces,
+        draft_payload
     )
+}
+
+fn render_runtime_capability_draft_payload(payload: &RuntimeCapabilityDraftPayload) -> String {
+    match payload {
+        RuntimeCapabilityDraftPayload::ManagedSkillBundle { files } => {
+            let file_names = files.keys().cloned().collect::<Vec<_>>().join(",");
+            format!("managed_skill_bundle files={file_names}")
+        }
+        RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { files } => {
+            let file_names = files.keys().cloned().collect::<Vec<_>>().join(",");
+            format!("programmatic_flow_spec files={file_names}")
+        }
+        RuntimeCapabilityDraftPayload::ProfileNoteAddendum { content } => {
+            let content_chars = content.chars().count();
+            format!("profile_note_addendum chars={content_chars}")
+        }
+    }
 }
 
 fn render_experiment_status(status: RuntimeExperimentStatus) -> &'static str {
@@ -1937,14 +1971,16 @@ fn build_runtime_capability_promotion_planned_payload(
     planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
     artifacts: &[RuntimeCapabilityArtifactDocument],
     evidence: &RuntimeCapabilityEvidenceDigest,
-) -> RuntimeCapabilityPromotionPlannedPayload {
+) -> CliResult<RuntimeCapabilityPromotionPlannedPayload> {
     let accepted_candidate_ids = artifacts
         .iter()
         .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
         .map(|artifact| artifact.candidate_id.clone())
         .collect::<Vec<_>>();
 
-    RuntimeCapabilityPromotionPlannedPayload {
+    let payload = build_runtime_capability_draft_payload(family_id, planned_artifact, evidence)?;
+
+    let planned_payload = RuntimeCapabilityPromotionPlannedPayload {
         artifact_kind: planned_artifact.artifact_kind.clone(),
         target: planned_artifact.target_kind,
         draft_id: planned_artifact.artifact_id.clone(),
@@ -1952,12 +1988,100 @@ fn build_runtime_capability_promotion_planned_payload(
         review_scope: planned_artifact.bounded_scope.clone(),
         required_capabilities: planned_artifact.required_capabilities.clone(),
         tags: planned_artifact.tags.clone(),
+        payload,
         provenance: RuntimeCapabilityPromotionPlannedPayloadProvenance {
             family_id: family_id.to_owned(),
             accepted_candidate_ids,
             changed_surfaces: evidence.changed_surfaces.clone(),
         },
+    };
+    Ok(planned_payload)
+}
+
+fn build_runtime_capability_draft_payload(
+    family_id: &str,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> CliResult<RuntimeCapabilityDraftPayload> {
+    match planned_artifact.target_kind {
+        RuntimeCapabilityTarget::ManagedSkill => {
+            let files = build_managed_skill_draft_files(family_id, planned_artifact, evidence);
+            Ok(RuntimeCapabilityDraftPayload::ManagedSkillBundle { files })
+        }
+        RuntimeCapabilityTarget::ProgrammaticFlow => {
+            let files = build_programmatic_flow_draft_files(family_id, planned_artifact, evidence)?;
+            Ok(RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { files })
+        }
+        RuntimeCapabilityTarget::ProfileNoteAddendum => {
+            let content = build_profile_note_addendum_draft(family_id, planned_artifact, evidence);
+            Ok(RuntimeCapabilityDraftPayload::ProfileNoteAddendum { content })
+        }
     }
+}
+
+fn build_managed_skill_draft_files(
+    family_id: &str,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> BTreeMap<String, String> {
+    let skill_name = planned_artifact.summary.as_str();
+    let skill_description = planned_artifact.summary.as_str();
+    let bounded_scope = planned_artifact.bounded_scope.as_str();
+    let required_capabilities = render_string_values(&planned_artifact.required_capabilities);
+    let tags = render_string_values(&planned_artifact.tags);
+    let changed_surfaces = render_string_values(&evidence.changed_surfaces);
+    let skill_markdown = format!(
+        "---\nname: {skill_name}\ndescription: {skill_description}\n---\n\n# {skill_name}\n\n## Purpose\n\nThis draft managed skill was generated from runtime capability family `{family_id}`.\nReview and refine it before activation.\n\n## Scope\n\n- In: {bounded_scope}\n- Required capabilities: {required_capabilities}\n- Tags: {tags}\n- Changed surfaces: {changed_surfaces}\n"
+    );
+    let mut files = BTreeMap::new();
+    files.insert("SKILL.md".to_owned(), skill_markdown);
+    files
+}
+
+fn build_programmatic_flow_draft_files(
+    family_id: &str,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> CliResult<BTreeMap<String, String>> {
+    let draft_id = planned_artifact.artifact_id.as_str();
+    let summary = planned_artifact.summary.as_str();
+    let bounded_scope = planned_artifact.bounded_scope.as_str();
+    let required_capabilities = &planned_artifact.required_capabilities;
+    let tags = &planned_artifact.tags;
+    let changed_surfaces = &evidence.changed_surfaces;
+    let flow_value = json!({
+        "id": draft_id,
+        "summary": summary,
+        "bounded_scope": bounded_scope,
+        "required_capabilities": required_capabilities,
+        "tags": tags,
+        "changed_surfaces": changed_surfaces,
+        "provenance": {
+            "family_id": family_id,
+        },
+        "steps": [],
+    });
+    let flow_json = serde_json::to_string_pretty(&flow_value).map_err(|error| {
+        format!("serialize runtime capability programmatic flow draft failed: {error}")
+    })?;
+    let mut files = BTreeMap::new();
+    files.insert("flow.json".to_owned(), flow_json);
+    Ok(files)
+}
+
+fn build_profile_note_addendum_draft(
+    family_id: &str,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> String {
+    let summary = planned_artifact.summary.as_str();
+    let bounded_scope = planned_artifact.bounded_scope.as_str();
+    let required_capabilities = render_string_values(&planned_artifact.required_capabilities);
+    let tags = render_string_values(&planned_artifact.tags);
+    let changed_surfaces = render_string_values(&evidence.changed_surfaces);
+    format!(
+        "## Runtime Capability Draft: {summary}\n- Family: {family_id}\n- Scope: {bounded_scope}\n- Required capabilities: {required_capabilities}\n- Tags: {tags}\n- Changed surfaces: {changed_surfaces}\n- Status: review before activation\n"
+    )
 }
 
 pub fn render_runtime_capability_promotion_plan_text(
