@@ -167,93 +167,12 @@ fn operation_dock_spans(
 ) -> Vec<Span<'static>> {
     let extra_wide = width >= 160;
     let wide = width >= 120;
-    let pulse = activity_pulse(pane.dots_frame());
     let mut items = Vec::new();
-
-    let attention_approvals = pane.attention_approval_count().unwrap_or(0);
-    if attention_approvals > 0 {
-        items.push(operation_item(
-            pulse,
-            if extra_wide {
-                format!(" approvals! {attention_approvals} · /approvals attention")
-            } else if wide {
-                format!(" apr! {attention_approvals} /approvals")
-            } else {
-                format!(" apr! {attention_approvals}")
-            },
-            palette.warning,
-            palette,
-        ));
-    }
-
-    let pending_approvals = pane.pending_approval_count().unwrap_or(0);
-    let passive_approvals = pending_approvals.saturating_sub(attention_approvals);
-    if passive_approvals > 0 {
-        items.push(operation_item(
-            pulse,
-            if extra_wide {
-                format!(" approvals {passive_approvals} · /approvals")
-            } else if wide {
-                format!(" apr {passive_approvals} /approvals")
-            } else {
-                format!(" apr {passive_approvals}")
-            },
-            palette.info,
-            palette,
-        ));
-    }
-
-    let overdue_tasks = pane.overdue_task_count().unwrap_or(0);
-    if overdue_tasks > 0 {
-        items.push(operation_item(
-            pulse,
-            if extra_wide {
-                format!(" overdue {overdue_tasks} · /tasks running")
-            } else if wide {
-                format!(" late {overdue_tasks} /tasks")
-            } else {
-                format!(" late {overdue_tasks}")
-            },
-            palette.error,
-            palette,
-        ));
-    }
-
-    let running_tasks = pane.running_task_count().unwrap_or(0);
-    if running_tasks > 0 {
-        items.push(operation_item(
-            pulse,
-            if extra_wide {
-                format!(" background {running_tasks} · /tasks running")
-            } else if wide {
-                format!(" bg {running_tasks} /tasks")
-            } else {
-                format!(" bg {running_tasks}")
-            },
-            palette.tool_running,
-            palette,
-        ));
-    }
-
-    let active_subagents = pane.active_subagent_count().unwrap_or(0);
-    if active_subagents > 0 {
-        items.push(operation_item(
-            pulse,
-            if extra_wide {
-                format!(" subagents {active_subagents} · /subagents")
-            } else if wide {
-                format!(" sub {active_subagents} /subagents")
-            } else {
-                format!(" sub {active_subagents}")
-            },
-            palette.brand,
-            palette,
-        ));
-    }
 
     let running_tools = pane.running_tool_call_count();
     let total_tools = pane.tool_call_count();
     if running_tools > 0 || total_tools > 0 {
+        let pulse = activity_pulse(pane.dots_frame());
         let label = if extra_wide {
             if running_tools > 0 {
                 format!(" tools {running_tools}/{total_tools} · /tools open")
@@ -277,14 +196,6 @@ fn operation_dock_spans(
             palette.info
         };
         items.push(operation_item(pulse, label, color, palette));
-    }
-
-    let dirty_file_count = pane.dirty_file_count();
-    if pane.worktree_dirty() && dirty_file_count > 0 {
-        let dirty_preview = pane.dirty_file_preview();
-        let dirty_summary =
-            summarize_dirty_files(dirty_preview, dirty_file_count, extra_wide, wide);
-        items.push(operation_item('•', dirty_summary, palette.info, palette));
     }
 
     items.push(passive_operation_item(
@@ -338,45 +249,6 @@ fn operation_item(
 
 fn passive_operation_item(label: String, palette: &Palette) -> Vec<Span<'static>> {
     vec![Span::styled(label, Style::default().fg(palette.separator))]
-}
-
-fn summarize_dirty_files(
-    dirty_preview: &[String],
-    dirty_file_count: usize,
-    extra_wide: bool,
-    wide: bool,
-) -> String {
-    let first_label = dirty_preview
-        .first()
-        .map(|path| summarize_dirty_file_name(path.as_str()))
-        .unwrap_or_else(|| "edited files".to_owned());
-    let remaining_count = dirty_file_count.saturating_sub(1);
-
-    if extra_wide {
-        if remaining_count > 0 {
-            return format!(" edits {first_label} +{remaining_count}");
-        }
-        return format!(" edits {first_label}");
-    }
-
-    if wide {
-        if remaining_count > 0 {
-            return format!(" edit {first_label} +{remaining_count}");
-        }
-        return format!(" edit {first_label}");
-    }
-
-    if remaining_count > 0 {
-        return format!(" edit +{dirty_file_count}");
-    }
-
-    format!(" edit {first_label}")
-}
-
-fn summarize_dirty_file_name(path: &str) -> String {
-    let file_name = path.rsplit('/').next().unwrap_or(path);
-
-    file_name.to_owned()
 }
 
 #[cfg(test)]
@@ -628,16 +500,6 @@ mod tests {
             dots_frame: 1,
             running_tool_call_count: 1,
             tool_call_count: 4,
-            worktree_dirty: true,
-            dirty_files: vec![
-                "crates/app/src/chat/tui/render.rs".to_owned(),
-                "crates/app/src/chat/tui/shell.rs".to_owned(),
-                "crates/app/src/chat/tui/state.rs".to_owned(),
-            ],
-            active_subagent_count: Some(2),
-            running_task_count: Some(1),
-            pending_approval_count: Some(3),
-            attention_approval_count: Some(1),
             ..TestSpinner::idle()
         };
         let palette = Palette::dark();
@@ -649,11 +511,7 @@ mod tests {
             .expect("draw");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("apr! 1 /approvals"), "text={text:?}");
-        assert!(text.contains("bg 1 /tasks"), "text={text:?}");
-        assert!(text.contains("/subagents"), "text={text:?}");
         assert!(text.contains("/tools"), "text={text:?}");
-        assert!(text.contains("edit render.rs +2"), "text={text:?}");
         assert!(text.contains("cmds"), "text={text:?}");
     }
 }

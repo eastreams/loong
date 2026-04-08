@@ -2120,25 +2120,121 @@ fn render_context_rail(
     pane: &impl SpinnerView,
     palette: &Palette,
 ) {
-    let dirty_file_count = pane.dirty_file_count();
-    let should_render_live_edits = pane.worktree_dirty() && dirty_file_count > 0;
-    if !should_render_live_edits {
+    let rail_spans = operational_rail_spans(pane, area.width, palette);
+    if rail_spans.is_empty() {
         render_separator(frame, area, palette);
         return;
     }
 
-    let dirty_preview = pane.dirty_file_preview();
-    let line = edited_files_rail_line(dirty_preview, dirty_file_count, area.width, palette);
+    let line = Line::from(rail_spans);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
+}
+
+fn operational_rail_spans(
+    pane: &impl SpinnerView,
+    width: u16,
+    palette: &Palette,
+) -> Vec<Span<'static>> {
+    let extra_wide = width >= 150;
+    let wide = width >= 96;
+    let mut segments = Vec::new();
+
+    let dirty_file_count = pane.dirty_file_count();
+    if pane.worktree_dirty() && dirty_file_count > 0 {
+        let dirty_preview = pane.dirty_file_preview();
+        let edits_line = edited_files_rail_line(
+            dirty_preview,
+            dirty_file_count,
+            width,
+            extra_wide,
+            wide,
+            palette,
+        );
+        segments.push(edits_line);
+    }
+
+    let attention_approvals = pane.attention_approval_count().unwrap_or(0);
+    if attention_approvals > 0 {
+        let label = if extra_wide {
+            format!(" approvals! {attention_approvals}")
+        } else {
+            format!(" apr! {attention_approvals}")
+        };
+        segments.push(rail_segment(label, palette.warning, palette));
+    }
+
+    let pending_approvals = pane.pending_approval_count().unwrap_or(0);
+    let passive_approvals = pending_approvals.saturating_sub(attention_approvals);
+    if passive_approvals > 0 {
+        let label = if extra_wide {
+            format!(" approvals {passive_approvals}")
+        } else {
+            format!(" apr {passive_approvals}")
+        };
+        segments.push(rail_segment(label, palette.info, palette));
+    }
+
+    let overdue_tasks = pane.overdue_task_count().unwrap_or(0);
+    if overdue_tasks > 0 {
+        let label = if extra_wide {
+            format!(" overdue {overdue_tasks}")
+        } else {
+            format!(" late {overdue_tasks}")
+        };
+        segments.push(rail_segment(label, palette.error, palette));
+    }
+
+    let running_tasks = pane.running_task_count().unwrap_or(0);
+    if running_tasks > 0 {
+        let label = if extra_wide {
+            format!(" background {running_tasks}")
+        } else {
+            format!(" bg {running_tasks}")
+        };
+        segments.push(rail_segment(label, palette.tool_running, palette));
+    }
+
+    let active_subagents = pane.active_subagent_count().unwrap_or(0);
+    if active_subagents > 0 {
+        let label = if extra_wide {
+            format!(" subagents {active_subagents}")
+        } else {
+            format!(" sub {active_subagents}")
+        };
+        segments.push(rail_segment(label, palette.brand, palette));
+    }
+
+    let max_segments = if width < 80 {
+        2
+    } else if width < 120 {
+        3
+    } else {
+        5
+    };
+
+    let mut spans = Vec::new();
+    for (index, segment) in segments.into_iter().take(max_segments).enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(
+                " · ".to_owned(),
+                Style::default().fg(palette.separator),
+            ));
+        }
+        spans.extend(segment);
+    }
+
+    spans
 }
 
 fn edited_files_rail_line(
     dirty_preview: &[String],
     dirty_file_count: usize,
     width: u16,
+    extra_wide: bool,
+    wide: bool,
     palette: &Palette,
-) -> Line<'static> {
+) -> Vec<Span<'static>> {
     let rail_width = usize::from(width);
     let first_file_label = dirty_preview
         .first()
@@ -2147,7 +2243,11 @@ fn edited_files_rail_line(
     let second_file_label = dirty_preview
         .get(1)
         .map(|path| file_name_tail(path.as_str()));
-    let shown_file_count = dirty_preview.len().min(2);
+    let shown_file_count = if width < 90 {
+        1
+    } else {
+        dirty_preview.len().min(2)
+    };
     let remaining_count = dirty_file_count.saturating_sub(shown_file_count);
     let mut spans = Vec::new();
 
@@ -2168,7 +2268,9 @@ fn edited_files_rail_line(
             .add_modifier(Modifier::BOLD),
     ));
 
-    if let Some(second_file_label) = second_file_label {
+    if shown_file_count > 1
+        && let Some(second_file_label) = second_file_label
+    {
         let second_label = truncate_path_start(second_file_label.as_str(), rail_width.min(22));
         spans.push(Span::styled(
             " · ".to_owned(),
@@ -2178,17 +2280,26 @@ fn edited_files_rail_line(
     }
 
     if remaining_count > 0 {
+        let more_label = if extra_wide || wide {
+            format!("+{remaining_count} more")
+        } else {
+            format!("+{dirty_file_count}")
+        };
         spans.push(Span::styled(
             " · ".to_owned(),
             Style::default().fg(palette.separator),
         ));
-        spans.push(Span::styled(
-            format!("+{remaining_count} more"),
-            Style::default().fg(palette.dim),
-        ));
+        spans.push(Span::styled(more_label, Style::default().fg(palette.dim)));
     }
 
-    Line::from(spans)
+    spans
+}
+
+fn rail_segment(label: String, color: Color, palette: &Palette) -> Vec<Span<'static>> {
+    vec![
+        Span::styled("• ".to_owned(), Style::default().fg(color)),
+        Span::styled(label, Style::default().fg(palette.dim)),
+    ]
 }
 
 fn file_name_tail(path: &str) -> String {
@@ -3044,6 +3155,11 @@ mod tests {
         session_id: String,
         worktree_dirty: bool,
         dirty_files: Vec<String>,
+        active_subagent_count: Option<usize>,
+        running_task_count: Option<usize>,
+        overdue_task_count: Option<usize>,
+        pending_approval_count: Option<usize>,
+        attention_approval_count: Option<usize>,
     }
 
     impl TestPane {
@@ -3066,6 +3182,11 @@ mod tests {
                 session_id: "test-sess".into(),
                 worktree_dirty: false,
                 dirty_files: Vec::new(),
+                active_subagent_count: None,
+                running_task_count: None,
+                overdue_task_count: None,
+                pending_approval_count: None,
+                attention_approval_count: None,
             }
         }
     }
@@ -3112,6 +3233,21 @@ mod tests {
         }
         fn dirty_file_preview(&self) -> &[String] {
             self.dirty_files.as_slice()
+        }
+        fn active_subagent_count(&self) -> Option<usize> {
+            self.active_subagent_count
+        }
+        fn running_task_count(&self) -> Option<usize> {
+            self.running_task_count
+        }
+        fn overdue_task_count(&self) -> Option<usize> {
+            self.overdue_task_count
+        }
+        fn pending_approval_count(&self) -> Option<usize> {
+            self.pending_approval_count
+        }
+        fn attention_approval_count(&self) -> Option<usize> {
+            self.attention_approval_count
         }
     }
 
@@ -3489,6 +3625,37 @@ mod tests {
             text.contains("+1 more"),
             "context rail should show remaining count"
         );
+    }
+
+    #[test]
+    fn draw_surfaces_operational_context_in_shared_rail() {
+        let backend = TestBackend::new(140, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut shell = TestShell::idle();
+        shell.pane.worktree_dirty = true;
+        shell.pane.dirty_files = vec![
+            "crates/app/src/chat/tui/render.rs".to_owned(),
+            "crates/app/src/chat/tui/shell.rs".to_owned(),
+        ];
+        shell.pane.attention_approval_count = Some(1);
+        shell.pane.pending_approval_count = Some(2);
+        shell.pane.running_task_count = Some(3);
+        shell.pane.active_subagent_count = Some(2);
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("edits"), "text={text:?}");
+        assert!(text.contains("apr! 1"), "text={text:?}");
+        assert!(text.contains("apr 1"), "text={text:?}");
+        assert!(text.contains("bg 3"), "text={text:?}");
+        assert!(text.contains("sub 2"), "text={text:?}");
     }
 
     #[test]
