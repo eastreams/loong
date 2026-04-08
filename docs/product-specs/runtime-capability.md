@@ -9,7 +9,8 @@ experiment should be crystallized into a reusable lower-layer capability.
 ## Acceptance Criteria
 
 - [ ] LoongClaw exposes a `runtime-capability` command family with `propose`,
-      `review`, `show`, `index`, `plan`, and `apply` subcommands.
+      `review`, `show`, `index`, `plan`, `apply`, and `activate`
+      subcommands.
 - [ ] `runtime-capability propose` creates a persisted capability-candidate
       artifact from one finished `runtime-experiment` run.
 - [ ] The candidate artifact records one explicit target type:
@@ -42,16 +43,21 @@ experiment should be crystallized into a reusable lower-layer capability.
       promotable family under the target delivery surface without mutating live
       runtime state, reuses the planned payload shape, and remains idempotent
       when the output already matches.
+- [ ] `runtime-capability activate` consumes one applied draft artifact and
+      either dry-runs or applies one governed activation path for the supported
+      target kind, remaining idempotent when the live runtime already matches
+      the draft.
 - [ ] Product docs describe `runtime-capability` as the governed review layer
-      above `runtime-experiment`, with `index`/readiness, `plan`, and `apply`
-      forming the promotion ladder below any future activation executor or
-      automated promotion loop.
+      above `runtime-experiment`, with `index`/readiness, `plan`, `apply`, and
+      `activate` forming the promotion ladder below any future automated
+      promotion loop.
 
 ## Out of Scope
 
 - Automatically generating or applying managed skills
-- Automatically generating or applying programmatic flows
-- Automatically mutating `profile_note` or runtime config
+- Automatically generating or activating programmatic flows
+- Automatically mutating `profile_note` or runtime config without an explicit
+  operator activation step
 - Automatic promotion, rollback, or optimizer orchestration
 - Persisted capability-family state or background indexing daemons
 - Persisted promotion-plan artifacts or plan caches

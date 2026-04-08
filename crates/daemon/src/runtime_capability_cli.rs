@@ -1,4 +1,5 @@
 use crate::Capability;
+use crate::mvp;
 use crate::runtime_experiment_cli::{
     RuntimeExperimentArtifactDocument, RuntimeExperimentDecision,
     RuntimeExperimentShowCommandOptions, RuntimeExperimentSnapshotDelta, RuntimeExperimentStatus,
@@ -6,6 +7,7 @@ use crate::runtime_experiment_cli::{
 };
 use crate::sha2::{self, Digest};
 use clap::{Args, Subcommand, ValueEnum};
+use kernel::ToolCoreRequest;
 use loongclaw_spec::CliResult;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -14,6 +16,7 @@ use std::{
     fs,
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -38,6 +41,8 @@ pub enum RuntimeCapabilityCommands {
     Plan(RuntimeCapabilityPlanCommandOptions),
     /// Materialize one governed draft artifact from one promotable capability family
     Apply(RuntimeCapabilityApplyCommandOptions),
+    /// Activate one governed draft artifact into the current runtime configuration
+    Activate(RuntimeCapabilityActivateCommandOptions),
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -108,6 +113,20 @@ pub struct RuntimeCapabilityApplyCommandOptions {
     pub root: String,
     #[arg(long)]
     pub family_id: String,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCapabilityActivateCommandOptions {
+    #[arg(long)]
+    pub config: Option<String>,
+    #[arg(long)]
+    pub artifact: String,
+    #[arg(long, default_value_t = false)]
+    pub apply: bool,
+    #[arg(long, default_value_t = false)]
+    pub replace: bool,
     #[arg(long, default_value_t = false)]
     pub json: bool,
 }
@@ -381,6 +400,30 @@ pub struct RuntimeCapabilityApplyReport {
     pub applied_artifact: RuntimeCapabilityAppliedArtifactDocument,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCapabilityActivateOutcome {
+    DryRun,
+    Activated,
+    AlreadyActivated,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityActivateReport {
+    pub generated_at: String,
+    pub artifact_path: String,
+    pub config_path: String,
+    pub artifact_id: String,
+    pub target: RuntimeCapabilityTarget,
+    pub delivery_surface: String,
+    pub activation_surface: String,
+    pub target_path: String,
+    pub apply_requested: bool,
+    pub replace_requested: bool,
+    pub outcome: RuntimeCapabilityActivateOutcome,
+    pub notes: Vec<String>,
+}
+
 pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResult<()> {
     match command {
         RuntimeCapabilityCommands::Propose(options) => {
@@ -412,6 +455,11 @@ pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResu
             let as_json = options.json;
             let report = execute_runtime_capability_apply_command(options)?;
             emit_runtime_capability_apply_report(&report, as_json)
+        }
+        RuntimeCapabilityCommands::Activate(options) => {
+            let as_json = options.json;
+            let report = execute_runtime_capability_activate_command(options)?;
+            emit_runtime_capability_activate_report(&report, as_json)
         }
     }
 }
@@ -607,6 +655,32 @@ pub fn execute_runtime_capability_apply_command(
     })
 }
 
+pub fn execute_runtime_capability_activate_command(
+    options: RuntimeCapabilityActivateCommandOptions,
+) -> CliResult<RuntimeCapabilityActivateReport> {
+    let artifact_path = Path::new(options.artifact.as_str());
+    let applied_artifact = load_runtime_capability_apply_artifact(artifact_path)?;
+    let canonical_artifact_path = canonicalize_existing_path(artifact_path)?;
+
+    match applied_artifact.target {
+        RuntimeCapabilityTarget::ManagedSkill => execute_runtime_capability_activate_managed_skill(
+            options,
+            canonical_artifact_path,
+            applied_artifact,
+        ),
+        RuntimeCapabilityTarget::ProfileNoteAddendum => {
+            execute_runtime_capability_activate_profile_note_addendum(
+                options,
+                canonical_artifact_path,
+                applied_artifact,
+            )
+        }
+        RuntimeCapabilityTarget::ProgrammaticFlow => Err(
+            "runtime capability activate does not yet support programmatic_flow artifacts because no governed activation surface exists yet".to_owned(),
+        ),
+    }
+}
+
 fn emit_runtime_capability_artifact(
     artifact: &RuntimeCapabilityArtifactDocument,
     as_json: bool,
@@ -667,6 +741,22 @@ fn emit_runtime_capability_apply_report(
     }
 
     println!("{}", render_runtime_capability_apply_text(report));
+    Ok(())
+}
+
+fn emit_runtime_capability_activate_report(
+    report: &RuntimeCapabilityActivateReport,
+    as_json: bool,
+) -> CliResult<()> {
+    if as_json {
+        let pretty = serde_json::to_string_pretty(report).map_err(|error| {
+            format!("serialize runtime capability activate report failed: {error}")
+        })?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("{}", render_runtime_capability_activate_text(report));
     Ok(())
 }
 
@@ -1477,6 +1567,374 @@ fn write_pretty_json_file_create_new(path: &Path, value: &impl Serialize) -> Cli
     Ok(())
 }
 
+fn execute_runtime_capability_activate_managed_skill(
+    options: RuntimeCapabilityActivateCommandOptions,
+    artifact_path: String,
+    applied_artifact: RuntimeCapabilityAppliedArtifactDocument,
+) -> CliResult<RuntimeCapabilityActivateReport> {
+    if options.replace && !options.apply {
+        return Err("runtime capability activate --replace requires --apply".to_owned());
+    }
+
+    let artifact_id = applied_artifact.artifact_id;
+    let target = applied_artifact.target;
+    let delivery_surface = applied_artifact.delivery_surface;
+    let payload = match applied_artifact.payload {
+        RuntimeCapabilityDraftPayload::ManagedSkillBundle { files } => files,
+        RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. }
+        | RuntimeCapabilityDraftPayload::ProfileNoteAddendum { .. } => {
+            return Err(
+                "runtime capability activate expected a managed skill bundle payload".to_owned(),
+            );
+        }
+    };
+
+    let (resolved_config_path, config) = mvp::config::load(options.config.as_deref())?;
+    let tool_runtime =
+        build_runtime_capability_activation_tool_runtime(&resolved_config_path, &config, true);
+    let install_root = resolve_runtime_capability_activation_install_root(&tool_runtime)?;
+    let target_path = install_root.join(artifact_id.as_str());
+    let canonical_target_path = canonicalize_optional_path(target_path.as_path())?;
+    let already_matches =
+        managed_skill_payload_matches_install_root(&payload, target_path.as_path())?;
+
+    if !options.apply {
+        let notes = vec![
+            "activation is dry-run by default".to_owned(),
+            "managed skill activation reuses external_skills.install under a governed runtime config"
+                .to_owned(),
+        ];
+        return Ok(RuntimeCapabilityActivateReport {
+            generated_at: now_rfc3339()?,
+            artifact_path,
+            config_path: resolved_config_path.display().to_string(),
+            artifact_id,
+            target,
+            delivery_surface,
+            activation_surface: "external_skills.install".to_owned(),
+            target_path: canonical_target_path,
+            apply_requested: false,
+            replace_requested: options.replace,
+            outcome: RuntimeCapabilityActivateOutcome::DryRun,
+            notes,
+        });
+    }
+
+    if already_matches {
+        let notes = vec!["managed skill already matches the applied draft payload".to_owned()];
+        return Ok(RuntimeCapabilityActivateReport {
+            generated_at: now_rfc3339()?,
+            artifact_path,
+            config_path: resolved_config_path.display().to_string(),
+            artifact_id,
+            target,
+            delivery_surface,
+            activation_surface: "external_skills.install".to_owned(),
+            target_path: canonical_target_path,
+            apply_requested: true,
+            replace_requested: options.replace,
+            outcome: RuntimeCapabilityActivateOutcome::AlreadyActivated,
+            notes,
+        });
+    }
+
+    let staging_base_root = resolve_runtime_capability_activation_staging_base_root(&tool_runtime)?;
+    let staging_root =
+        write_runtime_capability_draft_files_to_staging(&payload, staging_base_root.as_path())?;
+    let staging_path = staging_root.display().to_string();
+    let install_payload = json!({
+        "path": staging_path,
+        "skill_id": artifact_id,
+        "replace": options.replace,
+    });
+    let install_request = ToolCoreRequest {
+        tool_name: "external_skills.install".to_owned(),
+        payload: install_payload,
+    };
+    let install_result = mvp::tools::execute_tool_core_with_config(install_request, &tool_runtime);
+    let cleanup_result = fs::remove_dir_all(&staging_root);
+    if let Err(error) = cleanup_result {
+        let cleanup_error = format!(
+            "cleanup managed skill staging root {} failed: {error}",
+            staging_root.display()
+        );
+        return Err(cleanup_error);
+    }
+    install_result
+        .map_err(|error| format!("activate managed skill `{}` failed: {error}", artifact_id))?;
+
+    let notes =
+        vec!["managed skill installed into the governed external skills runtime".to_owned()];
+    Ok(RuntimeCapabilityActivateReport {
+        generated_at: now_rfc3339()?,
+        artifact_path,
+        config_path: resolved_config_path.display().to_string(),
+        artifact_id,
+        target,
+        delivery_surface,
+        activation_surface: "external_skills.install".to_owned(),
+        target_path: canonical_target_path,
+        apply_requested: true,
+        replace_requested: options.replace,
+        outcome: RuntimeCapabilityActivateOutcome::Activated,
+        notes,
+    })
+}
+
+fn execute_runtime_capability_activate_profile_note_addendum(
+    options: RuntimeCapabilityActivateCommandOptions,
+    artifact_path: String,
+    applied_artifact: RuntimeCapabilityAppliedArtifactDocument,
+) -> CliResult<RuntimeCapabilityActivateReport> {
+    if options.replace {
+        return Err(
+            "runtime capability activate --replace is not supported for profile_note_addendum artifacts"
+                .to_owned(),
+        );
+    }
+
+    let artifact_id = applied_artifact.artifact_id;
+    let target = applied_artifact.target;
+    let delivery_surface = applied_artifact.delivery_surface;
+    let addendum = match applied_artifact.payload {
+        RuntimeCapabilityDraftPayload::ProfileNoteAddendum { content } => content,
+        RuntimeCapabilityDraftPayload::ManagedSkillBundle { .. }
+        | RuntimeCapabilityDraftPayload::ProgrammaticFlowSpec { .. } => {
+            return Err(
+                "runtime capability activate expected a profile note addendum payload".to_owned(),
+            );
+        }
+    };
+
+    let (resolved_config_path, mut config) = mvp::config::load(options.config.as_deref())?;
+    let merged_profile_note = mvp::migration::merge_profile_note_addendum(
+        config.memory.profile_note.as_deref(),
+        addendum.as_str(),
+    );
+    let canonical_config_path = canonicalize_optional_path(resolved_config_path.as_path())?;
+
+    if !options.apply {
+        let note = if merged_profile_note.is_some() {
+            "profile note activation would append the advisory addendum".to_owned()
+        } else {
+            "profile note already contains the advisory addendum".to_owned()
+        };
+        return Ok(RuntimeCapabilityActivateReport {
+            generated_at: now_rfc3339()?,
+            artifact_path,
+            config_path: canonical_config_path.clone(),
+            artifact_id,
+            target,
+            delivery_surface,
+            activation_surface: "config.memory.profile_note".to_owned(),
+            target_path: canonical_config_path,
+            apply_requested: false,
+            replace_requested: false,
+            outcome: RuntimeCapabilityActivateOutcome::DryRun,
+            notes: vec![note],
+        });
+    }
+
+    let Some(merged_profile_note) = merged_profile_note else {
+        return Ok(RuntimeCapabilityActivateReport {
+            generated_at: now_rfc3339()?,
+            artifact_path,
+            config_path: canonical_config_path.clone(),
+            artifact_id,
+            target,
+            delivery_surface,
+            activation_surface: "config.memory.profile_note".to_owned(),
+            target_path: canonical_config_path,
+            apply_requested: true,
+            replace_requested: false,
+            outcome: RuntimeCapabilityActivateOutcome::AlreadyActivated,
+            notes: vec!["profile note already contains the advisory addendum".to_owned()],
+        });
+    };
+
+    config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
+    config.memory.profile_note = Some(merged_profile_note);
+    let resolved_config_path_string = resolved_config_path.display().to_string();
+    mvp::config::write(Some(resolved_config_path_string.as_str()), &config, true)?;
+
+    Ok(RuntimeCapabilityActivateReport {
+        generated_at: now_rfc3339()?,
+        artifact_path,
+        config_path: canonical_config_path.clone(),
+        artifact_id,
+        target,
+        delivery_surface,
+        activation_surface: "config.memory.profile_note".to_owned(),
+        target_path: canonical_config_path,
+        apply_requested: true,
+        replace_requested: false,
+        outcome: RuntimeCapabilityActivateOutcome::Activated,
+        notes: vec![
+            "profile_note_addendum activation also enforces profile_plus_window memory mode"
+                .to_owned(),
+        ],
+    })
+}
+
+fn build_runtime_capability_activation_tool_runtime(
+    resolved_config_path: &Path,
+    config: &mvp::config::LoongClawConfig,
+    external_skills_enabled: bool,
+) -> mvp::tools::runtime_config::ToolRuntimeConfig {
+    let mut adjusted_config = config.clone();
+    adjusted_config.external_skills.enabled = external_skills_enabled;
+    mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+        &adjusted_config,
+        Some(resolved_config_path),
+    )
+}
+
+fn resolve_runtime_capability_activation_install_root(
+    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> CliResult<PathBuf> {
+    if let Some(path) = tool_runtime.external_skills.install_root.clone() {
+        return Ok(path);
+    }
+
+    let file_root = match tool_runtime.file_root.clone() {
+        Some(path) => path,
+        None => std::env::current_dir().map_err(|error| {
+            format!("read current dir for managed skill activation failed: {error}")
+        })?,
+    };
+    Ok(file_root.join("external-skills-installed"))
+}
+
+fn resolve_runtime_capability_activation_staging_base_root(
+    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> CliResult<PathBuf> {
+    let file_root = match tool_runtime.file_root.clone() {
+        Some(path) => path,
+        None => std::env::current_dir()
+            .map_err(|error| format!("read current dir for activation staging failed: {error}"))?,
+    };
+    let staging_base_root = file_root.join(".runtime-capability-staging");
+    Ok(staging_base_root)
+}
+
+fn managed_skill_payload_matches_install_root(
+    files: &BTreeMap<String, String>,
+    install_root: &Path,
+) -> CliResult<bool> {
+    if !install_root.exists() {
+        return Ok(false);
+    }
+
+    for (relative_path, expected_contents) in files {
+        let normalized_relative_path =
+            normalize_runtime_capability_relative_path(relative_path.as_str())?;
+        let candidate_path = install_root.join(normalized_relative_path.as_path());
+        if !candidate_path.exists() {
+            return Ok(false);
+        }
+        let actual_contents = fs::read_to_string(&candidate_path).map_err(|error| {
+            format!(
+                "read activated managed skill file {} failed: {error}",
+                candidate_path.display()
+            )
+        })?;
+        if actual_contents != *expected_contents {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn write_runtime_capability_draft_files_to_staging(
+    files: &BTreeMap<String, String>,
+    staging_base_root: &Path,
+) -> CliResult<PathBuf> {
+    let staging_root =
+        build_runtime_capability_temp_dir(staging_base_root, "activate-managed-skill");
+    fs::create_dir_all(&staging_root).map_err(|error| {
+        format!(
+            "create runtime capability staging directory {} failed: {error}",
+            staging_root.display()
+        )
+    })?;
+
+    for (relative_path, contents) in files {
+        let normalized_relative_path =
+            normalize_runtime_capability_relative_path(relative_path.as_str())?;
+        let output_path = staging_root.join(normalized_relative_path.as_path());
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "create runtime capability draft parent {} failed: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::write(&output_path, contents).map_err(|error| {
+            format!(
+                "write runtime capability draft file {} failed: {error}",
+                output_path.display()
+            )
+        })?;
+    }
+
+    Ok(staging_root)
+}
+
+fn normalize_runtime_capability_relative_path(raw: &str) -> CliResult<PathBuf> {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Err(format!(
+            "runtime capability draft file path {} must be relative",
+            path.display()
+        ));
+    }
+
+    let mut normalized_path = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(value) => normalized_path.push(value),
+            std::path::Component::ParentDir => {
+                return Err(format!(
+                    "runtime capability draft file path {} cannot escape its bundle root",
+                    path.display()
+                ));
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(format!(
+                    "runtime capability draft file path {} must stay relative",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    if normalized_path.as_os_str().is_empty() {
+        return Err("runtime capability draft file path cannot be empty".to_owned());
+    }
+
+    Ok(normalized_path)
+}
+
+fn build_runtime_capability_temp_dir(staging_base_root: &Path, label: &str) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let process_id = std::process::id();
+    let directory_name = format!("loongclaw-runtime-capability-{label}-{process_id}-{timestamp}");
+    staging_base_root.join(directory_name)
+}
+
+fn canonicalize_optional_path(path: &Path) -> CliResult<String> {
+    if path.exists() {
+        return canonicalize_existing_path(path);
+    }
+    Ok(path.display().to_string())
+}
+
 fn canonicalize_existing_path(path: &Path) -> CliResult<String> {
     dunce::canonicalize(path)
         .map(|resolved| resolved.display().to_string())
@@ -1678,6 +2136,29 @@ pub fn render_runtime_capability_apply_text(report: &RuntimeCapabilityApplyRepor
     .join("\n")
 }
 
+pub fn render_runtime_capability_activate_text(report: &RuntimeCapabilityActivateReport) -> String {
+    [
+        format!("artifact_path={}", report.artifact_path),
+        format!("config_path={}", report.config_path),
+        format!("artifact_id={}", report.artifact_id),
+        format!("target={}", render_target(report.target)),
+        format!("delivery_surface={}", report.delivery_surface),
+        format!("activation_surface={}", report.activation_surface),
+        format!("target_path={}", report.target_path),
+        format!("apply_requested={}", report.apply_requested),
+        format!("replace_requested={}", report.replace_requested),
+        format!(
+            "outcome={}",
+            render_runtime_capability_activate_outcome(report.outcome)
+        ),
+        format!(
+            "notes={}",
+            render_string_values_with_separator(&report.notes, " | ")
+        ),
+    ]
+    .join("\n")
+}
+
 fn render_metrics(metrics: &std::collections::BTreeMap<String, f64>) -> String {
     if metrics.is_empty() {
         "-".to_owned()
@@ -1754,6 +2235,16 @@ fn render_runtime_capability_apply_outcome(outcome: RuntimeCapabilityApplyOutcom
     match outcome {
         RuntimeCapabilityApplyOutcome::Applied => "applied",
         RuntimeCapabilityApplyOutcome::AlreadyApplied => "already_applied",
+    }
+}
+
+fn render_runtime_capability_activate_outcome(
+    outcome: RuntimeCapabilityActivateOutcome,
+) -> &'static str {
+    match outcome {
+        RuntimeCapabilityActivateOutcome::DryRun => "dry_run",
+        RuntimeCapabilityActivateOutcome::Activated => "activated",
+        RuntimeCapabilityActivateOutcome::AlreadyActivated => "already_activated",
     }
 }
 

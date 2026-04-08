@@ -2747,6 +2747,452 @@ fn runtime_capability_apply_rejects_non_promotable_family() {
 }
 
 #[test]
+fn runtime_capability_activate_managed_skill_apply_installs_skill_and_is_idempotent() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-activate-managed-skill");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-managed-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-managed-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_a_path = root.join("artifacts/runtime-capability-activate-managed-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-activate-managed-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "activate-managed-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "activate-managed-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-managed-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-managed-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    let apply_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_apply_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityApplyCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                family_id: family.family_id.clone(),
+                json: false,
+            },
+        )
+        .expect("runtime capability apply should succeed");
+
+    let activate_options =
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateCommandOptions {
+            config: Some(config_path.display().to_string()),
+            artifact: apply_report.output_path,
+            apply: true,
+            replace: false,
+            json: false,
+        };
+    let activate_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            activate_options.clone(),
+        )
+        .expect("managed skill activation should succeed");
+
+    assert_eq!(
+        activate_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateOutcome::Activated
+    );
+    assert_eq!(
+        activate_report.activation_surface,
+        "external_skills.install"
+    );
+    let installed_skill_path = root
+        .join("external-skills-installed")
+        .join(apply_report.applied_artifact.artifact_id.as_str());
+    let installed_skill_markdown_path = installed_skill_path.join("SKILL.md");
+    assert!(
+        installed_skill_markdown_path.exists(),
+        "activation should install the draft skill"
+    );
+
+    let second_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            activate_options,
+        )
+        .expect("managed skill activation should be idempotent");
+    assert_eq!(
+        second_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateOutcome::AlreadyActivated
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_activate_profile_note_addendum_updates_config_and_is_idempotent() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-activate-profile-note");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-profile-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-profile-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_a_path = root.join("artifacts/runtime-capability-activate-profile-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-activate-profile-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "activate-profile-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum,
+        "Capture browser preview onboarding guidance as advisory profile context",
+        "Browser preview onboarding guidance only",
+        &["memory_read"],
+        &["browser", "profile"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "activate-profile-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum,
+        "Capture browser preview onboarding guidance as advisory profile context",
+        "Browser preview onboarding guidance only",
+        &["memory_read"],
+        &["browser", "profile"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-profile-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-profile-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    let apply_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_apply_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityApplyCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                family_id: family.family_id.clone(),
+                json: false,
+            },
+        )
+        .expect("runtime capability apply should succeed");
+
+    let activate_options =
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateCommandOptions {
+            config: Some(config_path.display().to_string()),
+            artifact: apply_report.output_path,
+            apply: true,
+            replace: false,
+            json: false,
+        };
+    let activate_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            activate_options.clone(),
+        )
+        .expect("profile note activation should succeed");
+
+    assert_eq!(
+        activate_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateOutcome::Activated
+    );
+    let config_path_text = config_path.display().to_string();
+    let (_, updated_config) =
+        mvp::config::load(Some(config_path_text.as_str())).expect("load updated config");
+    assert_eq!(
+        updated_config.memory.profile,
+        mvp::config::MemoryProfile::ProfilePlusWindow
+    );
+    let updated_profile_note = updated_config
+        .memory
+        .profile_note
+        .as_deref()
+        .expect("profile note should be present");
+    assert!(
+        updated_profile_note.contains("Runtime Capability Draft"),
+        "activation should append the advisory addendum"
+    );
+
+    let second_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            activate_options,
+        )
+        .expect("profile note activation should be idempotent");
+    assert_eq!(
+        second_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateOutcome::AlreadyActivated
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_activate_rejects_programmatic_flow_until_activation_surface_exists() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-activate-programmatic-flow");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-flow-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-flow-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_a_path = root.join("artifacts/runtime-capability-activate-flow-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-activate-flow-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "activate-flow-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProgrammaticFlow,
+        "Codify browser preview onboarding as a deterministic programmatic flow",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "flow"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "activate-flow-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProgrammaticFlow,
+        "Codify browser preview onboarding as a deterministic programmatic flow",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "flow"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-flow-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-flow-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    let apply_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_apply_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityApplyCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                family_id: family.family_id.clone(),
+                json: false,
+            },
+        )
+        .expect("runtime capability apply should succeed");
+
+    let error =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateCommandOptions {
+                config: Some(config_path.display().to_string()),
+                artifact: apply_report.output_path,
+                apply: true,
+                replace: false,
+                json: false,
+            },
+        )
+        .expect_err("programmatic flow activation should fail closed");
+
+    assert!(
+        error.contains("does not yet support programmatic_flow artifacts"),
+        "activation should explain why the flow stays blocked: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_activate_managed_skill_dry_run_reports_install_target() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-activate-managed-dry-run");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-managed-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "activate-managed-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let candidate_a_path = root.join("artifacts/runtime-capability-activate-managed-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-activate-managed-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "activate-managed-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "activate-managed-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-managed-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "activate-managed-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    let apply_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_apply_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityApplyCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                family_id: family.family_id.clone(),
+                json: false,
+            },
+        )
+        .expect("runtime capability apply should succeed");
+
+    let activate_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_activate_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateCommandOptions {
+                config: Some(config_path.display().to_string()),
+                artifact: apply_report.output_path,
+                apply: false,
+                replace: false,
+                json: false,
+            },
+        )
+        .expect("runtime capability activate dry-run should succeed");
+
+    assert_eq!(
+        activate_report.outcome,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityActivateOutcome::DryRun
+    );
+    assert_eq!(
+        activate_report.activation_surface,
+        "external_skills.install"
+    );
+    assert!(
+        activate_report
+            .target_path
+            .contains("external-skills-installed"),
+        "dry-run should point at the managed skill install root"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_capability_show_text_renders_snapshot_delta_summary() {
     let root = unique_temp_dir("loongclaw-runtime-capability-show-text-delta-summary");
     let config_path = write_runtime_capability_config(&root);
