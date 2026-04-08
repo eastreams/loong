@@ -114,7 +114,7 @@ async fn run_gateway_runtime_with_hooks_for_test(
         spec.surfaces.len(),
     )?);
     let owner_token = tracker.owner_token().to_owned();
-    let acp_manager = Arc::new(AcpSessionManager::default());
+    let acp_manager = build_gateway_acp_session_manager(&loaded_config.config)?;
     let control_surface_result =
         start_gateway_control_surface(runtime_dir, &loaded_config, Some(acp_manager)).await;
     let control_surface = match control_surface_result {
@@ -322,6 +322,13 @@ fn default_gateway_owner_status(runtime_dir: &Path) -> GatewayOwnerStatus {
         port: None,
         token_path: None,
     }
+}
+
+fn build_gateway_acp_session_manager(
+    config: &crate::mvp::config::LoongClawConfig,
+) -> CliResult<Arc<AcpSessionManager>> {
+    let manager = crate::mvp::acp::shared_acp_session_manager(config)?;
+    Ok(manager)
 }
 
 fn render_gateway_status_text(status: &GatewayOwnerStatus) -> String {

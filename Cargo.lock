@@ -2594,6 +2594,7 @@ dependencies = [
 name = "loongclaw"
 version = "0.1.0-alpha.3"
 dependencies = [
+ "async-trait",
  "axum",
  "base64",
  "chrono",

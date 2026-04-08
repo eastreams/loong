@@ -99,6 +99,7 @@ path = "src/main.rs"
 
 [dev-dependencies]
 loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec", features = ["test-hooks"] }
+async-trait.workspace = true
 sha2.workspace = true
 syn = { version = "2", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
