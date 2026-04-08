@@ -9432,6 +9432,9 @@ mod tests {
 
     #[test]
     fn discord_status_splits_config_backed_send_and_stub_serve() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.remove(crate::config::DISCORD_BOT_TOKEN_ENV);
+
         let mut config = LoongClawConfig::default();
         config.discord.enabled = true;
 

@@ -62,6 +62,7 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 }
 
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
+    validate_migrate_cli_required_flags(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
     let kernel_ctx = mvp::context::bootstrap_kernel_context_with_config(
         "daemon-migrate-cli",
@@ -79,6 +80,38 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
     .map_err(|error| translate_migrate_cli_error(&options, error))?;
 
     render_migrate_tool_outcome(&options, outcome)
+}
+
+fn validate_migrate_cli_required_flags(options: &MigrateCommandOptions) -> CliResult<()> {
+    let mode_id = options.mode.as_id();
+    let requires_output = matches!(
+        options.mode,
+        MigrateMode::Apply | MigrateMode::ApplySelected | MigrateMode::RollbackLastApply
+    );
+    let requires_input = !matches!(options.mode, MigrateMode::RollbackLastApply);
+
+    let output_is_present = required_cli_flag_is_present(options.output.as_deref());
+    let input_is_present = required_cli_flag_is_present(options.input.as_deref());
+
+    if requires_output && !output_is_present {
+        let error = format!("`--output` is required for `loongclaw migrate --mode {mode_id}`");
+        return Err(error);
+    }
+
+    if requires_input && !input_is_present {
+        let error = format!("`--input` is required for `loongclaw migrate --mode {mode_id}`");
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+fn required_cli_flag_is_present(raw: Option<&str>) -> bool {
+    let Some(raw) = raw else {
+        return false;
+    };
+    let normalized = raw.trim();
+    !normalized.is_empty()
 }
 
 fn block_on_migrate_cli<F>(future: F) -> CliResult<()>

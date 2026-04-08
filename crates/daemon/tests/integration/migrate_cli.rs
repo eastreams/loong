@@ -371,6 +371,54 @@ fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
 }
 
 #[test]
+fn migrate_cli_ux_rollback_mode_reports_flag_level_output_requirement() {
+    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
+        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+            input: None,
+            output: None,
+            source: None,
+            mode: loongclaw_daemon::migrate_cli::MigrateMode::RollbackLastApply,
+            json: false,
+            source_id: None,
+            safe_profile_merge: false,
+            primary_source_id: None,
+            apply_external_skills_plan: false,
+            force: false,
+        },
+    )
+    .expect_err("rollback mode without --output should fail");
+
+    assert_eq!(
+        error,
+        "`--output` is required for `loongclaw migrate --mode rollback_last_apply`"
+    );
+}
+
+#[test]
+fn migrate_cli_ux_discover_mode_reports_flag_level_input_requirement() {
+    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
+        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+            input: None,
+            output: None,
+            source: None,
+            mode: loongclaw_daemon::migrate_cli::MigrateMode::Discover,
+            json: false,
+            source_id: None,
+            safe_profile_merge: false,
+            primary_source_id: None,
+            apply_external_skills_plan: false,
+            force: false,
+        },
+    )
+    .expect_err("discover mode without --input should fail");
+
+    assert_eq!(
+        error,
+        "`--input` is required for `loongclaw migrate --mode discover`"
+    );
+}
+
+#[test]
 fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
         .args(["migrate", "--help"])
