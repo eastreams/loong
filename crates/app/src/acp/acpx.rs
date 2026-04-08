@@ -1998,6 +1998,7 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn doctor_accepts_fake_version_command() {
+        let _env = crate::test_support::ScopedEnv::new();
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe");
         let script_path = temp_dir.join("fake-acpx");
         write_executable_script_atomically(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
@@ -2069,6 +2070,7 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn runtime_backend_uses_agent_proxy_when_mcp_servers_requested() {
+        let _env = crate::test_support::ScopedEnv::new();
         let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-proxy");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
