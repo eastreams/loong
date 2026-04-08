@@ -182,6 +182,34 @@ pub(crate) fn render_provider_credential_source_value(raw: Option<&str>) -> Opti
     normalized.or_else(|| Some("environment variable".to_owned()))
 }
 
+pub(crate) fn render_configured_provider_credential_source_value(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<String> {
+    let configured_oauth = provider.configured_oauth_access_token_env_override();
+    let rendered_oauth = render_provider_credential_source_value(configured_oauth.as_deref());
+    if rendered_oauth.is_some() {
+        return rendered_oauth;
+    }
+
+    let configured_api_key = provider.configured_api_key_env_override();
+    render_provider_credential_source_value(configured_api_key.as_deref())
+}
+
+pub(crate) fn preferred_provider_credential_env_name(
+    config: &mvp::config::LoongClawConfig,
+) -> String {
+    let provider = &config.provider;
+    if let Some(binding) = configured_provider_credential_env_binding(provider) {
+        return binding.env_name;
+    }
+    if provider_has_inline_credential(provider) {
+        return String::new();
+    }
+    preferred_provider_credential_env_binding(provider)
+        .map(|binding| binding.env_name)
+        .unwrap_or_default()
+}
+
 fn binding_for_env_name(
     field: ProviderCredentialEnvField,
     raw_env_name: Option<&str>,

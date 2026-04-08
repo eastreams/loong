@@ -96,6 +96,7 @@ mod cli_json;
 mod command_kind;
 pub mod completions_cli;
 mod control_plane_server;
+mod copilot_onboarding;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
 mod env_compat;
