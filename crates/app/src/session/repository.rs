@@ -3137,52 +3137,60 @@ impl SessionRepository {
             return Ok(Vec::new());
         }
 
+        let turn_match_query = build_search_fts_query(normalized_query);
         let patterns = build_search_like_patterns(normalized_query);
-        if patterns.is_empty() {
+        if turn_match_query.is_none() && patterns.is_empty() {
             return Ok(Vec::new());
         }
 
         let mut hits = Vec::new();
-        hits.extend(Self::search_session_turns_with_conn(
-            conn,
-            session_id,
-            patterns.as_slice(),
-            limit,
-        )?);
-        hits.extend(Self::search_session_events_with_conn(
-            conn,
-            session_id,
-            patterns.as_slice(),
-            limit,
-        )?);
+        if let Some(turn_match_query) = turn_match_query.as_deref() {
+            let turn_hits =
+                Self::search_session_turns_with_conn(conn, session_id, turn_match_query, limit)?;
+            hits.extend(turn_hits);
+        }
+        if !patterns.is_empty() {
+            let event_hits = Self::search_session_events_with_conn(
+                conn,
+                session_id,
+                patterns.as_slice(),
+                limit,
+            )?;
+            hits.extend(event_hits);
+        }
         Ok(hits)
     }
 
     fn search_session_turns_with_conn(
         conn: &Connection,
         session_id: &str,
-        patterns: &[String],
+        match_query: &str,
         limit: usize,
     ) -> Result<Vec<SessionSearchRecord>, String> {
-        let where_clause = build_search_where_clause("lower(content)", patterns.len(), 2);
-        let sql = format!(
-            "SELECT id, session_id, role, content, ts
-             FROM turns
-             WHERE session_id = ?1
-               AND ({where_clause})
-             ORDER BY id DESC
-             LIMIT {limit}"
-        );
-
         let mut stmt = conn
-            .prepare(sql.as_str())
+            .prepare(
+                "SELECT persisted_turn.id,
+                        persisted_turn.session_id,
+                        persisted_turn.role,
+                        persisted_turn.content,
+                        persisted_turn.ts
+                 FROM memory_canonical_records_fts AS fts
+                 JOIN memory_canonical_records AS record
+                   ON record.record_id = fts.rowid
+                 JOIN turns AS persisted_turn
+                   ON persisted_turn.session_id = record.session_id
+                  AND persisted_turn.session_turn_index = record.session_turn_index
+                 WHERE memory_canonical_records_fts MATCH ?1
+                   AND persisted_turn.session_id = ?2
+                   AND record.kind IN ('user_turn', 'assistant_turn')
+                 ORDER BY bm25(memory_canonical_records_fts),
+                          persisted_turn.ts DESC,
+                          persisted_turn.id DESC
+                 LIMIT ?3",
+            )
             .map_err(|error| format!("prepare session search turns query failed: {error}"))?;
-        let mut bindings = Vec::with_capacity(patterns.len().saturating_add(1));
-        bindings.push(session_id.to_owned());
-        bindings.extend(patterns.iter().cloned());
-
         let rows = stmt
-            .query_map(params_from_iter(bindings.iter()), |row| {
+            .query_map(params![match_query, session_id, limit as i64], |row| {
                 Ok(RawSessionSearchTurnRecord {
                     id: row.get(0)?,
                     session_id: row.get(1)?,
@@ -3857,6 +3865,36 @@ fn build_search_like_patterns(normalized_query: &str) -> Vec<String> {
     }
 
     patterns
+}
+
+fn build_search_fts_query(normalized_query: &str) -> Option<String> {
+    let trimmed_query = normalized_query.trim();
+    if trimmed_query.is_empty() {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    let mut seen_terms = BTreeSet::new();
+
+    let escaped_query = trimmed_query.replace('"', "\"\"");
+    let quoted_query = format!("\"{escaped_query}\"");
+    if seen_terms.insert(quoted_query.clone()) {
+        terms.push(quoted_query);
+    }
+
+    for token in tokenize_search_query(normalized_query).into_iter().take(6) {
+        let escaped_token = token.replace('"', "\"\"");
+        let quoted_token = format!("\"{escaped_token}\"");
+        if seen_terms.insert(quoted_token.clone()) {
+            terms.push(quoted_token);
+        }
+    }
+
+    if terms.is_empty() {
+        return None;
+    }
+
+    Some(terms.join(" OR "))
 }
 
 fn tokenize_search_query(query: &str) -> Vec<String> {
@@ -4757,6 +4795,66 @@ mod tests {
         assert!(
             repo.is_session_visible("root-session", "grandchild-session")
                 .expect("root should see grandchild")
+        );
+    }
+
+    #[test]
+    fn search_session_content_returns_turn_and_event_hits_for_session_scope() {
+        let config = isolated_memory_config("search-session-content");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Completed,
+        })
+        .expect("create child");
+
+        append_turn_direct(
+            "child-session",
+            "assistant",
+            "Deploy freeze window is Friday and migration starts Saturday.",
+            &config,
+        )
+        .expect("append assistant turn");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_completed".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "summary": "deploy freeze checklist completed"
+            }),
+        })
+        .expect("append child event");
+
+        let hits = repo
+            .search_session_content("child-session", "deploy freeze", 8)
+            .expect("search session content");
+
+        assert!(
+            hits.iter().any(|hit| {
+                hit.source_kind == SessionSearchSourceKind::Turn
+                    && hit.content_text.contains("Deploy freeze window")
+            }),
+            "expected a turn hit, got: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|hit| {
+                hit.source_kind == SessionSearchSourceKind::Event
+                    && hit
+                        .content_text
+                        .contains("deploy freeze checklist completed")
+            }),
+            "expected an event hit, got: {hits:?}"
         );
     }
 

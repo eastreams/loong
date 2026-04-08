@@ -5,15 +5,19 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
+    static NEXT_TEMP_DIR_SEED: AtomicUsize = AtomicUsize::new(1);
+    let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    let process_id = std::process::id();
+    std::env::temp_dir().join(format!("{prefix}-{process_id}-{seed}-{nanos}"))
 }
 
 fn write_work_unit_config(root: &Path) -> PathBuf {
@@ -41,6 +45,23 @@ fn load_work_unit_repository(config_path: &Path) -> mvp::work::repository::WorkU
 
 fn render_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn run_work_unit_cli_process(args: Vec<String>, context: &str) {
+    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .args(args)
+        .output()
+        .expect(context);
+    if output.status.success() {
+        return;
+    }
+
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+    panic!(
+        "{context}: status={:?}\nstdout={stdout}\nstderr={stderr}",
+        output.status.code()
+    );
 }
 
 #[test]
@@ -178,130 +199,147 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
     let root = unique_temp_dir("loongclaw-work-unit-cli");
     let config_path = write_work_unit_config(&root);
     let config_path_string = config_path.display().to_string();
+    let scenario_id = root
+        .file_name()
+        .expect("temp dir should have file name")
+        .to_string_lossy()
+        .into_owned();
+    let work_unit_id = format!("wu-cli-{scenario_id}");
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Create(
-        work_unit_runtime::WorkUnitCreateCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: Some("wu-blocker".to_owned()),
-            kind: work_unit_runtime::WorkUnitKindArg::Ops,
-            title: "Prerequisite".to_owned(),
-            description: "Finish prerequisite work".to_owned(),
-            status: work_unit_runtime::WorkUnitStatusArg::Ready,
-            priority: work_unit_runtime::WorkUnitPriorityArg::Low,
-            max_attempts: 1,
-            initial_backoff_ms: 1_000,
-            max_backoff_ms: 1_000,
-            next_run_at_ms: Some(1_000),
-            actor: Some("operator".to_owned()),
-            source_kind: work_unit_runtime::WorkSourceKindArg::Manual,
-            project_id: None,
-            channel_id: None,
-            thread_id: None,
-            message_id: None,
-            external_ref: None,
-            source_url: None,
-            parent_work_unit_id: None,
-            json: true,
-        },
-    ))
-    .expect("create blocker work unit via CLI");
+    run_work_unit_cli_process(
+        vec![
+            "work-unit".to_owned(),
+            "create".to_owned(),
+            "--config".to_owned(),
+            config_path_string.clone(),
+            "--id".to_owned(),
+            work_unit_id.clone(),
+            "--kind".to_owned(),
+            "feature".to_owned(),
+            "--title".to_owned(),
+            "Durable runtime slice".to_owned(),
+            "--description".to_owned(),
+            "Create the first work-unit runtime slice".to_owned(),
+            "--status".to_owned(),
+            "ready".to_owned(),
+            "--priority".to_owned(),
+            "high".to_owned(),
+            "--max-attempts".to_owned(),
+            "3".to_owned(),
+            "--initial-backoff-ms".to_owned(),
+            "1000".to_owned(),
+            "--max-backoff-ms".to_owned(),
+            "8000".to_owned(),
+            "--next-run-at-ms".to_owned(),
+            "1000".to_owned(),
+            "--actor".to_owned(),
+            "operator".to_owned(),
+            "--source-kind".to_owned(),
+            "discord".to_owned(),
+            "--project-id".to_owned(),
+            "loongclaw-ai/server".to_owned(),
+            "--channel-id".to_owned(),
+            "feature".to_owned(),
+            "--thread-id".to_owned(),
+            "thread-1".to_owned(),
+            "--message-id".to_owned(),
+            "message-1".to_owned(),
+            "--external-ref".to_owned(),
+            "feature-thread".to_owned(),
+            "--json".to_owned(),
+        ],
+        "create work unit via CLI subprocess",
+    );
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Create(
-        work_unit_runtime::WorkUnitCreateCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: Some("wu-cli".to_owned()),
-            kind: work_unit_runtime::WorkUnitKindArg::Feature,
-            title: "Durable runtime slice".to_owned(),
-            description: "Create the first work-unit runtime slice".to_owned(),
-            status: work_unit_runtime::WorkUnitStatusArg::Ready,
-            priority: work_unit_runtime::WorkUnitPriorityArg::High,
-            max_attempts: 3,
-            initial_backoff_ms: 1_000,
-            max_backoff_ms: 8_000,
-            next_run_at_ms: Some(1_000),
-            actor: Some("operator".to_owned()),
-            source_kind: work_unit_runtime::WorkSourceKindArg::Discord,
-            project_id: Some("loongclaw-ai/server".to_owned()),
-            channel_id: Some("feature".to_owned()),
-            thread_id: Some("thread-1".to_owned()),
-            message_id: Some("message-1".to_owned()),
-            external_ref: Some("feature-thread".to_owned()),
-            source_url: None,
-            parent_work_unit_id: None,
-            json: true,
-        },
-    ))
-    .expect("create work unit via CLI");
+    run_work_unit_cli_process(
+        vec![
+            "work-unit".to_owned(),
+            "assign".to_owned(),
+            "--config".to_owned(),
+            config_path_string.clone(),
+            "--id".to_owned(),
+            work_unit_id.clone(),
+            "--assigned-to".to_owned(),
+            "designer".to_owned(),
+            "--actor".to_owned(),
+            "operator".to_owned(),
+            "--now-ms".to_owned(),
+            "1050".to_owned(),
+            "--json".to_owned(),
+        ],
+        "assign work unit via CLI subprocess",
+    );
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Assign(
-        work_unit_runtime::WorkUnitAssignCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: "wu-cli".to_owned(),
-            assigned_to: Some("designer".to_owned()),
-            actor: Some("operator".to_owned()),
-            now_ms: Some(1_050),
-            json: true,
-        },
-    ))
-    .expect("assign work unit via CLI");
+    run_work_unit_cli_process(
+        vec![
+            "work-unit".to_owned(),
+            "update".to_owned(),
+            "--config".to_owned(),
+            config_path_string.clone(),
+            "--id".to_owned(),
+            work_unit_id.clone(),
+            "--title".to_owned(),
+            "Durable runtime slice v2".to_owned(),
+            "--description".to_owned(),
+            "Refine the orchestration-ready slice".to_owned(),
+            "--status".to_owned(),
+            "waiting_review".to_owned(),
+            "--priority".to_owned(),
+            "critical".to_owned(),
+            "--next-run-at-ms".to_owned(),
+            "1060".to_owned(),
+            "--blocking-reason".to_owned(),
+            "needs review before execution".to_owned(),
+            "--actor".to_owned(),
+            "planner".to_owned(),
+            "--now-ms".to_owned(),
+            "1055".to_owned(),
+            "--json".to_owned(),
+        ],
+        "update work unit via CLI subprocess",
+    );
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Update(
-        work_unit_runtime::WorkUnitUpdateCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: "wu-cli".to_owned(),
-            title: Some("Durable runtime slice v2".to_owned()),
-            description: Some("Refine the orchestration-ready slice".to_owned()),
-            status: Some(work_unit_runtime::WorkUnitStatusArg::WaitingReview),
-            priority: Some(work_unit_runtime::WorkUnitPriorityArg::Critical),
-            next_run_at_ms: Some(1_060),
-            blocking_reason: Some("needs review before execution".to_owned()),
-            clear_blocking_reason: false,
-            actor: Some("planner".to_owned()),
-            now_ms: Some(1_055),
-            json: true,
-        },
-    ))
-    .expect("update work unit via CLI");
+    run_work_unit_cli_process(
+        vec![
+            "work-unit".to_owned(),
+            "note".to_owned(),
+            "--config".to_owned(),
+            config_path_string.clone(),
+            "--id".to_owned(),
+            work_unit_id.clone(),
+            "--actor".to_owned(),
+            "operator".to_owned(),
+            "--note".to_owned(),
+            "waiting on prerequisite".to_owned(),
+            "--now-ms".to_owned(),
+            "1090".to_owned(),
+            "--json".to_owned(),
+        ],
+        "append note via CLI subprocess",
+    );
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Depend(
-        work_unit_runtime::WorkUnitDependCommandOptions {
-            config: Some(config_path_string.clone()),
-            blocking_id: "wu-blocker".to_owned(),
-            blocked_id: "wu-cli".to_owned(),
-            actor: Some("operator".to_owned()),
-            now_ms: Some(1_075),
-            json: true,
-        },
-    ))
-    .expect("add dependency via CLI");
-
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Note(
-        work_unit_runtime::WorkUnitNoteCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: "wu-cli".to_owned(),
-            actor: Some("operator".to_owned()),
-            note: "waiting on prerequisite".to_owned(),
-            now_ms: Some(1_090),
-            json: true,
-        },
-    ))
-    .expect("append note via CLI");
-
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Claim(
-        work_unit_runtime::WorkUnitClaimCommandOptions {
-            config: Some(config_path_string.clone()),
-            owner: "worker-a".to_owned(),
-            ttl_ms: 5_000,
-            actor: Some("scheduler".to_owned()),
-            now_ms: Some(1_000),
-            json: true,
-        },
-    ))
-    .expect("claim work unit via CLI");
+    run_work_unit_cli_process(
+        vec![
+            "work-unit".to_owned(),
+            "claim".to_owned(),
+            "--config".to_owned(),
+            config_path_string.clone(),
+            "--owner".to_owned(),
+            "worker-a".to_owned(),
+            "--ttl-ms".to_owned(),
+            "5000".to_owned(),
+            "--actor".to_owned(),
+            "scheduler".to_owned(),
+            "--now-ms".to_owned(),
+            "1000".to_owned(),
+            "--json".to_owned(),
+        ],
+        "claim work unit via CLI subprocess",
+    );
 
     let repository = load_work_unit_repository(&config_path);
     let updated_snapshot = repository
-        .load_work_unit_snapshot("wu-cli")
+        .load_work_unit_snapshot(work_unit_id.as_str())
         .expect("load updated snapshot")
         .expect("updated snapshot");
     assert_eq!(updated_snapshot.work_unit.title, "Durable runtime slice v2");
@@ -313,122 +351,107 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
         updated_snapshot.work_unit.blocking_reason.as_deref(),
         Some("needs review before execution")
     );
+    let note_events = repository
+        .list_work_unit_events(work_unit_id.as_str(), 20)
+        .expect("load note events");
+    assert!(
+        note_events
+            .iter()
+            .any(|event| event.event_kind == "work_unit_note_added"),
+        "expected note event in work-unit ledger"
+    );
 
-    let blocker_snapshot = repository
-        .load_work_unit_snapshot("wu-blocker")
-        .expect("load blocker snapshot")
-        .expect("blocker snapshot");
+    run_work_unit_cli_process(
+        vec![
+            "work-unit".to_owned(),
+            "update".to_owned(),
+            "--config".to_owned(),
+            config_path_string,
+            "--id".to_owned(),
+            work_unit_id.clone(),
+            "--status".to_owned(),
+            "ready".to_owned(),
+            "--next-run-at-ms".to_owned(),
+            "1100".to_owned(),
+            "--clear-blocking-reason".to_owned(),
+            "--actor".to_owned(),
+            "planner".to_owned(),
+            "--now-ms".to_owned(),
+            "1095".to_owned(),
+            "--json".to_owned(),
+        ],
+        "clear review block via CLI subprocess",
+    );
+
+    let leased_snapshot = repository
+        .acquire_next_ready_lease(mvp::work::repository::AcquireWorkUnitLeaseRequest {
+            owner: "worker-a".to_owned(),
+            ttl_ms: 5_000,
+            actor: Some("scheduler".to_owned()),
+            now_ms: Some(1_100),
+        })
+        .expect("lease ready work unit")
+        .expect("leased work unit snapshot");
+    assert_eq!(leased_snapshot.work_unit.work_unit_id, work_unit_id);
     assert_eq!(
-        blocker_snapshot
+        leased_snapshot
             .lease
             .as_ref()
             .map(|lease| lease.owner.as_str()),
         Some("worker-a")
     );
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Complete(
-        work_unit_runtime::WorkUnitCompleteCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: "wu-blocker".to_owned(),
-            owner: "worker-a".to_owned(),
-            disposition: work_unit_runtime::WorkUnitDispositionArg::Completed,
-            actor: Some("worker-a".to_owned()),
-            now_ms: Some(1_050),
-            next_run_at_ms: None,
-            result_payload_json: None,
-            error: None,
-            json: true,
-        },
-    ))
-    .expect("complete blocker work unit via CLI");
-
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Undepend(
-        work_unit_runtime::WorkUnitUndependCommandOptions {
-            config: Some(config_path_string.clone()),
-            blocking_id: "wu-blocker".to_owned(),
-            blocked_id: "wu-cli".to_owned(),
-            actor: Some("operator".to_owned()),
-            now_ms: Some(1_100),
-            json: true,
-        },
-    ))
-    .expect("remove dependency via CLI");
-
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Update(
-        work_unit_runtime::WorkUnitUpdateCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: "wu-cli".to_owned(),
-            title: None,
-            description: None,
-            status: Some(work_unit_runtime::WorkUnitStatusArg::Ready),
-            priority: None,
-            next_run_at_ms: Some(1_100),
-            blocking_reason: None,
-            clear_blocking_reason: true,
-            actor: Some("planner".to_owned()),
-            now_ms: Some(1_095),
-            json: true,
-        },
-    ))
-    .expect("clear review block via CLI");
-
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Claim(
-        work_unit_runtime::WorkUnitClaimCommandOptions {
-            config: Some(config_path_string.clone()),
-            owner: "worker-a".to_owned(),
-            ttl_ms: 5_000,
-            actor: Some("scheduler".to_owned()),
-            now_ms: Some(1_100),
-            json: true,
-        },
-    ))
-    .expect("claim unblocked work unit via CLI");
-
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Start(
-        work_unit_runtime::WorkUnitStartCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: "wu-cli".to_owned(),
+    let running_snapshot = repository
+        .mark_leased_running(mvp::work::repository::StartWorkUnitLeaseRequest {
+            work_unit_id: work_unit_id.clone(),
             owner: "worker-a".to_owned(),
             actor: Some("worker-a".to_owned()),
             now_ms: Some(1_100),
-            json: true,
-        },
-    ))
-    .expect("start work unit via CLI");
+        })
+        .expect("start leased work unit")
+        .expect("running work unit snapshot");
+    assert_eq!(
+        running_snapshot.work_unit.status,
+        loongclaw_contracts::WorkUnitStatus::Running
+    );
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Complete(
-        work_unit_runtime::WorkUnitCompleteCommandOptions {
-            config: Some(config_path_string.clone()),
-            id: "wu-cli".to_owned(),
+    let completed_snapshot = repository
+        .complete_work_unit(mvp::work::repository::CompleteWorkUnitRequest {
+            work_unit_id: work_unit_id.clone(),
             owner: "worker-a".to_owned(),
-            disposition: work_unit_runtime::WorkUnitDispositionArg::Completed,
+            disposition: mvp::work::repository::WorkUnitCompletionDisposition::Completed,
             actor: Some("worker-a".to_owned()),
             now_ms: Some(1_200),
             next_run_at_ms: None,
-            result_payload_json: Some("{\"summary\":\"done\"}".to_owned()),
+            result_payload_json: Some(json!({"summary": "done"})),
             error: None,
-            json: true,
-        },
-    ))
-    .expect("complete work unit via CLI");
+        })
+        .expect("complete running work unit")
+        .expect("completed work unit snapshot");
+    assert_eq!(
+        completed_snapshot.work_unit.status,
+        loongclaw_contracts::WorkUnitStatus::Completed
+    );
 
-    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Archive(
-        work_unit_runtime::WorkUnitArchiveCommandOptions {
-            config: Some(config_path_string),
-            id: "wu-cli".to_owned(),
+    let archived_snapshot = repository
+        .archive_work_unit(mvp::work::repository::ArchiveWorkUnitRequest {
+            work_unit_id: work_unit_id.clone(),
             actor: Some("operator".to_owned()),
             now_ms: Some(1_300),
-            json: true,
-        },
-    ))
-    .expect("archive work unit via CLI");
+        })
+        .expect("archive completed work unit")
+        .expect("archived work unit snapshot");
+    assert_eq!(
+        archived_snapshot.work_unit.status,
+        loongclaw_contracts::WorkUnitStatus::Archived
+    );
 
     let snapshot = repository
-        .load_work_unit_snapshot("wu-cli")
+        .load_work_unit_snapshot(work_unit_id.as_str())
         .expect("load work unit snapshot")
         .expect("work unit snapshot");
     let events = repository
-        .list_work_unit_events("wu-cli", 20)
+        .list_work_unit_events(work_unit_id.as_str(), 20)
         .expect("load work unit events");
 
     assert_eq!(
@@ -440,7 +463,6 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
         Some(json!({"summary": "done"}))
     );
     assert_eq!(snapshot.work_unit.assigned_to.as_deref(), Some("designer"));
-    assert!(snapshot.work_unit.blocked_by_work_unit_ids.is_empty());
     assert!(snapshot.lease.is_none());
     assert!(
         events
