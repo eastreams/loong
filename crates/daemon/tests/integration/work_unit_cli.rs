@@ -4,6 +4,7 @@ use loongclaw_daemon::work_unit_cli as work_unit_runtime;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -36,6 +37,10 @@ fn load_work_unit_repository(config_path: &Path) -> mvp::work::repository::WorkU
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     mvp::work::repository::WorkUnitRepository::new(&memory_config).expect("work unit repository")
+}
+
+fn render_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 #[test]
@@ -77,7 +82,7 @@ fn cli_work_unit_parse_accepts_full_complete_command_shape() {
         "--owner",
         "worker-a",
         "--disposition",
-        "retry-pending",
+        "retry_pending",
         "--actor",
         "scheduler",
         "--now-ms",
@@ -127,7 +132,7 @@ fn cli_work_unit_parse_accepts_update_command_shape() {
         "--description",
         "Refined description",
         "--status",
-        "waiting-review",
+        "waiting_review",
         "--priority",
         "critical",
         "--next-run-at-ms",
@@ -466,5 +471,72 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
             .iter()
             .any(|event| event.event_kind == "work_unit_note_added"),
         "expected note event in work-unit ledger"
+    );
+}
+
+#[test]
+fn work_unit_cli_update_text_output_uses_snake_case_status_labels() {
+    let root = unique_temp_dir("loongclaw-work-unit-cli-text");
+    let config_path = write_work_unit_config(&root);
+    let repository = load_work_unit_repository(&config_path);
+    let retry_policy = loongclaw_contracts::WorkUnitRetryPolicy {
+        max_attempts: 2,
+        initial_backoff_ms: 1_000,
+        max_backoff_ms: 8_000,
+    };
+    let source_ref = loongclaw_contracts::WorkUnitSourceRef {
+        source_kind: loongclaw_contracts::WorkSourceKind::Manual,
+        project_id: None,
+        channel_id: None,
+        thread_id: None,
+        message_id: None,
+        external_ref: None,
+        source_url: None,
+    };
+    let new_work_unit = mvp::work::repository::NewWorkUnitRecord {
+        work_unit_id: Some("wu-text".to_owned()),
+        kind: loongclaw_contracts::WorkUnitKind::Feature,
+        title: "text renderer".to_owned(),
+        description: "verify non-json output".to_owned(),
+        source_ref,
+        status: loongclaw_contracts::WorkUnitStatus::Ready,
+        priority: loongclaw_contracts::WorkUnitPriority::Normal,
+        retry_policy,
+        parent_work_unit_id: None,
+        next_run_at_ms: Some(1_000),
+    };
+    repository
+        .create_work_unit(new_work_unit, Some("operator"))
+        .expect("create work unit fixture");
+
+    let config_path_string = config_path.display().to_string();
+    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .args([
+            "work-unit",
+            "update",
+            "--config",
+            config_path_string.as_str(),
+            "--id",
+            "wu-text",
+            "--status",
+            "waiting_review",
+            "--actor",
+            "planner",
+            "--now-ms",
+            "1234",
+        ])
+        .output()
+        .expect("run work-unit update text command");
+
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "work-unit update text output should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("status=waiting_review"),
+        "text output should preserve snake_case status labels, stdout={stdout:?}"
     );
 }

@@ -343,6 +343,7 @@ pub enum WorkSourceKindArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
 pub enum WorkUnitStatusArg {
     Captured,
     Triaged,
@@ -359,6 +360,7 @@ pub enum WorkUnitStatusArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
 pub enum WorkUnitPriorityArg {
     Low,
     Normal,
@@ -367,6 +369,7 @@ pub enum WorkUnitPriorityArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
 pub enum WorkUnitDispositionArg {
     Completed,
     RetryPending,
@@ -550,7 +553,8 @@ fn run_start_command(options: WorkUnitStartCommandOptions) -> CliResult<()> {
         now_ms: options.now_ms,
     };
     let snapshot = repository.mark_leased_running(request)?;
-    render_optional_snapshot("start", snapshot, options.json)
+    let missing_message = "start did not find a matching active lease";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_heartbeat_command(options: WorkUnitHeartbeatCommandOptions) -> CliResult<()> {
@@ -563,7 +567,8 @@ fn run_heartbeat_command(options: WorkUnitHeartbeatCommandOptions) -> CliResult<
         now_ms: options.now_ms,
     };
     let snapshot = repository.heartbeat_lease(request)?;
-    render_optional_snapshot("heartbeat", snapshot, options.json)
+    let missing_message = "heartbeat did not find a matching active lease";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_complete_command(options: WorkUnitCompleteCommandOptions) -> CliResult<()> {
@@ -584,7 +589,8 @@ fn run_complete_command(options: WorkUnitCompleteCommandOptions) -> CliResult<()
         error: options.error,
     };
     let snapshot = repository.complete_work_unit(request)?;
-    render_optional_snapshot("complete", snapshot, options.json)
+    let missing_message = "complete did not find a matching active lease";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_recover_command(options: WorkUnitRecoverCommandOptions) -> CliResult<()> {
@@ -603,7 +609,9 @@ fn run_archive_command(options: WorkUnitArchiveCommandOptions) -> CliResult<()> 
         now_ms: options.now_ms,
     };
     let snapshot = repository.archive_work_unit(request)?;
-    render_optional_snapshot("archive", snapshot, options.json)
+    let missing_message =
+        "archive failed: work unit not found, already archived, or not in a terminal state";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_assign_command(options: WorkUnitAssignCommandOptions) -> CliResult<()> {
@@ -615,7 +623,8 @@ fn run_assign_command(options: WorkUnitAssignCommandOptions) -> CliResult<()> {
         now_ms: options.now_ms,
     };
     let snapshot = repository.assign_work_unit(request)?;
-    render_optional_snapshot("assign", snapshot, options.json)
+    let missing_message = "assign failed: work unit not found or archived";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_update_command(options: WorkUnitUpdateCommandOptions) -> CliResult<()> {
@@ -633,7 +642,8 @@ fn run_update_command(options: WorkUnitUpdateCommandOptions) -> CliResult<()> {
         now_ms: options.now_ms,
     };
     let snapshot = repository.update_work_unit(request)?;
-    render_optional_snapshot("update", snapshot, options.json)
+    let missing_message = "update failed: work unit not found or archived";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_depend_command(options: WorkUnitDependCommandOptions) -> CliResult<()> {
@@ -645,7 +655,8 @@ fn run_depend_command(options: WorkUnitDependCommandOptions) -> CliResult<()> {
         now_ms: options.now_ms,
     };
     let snapshot = repository.add_dependency(request)?;
-    render_optional_snapshot("depend", snapshot, options.json)
+    let missing_message = "depend failed: blocked work unit not found after dependency update";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_undepend_command(options: WorkUnitUndependCommandOptions) -> CliResult<()> {
@@ -657,7 +668,8 @@ fn run_undepend_command(options: WorkUnitUndependCommandOptions) -> CliResult<()
         now_ms: options.now_ms,
     };
     let snapshot = repository.remove_dependency(request)?;
-    render_optional_snapshot("undepend", snapshot, options.json)
+    let missing_message = "undepend failed: blocked work unit not found";
+    render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
 fn run_note_command(options: WorkUnitNoteCommandOptions) -> CliResult<()> {
@@ -670,7 +682,7 @@ fn run_note_command(options: WorkUnitNoteCommandOptions) -> CliResult<()> {
     };
     let event = repository.append_note(request)?;
     let Some(event) = event else {
-        return Err("note did not find an active work unit".to_owned());
+        return Err("note failed: work unit not found or archived".to_owned());
     };
     render_json_or_text(&event, options.json, render_single_work_unit_event_text)
 }
@@ -700,12 +712,12 @@ fn load_work_unit_repository(
 }
 
 fn render_optional_snapshot(
-    action: &str,
     snapshot: Option<WorkUnitSnapshot>,
     as_json: bool,
+    missing_message: &str,
 ) -> CliResult<()> {
     let Some(snapshot) = snapshot else {
-        return Err(format!("{action} did not find a matching active lease"));
+        return Err(missing_message.to_owned());
     };
     render_json_or_text(&snapshot, as_json, render_work_unit_snapshot_text)
 }
