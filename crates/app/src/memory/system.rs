@@ -99,15 +99,19 @@ impl MemorySystemMetadata {
         mut self,
         families: impl IntoIterator<Item = MemoryStageFamily>,
     ) -> Self {
-        let collected_families = families.into_iter().collect::<Vec<_>>();
-
-        for family in collected_families {
-            let already_present = self.supported_stage_families.contains(&family);
-            if already_present {
-                continue;
-            }
-
-            self.supported_stage_families.push(family);
+        let collected_families = dedupe_stage_families(families);
+        let pre_assembly_families = self.supported_pre_assembly_stage_families.clone();
+        let combined_families = pre_assembly_families
+            .into_iter()
+            .chain(collected_families)
+            .collect::<Vec<_>>();
+        let normalized_families = dedupe_stage_families(combined_families);
+        self.supported_stage_families = normalized_families;
+        let has_supported_stages = !self.supported_stage_families.is_empty();
+        if self.runtime_fallback_kind == MemorySystemRuntimeFallbackKind::MetadataOnly
+            && has_supported_stages
+        {
+            self.runtime_fallback_kind = MemorySystemRuntimeFallbackKind::SystemBacked;
         }
         self
     }
@@ -116,16 +120,27 @@ impl MemorySystemMetadata {
         mut self,
         families: impl IntoIterator<Item = MemoryStageFamily>,
     ) -> Self {
-        let collected_families = families.into_iter().collect::<Vec<_>>();
-        self.supported_pre_assembly_stage_families = collected_families.clone();
-
-        for family in collected_families {
-            let already_present = self.supported_stage_families.contains(&family);
-            if already_present {
-                continue;
-            }
-
-            self.supported_stage_families.push(family);
+        let collected_families = dedupe_stage_families(families);
+        let previous_pre_assembly_families = self.supported_pre_assembly_stage_families.clone();
+        let additional_stage_families = self
+            .supported_stage_families
+            .iter()
+            .copied()
+            .filter(|family| !previous_pre_assembly_families.contains(family))
+            .collect::<Vec<_>>();
+        let combined_families = collected_families
+            .iter()
+            .copied()
+            .chain(additional_stage_families)
+            .collect::<Vec<_>>();
+        let normalized_stage_families = dedupe_stage_families(combined_families);
+        self.supported_pre_assembly_stage_families = collected_families;
+        self.supported_stage_families = normalized_stage_families;
+        let has_supported_stages = !self.supported_stage_families.is_empty();
+        if self.runtime_fallback_kind == MemorySystemRuntimeFallbackKind::MetadataOnly
+            && has_supported_stages
+        {
+            self.runtime_fallback_kind = MemorySystemRuntimeFallbackKind::SystemBacked;
         }
         self
     }
@@ -156,6 +171,23 @@ impl MemorySystemMetadata {
     pub fn supports_stage_family(&self, family: MemoryStageFamily) -> bool {
         self.supported_stage_families.contains(&family)
     }
+}
+
+fn dedupe_stage_families(
+    families: impl IntoIterator<Item = MemoryStageFamily>,
+) -> Vec<MemoryStageFamily> {
+    let mut deduped_families = Vec::new();
+
+    for family in families {
+        let already_present = deduped_families.contains(&family);
+        if already_present {
+            continue;
+        }
+
+        deduped_families.push(family);
+    }
+
+    deduped_families
 }
 
 pub trait MemorySystem: Send + Sync {
@@ -1223,6 +1255,45 @@ mod tests {
                 MemoryRecallMode::PromptAssembly,
                 MemoryRecallMode::OperatorInspection
             ]
+        );
+    }
+
+    #[test]
+    fn supported_stage_families_replace_previous_explicit_stage_set() {
+        let metadata = MemorySystemMetadata::new(
+            "stage-reset",
+            [MemorySystemCapability::PromptHydration],
+            "Stage reset test system",
+        )
+        .with_supported_pre_assembly_stage_families([
+            MemoryStageFamily::Derive,
+            MemoryStageFamily::Retrieve,
+        ])
+        .with_supported_stage_families([MemoryStageFamily::Compact])
+        .with_supported_stage_families([MemoryStageFamily::AfterTurn]);
+
+        assert_eq!(
+            metadata.supported_stage_families,
+            vec![
+                MemoryStageFamily::Derive,
+                MemoryStageFamily::Retrieve,
+                MemoryStageFamily::AfterTurn,
+            ]
+        );
+    }
+
+    #[test]
+    fn supported_stage_builders_auto_promote_runtime_fallback_to_system_backed() {
+        let metadata = MemorySystemMetadata::new(
+            "auto-promote",
+            [MemorySystemCapability::PromptHydration],
+            "Auto promote test system",
+        )
+        .with_supported_pre_assembly_stage_families([MemoryStageFamily::Retrieve]);
+
+        assert_eq!(
+            metadata.runtime_fallback_kind,
+            MemorySystemRuntimeFallbackKind::SystemBacked
         );
     }
 

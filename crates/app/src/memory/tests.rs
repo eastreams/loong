@@ -57,8 +57,8 @@ fn supported_memory_core_operations_for_sqlite_are_stable() {
             "append_turn",
             "window",
             "clear_session",
-            "read_context",
             "replace_turns",
+            "read_context",
             "read_stage_envelope",
         ]
     );
@@ -698,6 +698,10 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
             &self.metadata
         }
 
+        fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
+            vec![MemoryCoreOperation::ReadContext]
+        }
+
         fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
             let operation = request.operation;
             let payload = json!({
@@ -796,6 +800,9 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
 async fn registry_selected_system_can_use_compact_stage_hook_without_custom_runtime() {
     struct CompactHookMemorySystem;
 
+    static EXPECTED_COMPACT_HOOK_SESSION_ID: OnceLock<String> = OnceLock::new();
+    static EXPECTED_COMPACT_HOOK_WORKSPACE_ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
+
     impl MemorySystem for CompactHookMemorySystem {
         fn id(&self) -> &'static str {
             "registry-compact-hook"
@@ -815,10 +822,33 @@ async fn registry_selected_system_can_use_compact_stage_hook_without_custom_runt
 
         fn run_compact_stage(
             &self,
-            _session_id: &str,
-            _workspace_root: Option<&std::path::Path>,
+            session_id: &str,
+            workspace_root: Option<&std::path::Path>,
             _config: &runtime_config::MemoryRuntimeConfig,
         ) -> Result<Option<StageDiagnostics>, String> {
+            let expected_session_id = EXPECTED_COMPACT_HOOK_SESSION_ID
+                .get()
+                .expect("expected compact-hook session id");
+            let expected_workspace_root = EXPECTED_COMPACT_HOOK_WORKSPACE_ROOT
+                .get()
+                .expect("expected compact-hook workspace root");
+            let actual_workspace_root = workspace_root.map(|path| path.to_path_buf());
+            let expected_workspace_root = Some(expected_workspace_root.clone());
+            if session_id != expected_session_id {
+                let error = format!(
+                    "expected compact hook session id `{expected_session_id}`, got `{session_id}`"
+                );
+
+                return Err(error);
+            }
+            if actual_workspace_root != expected_workspace_root {
+                let error = format!(
+                    "expected compact hook workspace root `{:?}`, got `{:?}`",
+                    expected_workspace_root, actual_workspace_root
+                );
+
+                return Err(error);
+            }
             let diagnostics = StageDiagnostics::succeeded(MemoryStageFamily::Compact);
 
             Ok(Some(diagnostics))
@@ -837,13 +867,26 @@ async fn registry_selected_system_can_use_compact_stage_hook_without_custom_runt
 
     ensure_registry_compact_hook_system_registered();
 
+    let workspace_root = crate::test_support::unique_temp_dir("compact-hook-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create compact hook workspace");
+    EXPECTED_COMPACT_HOOK_SESSION_ID
+        .set("compact-hook-session".to_owned())
+        .ok();
+    EXPECTED_COMPACT_HOOK_WORKSPACE_ROOT
+        .set(workspace_root.clone())
+        .ok();
+
     let config = runtime_config::MemoryRuntimeConfig {
         resolved_system_id: Some("registry-compact-hook".to_owned()),
         ..runtime_config::MemoryRuntimeConfig::default()
     };
-    let diagnostics = run_compact_stage("compact-hook-session", None, &config)
-        .await
-        .expect("compact stage should run through system-backed runtime");
+    let diagnostics = run_compact_stage(
+        "compact-hook-session",
+        Some(workspace_root.as_path()),
+        &config,
+    )
+    .await
+    .expect("compact stage should run through system-backed runtime");
 
     assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
     assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);

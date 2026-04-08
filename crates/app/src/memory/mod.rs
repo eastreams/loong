@@ -55,7 +55,7 @@ pub use protocol::{
     build_read_stage_envelope_request_with_workspace_root, build_replace_turns_request,
     build_replace_turns_request_with_expectation, build_window_request,
     decode_memory_context_entries, decode_stage_envelope, decode_window_turn_count,
-    decode_window_turns, encode_stage_envelope_payload,
+    decode_window_turns, encode_stage_envelope_payload, parse_exact_memory_core_operation,
 };
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use sqlite::CanonicalMemorySearchHit;
@@ -110,14 +110,22 @@ pub fn execute_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutco
 
 pub fn supported_memory_core_operations(backend: MemoryBackendKind) -> Vec<MemoryCoreOperation> {
     match backend {
-        MemoryBackendKind::Sqlite => vec![
-            MemoryCoreOperation::AppendTurn,
-            MemoryCoreOperation::Window,
-            MemoryCoreOperation::ClearSession,
-            MemoryCoreOperation::ReadContext,
-            MemoryCoreOperation::ReplaceTurns,
-            MemoryCoreOperation::ReadStageEnvelope,
-        ],
+        MemoryBackendKind::Sqlite => {
+            let mut operations = Vec::new();
+
+            #[cfg(feature = "memory-sqlite")]
+            {
+                operations.push(MemoryCoreOperation::AppendTurn);
+                operations.push(MemoryCoreOperation::Window);
+                operations.push(MemoryCoreOperation::ClearSession);
+                operations.push(MemoryCoreOperation::ReplaceTurns);
+            }
+
+            operations.push(MemoryCoreOperation::ReadContext);
+            operations.push(MemoryCoreOperation::ReadStageEnvelope);
+
+            operations
+        }
     }
 }
 
@@ -137,7 +145,7 @@ pub(crate) fn execute_builtin_backend_memory_core(
     request: MemoryCoreRequest,
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<MemoryCoreOutcome, String> {
-    let parsed_operation = MemoryCoreOperation::parse_id(request.operation.as_str());
+    let parsed_operation = parse_exact_memory_core_operation(request.operation.as_str());
     match config.backend {
         MemoryBackendKind::Sqlite => match parsed_operation {
             Some(MemoryCoreOperation::AppendTurn) => append_turn(request, config),
@@ -148,7 +156,7 @@ pub(crate) fn execute_builtin_backend_memory_core(
             Some(MemoryCoreOperation::ReadStageEnvelope) => {
                 context::read_stage_envelope(request, config)
             }
-            _ => Ok(MemoryCoreOutcome {
+            None => Ok(MemoryCoreOutcome {
                 status: "ok".to_owned(),
                 payload: json!({
                     "adapter": "kv-core",

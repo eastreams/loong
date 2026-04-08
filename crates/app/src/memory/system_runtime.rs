@@ -10,12 +10,15 @@ use super::orchestrator::{
 };
 use super::runtime_config::MemoryRuntimeConfig;
 use super::{
-    MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics, StageEnvelope,
+    MemoryCoreOperation, MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics,
+    StageEnvelope,
 };
 
 #[async_trait]
 pub trait MemorySystemRuntime: Send + Sync {
     fn metadata(&self) -> &MemorySystemMetadata;
+
+    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation>;
 
     fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String>;
 
@@ -56,6 +59,10 @@ impl SystemBackedMemorySystemRuntime {
 impl MemorySystemRuntime for SystemBackedMemorySystemRuntime {
     fn metadata(&self) -> &MemorySystemMetadata {
         &self.metadata
+    }
+
+    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
+        super::supported_memory_core_operations(self.config.backend)
     }
 
     fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
@@ -145,6 +152,10 @@ impl MemorySystemRuntime for BuiltinMemorySystemRuntime {
         &self.metadata
     }
 
+    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
+        super::supported_memory_core_operations(self.config.backend)
+    }
+
     fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
         super::execute_builtin_backend_memory_core(request, &self.config)
     }
@@ -200,6 +211,10 @@ impl MetadataOnlyMemorySystemRuntime {
 impl MemorySystemRuntime for MetadataOnlyMemorySystemRuntime {
     fn metadata(&self) -> &MemorySystemMetadata {
         &self.metadata
+    }
+
+    fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
+        super::supported_memory_core_operations(self.config.backend)
     }
 
     fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
