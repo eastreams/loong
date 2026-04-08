@@ -54,6 +54,10 @@ fn cli_work_unit_help_mentions_durable_runtime_commands() {
         help.contains("recover"),
         "work-unit help should expose lease recovery: {help}"
     );
+    assert!(
+        help.contains("assign"),
+        "work-unit help should expose orchestration assignment: {help}"
+    );
 }
 
 #[test]
@@ -113,6 +117,33 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
     work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Create(
         work_unit_runtime::WorkUnitCreateCommandOptions {
             config: Some(config_path_string.clone()),
+            id: Some("wu-blocker".to_owned()),
+            kind: work_unit_runtime::WorkUnitKindArg::Ops,
+            title: "Prerequisite".to_owned(),
+            description: "Finish prerequisite work".to_owned(),
+            status: work_unit_runtime::WorkUnitStatusArg::Ready,
+            priority: work_unit_runtime::WorkUnitPriorityArg::Low,
+            max_attempts: 1,
+            initial_backoff_ms: 1_000,
+            max_backoff_ms: 1_000,
+            next_run_at_ms: Some(1_000),
+            actor: Some("operator".to_owned()),
+            source_kind: work_unit_runtime::WorkSourceKindArg::Manual,
+            project_id: None,
+            channel_id: None,
+            thread_id: None,
+            message_id: None,
+            external_ref: None,
+            source_url: None,
+            parent_work_unit_id: None,
+            json: true,
+        },
+    ))
+    .expect("create blocker work unit via CLI");
+
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Create(
+        work_unit_runtime::WorkUnitCreateCommandOptions {
+            config: Some(config_path_string.clone()),
             id: Some("wu-cli".to_owned()),
             kind: work_unit_runtime::WorkUnitKindArg::Feature,
             title: "Durable runtime slice".to_owned(),
@@ -137,6 +168,42 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
     ))
     .expect("create work unit via CLI");
 
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Assign(
+        work_unit_runtime::WorkUnitAssignCommandOptions {
+            config: Some(config_path_string.clone()),
+            id: "wu-cli".to_owned(),
+            assigned_to: Some("designer".to_owned()),
+            actor: Some("operator".to_owned()),
+            now_ms: Some(1_050),
+            json: true,
+        },
+    ))
+    .expect("assign work unit via CLI");
+
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Depend(
+        work_unit_runtime::WorkUnitDependCommandOptions {
+            config: Some(config_path_string.clone()),
+            blocking_id: "wu-blocker".to_owned(),
+            blocked_id: "wu-cli".to_owned(),
+            actor: Some("operator".to_owned()),
+            now_ms: Some(1_075),
+            json: true,
+        },
+    ))
+    .expect("add dependency via CLI");
+
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Note(
+        work_unit_runtime::WorkUnitNoteCommandOptions {
+            config: Some(config_path_string.clone()),
+            id: "wu-cli".to_owned(),
+            actor: Some("operator".to_owned()),
+            note: "waiting on prerequisite".to_owned(),
+            now_ms: Some(1_090),
+            json: true,
+        },
+    ))
+    .expect("append note via CLI");
+
     work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Claim(
         work_unit_runtime::WorkUnitClaimCommandOptions {
             config: Some(config_path_string.clone()),
@@ -148,6 +215,59 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
         },
     ))
     .expect("claim work unit via CLI");
+
+    let repository = load_work_unit_repository(&config_path);
+    let blocker_snapshot = repository
+        .load_work_unit_snapshot("wu-blocker")
+        .expect("load blocker snapshot")
+        .expect("blocker snapshot");
+    assert_eq!(
+        blocker_snapshot
+            .lease
+            .as_ref()
+            .map(|lease| lease.owner.as_str()),
+        Some("worker-a")
+    );
+
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Complete(
+        work_unit_runtime::WorkUnitCompleteCommandOptions {
+            config: Some(config_path_string.clone()),
+            id: "wu-blocker".to_owned(),
+            owner: "worker-a".to_owned(),
+            disposition: work_unit_runtime::WorkUnitDispositionArg::Completed,
+            actor: Some("worker-a".to_owned()),
+            now_ms: Some(1_050),
+            next_run_at_ms: None,
+            result_payload_json: None,
+            error: None,
+            json: true,
+        },
+    ))
+    .expect("complete blocker work unit via CLI");
+
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Undepend(
+        work_unit_runtime::WorkUnitUndependCommandOptions {
+            config: Some(config_path_string.clone()),
+            blocking_id: "wu-blocker".to_owned(),
+            blocked_id: "wu-cli".to_owned(),
+            actor: Some("operator".to_owned()),
+            now_ms: Some(1_100),
+            json: true,
+        },
+    ))
+    .expect("remove dependency via CLI");
+
+    work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Claim(
+        work_unit_runtime::WorkUnitClaimCommandOptions {
+            config: Some(config_path_string.clone()),
+            owner: "worker-a".to_owned(),
+            ttl_ms: 5_000,
+            actor: Some("scheduler".to_owned()),
+            now_ms: Some(1_100),
+            json: true,
+        },
+    ))
+    .expect("claim unblocked work unit via CLI");
 
     work_unit_runtime::run_work_unit_cli(work_unit_runtime::WorkUnitCommands::Start(
         work_unit_runtime::WorkUnitStartCommandOptions {
@@ -188,7 +308,6 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
     ))
     .expect("archive work unit via CLI");
 
-    let repository = load_work_unit_repository(&config_path);
     let snapshot = repository
         .load_work_unit_snapshot("wu-cli")
         .expect("load work unit snapshot")
@@ -205,6 +324,8 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
         snapshot.work_unit.result_payload_json,
         Some(json!({"summary": "done"}))
     );
+    assert_eq!(snapshot.work_unit.assigned_to.as_deref(), Some("designer"));
+    assert!(snapshot.work_unit.blocked_by_work_unit_ids.is_empty());
     assert!(snapshot.lease.is_none());
     assert!(
         events
@@ -217,5 +338,17 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
             .iter()
             .any(|event| event.event_kind == "work_unit_archived"),
         "expected archive event in work-unit ledger"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_kind == "work_unit_assigned"),
+        "expected assignment event in work-unit ledger"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_kind == "work_unit_note_added"),
+        "expected note event in work-unit ledger"
     );
 }

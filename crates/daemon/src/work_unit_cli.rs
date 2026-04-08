@@ -29,6 +29,14 @@ pub enum WorkUnitCommands {
     Recover(WorkUnitRecoverCommandOptions),
     /// Archive one terminal work unit
     Archive(WorkUnitArchiveCommandOptions),
+    /// Assign or clear a durable work-unit owner without taking a runtime lease
+    Assign(WorkUnitAssignCommandOptions),
+    /// Add one blocking dependency edge between two durable work units
+    Depend(WorkUnitDependCommandOptions),
+    /// Remove one blocking dependency edge between two durable work units
+    Undepend(WorkUnitUndependCommandOptions),
+    /// Append one orchestration note event to a durable work unit
+    Note(WorkUnitNoteCommandOptions),
     /// Summarize durable runtime queue health
     Health(WorkUnitHealthCommandOptions),
 }
@@ -216,6 +224,70 @@ pub struct WorkUnitArchiveCommandOptions {
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct WorkUnitAssignCommandOptions {
+    #[arg(long)]
+    pub config: Option<String>,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub assigned_to: Option<String>,
+    #[arg(long)]
+    pub actor: Option<String>,
+    #[arg(long)]
+    pub now_ms: Option<i64>,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct WorkUnitDependCommandOptions {
+    #[arg(long)]
+    pub config: Option<String>,
+    #[arg(long)]
+    pub blocking_id: String,
+    #[arg(long)]
+    pub blocked_id: String,
+    #[arg(long)]
+    pub actor: Option<String>,
+    #[arg(long)]
+    pub now_ms: Option<i64>,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct WorkUnitUndependCommandOptions {
+    #[arg(long)]
+    pub config: Option<String>,
+    #[arg(long)]
+    pub blocking_id: String,
+    #[arg(long)]
+    pub blocked_id: String,
+    #[arg(long)]
+    pub actor: Option<String>,
+    #[arg(long)]
+    pub now_ms: Option<i64>,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct WorkUnitNoteCommandOptions {
+    #[arg(long)]
+    pub config: Option<String>,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub actor: Option<String>,
+    #[arg(long)]
+    pub note: String,
+    #[arg(long)]
+    pub now_ms: Option<i64>,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct WorkUnitHealthCommandOptions {
     #[arg(long)]
     pub config: Option<String>,
@@ -346,6 +418,10 @@ pub fn run_work_unit_cli(command: WorkUnitCommands) -> CliResult<()> {
         WorkUnitCommands::Complete(options) => run_complete_command(options),
         WorkUnitCommands::Recover(options) => run_recover_command(options),
         WorkUnitCommands::Archive(options) => run_archive_command(options),
+        WorkUnitCommands::Assign(options) => run_assign_command(options),
+        WorkUnitCommands::Depend(options) => run_depend_command(options),
+        WorkUnitCommands::Undepend(options) => run_undepend_command(options),
+        WorkUnitCommands::Note(options) => run_note_command(options),
         WorkUnitCommands::Health(options) => run_health_command(options),
     }
 }
@@ -499,6 +575,57 @@ fn run_archive_command(options: WorkUnitArchiveCommandOptions) -> CliResult<()> 
     render_optional_snapshot("archive", snapshot, options.json)
 }
 
+fn run_assign_command(options: WorkUnitAssignCommandOptions) -> CliResult<()> {
+    let repository = load_work_unit_repository(options.config.as_deref())?;
+    let request = mvp::work::repository::AssignWorkUnitRequest {
+        work_unit_id: options.id,
+        assigned_to: options.assigned_to,
+        actor: options.actor,
+        now_ms: options.now_ms,
+    };
+    let snapshot = repository.assign_work_unit(request)?;
+    render_optional_snapshot("assign", snapshot, options.json)
+}
+
+fn run_depend_command(options: WorkUnitDependCommandOptions) -> CliResult<()> {
+    let repository = load_work_unit_repository(options.config.as_deref())?;
+    let request = mvp::work::repository::AddWorkUnitDependencyRequest {
+        blocking_work_unit_id: options.blocking_id,
+        blocked_work_unit_id: options.blocked_id,
+        actor: options.actor,
+        now_ms: options.now_ms,
+    };
+    let snapshot = repository.add_dependency(request)?;
+    render_optional_snapshot("depend", snapshot, options.json)
+}
+
+fn run_undepend_command(options: WorkUnitUndependCommandOptions) -> CliResult<()> {
+    let repository = load_work_unit_repository(options.config.as_deref())?;
+    let request = mvp::work::repository::RemoveWorkUnitDependencyRequest {
+        blocking_work_unit_id: options.blocking_id,
+        blocked_work_unit_id: options.blocked_id,
+        actor: options.actor,
+        now_ms: options.now_ms,
+    };
+    let snapshot = repository.remove_dependency(request)?;
+    render_optional_snapshot("undepend", snapshot, options.json)
+}
+
+fn run_note_command(options: WorkUnitNoteCommandOptions) -> CliResult<()> {
+    let repository = load_work_unit_repository(options.config.as_deref())?;
+    let request = mvp::work::repository::AppendWorkUnitNoteRequest {
+        work_unit_id: options.id,
+        actor: options.actor,
+        note: options.note,
+        now_ms: options.now_ms,
+    };
+    let event = repository.append_note(request)?;
+    let Some(event) = event else {
+        return Err("note did not find an active work unit".to_owned());
+    };
+    render_json_or_text(&event, options.json, render_single_work_unit_event_text)
+}
+
 fn run_health_command(options: WorkUnitHealthCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let health = repository.load_runtime_health(options.now_ms)?;
@@ -578,10 +705,13 @@ fn render_work_unit_snapshot_text(snapshot: &WorkUnitSnapshot) -> String {
     let last_error = work_unit.last_error.as_deref().unwrap_or("-");
     let blocking_reason = work_unit.blocking_reason.as_deref().unwrap_or("-");
     let parent = work_unit.parent_work_unit_id.as_deref().unwrap_or("-");
+    let assigned_to = work_unit.assigned_to.as_deref().unwrap_or("-");
+    let blocks = render_string_list(work_unit.blocks_work_unit_ids.as_slice());
+    let blocked_by = render_string_list(work_unit.blocked_by_work_unit_ids.as_slice());
     let source = render_source_ref(&work_unit.source_ref);
     let retry = render_retry_policy(&work_unit.retry_policy);
     format!(
-        "id={} kind={} status={} priority={} attempts={} next_run_at_ms={} archived_at_ms={}\nsource={}\nretry={}\nparent_work_unit_id={}\ntitle={}\ndescription={}\nlast_error={}\nblocking_reason={}\nresult_payload_json={}\n{}\n",
+        "id={} kind={} status={} priority={} attempts={} next_run_at_ms={} archived_at_ms={}\nsource={}\nretry={}\nparent_work_unit_id={}\nassigned_to={}\nblocks_work_unit_ids={}\nblocked_by_work_unit_ids={}\ntitle={}\ndescription={}\nlast_error={}\nblocking_reason={}\nresult_payload_json={}\n{}\n",
         work_unit.work_unit_id,
         work_unit.kind.as_str(),
         work_unit.status.as_str(),
@@ -592,6 +722,9 @@ fn render_work_unit_snapshot_text(snapshot: &WorkUnitSnapshot) -> String {
         source,
         retry,
         parent,
+        assigned_to,
+        blocks,
+        blocked_by,
         work_unit.title,
         work_unit.description,
         last_error,
@@ -614,8 +747,10 @@ fn render_work_unit_list_text(snapshots: &[WorkUnitSnapshot]) -> String {
             .as_ref()
             .map(|lease| lease.owner.as_str())
             .unwrap_or("-");
+        let assigned_to = work_unit.assigned_to.as_deref().unwrap_or("-");
+        let blocked_by_count = work_unit.blocked_by_work_unit_ids.len();
         let line = format!(
-            "- id={} kind={} status={} priority={} attempts={} next_run_at_ms={} lease_owner={}",
+            "- id={} kind={} status={} priority={} attempts={} next_run_at_ms={} lease_owner={} assigned_to={} blocked_by_count={}",
             work_unit.work_unit_id,
             work_unit.kind.as_str(),
             work_unit.status.as_str(),
@@ -623,6 +758,8 @@ fn render_work_unit_list_text(snapshots: &[WorkUnitSnapshot]) -> String {
             work_unit.attempt_count,
             work_unit.next_run_at_ms,
             lease_owner,
+            assigned_to,
+            blocked_by_count,
         );
         lines.push(line);
     }
@@ -651,6 +788,10 @@ fn render_work_unit_events_text(events: &[loongclaw_contracts::WorkUnitEventReco
     }
     lines.push(String::new());
     lines.join("\n")
+}
+
+fn render_single_work_unit_event_text(event: &loongclaw_contracts::WorkUnitEventRecord) -> String {
+    render_work_unit_events_text(std::slice::from_ref(event))
 }
 
 fn render_work_unit_health_text(health: &loongclaw_contracts::WorkRuntimeHealthSnapshot) -> String {
@@ -709,4 +850,11 @@ fn render_optional_i64(value: Option<i64>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_owned())
+}
+
+fn render_string_list(values: &[String]) -> String {
+    if values.is_empty() {
+        return "-".to_owned();
+    }
+    values.join(",")
 }
