@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-08T02:54:20Z
+- Generated at: 2026-04-08T05:18:50Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -21,7 +21,7 @@
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10222 | 10500 | 278 | 72 | 90 | 18 | 97.4% | TIGHT | 9922 | 3.0% | PASS | 88 |
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9716 | 9800 | 84 | 90 | 90 | 0 | 100.0% | TIGHT | 9796 | -0.8% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6848 | 7300 | 452 | 123 | 160 | 37 | 93.8% | WATCH | 6936 | -1.3% | PASS | 146 |
-| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1788 | 6400 | 4612 | 0 | 110 | 110 | 27.9% | HEALTHY | 1779 | 0.5% | PASS | 0 |
+| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1786 | 6400 | 4614 | 0 | 110 | 110 | 27.9% | HEALTHY | 1779 | 0.4% | PASS | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10094 | 11200 | 1106 | 83 | 120 | 37 | 90.1% | WATCH | 10831 | -6.8% | PASS | 98 |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14962 | 15000 | 38 | 54 | 70 | 16 | 99.7% | TIGHT | 14472 | 3.4% | PASS | 54 |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6439 | 6500 | 61 | 200 | 210 | 10 | 99.1% | TIGHT | 6324 | 1.8% | PASS | 210 |
@@ -67,7 +67,7 @@
 <!-- arch-hotspot key=channel_registry lines=10222 functions=72 -->
 <!-- arch-hotspot key=channel_config lines=9716 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6848 functions=123 -->
-<!-- arch-hotspot key=channel_mod lines=1788 functions=0 -->
+<!-- arch-hotspot key=channel_mod lines=1786 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=10094 functions=83 -->
 <!-- arch-hotspot key=tools_mod lines=14962 functions=54 -->
 <!-- arch-hotspot key=daemon_lib lines=6439 functions=200 -->
