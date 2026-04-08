@@ -12,6 +12,10 @@ mod tools;
 
 pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
+pub use crate::channel::{ChannelDescriptor, ChannelRuntimeKind};
+#[allow(unused_imports)]
+pub use crate::channel::{channel_descriptor, service_channel_descriptors};
+#[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::bridge::{
@@ -22,28 +26,28 @@ pub use channels::bridge::{
 #[allow(unused_imports)]
 pub use channels::{
     ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelAcpConfig,
-    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource, ChannelDescriptor,
-    ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig, DingtalkAccountConfig,
-    DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig, EmailAccountConfig,
-    EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode,
-    FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig,
-    ImessageChannelConfig, IrcAccountConfig, IrcChannelConfig, LineAccountConfig,
-    LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig,
-    MattermostChannelConfig, NextcloudTalkAccountConfig, NextcloudTalkChannelConfig,
-    NostrAccountConfig, NostrChannelConfig, ResolvedDingtalkChannelConfig,
-    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
-    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
-    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
-    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
-    ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig,
-    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
-    SignalAccountConfig, SignalChannelConfig, SlackAccountConfig, SlackChannelConfig,
-    SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig,
-    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig,
-    TlonChannelConfig, TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig,
-    WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig,
-    WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
+    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
+    ChannelResolvedAccountRoute, CliChannelConfig, DingtalkAccountConfig, DingtalkChannelConfig,
+    DiscordAccountConfig, DiscordChannelConfig, EmailAccountConfig, EmailChannelConfig,
+    FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
+    GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig, ImessageChannelConfig,
+    IrcAccountConfig, IrcChannelConfig, LineAccountConfig, LineChannelConfig, MatrixAccountConfig,
+    MatrixChannelConfig, MattermostAccountConfig, MattermostChannelConfig,
+    NextcloudTalkAccountConfig, NextcloudTalkChannelConfig, NostrAccountConfig, NostrChannelConfig,
+    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
+    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
+    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
+    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
+    ResolvedNostrChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
+    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
+    ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
+    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SignalAccountConfig,
+    SignalChannelConfig, SlackAccountConfig, SlackChannelConfig, SynologyChatAccountConfig,
+    SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig, TelegramAccountConfig,
+    TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig, TlonChannelConfig,
+    TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig, WebhookChannelConfig,
+    WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig, WhatsappAccountConfig,
+    WhatsappChannelConfig,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{

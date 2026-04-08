@@ -115,7 +115,11 @@ use runtime::state::ChannelOperationRuntimeTracker;
     feature = "channel-whatsapp"
 ))]
 pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
-pub use sdk::{background_channel_runtime_descriptors, is_background_channel_surface_enabled};
+pub use sdk::{
+    ChannelDescriptor, ChannelRuntimeKind, background_channel_runtime_descriptors,
+    channel_descriptor, is_background_channel_surface_enabled, service_channel_descriptors,
+};
+pub(crate) use sdk::{collect_channel_validation_issues, enabled_channel_ids};
 pub use tlon_command::run_tlon_send;
 
 mod types;
