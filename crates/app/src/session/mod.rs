@@ -5,6 +5,9 @@ pub mod recovery;
 pub mod repository;
 
 #[cfg(feature = "memory-sqlite")]
+pub mod trajectory;
+
+#[cfg(feature = "memory-sqlite")]
 pub mod frozen_result;
 
 #[cfg(feature = "memory-sqlite")]

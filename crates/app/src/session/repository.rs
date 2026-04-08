@@ -1133,6 +1133,19 @@ impl SessionRepository {
         Self::search_session_content_with_conn(&conn, &session_id, &normalized_query, limit)
     }
 
+    pub fn list_all_events(
+        &self,
+        session_id: &str,
+        page_limit: usize,
+    ) -> Result<Vec<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        if page_limit == 0 {
+            return Err("page_limit must be >= 1".to_owned());
+        }
+        let conn = self.open_connection()?;
+        Self::drain_events_after_with_conn(&conn, &session_id, 0, page_limit)
+    }
+
     pub fn load_terminal_outcome(
         &self,
         session_id: &str,

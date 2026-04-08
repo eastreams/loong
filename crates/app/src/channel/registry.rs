@@ -8761,6 +8761,7 @@ mod tests {
 
         let mut config = LoongClawConfig::default();
         config.discord.enabled = true;
+        config.discord.bot_token_env = None;
 
         let snapshots = channel_status_snapshots(&config);
         let discord = snapshots
