@@ -6654,6 +6654,215 @@ mod tests {
     }
 
     #[test]
+    fn audit_repair_reports_healthy_for_valid_chain() {
+        let root = unique_temp_dir("loongclaw-audit-cli-repair-healthy");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+        let sink =
+            crate::kernel::JsonlAuditSink::new(journal_path).expect("jsonl sink should initialize");
+
+        sink.record(sample_audit_event(
+            "evt-repair-healthy-1",
+            1_700_010_330,
+            Some("agent-repair"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-healthy-1".to_owned(),
+            },
+        ))
+        .expect("record first event");
+
+        sink.record(sample_audit_event(
+            "evt-repair-healthy-2",
+            1_700_010_331,
+            Some("agent-repair"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-healthy-2".to_owned(),
+            },
+        ))
+        .expect("record second event");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Repair,
+        })
+        .expect("execute audit repair");
+
+        match &execution.result {
+            AuditCommandResult::Repair {
+                total_events,
+                repaired_events,
+                already_valid_events,
+                outcome,
+                refused_line,
+                refused_reason,
+            } => {
+                assert_eq!(*total_events, 2);
+                assert_eq!(*repaired_events, 0);
+                assert_eq!(*already_valid_events, 2);
+                assert_eq!(outcome, "healthy");
+                assert_eq!(*refused_line, None);
+                assert!(refused_reason.is_none());
+            }
+            other => panic!("unexpected audit repair result: {other:?}"),
+        }
+
+        let rendered = render_audit_cli_text(&execution).expect("render audit repair");
+
+        assert!(rendered.contains("audit repair"));
+        assert!(rendered.contains("already_valid_events=2"));
+        assert!(rendered.contains("outcome=healthy"));
+    }
+
+    #[test]
+    fn audit_repair_reports_repaired_for_legacy_prefix() {
+        let root = unique_temp_dir("loongclaw-audit-cli-repair-legacy-prefix");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+        let legacy_event = sample_audit_event(
+            "evt-repair-legacy-1",
+            1_700_010_340,
+            Some("agent-repair"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-legacy-1".to_owned(),
+            },
+        );
+
+        write_journal(&journal_path, &[legacy_event]);
+
+        let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+
+        sink.record(sample_audit_event(
+            "evt-repair-tail-1",
+            1_700_010_341,
+            Some("agent-repair"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-tail-1".to_owned(),
+            },
+        ))
+        .expect("record protected event");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: true,
+            command: AuditCommands::Repair,
+        })
+        .expect("execute audit repair");
+
+        match &execution.result {
+            AuditCommandResult::Repair {
+                total_events,
+                repaired_events,
+                already_valid_events,
+                outcome,
+                refused_line,
+                refused_reason,
+            } => {
+                assert_eq!(*total_events, 2);
+                assert_eq!(*repaired_events, 2);
+                assert_eq!(*already_valid_events, 0);
+                assert_eq!(outcome, "repaired");
+                assert_eq!(*refused_line, None);
+                assert!(refused_reason.is_none());
+            }
+            other => panic!("unexpected audit repair result: {other:?}"),
+        }
+
+        let payload = audit_cli_json(&execution);
+        let verify_report = crate::kernel::verify_jsonl_audit_journal(&journal_path)
+            .expect("verify repaired journal");
+
+        assert_eq!(payload["command"], "repair");
+        assert_eq!(payload["total_events"], json!(2));
+        assert_eq!(payload["repaired_events"], json!(2));
+        assert_eq!(payload["already_valid_events"], json!(0));
+        assert_eq!(payload["outcome"], json!("repaired"));
+        assert_eq!(payload["refused_line"], Value::Null);
+        assert_eq!(payload["refused_reason"], Value::Null);
+        assert!(verify_report.valid);
+        assert_eq!(verify_report.verified_events, 2);
+    }
+
+    #[test]
+    fn audit_repair_reports_refused_for_tampered_journal() {
+        let root = unique_temp_dir("loongclaw-audit-cli-repair-refused");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+        let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+
+        sink.record(sample_audit_event(
+            "evt-repair-refused-1",
+            1_700_010_350,
+            Some("agent-repair"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-refused-1".to_owned(),
+            },
+        ))
+        .expect("record first event");
+
+        sink.record(sample_audit_event(
+            "evt-repair-refused-2",
+            1_700_010_351,
+            Some("agent-repair"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-refused-2".to_owned(),
+            },
+        ))
+        .expect("record second event");
+
+        let original_contents = fs::read_to_string(&journal_path).expect("read audit journal");
+        let tampered_contents =
+            original_contents.replacen("token-repair-refused-2", "token-repair-refused-x", 1);
+
+        fs::write(&journal_path, &tampered_contents).expect("rewrite tampered journal");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: true,
+            command: AuditCommands::Repair,
+        })
+        .expect("execute audit repair");
+
+        match &execution.result {
+            AuditCommandResult::Repair {
+                total_events,
+                repaired_events,
+                already_valid_events,
+                outcome,
+                refused_line,
+                refused_reason,
+            } => {
+                assert_eq!(*total_events, 2);
+                assert_eq!(*repaired_events, 0);
+                assert_eq!(*already_valid_events, 1);
+                assert_eq!(outcome, "refused");
+                assert_eq!(*refused_line, Some(2));
+                assert_eq!(
+                    refused_reason.as_deref(),
+                    Some("entry_hash mismatch — event data may be tampered")
+                );
+            }
+            other => panic!("unexpected audit repair result: {other:?}"),
+        }
+
+        let payload = audit_cli_json(&execution);
+        let rendered = render_audit_cli_text(&execution).expect("render audit repair");
+
+        assert_eq!(payload["command"], "repair");
+        assert_eq!(payload["outcome"], json!("refused"));
+        assert_eq!(payload["refused_line"], json!(2));
+        assert_eq!(
+            payload["refused_reason"],
+            json!("entry_hash mismatch — event data may be tampered")
+        );
+        assert!(rendered.contains("outcome=refused"));
+        assert!(rendered.contains("refused_line=2"));
+        assert!(rendered.contains("refused_reason=entry_hash mismatch"));
+    }
+
+    #[test]
     fn audit_summary_json_uses_empty_and_null_triage_fields_when_no_triage_events_exist() {
         let execution = AuditCommandExecution {
             resolved_config_path: "/tmp/loongclaw.toml".to_owned(),

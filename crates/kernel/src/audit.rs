@@ -408,7 +408,13 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
             path.display()
         ))
     })?;
-    let original_permissions = fs::metadata(path).map(|m| m.permissions()).ok();
+    let original_metadata = fs::metadata(path).map_err(|error| {
+        AuditError::Sink(format!(
+            "failed to read audit journal metadata `{}` before repair: {error}",
+            path.display()
+        ))
+    })?;
+    let original_permissions = original_metadata.permissions();
 
     let reader = BufReader::new(file);
     let mut repaired_lines: Vec<Vec<u8>> = Vec::new();
@@ -455,7 +461,7 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
 
             // Validate source chain: prev_hash must match the previous
             // source entry_hash (mirrors verify_jsonl_audit_journal).
-            if protected_chain_started && integrity.prev_hash != source_previous_hash {
+            if integrity.prev_hash != source_previous_hash {
                 return Ok(AuditRepairReport {
                     total_events,
                     repaired_events,
@@ -545,9 +551,12 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                 temp_path.display()
             ))
         })?;
-        if let Some(permissions) = &original_permissions {
-            let _ = fs::set_permissions(&temp_path, permissions.clone());
-        }
+        fs::set_permissions(&temp_path, original_permissions.clone()).map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to apply original permissions to repair temp file `{}`: {error}",
+                temp_path.display()
+            ))
+        })?;
         for line_bytes in &repaired_lines {
             temp_file.write_all(line_bytes).map_err(|error| {
                 AuditError::Sink(format!(
@@ -562,6 +571,13 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                 temp_path.display()
             ))
         })?;
+        temp_file.sync_all().map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to sync repair temp file `{}`: {error}",
+                temp_path.display()
+            ))
+        })?;
+        drop(temp_file);
         fs::rename(&temp_path, path).map_err(|error| {
             AuditError::Sink(format!(
                 "failed to replace journal with repaired file `{}`: {error}",

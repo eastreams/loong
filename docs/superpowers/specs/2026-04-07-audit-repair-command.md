@@ -10,7 +10,8 @@
 |---|---|
 | missing integrity envelope | **Repair**: compute and inject SHA256 hash chain |
 | healthy (already has valid integrity) | **Skip**: report as already healthy |
-| prev_hash mismatch (after legacy prefix repair) | **Re-seal**: rebuild chain with new prev_hash |
+| valid protected tail after legacy prefix repair | **Re-seal**: rebuild chain with new prev_hash |
+| source prev_hash mismatch | **Refuse**: report chain corruption, do not reseal |
 | entry_hash vs event data mismatch | **Refuse**: report as tampered, do not reseal |
 
 Repair writes a new journal file (`.jsonl.repair-tmp`), then atomically renames. Original is never modified in-place. Temp file is cleaned up on rename failure. **Must be run while daemon is stopped** (running `JsonlAuditSink` holds stale file handle).
