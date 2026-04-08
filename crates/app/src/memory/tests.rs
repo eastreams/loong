@@ -732,14 +732,21 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
         }
     }
 
+    fn ensure_registry_runtime_executing_system_registered() {
+        static REGISTRY_RUNTIME_EXECUTING_SYSTEM: OnceLock<()> = OnceLock::new();
+        REGISTRY_RUNTIME_EXECUTING_SYSTEM.get_or_init(|| {
+            register_memory_system("registry-runtime-executing", || {
+                Box::new(RuntimeExecutingMemorySystem)
+            })
+            .expect("register runtime-executing memory system");
+        });
+    }
+
     let _guard = core_dispatch_test_lock()
         .lock()
-        .expect("core dispatch test lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    register_memory_system("registry-runtime-executing", || {
-        Box::new(RuntimeExecutingMemorySystem)
-    })
-    .expect("register runtime-executing memory system");
+    ensure_registry_runtime_executing_system_registered();
 
     let config = runtime_config::MemoryRuntimeConfig {
         resolved_system_id: Some("registry-runtime-executing".to_owned()),
