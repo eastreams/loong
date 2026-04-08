@@ -61,8 +61,9 @@ Delivered:
 - external profile integrity lock (`security_scan.profile_sha256`) with fail-closed behavior
 - external profile signature verification (`security_scan.profile_signature`, ed25519)
 - JSONL SIEM export lane (`security_scan.siem_export`) with optional fail-closed mode
-- kernel-level tool-call policy gate (`PolicyEngine::check_tool_call`) with explicit
-  deny/approval-required outcomes before tool dispatch (Rule of Two)
+- kernel-level tool-call policy gate via policy extensions and execution-layer
+  dispatch with explicit deny/approval-required outcomes before tool dispatch
+  (Rule of Two)
 - WASM static scan controls:
   - allowed artifact paths
   - module size cap
