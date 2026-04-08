@@ -37,6 +37,7 @@ pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
+pub use self::env_compat::make_env_compatible;
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
     run_list_mcp_servers_cli, run_show_mcp_server_cli,
@@ -97,6 +98,7 @@ pub mod completions_cli;
 mod control_plane_server;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
+mod env_compat;
 mod external_skills_policy_probe;
 pub mod feishu_cli;
 pub mod feishu_support;
@@ -1568,24 +1570,6 @@ pub fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
-/// Copies deprecated `LOONGCLAW_*` env vars into their `LOONG_*` replacements
-/// and emits a deprecation warning. No-op when the new name is already set.
-pub fn make_env_compatible() {
-    const MIGRATIONS: &[(&str, &str)] = &[("LOONG_HOME", "LOONGCLAW_HOME")];
-    for &(new, old) in MIGRATIONS {
-        let old_val = std::env::var_os(old);
-        let new_val = std::env::var_os(new);
-        if let (Some(old_val), None) = (old_val, new_val) {
-            // SAFETY: single-threaded — called before tokio runtime and parse_cli.
-            #[allow(unsafe_code, clippy::disallowed_methods)]
-            unsafe {
-                std::env::set_var(new, &old_val);
-            }
-            tracing::warn!("{old} is deprecated. Set {new} instead.");
-        }
-    }
-}
-
 fn resolve_welcome_config_path() -> CliResult<PathBuf> {
     let config_path = resolved_default_entry_config_path();
     if config_path.is_file() {
@@ -1629,54 +1613,6 @@ pub fn run_welcome_cli() -> CliResult<()> {
     let (_resolved_path, config) = load_result;
     println!("{}", render_welcome_banner(config_path.as_path(), &config));
     Ok(())
-}
-
-#[cfg(test)]
-mod env_compat_tests {
-    use crate::test_support::ScopedEnv;
-    fn loong_home() -> Option<std::path::PathBuf> {
-        std::env::var_os("LOONG_HOME").map(std::path::PathBuf::from)
-    }
-
-    #[test]
-    fn migrates_deprecated_env_when_new_is_unset() {
-        let mut env = ScopedEnv::new();
-        let val = std::env::temp_dir().join("loong-compat-old-only");
-        env.set("LOONGCLAW_HOME", &val);
-        env.remove("LOONG_HOME");
-        super::make_env_compatible();
-        assert_eq!(loong_home(), Some(val));
-    }
-
-    #[test]
-    fn does_not_overwrite_new_env_when_both_set() {
-        let mut env = ScopedEnv::new();
-        let new = std::env::temp_dir().join("loong-compat-new");
-        let old = std::env::temp_dir().join("loong-compat-old");
-        env.set("LOONG_HOME", &new);
-        env.set("LOONGCLAW_HOME", &old);
-        super::make_env_compatible();
-        assert_eq!(loong_home(), Some(new));
-    }
-
-    #[test]
-    fn no_op_when_only_new_env_is_set() {
-        let mut env = ScopedEnv::new();
-        let val = std::env::temp_dir().join("loong-compat-new-only");
-        env.set("LOONG_HOME", &val);
-        env.remove("LOONGCLAW_HOME");
-        super::make_env_compatible();
-        assert_eq!(loong_home(), Some(val));
-    }
-
-    #[test]
-    fn no_op_when_neither_env_is_set() {
-        let mut env = ScopedEnv::new();
-        env.remove("LOONG_HOME");
-        env.remove("LOONGCLAW_HOME");
-        super::make_env_compatible();
-        assert!(loong_home().is_none());
-    }
 }
 
 #[cfg(test)]

@@ -77,7 +77,10 @@ impl ImportEnvironmentGuard {
             .find_map(|(key, value)| (*key == "HOME").then_some(*value))
             .flatten()
             .map(std::path::PathBuf::from);
-        let explicit_loongclaw_home = pairs.iter().any(|(key, _)| *key == "LOONG_HOME");
+        let explicit_home_override = pairs
+            .iter()
+            .any(|(key, _)| *key == "LOONG_HOME" || *key == "LOONGCLAW_HOME");
+
         for (key, value) in pairs {
             saved.push(((*key).to_owned(), std::env::var_os(key)));
             match value {
@@ -89,7 +92,7 @@ impl ImportEnvironmentGuard {
                 },
             }
         }
-        if !explicit_loongclaw_home {
+        if !explicit_home_override {
             saved.push(("LOONG_HOME".to_owned(), std::env::var_os("LOONG_HOME")));
             match home_override {
                 Some(home) => unsafe {
