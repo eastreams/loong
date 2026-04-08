@@ -11,6 +11,20 @@ use crate::secrets::{
     SecretLookup, has_configured_secret_ref, resolve_secret_lookup, secret_ref_env_name,
 };
 
+pub(crate) const GITHUB_COPILOT_EDITOR_VERSION: &str = "vscode/1.85.1";
+pub(crate) const GITHUB_COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot/1.155.0";
+pub(crate) const GITHUB_COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+pub(crate) const GITHUB_COPILOT_USER_AGENT: &str = "GithubCopilot/1.155.0";
+pub(crate) const GITHUB_COPILOT_OAUTH_TOKEN_ENV: &str = "GITHUB_COPILOT_OAUTH_TOKEN";
+pub(crate) const GITHUB_COPILOT_DEFAULT_HEADERS: [(&str, &str); 3] = [
+    ("Editor-Version", GITHUB_COPILOT_EDITOR_VERSION),
+    (
+        "Editor-Plugin-Version",
+        GITHUB_COPILOT_EDITOR_PLUGIN_VERSION,
+    ),
+    ("Copilot-Integration-Id", GITHUB_COPILOT_INTEGRATION_ID),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderProfile {
     pub kind: ProviderKind,
@@ -617,7 +631,7 @@ pub enum ProviderKind {
     KimiCoding,
     #[serde(alias = "groq_compatible")]
     Groq,
-    #[serde(alias = "github_copilot", alias = "github-copilot", alias = "copilot")]
+    #[serde(rename = "github-copilot", alias = "github_copilot", alias = "copilot")]
     GithubCopilot,
     #[serde(alias = "fireworks_compatible", alias = "fireworks-ai")]
     Fireworks,
@@ -3281,15 +3295,11 @@ const PROVIDER_PROFILES: [ProviderProfile; 43] = [
         models_path: None,
         protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
         auth_scheme: ProviderAuthScheme::Bearer,
-        default_headers: &[
-            ("Editor-Version", "vscode/1.85.1"),
-            ("Editor-Plugin-Version", "copilot/1.155.0"),
-            ("Copilot-Integration-Id", "vscode-chat"),
-        ],
+        default_headers: &GITHUB_COPILOT_DEFAULT_HEADERS,
         default_api_key_env: None,
         api_key_env_aliases: &[],
-        default_user_agent: Some("GithubCopilot/1.155.0"),
-        default_oauth_access_token_env: None,
+        default_user_agent: Some(GITHUB_COPILOT_USER_AGENT),
+        default_oauth_access_token_env: Some(GITHUB_COPILOT_OAUTH_TOKEN_ENV),
         oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::OpenAiCompatible,
     },
@@ -4273,6 +4283,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn provider_kind_serializes_github_copilot_using_canonical_hyphenated_id() {
+        let raw = serde_json::to_string(&ProviderKind::GithubCopilot)
+            .expect("provider kind should serialize");
+
+        assert_eq!(raw, "\"github-copilot\"");
     }
 
     #[test]

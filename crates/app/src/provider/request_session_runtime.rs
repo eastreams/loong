@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use crate::config::ProviderKind;
 use crate::{CliResult, config::LoongClawConfig};
 
 use super::auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
@@ -38,16 +37,7 @@ pub(super) async fn prepare_provider_request_session(
 ) -> CliResult<ProviderRequestSession> {
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
-
-    if config.provider.kind == ProviderKind::GithubCopilot {
-        let github_token = config
-            .provider
-            .oauth_access_token()
-            .ok_or_else(|| {
-                "GitHub Copilot requires authentication. Run `loong onboard` to set up.".to_owned()
-            })?;
-        super::copilot_auth::ensure_copilot_api_key(&github_token).await?;
-    }
+    super::copilot_auth::ensure_provider_copilot_api_key(&config.provider).await?;
 
     validate_provider_auth_readiness(config).await?;
     ensure_provider_profile_state_backend(config);

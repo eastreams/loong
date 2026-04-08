@@ -1231,6 +1231,88 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_persists_github_copilot_oauth_env_binding() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-github-copilot-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+    unsafe {
+        std::env::set_var(
+            "GITHUB_COPILOT_OAUTH_TOKEN",
+            "test-github-copilot-oauth-token",
+        );
+    }
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.provider = Some("github-copilot".to_owned());
+    options.model = Some("copilot-test-model".to_owned());
+    options.skip_model_probe = true;
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context =
+        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("GitHub Copilot onboarding should reuse an existing OAuth token env in non-interactive mode");
+
+    let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
+    assert!(
+        raw.contains("[providers.github-copilot.oauth_access_token]")
+            && raw.contains("env = \"GITHUB_COPILOT_OAUTH_TOKEN\""),
+        "GitHub Copilot onboarding should persist the OAuth env binding in the canonical secret field: {raw}"
+    );
+    assert!(
+        !raw.contains("oauth_access_token_env = "),
+        "GitHub Copilot onboarding should not keep the legacy oauth_access_token_env field: {raw}"
+    );
+
+    let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
+        .expect("load written onboarding config");
+    assert_eq!(
+        config.provider.kind,
+        mvp::config::ProviderKind::GithubCopilot
+    );
+    assert_eq!(config.provider.model, "copilot-test-model");
+    assert_eq!(
+        config.provider.oauth_access_token,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "GITHUB_COPILOT_OAUTH_TOKEN".to_owned(),
+        }),
+        "reloaded config should keep the routed OAuth env binding in the canonical oauth_access_token field"
+    );
+    assert_eq!(config.provider.oauth_access_token_env, None);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_rejects_github_copilot_without_oauth_token() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-github-copilot-missing-token-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.provider = Some("github-copilot".to_owned());
+    options.model = Some("copilot-test-model".to_owned());
+    options.skip_model_probe = true;
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context =
+        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    let error = loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect_err("GitHub Copilot onboarding should fail without a reusable OAuth token in non-interactive mode");
+
+    assert!(
+        error.contains("GITHUB_COPILOT_OAUTH_TOKEN"),
+        "missing-token error should name the expected GitHub Copilot env source: {error}"
+    );
+    assert!(
+        error.contains("--non-interactive"),
+        "missing-token error should explain why interactive device login was skipped: {error}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn non_interactive_onboard_applies_reviewed_default_when_probe_is_skipped() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-reviewed-auto-skip-root");

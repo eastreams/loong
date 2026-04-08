@@ -79,6 +79,7 @@ pub use memory::{
 };
 #[allow(unused_imports)]
 pub use outbound_http::OutboundHttpConfig;
+pub(crate) use provider::{GITHUB_COPILOT_DEFAULT_HEADERS, GITHUB_COPILOT_USER_AGENT};
 #[allow(unused_imports)]
 pub use provider::{
     ModelCatalogProbeRecovery, PROVIDER_DESCRIPTOR_SCHEMA_VERSION, ProviderAuthScheme,

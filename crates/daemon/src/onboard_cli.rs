@@ -15,6 +15,7 @@ use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 use serde_json::json;
 
+use crate::copilot_onboarding::finalize_github_copilot_onboard_credentials;
 use crate::onboard_finalize::{
     ConfigWritePlan, build_onboarding_success_summary_with_memory, prepare_output_path_for_write,
     render_onboarding_success_summary_lines, resolve_backup_path, rollback_onboard_write_failure,
@@ -1473,9 +1474,12 @@ pub async fn run_onboard_cli_with_ui(
         config.provider.model = selected_model;
 
         if config.provider.kind == mvp::config::ProviderKind::GithubCopilot {
-            tracing::warn!("GitHub Copilot uses an undocumented API. It may break without notice.");
-            let token = mvp::provider::copilot_device_code_login().await?;
-            config.provider.oauth_access_token = Some(SecretRef::Inline(token));
+            finalize_github_copilot_onboard_credentials(
+                &mut config.provider,
+                &output_path,
+                options.non_interactive,
+            )
+            .await?;
         } else {
             let default_api_key_env = preferred_api_key_env_default(&config);
             let selected_api_key_env = resolve_api_key_env_selection(
@@ -3043,36 +3047,8 @@ fn non_interactive_preflight_warning_message(
         "onboard preflight failed: {detail}; rerun without --non-interactive to inspect and confirm them"
     )
 }
-fn render_configured_provider_credential_source_value(
-    provider: &mvp::config::ProviderConfig,
-) -> Option<String> {
-    let configured_oauth = provider.configured_oauth_access_token_env_override();
-    let rendered_oauth = provider_credential_policy::render_provider_credential_source_value(
-        configured_oauth.as_deref(),
-    );
-    if rendered_oauth.is_some() {
-        return rendered_oauth;
-    }
-
-    let configured_api_key = provider.configured_api_key_env_override();
-    provider_credential_policy::render_provider_credential_source_value(
-        configured_api_key.as_deref(),
-    )
-}
-
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
-    let provider = &config.provider;
-    if let Some(binding) =
-        provider_credential_policy::configured_provider_credential_env_binding(provider)
-    {
-        return binding.env_name;
-    }
-    if provider_credential_policy::provider_has_inline_credential(provider) {
-        return String::new();
-    }
-    provider_credential_policy::preferred_provider_credential_env_binding(provider)
-        .map(|binding| binding.env_name)
-        .unwrap_or_default()
+    provider_credential_policy::preferred_provider_credential_env_name(config)
 }
 
 pub fn collect_import_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<ImportSurface> {
@@ -5337,7 +5313,10 @@ fn render_api_key_env_selection_screen_lines_with_style(
         "- provider: {}",
         crate::provider_presentation::guided_provider_label(config.provider.kind)
     )];
-    if let Some(current_env) = render_configured_provider_credential_source_value(&config.provider)
+    if let Some(current_env) =
+        provider_credential_policy::render_configured_provider_credential_source_value(
+            &config.provider,
+        )
     {
         context_lines.push(format!("- current source: {current_env}"));
     }
@@ -5883,7 +5862,9 @@ pub(crate) fn summarize_provider_credential(
             value: "inline oauth token".to_owned(),
         });
     }
-    if let Some(configured_env) = render_configured_provider_credential_source_value(provider) {
+    if let Some(configured_env) =
+        provider_credential_policy::render_configured_provider_credential_source_value(provider)
+    {
         return Some(OnboardingCredentialSummary {
             label: "credential source",
             value: configured_env,

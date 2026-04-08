@@ -21,7 +21,9 @@ pub(super) fn resolve_provider_auth_profiles(
     match provider.kind.auth_scheme() {
         ProviderAuthScheme::Bearer => {
             if provider.kind == ProviderKind::GithubCopilot {
-                if let Some(api_key) = super::copilot_auth::cached_copilot_api_key() {
+                if let Some(api_key) =
+                    super::copilot_auth::cached_provider_copilot_api_key(provider)
+                {
                     push_bearer_profile(&mut profiles, &mut seen, "copilot", &api_key);
                 }
             } else if let Some(token) = provider.oauth_access_token() {
@@ -170,7 +172,8 @@ mod tests {
     fn resolve_provider_auth_profiles_uses_copilot_cache_for_github_copilot() {
         let _guard = super::super::copilot_auth::acquire_cache_test_lock();
 
-        super::super::copilot_auth::set_cached_key_for_test(
+        super::super::copilot_auth::set_cached_key_for_auth_source_for_test(
+            "github-oauth-token-should-not-be-used",
             "test-copilot-api-key",
             super::super::copilot_auth::now_unix_for_test() + 3600,
         );
@@ -192,6 +195,36 @@ mod tests {
             profiles[0].authorization_header.as_deref(),
             Some("Bearer test-copilot-api-key")
         );
+
+        super::super::copilot_auth::clear_cache_for_test();
+    }
+
+    #[test]
+    fn resolve_provider_auth_profiles_isolates_copilot_cache_by_oauth_token() {
+        let _guard = super::super::copilot_auth::acquire_cache_test_lock();
+
+        super::super::copilot_auth::set_cached_key_for_auth_source_for_test(
+            "github-oauth-token-a",
+            "test-copilot-api-key-a",
+            super::super::copilot_auth::now_unix_for_test() + 3600,
+        );
+
+        let provider = ProviderConfig {
+            kind: ProviderKind::GithubCopilot,
+            api_key: None,
+            api_key_env: None,
+            oauth_access_token: Some(loongclaw_contracts::SecretRef::Inline(
+                "github-oauth-token-b".to_owned(),
+            )),
+            oauth_access_token_env: None,
+            ..ProviderConfig::default()
+        };
+
+        let profiles = resolve_provider_auth_profiles(&provider);
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "anonymous");
+        assert_eq!(profiles[0].authorization_header, None);
 
         super::super::copilot_auth::clear_cache_for_test();
     }
