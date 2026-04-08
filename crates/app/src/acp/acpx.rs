@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -15,6 +14,12 @@ use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use crate::CliResult;
 use crate::config::{AcpxMcpServerConfig, LoongClawConfig};
 
+#[cfg(test)]
+pub(crate) use super::acpx_mcp::probe_mcp_proxy_support_with_runtime;
+pub(crate) use super::acpx_mcp::{
+    AcpxMcpServerEntry, AcpxMcpServerEnvEntry, build_mcp_proxy_agent_command,
+    probe_mcp_proxy_support,
+};
 use super::backend::{
     AcpAbortSignal, AcpBackendMetadata, AcpCapability, AcpConfigPatch, AcpDoctorReport,
     AcpRuntimeBackend, AcpSessionBootstrap, AcpSessionHandle, AcpSessionMode, AcpSessionState,
@@ -32,10 +37,6 @@ const ACPX_DEFAULT_QUEUE_OWNER_TTL_SECONDS: f64 = 0.1;
 const ACPX_PERMISSION_DENIED_EXIT_CODE: i32 = 5;
 const ACPX_SPAWN_RETRY_ATTEMPTS: usize = 5;
 const ACPX_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
-const ACPX_MCP_PROXY_NODE_COMMAND: &str = "node";
-const ACPX_MCP_PROXY_SCRIPT_NAME: &str = "loongclaw-acpx-mcp-proxy.mjs";
-const ACPX_MCP_PROXY_SCRIPT_SOURCE: &str = include_str!("assets/acpx-mcp-proxy.mjs");
-static ACPX_MCP_PROXY_SCRIPT_PATH: OnceLock<Result<String, String>> = OnceLock::new();
 
 mod command_probe;
 
@@ -80,22 +81,6 @@ struct AcpxIdentifiers {
     acpx_record_id: Option<String>,
     backend_session_id: Option<String>,
     agent_session_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AcpxMcpServerEntry {
-    name: String,
-    command: String,
-    args: Vec<String>,
-    env: Vec<AcpxMcpServerEnvEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cwd: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AcpxMcpServerEnvEntry {
-    name: String,
-    value: String,
 }
 
 #[derive(Default)]
@@ -922,126 +907,6 @@ fn resolve_selected_mcp_server_entries(
             })
         })
         .collect()
-}
-
-fn build_mcp_proxy_agent_command(
-    target_command: &str,
-    mcp_servers: &[AcpxMcpServerEntry],
-) -> CliResult<String> {
-    let script_path = ensure_mcp_proxy_script_path()?;
-    let payload = serde_json::to_vec(&json!({
-        "targetCommand": target_command,
-        "mcpServers": mcp_servers,
-    }))
-    .map_err(|error| format!("serialize ACPX MCP proxy payload failed: {error}"))?;
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
-    Ok(join_command_line(&[
-        ACPX_MCP_PROXY_NODE_COMMAND.to_owned(),
-        script_path,
-        "--payload".to_owned(),
-        encoded,
-    ]))
-}
-
-fn ensure_mcp_proxy_script_path() -> CliResult<String> {
-    ACPX_MCP_PROXY_SCRIPT_PATH
-        .get_or_init(materialize_mcp_proxy_script)
-        .clone()
-}
-
-fn materialize_mcp_proxy_script() -> Result<String, String> {
-    let path = std::env::temp_dir()
-        .join("loongclaw")
-        .join(ACPX_MCP_PROXY_SCRIPT_NAME);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("create ACPX MCP proxy directory failed: {error}"))?;
-    }
-    std::fs::write(&path, ACPX_MCP_PROXY_SCRIPT_SOURCE)
-        .map_err(|error| format!("write ACPX MCP proxy script failed: {error}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = std::fs::metadata(&path)
-            .map_err(|error| format!("stat ACPX MCP proxy script failed: {error}"))?
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&path, permissions)
-            .map_err(|error| format!("chmod ACPX MCP proxy script failed: {error}"))?;
-    }
-    Ok(path.display().to_string())
-}
-
-async fn probe_mcp_proxy_support(
-    cwd: Option<&str>,
-    timeout_duration: Duration,
-) -> CliResult<(String, String)> {
-    let script_path = ensure_mcp_proxy_script_path()?;
-    let mut probe = Command::new(ACPX_MCP_PROXY_NODE_COMMAND);
-    probe.arg("--version");
-    if let Some(cwd) = cwd {
-        probe.current_dir(cwd);
-    }
-    let output = wait_for_command_output(&mut probe, timeout_duration)
-        .await
-        .map_err(|error| match error {
-            CommandOutputError::TimedOut => {
-                "embedded ACPX MCP proxy runtime probe timed out".to_owned()
-            }
-            CommandOutputError::Io(error) => {
-                if error.kind() == ErrorKind::NotFound {
-                    format!(
-                        "embedded ACPX MCP proxy requires `{ACPX_MCP_PROXY_NODE_COMMAND}` on PATH"
-                    )
-                } else {
-                    format!("probe embedded ACPX MCP proxy runtime failed: {error}")
-                }
-            }
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    let observed = match (stdout.is_empty(), stderr.is_empty()) {
-        (false, true) => stdout,
-        (true, false) => stderr,
-        (false, false) => format!("{stdout} | {stderr}"),
-        (true, true) => "(empty)".to_owned(),
-    };
-    if !output.status.success() {
-        return Err(format!(
-            "embedded ACPX MCP proxy runtime probe exited with code {}: {observed}",
-            output
-                .status
-                .code()
-                .map_or_else(|| "unknown".to_owned(), |code| code.to_string())
-        ));
-    }
-    Ok((script_path, observed))
-}
-
-fn join_command_line(parts: &[String]) -> String {
-    parts
-        .iter()
-        .map(|part| quote_command_part(part.as_str()))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn quote_command_part(value: &str) -> String {
-    if value.is_empty() {
-        return "\"\"".to_owned();
-    }
-    if value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric()
-            || matches!(
-                ch,
-                '_' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',' | '-'
-            )
-    }) {
-        return value.to_owned();
-    }
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 fn resolve_effective_cwd(
@@ -2371,8 +2236,8 @@ exit 0
             "expected --agent proxy flag in log: {log}"
         );
         assert!(
-            log.contains("--payload"),
-            "expected MCP proxy payload flag in log: {log}"
+            log.contains("--payload-file"),
+            "expected MCP proxy payload file flag in log: {log}"
         );
         assert!(
             log.contains("sessions ensure --name session-proxy"),
