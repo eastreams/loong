@@ -11,6 +11,7 @@ pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser comp
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
 const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 2;
+const BROWSER_COMPANION_PROBE_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,10 +214,16 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 async fn probe_browser_companion_version(
     command: &str,
 ) -> Result<String, BrowserCompanionProbeError> {
-    for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
+    for attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
         let probe_result = probe_browser_companion_version_once(command).await;
         match probe_result {
-            Err(BrowserCompanionProbeError::TimedOut) => {}
+            Err(BrowserCompanionProbeError::TimedOut) => {
+                let is_last_attempt = attempt + 1 == BROWSER_COMPANION_PROBE_ATTEMPTS;
+                if is_last_attempt {
+                    break;
+                }
+                tokio::time::sleep(BROWSER_COMPANION_PROBE_RETRY_DELAY).await;
+            }
             result => {
                 return result;
             }

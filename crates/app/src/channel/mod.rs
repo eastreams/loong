@@ -338,19 +338,12 @@ pub use turn_feedback::ChannelTurnFeedbackPolicy;
 
 #[derive(Debug, Clone, Default)]
 pub struct ChannelDelivery {
-    #[allow(dead_code)]
     pub ack_cursor: Option<String>,
-    #[allow(dead_code)]
     pub source_message_id: Option<String>,
-    #[allow(dead_code)]
     pub sender_principal_key: Option<String>,
-    #[allow(dead_code)]
     pub thread_root_id: Option<String>,
-    #[allow(dead_code)]
     pub parent_message_id: Option<String>,
-    #[allow(dead_code)]
     pub resources: Vec<ChannelDeliveryResource>,
-    #[allow(dead_code)]
     pub feishu_callback: Option<ChannelDeliveryFeishuCallback>,
 }
 
@@ -759,7 +752,6 @@ pub struct FeishuChannelSendRequest {
     feature = "channel-matrix",
     feature = "channel-wecom"
 ))]
-#[allow(dead_code)]
 #[async_trait]
 pub trait ChannelAdapter {
     fn name(&self) -> &str;

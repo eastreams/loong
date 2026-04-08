@@ -302,28 +302,6 @@ fn split_existing_ancestor(path: &Path) -> Result<(PathBuf, Vec<OsString>), Stri
     }
 }
 
-#[allow(dead_code)]
-fn normalize_without_fs_access(path: &Path) -> PathBuf {
-    let mut parts = Vec::new();
-    for component in path.components() {
-        use std::path::Component;
-        match component {
-            Component::ParentDir => {
-                parts.pop();
-            }
-            Component::CurDir => {}
-            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
-                parts.push(component.as_os_str().to_owned());
-            }
-        }
-    }
-    let mut normalized = PathBuf::new();
-    for part in parts {
-        normalized.push(part);
-    }
-    normalized
-}
-
 #[cfg(all(test, feature = "tool-file"))]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};

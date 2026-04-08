@@ -1279,7 +1279,6 @@ fn issue_tool_lease(tool_id: &str, payload: &serde_json::Map<String, Value>) -> 
     format!("{encoded_claims}.{signature}")
 }
 
-#[allow(dead_code)]
 pub(crate) fn bridge_provider_tool_call_with_scope(
     tool_name: &str,
     args_json: Value,
@@ -1304,15 +1303,6 @@ pub(crate) fn bridge_provider_tool_call_with_scope(
         outer_payload.insert(key, value);
     }
     ("tool.invoke".to_owned(), Value::Object(outer_payload))
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn synthesize_test_provider_tool_call(
-    tool_name: &str,
-    args_json: Value,
-) -> (String, Value) {
-    bridge_provider_tool_call_with_scope(tool_name, args_json, None, None)
 }
 
 #[cfg(test)]
@@ -1436,87 +1426,6 @@ fn tool_function_name(tool: &Value) -> &str {
         .and_then(|value| value.get("name"))
         .and_then(Value::as_str)
         .unwrap_or("")
-}
-
-#[allow(dead_code)]
-fn _shape_examples() -> BTreeMap<&'static str, Value> {
-    let mut shapes = BTreeMap::from([
-        (
-            "claw.migrate",
-            json!({
-                "input_path": "/tmp/nanobot-workspace",
-                "mode": "plan",
-                "source": "auto"
-            }),
-        ),
-        (
-            "shell.exec",
-            json!({
-                "command": "echo",
-                "args": ["hello"]
-            }),
-        ),
-        (
-            "external_skills.policy",
-            json!({
-                "action": "set",
-                "policy_update_approved": true,
-                "enabled": true,
-                "require_download_approval": true,
-                "allowed_domains": ["skills.sh"],
-                "blocked_domains": ["*.evil.example"]
-            }),
-        ),
-        (
-            "external_skills.fetch",
-            json!({
-                "url": "https://skills.sh/packages/demo-skill.tar.gz",
-                "approval_granted": true
-            }),
-        ),
-        (
-            "file.read",
-            json!({
-                "path": "README.md",
-                "max_bytes": 4096
-            }),
-        ),
-        (
-            "memory_search",
-            json!({
-                "query": "deploy freeze window",
-                "max_results": 3
-            }),
-        ),
-        (
-            "memory_get",
-            json!({
-                "path": "MEMORY.md",
-                "from": 1,
-                "lines": 20
-            }),
-        ),
-        (
-            "file.write",
-            json!({
-                "path": "notes.txt",
-                "content": "hello",
-                "create_dirs": true
-            }),
-        ),
-        (
-            "web.fetch",
-            json!({
-                "url": "https://docs.example.com/page",
-                "mode": "readable_text"
-            }),
-        ),
-    ]);
-    #[cfg(feature = "feishu-integration")]
-    {
-        shapes.extend(feishu::feishu_shape_examples());
-    }
-    shapes
 }
 
 #[cfg(test)]

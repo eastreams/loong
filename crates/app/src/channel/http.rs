@@ -117,11 +117,13 @@ pub(super) fn redact_generic_webhook_status_url(raw_url: &str) -> Option<String>
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::time::Duration;
 
-    fn read_test_http_request(stream: &mut TcpStream) -> Result<(), String> {
-        let read_timeout = Duration::from_millis(250);
+    fn read_test_http_request(
+        stream: &mut TcpStream,
+        read_timeout: Duration,
+    ) -> Result<(), String> {
         stream
             .set_read_timeout(Some(read_timeout))
             .map_err(|error| format!("set test server read timeout: {error}"))?;
@@ -183,13 +185,8 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _peer)) => {
-                        read_test_http_request(&mut stream)?;
-                        stream
-                            .write_all(response.as_bytes())
-                            .map_err(|error| format!("write test server response: {error}"))?;
-                        stream
-                            .flush()
-                            .map_err(|error| format!("flush test server response: {error}"))?;
+                        read_test_http_request(&mut stream, accept_timeout)?;
+                        write_test_http_response(&mut stream, &response)?;
                         return Ok(true);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -207,6 +204,45 @@ mod tests {
 
         let url = format!("http://127.0.0.1:{}/", address.port());
         Ok((url, handle))
+    }
+
+    fn write_test_http_response(stream: &mut TcpStream, response: &str) -> Result<(), String> {
+        stream
+            .write_all(response.as_bytes())
+            .map_err(|error| format!("write test server response: {error}"))?;
+        stream
+            .flush()
+            .map_err(|error| format!("flush test server response: {error}"))?;
+        stream
+            .shutdown(Shutdown::Write)
+            .map_err(|error| format!("shutdown test server write half: {error}"))?;
+
+        let drain_timeout = Duration::from_millis(50);
+        stream
+            .set_read_timeout(Some(drain_timeout))
+            .map_err(|error| format!("set test server drain timeout: {error}"))?;
+
+        let mut drain_buffer = [0_u8; 256];
+
+        loop {
+            let read_result = stream.read(&mut drain_buffer);
+
+            match read_result {
+                Ok(0) => {
+                    return Ok(());
+                }
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::TimedOut
+                        || error.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(format!("drain test server request tail: {error}"));
+                }
+            }
+        }
     }
 
     #[test]

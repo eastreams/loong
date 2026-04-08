@@ -72,10 +72,12 @@ pub use session_address::{
     ConversationSessionAddress, decode_route_session_segment, encode_route_session_segment,
     parse_route_session_id,
 };
-pub use session_history::load_discovery_first_event_summary;
-pub use session_history::{
+#[cfg(test)]
+pub(crate) use session_history::{
+    load_discovery_first_event_summary, load_turn_checkpoint_event_summary,
+};
+pub(crate) use session_history::{
     load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
-    load_turn_checkpoint_event_summary,
 };
 pub use subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,

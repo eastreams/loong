@@ -7,15 +7,17 @@ use loongclaw_contracts::{Capability, MemoryCoreRequest};
 use serde_json::{Value, json};
 
 use crate::CliResult;
+#[cfg(test)]
 use crate::KernelContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
+#[cfg(test)]
+use super::analytics::{DiscoveryFirstEventSummary, summarize_discovery_first_events};
 use super::analytics::{
-    DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary, SafeLaneEventSummary,
-    TurnCheckpointEventSummary, summarize_discovery_first_events,
+    FastLaneToolBatchEventSummary, SafeLaneEventSummary, TurnCheckpointEventSummary,
     summarize_fast_lane_tool_batch_events, summarize_safe_lane_events,
     summarize_turn_checkpoint_history,
 };
@@ -109,6 +111,7 @@ pub(crate) struct TurnCheckpointHistorySnapshot {
 }
 
 impl TurnCheckpointHistorySnapshot {
+    #[cfg(test)]
     pub(crate) fn into_summary(self) -> TurnCheckpointEventSummary {
         self.summary
     }
@@ -138,7 +141,8 @@ impl TurnCheckpointHistorySnapshot {
     }
 }
 
-pub async fn load_turn_checkpoint_event_summary(
+#[cfg(test)]
+pub(crate) async fn load_turn_checkpoint_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
@@ -160,7 +164,7 @@ pub async fn load_turn_checkpoint_event_summary(
     }
 }
 
-pub async fn load_safe_lane_event_summary(
+pub(crate) async fn load_safe_lane_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
@@ -181,7 +185,7 @@ pub async fn load_safe_lane_event_summary(
     }
 }
 
-pub async fn load_fast_lane_tool_batch_event_summary(
+pub(crate) async fn load_fast_lane_tool_batch_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
@@ -202,25 +206,7 @@ pub async fn load_fast_lane_tool_batch_event_summary(
     }
 }
 
-pub async fn load_discovery_first_event_summary(
-    session_id: &str,
-    limit: usize,
-    kernel_ctx: Option<&KernelContext>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
-) -> CliResult<DiscoveryFirstEventSummary> {
-    load_discovery_first_event_summary_with_binding(
-        session_id,
-        limit,
-        kernel_ctx.map_or_else(
-            ConversationRuntimeBinding::direct,
-            ConversationRuntimeBinding::kernel,
-        ),
-        #[cfg(feature = "memory-sqlite")]
-        memory_config,
-    )
-    .await
-}
-
+#[cfg(test)]
 pub(crate) async fn load_discovery_first_event_summary_with_binding(
     session_id: &str,
     limit: usize,
@@ -240,6 +226,26 @@ pub(crate) async fn load_discovery_first_event_summary_with_binding(
         let _ = (session_id, limit, binding);
         Err("discovery-first summary unavailable: memory-sqlite feature disabled".to_owned())
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn load_discovery_first_event_summary(
+    session_id: &str,
+    limit: usize,
+    kernel_ctx: Option<&KernelContext>,
+    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+) -> CliResult<DiscoveryFirstEventSummary> {
+    load_discovery_first_event_summary_with_binding(
+        session_id,
+        limit,
+        kernel_ctx.map_or_else(
+            ConversationRuntimeBinding::direct,
+            ConversationRuntimeBinding::kernel,
+        ),
+        #[cfg(feature = "memory-sqlite")]
+        memory_config,
+    )
+    .await
 }
 
 pub(crate) async fn load_latest_turn_checkpoint_entry(

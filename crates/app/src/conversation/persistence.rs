@@ -4,12 +4,13 @@ use crate::CliResult;
 use crate::acp::{
     AcpTurnResult, PersistedAcpRuntimeEventContext, build_persisted_runtime_event_records,
 };
-use crate::memory::{
-    build_conversation_event_content, build_tool_decision_content, build_tool_outcome_content,
-};
+use crate::memory::build_conversation_event_content;
+#[cfg(test)]
+use crate::memory::{build_tool_decision_content, build_tool_outcome_content};
 
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
+#[cfg(test)]
 use super::turn_engine::{ToolDecision, ToolOutcome};
 use super::turn_shared::ReplyPersistenceMode;
 
@@ -52,7 +53,7 @@ pub(super) async fn persist_reply_turns_with_mode<R: ConversationRuntime + ?Size
 /// Uses the existing `persist_turn` mechanism so the DB schema stays unchanged.
 /// The content is a single JSON line with `"type": "tool_decision"` plus
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
-#[allow(dead_code)] // Will be wired into TurnEngine in a follow-up task
+#[cfg(test)]
 pub(super) async fn persist_tool_decision<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     session_id: &str,
@@ -74,7 +75,7 @@ pub(super) async fn persist_tool_decision<R: ConversationRuntime + ?Sized>(
 /// Uses the existing `persist_turn` mechanism so the DB schema stays unchanged.
 /// The content is a single JSON line with `"type": "tool_outcome"` plus
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
-#[allow(dead_code)] // Will be wired into TurnEngine in a follow-up task
+#[cfg(test)]
 pub(super) async fn persist_tool_outcome<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     session_id: &str,
