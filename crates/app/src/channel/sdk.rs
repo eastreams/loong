@@ -1,12 +1,13 @@
+use std::sync::OnceLock;
+
 use crate::{
     CliResult,
     config::{ConfigValidationIssue, LoongClawConfig},
 };
 
 use super::registry::{
-    ChannelRuntimeCommandDescriptor, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, resolve_channel_selection_order,
+    ChannelRuntimeCommandDescriptor, resolve_channel_command_family_descriptor,
+    resolve_channel_selection_order,
 };
 
 #[cfg(feature = "channel-feishu")]
@@ -42,199 +43,17 @@ type BackgroundSurfaceEnabledFn = fn(&LoongClawConfig, Option<&str>) -> CliResul
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelIntegrationDescriptor {
-    pub descriptor: &'static ChannelDescriptor,
+    pub channel_id: &'static str,
     pub background_runtime: Option<ChannelRuntimeCommandDescriptor>,
     pub is_enabled: ChannelEnabledFn,
     pub collect_validation_issues: ChannelValidationFn,
     pub background_surface_is_enabled: Option<BackgroundSurfaceEnabledFn>,
 }
 
-const CLI_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "cli",
-    label: "cli",
-    surface_label: "cli channel",
-    runtime_kind: ChannelRuntimeKind::Interactive,
-    serve_subcommand: None,
-};
-
-const TELEGRAM_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "telegram",
-    label: "telegram",
-    surface_label: "telegram channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: Some(TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
-};
-
-const FEISHU_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "feishu",
-    label: "feishu",
-    surface_label: "feishu channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: Some(FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
-};
-
-const MATRIX_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "matrix",
-    label: "matrix",
-    surface_label: "matrix channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: Some(MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
-};
-
-const WECOM_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "wecom",
-    label: "wecom",
-    surface_label: "wecom channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: Some(WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
-};
-
-const DISCORD_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "discord",
-    label: "discord",
-    surface_label: "discord channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const SLACK_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "slack",
-    label: "slack",
-    surface_label: "slack channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const LINE_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "line",
-    label: "line",
-    surface_label: "line channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const DINGTALK_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "dingtalk",
-    label: "dingtalk",
-    surface_label: "dingtalk channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const WHATSAPP_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "whatsapp",
-    label: "whatsapp",
-    surface_label: "whatsapp channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const EMAIL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "email",
-    label: "email",
-    surface_label: "email channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const WEBHOOK_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "webhook",
-    label: "webhook",
-    surface_label: "webhook channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const GOOGLE_CHAT_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "google-chat",
-    label: "google-chat",
-    surface_label: "google chat channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const SIGNAL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "signal",
-    label: "signal",
-    surface_label: "signal channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const TWITCH_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "twitch",
-    label: "twitch",
-    surface_label: "twitch channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const TEAMS_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "teams",
-    label: "teams",
-    surface_label: "teams channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const TLON_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "tlon",
-    label: "tlon",
-    surface_label: "tlon channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const MATTERMOST_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "mattermost",
-    label: "mattermost",
-    surface_label: "mattermost channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const NEXTCLOUD_TALK_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "nextcloud-talk",
-    label: "nextcloud-talk",
-    surface_label: "nextcloud talk channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const SYNOLOGY_CHAT_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "synology-chat",
-    label: "synology-chat",
-    surface_label: "synology chat channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const IRC_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "irc",
-    label: "irc",
-    surface_label: "irc channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const IMESSAGE_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "imessage",
-    label: "imessage",
-    surface_label: "imessage channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
-
-const NOSTR_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
-    id: "nostr",
-    label: "nostr",
-    surface_label: "nostr channel",
-    runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
-};
+static CHANNEL_DESCRIPTORS: OnceLock<Vec<ChannelDescriptor>> = OnceLock::new();
 
 const CLI_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &CLI_CHANNEL_DESCRIPTOR,
+    channel_id: "cli",
     background_runtime: None,
     is_enabled: cli_channel_is_enabled,
     collect_validation_issues: collect_cli_channel_validation_issues,
@@ -249,7 +68,7 @@ const TELEGRAM_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
 const TELEGRAM_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
 const TELEGRAM_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &TELEGRAM_CHANNEL_DESCRIPTOR,
+    channel_id: "telegram",
     background_runtime: TELEGRAM_BACKGROUND_RUNTIME,
     is_enabled: telegram_channel_is_enabled,
     collect_validation_issues: collect_telegram_channel_validation_issues,
@@ -264,7 +83,7 @@ const FEISHU_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
 const FEISHU_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
 const FEISHU_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &FEISHU_CHANNEL_DESCRIPTOR,
+    channel_id: "feishu",
     background_runtime: FEISHU_BACKGROUND_RUNTIME,
     is_enabled: feishu_channel_is_enabled,
     collect_validation_issues: collect_feishu_channel_validation_issues,
@@ -279,7 +98,7 @@ const MATRIX_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
 const MATRIX_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
 const MATRIX_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &MATRIX_CHANNEL_DESCRIPTOR,
+    channel_id: "matrix",
     background_runtime: MATRIX_BACKGROUND_RUNTIME,
     is_enabled: matrix_channel_is_enabled,
     collect_validation_issues: collect_matrix_channel_validation_issues,
@@ -294,7 +113,7 @@ const WECOM_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
 const WECOM_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
 const WECOM_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &WECOM_CHANNEL_DESCRIPTOR,
+    channel_id: "wecom",
     background_runtime: WECOM_BACKGROUND_RUNTIME,
     is_enabled: wecom_channel_is_enabled,
     collect_validation_issues: collect_wecom_channel_validation_issues,
@@ -302,7 +121,7 @@ const WECOM_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrati
 };
 
 const DISCORD_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &DISCORD_CHANNEL_DESCRIPTOR,
+    channel_id: "discord",
     background_runtime: None,
     is_enabled: discord_channel_is_enabled,
     collect_validation_issues: collect_discord_channel_validation_issues,
@@ -310,7 +129,7 @@ const DISCORD_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegra
 };
 
 const SLACK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &SLACK_CHANNEL_DESCRIPTOR,
+    channel_id: "slack",
     background_runtime: None,
     is_enabled: slack_channel_is_enabled,
     collect_validation_issues: collect_slack_channel_validation_issues,
@@ -318,7 +137,7 @@ const SLACK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrati
 };
 
 const LINE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &LINE_CHANNEL_DESCRIPTOR,
+    channel_id: "line",
     background_runtime: None,
     is_enabled: line_channel_is_enabled,
     collect_validation_issues: collect_line_channel_validation_issues,
@@ -326,7 +145,7 @@ const LINE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegratio
 };
 
 const DINGTALK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &DINGTALK_CHANNEL_DESCRIPTOR,
+    channel_id: "dingtalk",
     background_runtime: None,
     is_enabled: dingtalk_channel_is_enabled,
     collect_validation_issues: collect_dingtalk_channel_validation_issues,
@@ -334,7 +153,7 @@ const DINGTALK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
 };
 
 const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &WHATSAPP_CHANNEL_DESCRIPTOR,
+    channel_id: "whatsapp",
     background_runtime: None,
     is_enabled: whatsapp_channel_is_enabled,
     collect_validation_issues: collect_whatsapp_channel_validation_issues,
@@ -342,7 +161,7 @@ const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
 };
 
 const EMAIL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &EMAIL_CHANNEL_DESCRIPTOR,
+    channel_id: "email",
     background_runtime: None,
     is_enabled: email_channel_is_enabled,
     collect_validation_issues: collect_email_channel_validation_issues,
@@ -350,7 +169,7 @@ const EMAIL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrati
 };
 
 const WEBHOOK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &WEBHOOK_CHANNEL_DESCRIPTOR,
+    channel_id: "webhook",
     background_runtime: None,
     is_enabled: webhook_channel_is_enabled,
     collect_validation_issues: collect_webhook_channel_validation_issues,
@@ -359,7 +178,7 @@ const WEBHOOK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegra
 
 const GOOGLE_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
     ChannelIntegrationDescriptor {
-        descriptor: &GOOGLE_CHAT_CHANNEL_DESCRIPTOR,
+        channel_id: "google-chat",
         background_runtime: None,
         is_enabled: google_chat_channel_is_enabled,
         collect_validation_issues: collect_google_chat_channel_validation_issues,
@@ -367,7 +186,7 @@ const GOOGLE_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
     };
 
 const SIGNAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &SIGNAL_CHANNEL_DESCRIPTOR,
+    channel_id: "signal",
     background_runtime: None,
     is_enabled: signal_channel_is_enabled,
     collect_validation_issues: collect_signal_channel_validation_issues,
@@ -375,7 +194,7 @@ const SIGNAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
 };
 
 const TWITCH_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &TWITCH_CHANNEL_DESCRIPTOR,
+    channel_id: "twitch",
     background_runtime: None,
     is_enabled: twitch_channel_is_enabled,
     collect_validation_issues: collect_twitch_channel_validation_issues,
@@ -383,7 +202,7 @@ const TWITCH_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
 };
 
 const TEAMS_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &TEAMS_CHANNEL_DESCRIPTOR,
+    channel_id: "teams",
     background_runtime: None,
     is_enabled: teams_channel_is_enabled,
     collect_validation_issues: collect_teams_channel_validation_issues,
@@ -391,7 +210,7 @@ const TEAMS_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrati
 };
 
 const MATTERMOST_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &MATTERMOST_CHANNEL_DESCRIPTOR,
+    channel_id: "mattermost",
     background_runtime: None,
     is_enabled: mattermost_channel_is_enabled,
     collect_validation_issues: collect_mattermost_channel_validation_issues,
@@ -400,7 +219,7 @@ const MATTERMOST_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelInte
 
 const NEXTCLOUD_TALK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
     ChannelIntegrationDescriptor {
-        descriptor: &NEXTCLOUD_TALK_CHANNEL_DESCRIPTOR,
+        channel_id: "nextcloud-talk",
         background_runtime: None,
         is_enabled: nextcloud_talk_channel_is_enabled,
         collect_validation_issues: collect_nextcloud_talk_channel_validation_issues,
@@ -409,7 +228,7 @@ const NEXTCLOUD_TALK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
 
 const SYNOLOGY_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
     ChannelIntegrationDescriptor {
-        descriptor: &SYNOLOGY_CHAT_CHANNEL_DESCRIPTOR,
+        channel_id: "synology-chat",
         background_runtime: None,
         is_enabled: synology_chat_channel_is_enabled,
         collect_validation_issues: collect_synology_chat_channel_validation_issues,
@@ -417,7 +236,7 @@ const SYNOLOGY_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
     };
 
 const IRC_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &IRC_CHANNEL_DESCRIPTOR,
+    channel_id: "irc",
     background_runtime: None,
     is_enabled: irc_channel_is_enabled,
     collect_validation_issues: collect_irc_channel_validation_issues,
@@ -425,7 +244,7 @@ const IRC_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegration
 };
 
 const IMESSAGE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &IMESSAGE_CHANNEL_DESCRIPTOR,
+    channel_id: "imessage",
     background_runtime: None,
     is_enabled: imessage_channel_is_enabled,
     collect_validation_issues: collect_imessage_channel_validation_issues,
@@ -433,7 +252,7 @@ const IMESSAGE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
 };
 
 const TLON_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &TLON_CHANNEL_DESCRIPTOR,
+    channel_id: "tlon",
     background_runtime: None,
     is_enabled: tlon_channel_is_enabled,
     collect_validation_issues: collect_tlon_channel_validation_issues,
@@ -441,7 +260,7 @@ const TLON_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegratio
 };
 
 const NOSTR_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
-    descriptor: &NOSTR_CHANNEL_DESCRIPTOR,
+    channel_id: "nostr",
     background_runtime: None,
     is_enabled: nostr_channel_is_enabled,
     collect_validation_issues: collect_nostr_channel_validation_issues,
@@ -474,9 +293,85 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     NOSTR_CHANNEL_INTEGRATION,
 ];
 
+fn channel_descriptors() -> &'static [ChannelDescriptor] {
+    let descriptors = CHANNEL_DESCRIPTORS.get_or_init(build_channel_descriptors);
+    descriptors.as_slice()
+}
+
+fn build_channel_descriptors() -> Vec<ChannelDescriptor> {
+    let mut descriptors = Vec::with_capacity(CHANNEL_INTEGRATIONS.len());
+
+    for integration in CHANNEL_INTEGRATIONS {
+        let channel_id = integration.channel_id;
+        let background_runtime = integration.background_runtime;
+        let descriptor = build_channel_descriptor(channel_id, background_runtime);
+        descriptors.push(descriptor);
+    }
+
+    descriptors
+}
+
+fn build_channel_descriptor(
+    channel_id: &'static str,
+    background_runtime: Option<ChannelRuntimeCommandDescriptor>,
+) -> ChannelDescriptor {
+    let label = channel_id;
+    let surface_label_text = channel_surface_label_text(channel_id);
+    let surface_label = leak_channel_string(surface_label_text);
+    let runtime_kind = channel_runtime_kind(channel_id);
+    let serve_subcommand = channel_serve_subcommand(channel_id, background_runtime);
+
+    ChannelDescriptor {
+        id: channel_id,
+        label,
+        surface_label,
+        runtime_kind,
+        serve_subcommand,
+    }
+}
+
+fn channel_surface_label_text(channel_id: &str) -> String {
+    let normalized = channel_id.replace('-', " ");
+    let surface_label = format!("{normalized} channel");
+    surface_label
+}
+
+fn leak_channel_string(value: String) -> &'static str {
+    let boxed = value.into_boxed_str();
+    let leaked = Box::leak(boxed);
+    leaked
+}
+
+fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
+    if channel_id == "cli" {
+        return ChannelRuntimeKind::Interactive;
+    }
+
+    ChannelRuntimeKind::Service
+}
+
+fn channel_serve_subcommand(
+    channel_id: &str,
+    background_runtime: Option<ChannelRuntimeCommandDescriptor>,
+) -> Option<&'static str> {
+    if background_runtime.is_none() {
+        return None;
+    }
+
+    let family_descriptor = resolve_channel_command_family_descriptor(channel_id)?;
+    let serve_operation = family_descriptor.serve();
+    let serve_command = serve_operation.command;
+    Some(serve_command)
+}
+
 pub(crate) fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
     let integration = find_channel_integration(id)?;
-    Some(integration.descriptor)
+    let descriptor_id = integration.channel_id;
+    let descriptors = channel_descriptors();
+    let descriptor = descriptors
+        .iter()
+        .find(|descriptor| descriptor.id == descriptor_id)?;
+    Some(descriptor)
 }
 
 fn ordered_channel_integrations() -> Vec<&'static ChannelIntegrationDescriptor> {
@@ -488,19 +383,20 @@ fn ordered_channel_integrations() -> Vec<&'static ChannelIntegrationDescriptor> 
 fn channel_integration_order_key(
     integration: &ChannelIntegrationDescriptor,
 ) -> (u8, u16, &'static str) {
-    let runtime_group = match integration.descriptor.runtime_kind {
+    let channel_id = integration.channel_id;
+    let runtime_kind = channel_runtime_kind(channel_id);
+    let runtime_group = match runtime_kind {
         ChannelRuntimeKind::Interactive => 0_u8,
         ChannelRuntimeKind::Service => 1_u8,
     };
-    let selection_order =
-        resolve_channel_selection_order(integration.descriptor.id).unwrap_or(u16::MAX);
-    (runtime_group, selection_order, integration.descriptor.id)
+    let selection_order = resolve_channel_selection_order(channel_id).unwrap_or(u16::MAX);
+    (runtime_group, selection_order, channel_id)
 }
 
 pub(crate) fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
     ordered_channel_integrations()
         .into_iter()
-        .map(|integration| integration.descriptor)
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
         .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::Service)
         .collect()
 }
@@ -512,12 +408,16 @@ pub(crate) fn enabled_channel_ids(
     ordered_channel_integrations()
         .into_iter()
         .filter(|integration| {
+            let maybe_descriptor = channel_descriptor(integration.channel_id);
+            let Some(descriptor) = maybe_descriptor else {
+                return false;
+            };
             let enabled = (integration.is_enabled)(config);
             let matches_runtime_kind =
-                runtime_kind.is_none_or(|kind| integration.descriptor.runtime_kind == kind);
+                runtime_kind.is_none_or(|kind| descriptor.runtime_kind == kind);
             enabled && matches_runtime_kind
         })
-        .map(|integration| integration.descriptor.id.to_owned())
+        .map(|integration| integration.channel_id.to_owned())
         .collect()
 }
 
@@ -553,7 +453,7 @@ pub fn is_background_channel_surface_enabled(
 fn find_channel_integration(id: &str) -> Option<&'static ChannelIntegrationDescriptor> {
     let exact_integration = CHANNEL_INTEGRATIONS
         .iter()
-        .find(|integration| integration.descriptor.id == id);
+        .find(|integration| integration.channel_id == id);
 
     if let Some(integration) = exact_integration {
         return Some(integration);
@@ -563,7 +463,7 @@ fn find_channel_integration(id: &str) -> Option<&'static ChannelIntegrationDescr
 
     CHANNEL_INTEGRATIONS
         .iter()
-        .find(|integration| integration.descriptor.id == normalized_id)
+        .find(|integration| integration.channel_id == normalized_id)
 }
 
 fn cli_channel_is_enabled(config: &LoongClawConfig) -> bool {
