@@ -37,151 +37,21 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
         "welcome help should frame the configured path as a quick-command entrypoint: {help}"
     );
     assert!(
-        help.contains("loong ask --config <path>"),
+        help.contains("loongclaw ask --config <path>"),
         "welcome help should mention ask with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("loong chat --config <path>"),
+        help.contains("loongclaw chat --config <path>"),
         "welcome help should mention chat with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("loong personalize --config <path>"),
-        "welcome help should mention personalize with an explicit config placeholder: {help}"
-    );
-    assert!(
-        help.contains("loong doctor --config <path>"),
+        help.contains("loongclaw doctor --config <path>"),
         "welcome help should mention doctor with an explicit config placeholder: {help}"
     );
     assert!(
         help.contains("LOONGCLAW_CONFIG_PATH"),
         "welcome help should explain how config-path environment overrides interact with the quick commands: {help}"
     );
-}
-
-#[test]
-fn doctor_help_mentions_security_subcommand() {
-    let help = render_cli_help(["doctor"]);
-
-    assert!(
-        help.contains("security"),
-        "doctor help should advertise the security audit subcommand: {help}"
-    );
-    assert!(
-        help.contains("--config <CONFIG>"),
-        "doctor help should keep the shared config flag visible: {help}"
-    );
-}
-
-#[test]
-fn doctor_security_help_mentions_security_exposure_audit() {
-    let help = render_cli_help(["doctor", "security"]);
-
-    assert!(
-        help.contains("security exposure"),
-        "doctor security help should describe the exposure audit: {help}"
-    );
-    assert!(
-        help.contains("Usage: security"),
-        "doctor security help should render a dedicated usage block: {help}"
-    );
-}
-
-#[test]
-fn doctor_security_cli_parses_subcommand_and_global_flags() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "doctor",
-        "--config",
-        "/tmp/loongclaw.toml",
-        "security",
-        "--json",
-    ])
-    .expect("`doctor security --json` should parse");
-
-    match cli.command {
-        Some(Commands::Doctor {
-            config,
-            fix,
-            json,
-            skip_model_probe,
-            command,
-        }) => {
-            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
-            assert!(!fix);
-            assert!(json);
-            assert!(!skip_model_probe);
-            assert_eq!(
-                command,
-                Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security)
-            );
-        }
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
-fn doctor_security_cli_accepts_global_flags_after_subcommand() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "doctor",
-        "security",
-        "--config",
-        "/tmp/loongclaw.toml",
-        "--skip-model-probe",
-    ])
-    .expect("global doctor flags should remain valid after the security subcommand");
-
-    match cli.command {
-        Some(Commands::Doctor {
-            config,
-            fix,
-            json,
-            skip_model_probe,
-            command,
-        }) => {
-            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
-            assert!(!fix);
-            assert!(!json);
-            assert!(skip_model_probe);
-            assert_eq!(
-                command,
-                Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security)
-            );
-        }
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build test runtime");
-
-    let fix_error = runtime
-        .block_on(loongclaw_daemon::doctor_cli::run_doctor_cli(
-            loongclaw_daemon::doctor_cli::DoctorCommandOptions {
-                config: None,
-                fix: true,
-                json: false,
-                skip_model_probe: false,
-                command: Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security),
-            },
-        ))
-        .expect_err("doctor security should reject --fix at runtime");
-
-    let probe_error = runtime
-        .block_on(loongclaw_daemon::doctor_cli::run_doctor_cli(
-            loongclaw_daemon::doctor_cli::DoctorCommandOptions {
-                config: None,
-                fix: false,
-                json: false,
-                skip_model_probe: true,
-                command: Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security),
-            },
-        ))
-        .expect_err("doctor security should reject --skip-model-probe at runtime");
-
-    assert!(fix_error.contains("--fix"));
-    assert!(probe_error.contains("--skip-model-probe"));
 }
 
 #[test]
@@ -291,64 +161,6 @@ fn migrate_cli_parses_apply_selected_flags() {
 }
 
 #[test]
-fn run_spec_cli_parses_bridge_support_delta_override() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "run-spec",
-        "--spec",
-        "/tmp/runner.spec.json",
-        "--bridge-support-delta",
-        "/tmp/bridge-support.delta.json",
-        "--bridge-support-delta-sha256",
-        "abc123",
-    ])
-    .expect("run-spec with bridge support delta override should parse");
-
-    match cli.command {
-        Some(Commands::RunSpec {
-            spec,
-            print_audit,
-            bridge_support,
-            ..
-        }) => {
-            assert_eq!(spec, "/tmp/runner.spec.json");
-            assert!(!print_audit);
-            assert_eq!(
-                bridge_support.bridge_support_delta.as_deref(),
-                Some("/tmp/bridge-support.delta.json")
-            );
-            assert_eq!(
-                bridge_support.bridge_support_delta_sha256.as_deref(),
-                Some("abc123")
-            );
-        }
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
-fn run_spec_help_mentions_bridge_support_overrides() {
-    let help = render_cli_help(["run-spec"]);
-
-    assert!(
-        help.contains("--bridge-support <BRIDGE_SUPPORT>"),
-        "help: {help}"
-    );
-    assert!(
-        help.contains("--bridge-profile <BRIDGE_PROFILE>"),
-        "help: {help}"
-    );
-    assert!(
-        help.contains("--bridge-support-delta <BRIDGE_SUPPORT_DELTA>"),
-        "help: {help}"
-    );
-    assert!(
-        help.contains("--bridge-support-delta-sha256 <BRIDGE_SUPPORT_DELTA_SHA256>"),
-        "help: {help}"
-    );
-}
-
-#[test]
 fn safe_lane_summary_cli_rejects_zero_limit() {
     let error = run_safe_lane_summary_cli(None, Some("session-a"), 0, false)
         .expect_err("zero limit must be rejected");
@@ -356,399 +168,80 @@ fn safe_lane_summary_cli_rejects_zero_limit() {
 }
 
 #[test]
-fn runtime_trajectory_cli_rejects_invalid_limits() {
-    let turn_limit_error =
-        run_runtime_trajectory_cli(None, Some("session-a"), None, None, Some(0), 10, false)
-            .expect_err("zero turn limit must be rejected");
-    assert!(turn_limit_error.contains("turn_limit"));
+fn runtime_trajectory_export_help_mentions_export_and_lineage() {
+    let help = render_cli_help(["runtime-trajectory", "export"]);
 
-    let event_page_error =
-        run_runtime_trajectory_cli(None, Some("session-a"), None, None, None, 0, false)
-            .expect_err("zero event page limit must be rejected");
-    assert!(event_page_error.contains("event_page_limit"));
-
-    let missing_source_error = run_runtime_trajectory_cli(None, None, None, None, None, 10, false)
-        .expect_err("missing session and artifact must be rejected");
-    assert!(missing_source_error.contains("--session or --artifact"));
+    assert!(
+        help.contains("trajectory"),
+        "runtime-trajectory export help should mention trajectory export: {help}"
+    );
+    assert!(
+        help.contains("--session <SESSION>"),
+        "runtime-trajectory export help should require a session id: {help}"
+    );
+    assert!(
+        help.contains("--lineage"),
+        "runtime-trajectory export help should explain lineage export: {help}"
+    );
 }
 
 #[test]
-fn session_search_cli_rejects_zero_limit() {
-    let error = run_session_search_cli(
-        None,
-        Some("session-a"),
-        "deploy freeze",
-        0,
-        None,
-        false,
-        false,
-    )
-    .expect_err("zero limit must be rejected");
-    assert!(error.contains(">= 1"));
-}
-
-#[test]
-fn session_search_cli_parses_flags() {
+fn runtime_trajectory_cli_parses_export_flags() {
     let cli = try_parse_cli([
         "loongclaw",
-        "session-search",
+        "runtime-trajectory",
+        "export",
+        "--config",
+        "/tmp/loongclaw.toml",
         "--session",
         "root-session",
-        "--query",
-        "deploy freeze",
-        "--limit",
-        "7",
+        "--lineage",
         "--output",
-        "/tmp/session-search.json",
-        "--include-archived",
+        "/tmp/runtime-trajectory.json",
         "--json",
     ])
-    .expect("`session-search` should parse");
+    .expect("`runtime-trajectory export` should parse");
 
     match cli.command {
-        Some(Commands::SessionSearch {
-            config,
-            session,
-            query,
-            limit,
-            output,
-            include_archived,
-            json,
+        Some(Commands::RuntimeTrajectory {
+            command:
+                loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Export(options),
         }) => {
-            assert!(config.is_none());
-            assert_eq!(session.as_deref(), Some("root-session"));
-            assert_eq!(query, "deploy freeze");
-            assert_eq!(limit, 7);
-            assert_eq!(output.as_deref(), Some("/tmp/session-search.json"));
-            assert!(include_archived);
-            assert!(json);
+            assert_eq!(options.config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert_eq!(options.session, "root-session");
+            assert!(options.lineage);
+            assert_eq!(
+                options.output.as_deref(),
+                Some("/tmp/runtime-trajectory.json")
+            );
+            assert!(options.json);
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }
 }
 
 #[test]
-fn session_search_inspect_cli_parses_flags() {
+fn runtime_trajectory_cli_parses_show_flags() {
     let cli = try_parse_cli([
         "loongclaw",
-        "session-search-inspect",
+        "runtime-trajectory",
+        "show",
         "--artifact",
-        "/tmp/session-search.json",
+        "/tmp/runtime-trajectory.json",
         "--json",
     ])
-    .expect("`session-search-inspect` should parse");
+    .expect("`runtime-trajectory show` should parse");
 
     match cli.command {
-        Some(Commands::SessionSearchInspect { artifact, json }) => {
-            assert_eq!(artifact, "/tmp/session-search.json");
-            assert!(json);
-        }
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
-fn format_session_search_text_includes_hit_summary() {
-    let rendered = format_session_search_text(
-        "/tmp/loongclaw.toml",
-        Some("/tmp/session-search.json"),
-        &SessionSearchArtifactDocument {
-            schema: SessionSearchArtifactSchema {
-                version: SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION,
-                surface: "session_search".to_owned(),
-                purpose: "session_recall_evidence".to_owned(),
-            },
-            exported_at: "2026-04-05T00:00:00Z".to_owned(),
-            scope_session_id: "root-session".to_owned(),
-            query: "deploy freeze".to_owned(),
-            limit: 5,
-            include_archived: false,
-            include_turns: true,
-            include_events: true,
-            returned_count: 1,
-            matched_session_count: 1,
-            searched_session_count: 2,
-            results: vec![SessionSearchArtifactResult {
-                session_id: "child-session".to_owned(),
-                label: Some("Child".to_owned()),
-                session_state: "running".to_owned(),
-                archived: false,
-                source: "turn".to_owned(),
-                source_id: 12,
-                role: Some("assistant".to_owned()),
-                event_kind: None,
-                ts: 123,
-                snippet: "deploy freeze checklist updated".to_owned(),
-                score: 140,
-            }],
-        },
-    );
-
-    assert!(rendered.contains("session_search session=root-session"));
-    assert!(rendered.contains("returned_count=1"));
-    assert!(rendered.contains("output=/tmp/session-search.json"));
-    assert!(rendered.contains("session=child-session"));
-    assert!(rendered.contains("source=turn"));
-    assert!(rendered.contains("role=assistant"));
-    assert!(rendered.contains("deploy freeze checklist updated"));
-}
-
-#[test]
-fn format_session_search_inspect_text_summarizes_first_hit() {
-    let rendered = format_session_search_inspect_text(
-        "/tmp/session-search.json",
-        &SessionSearchArtifactDocument {
-            schema: SessionSearchArtifactSchema {
-                version: SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION,
-                surface: "session_search".to_owned(),
-                purpose: "session_recall_evidence".to_owned(),
-            },
-            exported_at: "2026-04-05T00:00:00Z".to_owned(),
-            scope_session_id: "root-session".to_owned(),
-            query: "deploy freeze".to_owned(),
-            limit: 5,
-            include_archived: false,
-            include_turns: true,
-            include_events: true,
-            returned_count: 1,
-            matched_session_count: 1,
-            searched_session_count: 2,
-            results: vec![SessionSearchArtifactResult {
-                session_id: "child-session".to_owned(),
-                label: Some("Child".to_owned()),
-                session_state: "running".to_owned(),
-                archived: false,
-                source: "turn".to_owned(),
-                source_id: 12,
-                role: Some("assistant".to_owned()),
-                event_kind: None,
-                ts: 123,
-                snippet: "deploy freeze checklist updated".to_owned(),
-                score: 140,
-            }],
-        },
-    );
-
-    assert!(rendered.contains("artifact=/tmp/session-search.json"));
-    assert!(rendered.contains("scope_session_id=root-session"));
-    assert!(rendered.contains("query=deploy freeze"));
-    assert!(rendered.contains("first_result_session_id=child-session"));
-    assert!(rendered.contains("first_result_source=turn"));
-    assert!(rendered.contains("first_result_role=assistant"));
-}
-
-#[test]
-fn trajectory_export_cli_parses_flags() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "trajectory-export",
-        "--session",
-        "root-session",
-        "--output",
-        "/tmp/trajectory.json",
-        "--json",
-    ])
-    .expect("`trajectory-export` should parse");
-
-    match cli.command {
-        Some(Commands::TrajectoryExport {
-            config,
-            session,
-            output,
-            json,
+        Some(Commands::RuntimeTrajectory {
+            command:
+                loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Show(options),
         }) => {
-            assert!(config.is_none());
-            assert_eq!(session.as_deref(), Some("root-session"));
-            assert_eq!(output.as_deref(), Some("/tmp/trajectory.json"));
-            assert!(json);
+            assert_eq!(options.artifact, "/tmp/runtime-trajectory.json");
+            assert!(options.json);
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }
-}
-
-#[test]
-fn format_trajectory_export_text_summarizes_counts() {
-    let rendered = format_trajectory_export_text(
-        "/tmp/loongclaw.toml",
-        Some("/tmp/trajectory.json"),
-        &TrajectoryExportArtifactDocument {
-            schema: TrajectoryExportArtifactSchema {
-                version: TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION,
-                surface: "trajectory_export".to_owned(),
-                purpose: "session_replay_evidence".to_owned(),
-            },
-            exported_at: "2026-04-04T00:00:00Z".to_owned(),
-            session: TrajectoryExportSessionSummary {
-                session_id: "root-session".to_owned(),
-                kind: "root".to_owned(),
-                parent_session_id: None,
-                label: Some("Root".to_owned()),
-                state: "completed".to_owned(),
-                created_at: 1,
-                updated_at: 2,
-                archived_at: None,
-                turn_count: 2,
-                last_turn_at: Some(2),
-                last_error: None,
-            },
-            turns: vec![
-                TrajectoryExportTurn {
-                    role: "user".to_owned(),
-                    content: "hello".to_owned(),
-                    ts: 1,
-                },
-                TrajectoryExportTurn {
-                    role: "assistant".to_owned(),
-                    content: "world".to_owned(),
-                    ts: 2,
-                },
-            ],
-            events: vec![TrajectoryExportEvent {
-                id: 7,
-                session_id: "root-session".to_owned(),
-                event_kind: "delegate_started".to_owned(),
-                actor_session_id: Some("root-session".to_owned()),
-                payload_json: json!({"mode": "async"}),
-                ts: 2,
-            }],
-        },
-    );
-
-    assert!(rendered.contains("schema.version=1"));
-    assert!(rendered.contains("session_id=root-session"));
-    assert!(rendered.contains("turns=2"));
-    assert!(rendered.contains("events=1"));
-    assert!(rendered.contains("output=/tmp/trajectory.json"));
-}
-
-#[test]
-fn trajectory_inspect_cli_parses_flags() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "trajectory-inspect",
-        "--artifact",
-        "/tmp/trajectory.json",
-        "--json",
-    ])
-    .expect("`trajectory-inspect` should parse");
-
-    match cli.command {
-        Some(Commands::TrajectoryInspect { artifact, json }) => {
-            assert_eq!(artifact, "/tmp/trajectory.json");
-            assert!(json);
-        }
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
-fn format_trajectory_inspect_text_summarizes_counts() {
-    let rendered = format_trajectory_inspect_text(
-        "/tmp/trajectory.json",
-        &TrajectoryExportArtifactDocument {
-            schema: TrajectoryExportArtifactSchema {
-                version: TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION,
-                surface: "trajectory_export".to_owned(),
-                purpose: "session_replay_evidence".to_owned(),
-            },
-            exported_at: "2026-04-04T00:00:00Z".to_owned(),
-            session: TrajectoryExportSessionSummary {
-                session_id: "root-session".to_owned(),
-                kind: "root".to_owned(),
-                parent_session_id: None,
-                label: Some("Root".to_owned()),
-                state: "completed".to_owned(),
-                created_at: 1,
-                updated_at: 2,
-                archived_at: None,
-                turn_count: 2,
-                last_turn_at: Some(2),
-                last_error: None,
-            },
-            turns: vec![
-                TrajectoryExportTurn {
-                    role: "user".to_owned(),
-                    content: "hello".to_owned(),
-                    ts: 1,
-                },
-                TrajectoryExportTurn {
-                    role: "assistant".to_owned(),
-                    content: "world".to_owned(),
-                    ts: 2,
-                },
-            ],
-            events: vec![TrajectoryExportEvent {
-                id: 7,
-                session_id: "root-session".to_owned(),
-                event_kind: "delegate_started".to_owned(),
-                actor_session_id: Some("root-session".to_owned()),
-                payload_json: json!({"mode": "async"}),
-                ts: 2,
-            }],
-        },
-    );
-
-    assert!(rendered.contains("schema.version=1"));
-    assert!(rendered.contains("artifact=/tmp/trajectory.json"));
-    assert!(rendered.contains("session_id=root-session"));
-    assert!(rendered.contains("turns=2"));
-    assert!(rendered.contains("events=1"));
-    assert!(rendered.contains("first_turn_role=user"));
-    assert!(rendered.contains("last_turn_role=assistant"));
-    assert!(rendered.contains("latest_event_kind=delegate_started"));
-}
-
-#[test]
-fn format_trajectory_inspect_text_summarizes_roles_and_events() {
-    let rendered = format_trajectory_inspect_text(
-        "/tmp/trajectory.json",
-        &TrajectoryExportArtifactDocument {
-            schema: TrajectoryExportArtifactSchema {
-                version: TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION,
-                surface: "trajectory_export".to_owned(),
-                purpose: "session_replay_evidence".to_owned(),
-            },
-            exported_at: "2026-04-04T00:00:00Z".to_owned(),
-            session: TrajectoryExportSessionSummary {
-                session_id: "root-session".to_owned(),
-                kind: "root".to_owned(),
-                parent_session_id: None,
-                label: Some("Root".to_owned()),
-                state: "completed".to_owned(),
-                created_at: 1,
-                updated_at: 2,
-                archived_at: None,
-                turn_count: 2,
-                last_turn_at: Some(2),
-                last_error: None,
-            },
-            turns: vec![
-                TrajectoryExportTurn {
-                    role: "user".to_owned(),
-                    content: "hello".to_owned(),
-                    ts: 1,
-                },
-                TrajectoryExportTurn {
-                    role: "assistant".to_owned(),
-                    content: "world".to_owned(),
-                    ts: 2,
-                },
-            ],
-            events: vec![TrajectoryExportEvent {
-                id: 7,
-                session_id: "root-session".to_owned(),
-                event_kind: "delegate_started".to_owned(),
-                actor_session_id: Some("root-session".to_owned()),
-                payload_json: json!({"mode": "async"}),
-                ts: 2,
-            }],
-        },
-    );
-
-    assert!(rendered.contains("artifact=/tmp/trajectory.json"));
-    assert!(rendered.contains("first_turn_role=user"));
-    assert!(rendered.contains("last_turn_role=assistant"));
-    assert!(rendered.contains("latest_event_kind=delegate_started"));
 }
 
 #[test]
@@ -845,13 +338,13 @@ fn onboard_cli_accepts_personality_flag() {
         "--non-interactive",
         "--accept-risk",
         "--personality",
-        "hermit",
+        "friendly_collab",
     ])
     .expect("`--personality` should parse");
 
     match cli.command {
         Some(Commands::Onboard { personality, .. }) => {
-            assert_eq!(personality.as_deref(), Some("hermit"));
+            assert_eq!(personality.as_deref(), Some("friendly_collab"));
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }
@@ -1330,7 +823,7 @@ fn runtime_experiment_cli_rejects_compare_recorded_snapshots_with_manual_paths()
 }
 
 #[test]
-fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
+fn runtime_capability_cli_parses_propose_review_show_index_plan_and_apply() {
     let propose = try_parse_cli([
         "loongclaw",
         "runtime-capability",
@@ -1560,9 +1053,7 @@ fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
 
     match apply.command {
         Some(Commands::RuntimeCapability { command }) => match command {
-            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(
-                options,
-            ) => {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(options) => {
                 assert_eq!(options.root, "/tmp/runtime-capability");
                 assert_eq!(options.family_id, "family-123");
                 assert!(options.json);
@@ -1582,187 +1073,10 @@ fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
 }
 
 #[test]
-fn runtime_capability_cli_parses_memory_stage_profile_target() {
-    let propose = try_parse_cli([
-        "loongclaw",
-        "runtime-capability",
-        "propose",
-        "--run",
-        "/tmp/runtime-experiment.json",
-        "--output",
-        "/tmp/runtime-capability.json",
-        "--target",
-        "memory_stage_profile",
-        "--target-summary",
-        "Promote governed memory pipeline intent into a reusable profile",
-        "--bounded-scope",
-        "Governed memory pipeline promotion intent only",
-        "--required-capability",
-        "memory_read",
-        "--tag",
-        "memory",
-        "--tag",
-        "pipeline",
-    ])
-    .expect("`runtime-capability propose --target memory_stage_profile` should parse");
-
-    match propose.command {
-        Some(Commands::RuntimeCapability { command }) => match command {
-            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
-                options,
-            ) => {
-                assert_eq!(options.run, "/tmp/runtime-experiment.json");
-                assert_eq!(options.output, "/tmp/runtime-capability.json");
-                assert_eq!(
-                    options.target,
-                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile
-                );
-                assert!(options.target_summary.contains("governed memory pipeline"));
-                assert_eq!(
-                    options.bounded_scope,
-                    "Governed memory pipeline promotion intent only"
-                );
-                assert_eq!(options.required_capability, vec!["memory_read".to_owned()]);
-                assert_eq!(options.tag, vec!["memory".to_owned(), "pipeline".to_owned()]);
-            }
-            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
-                _,
-            )
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)) => {
-                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
-            }
-        },
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
-fn runtime_capability_cli_parses_memory_stage_profile_canonical_spelling() {
-    let propose = try_parse_cli([
-        "loongclaw",
-        "runtime-capability",
-        "propose",
-        "--run",
-        "/tmp/runtime-experiment.json",
-        "--output",
-        "/tmp/runtime-capability.json",
-        "--target",
-        "memory-stage-profile",
-        "--target-summary",
-        "Promote governed memory pipeline intent into a reusable profile",
-        "--bounded-scope",
-        "Governed memory pipeline promotion intent only",
-        "--required-capability",
-        "memory_read",
-        "--tag",
-        "memory",
-        "--tag",
-        "pipeline",
-    ])
-    .expect("`runtime-capability propose --target memory-stage-profile` should parse");
-
-    match propose.command {
-        Some(Commands::RuntimeCapability { command }) => match command {
-            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
-                options,
-            ) => {
-                assert_eq!(
-                    options.target,
-                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile
-                );
-            }
-            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
-                _,
-            )
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)
-            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Apply(_)) => {
-                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
-            }
-        },
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
 fn acp_event_summary_cli_rejects_zero_limit() {
     let error = run_acp_event_summary_cli(None, Some("session-a"), 0, false)
         .expect_err("zero limit must be rejected");
     assert!(error.contains(">= 1"));
-}
-
-#[test]
-fn runtime_trajectory_cli_parses_flags() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "runtime-trajectory",
-        "export",
-        "--session",
-        "root-session",
-        "--output",
-        "/tmp/runtime-trajectory.json",
-        "--turn-limit",
-        "25",
-        "--event-page-limit",
-        "50",
-        "--json",
-    ])
-    .expect("runtime-trajectory flags should parse");
-
-    match cli.command {
-        Some(Commands::RuntimeTrajectory { command }) => match command {
-            loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Export(
-                options,
-            ) => {
-                assert_eq!(options.session.as_deref(), Some("root-session"));
-                assert_eq!(
-                    options.output.as_deref(),
-                    Some("/tmp/runtime-trajectory.json")
-                );
-                assert_eq!(options.turn_limit, Some(25));
-                assert_eq!(options.event_page_limit, 50);
-                assert!(options.json);
-            }
-            other => panic!("unexpected runtime-trajectory subcommand parsed: {other:?}"),
-        },
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
-fn runtime_trajectory_cli_parses_artifact_show_mode() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "runtime-trajectory",
-        "show",
-        "--artifact",
-        "/tmp/runtime-trajectory.json",
-        "--json",
-    ])
-    .expect("runtime-trajectory artifact mode should parse");
-
-    match cli.command {
-        Some(Commands::RuntimeTrajectory { command }) => match command {
-            loongclaw_daemon::runtime_trajectory_cli::RuntimeTrajectoryCommands::Show(options) => {
-                assert_eq!(options.artifact, "/tmp/runtime-trajectory.json");
-                assert!(options.json);
-            }
-            other => panic!("unexpected runtime-trajectory subcommand parsed: {other:?}"),
-        },
-        other => panic!("unexpected command parsed: {other:?}"),
-    }
-}
-
-#[test]
-fn runtime_trajectory_help_mentions_export_and_show_subcommands() {
-    let help = render_cli_help(["runtime-trajectory"]);
-
-    assert!(help.contains("export"));
-    assert!(help.contains("show"));
 }
 
 #[test]
@@ -1886,19 +1200,6 @@ fn chat_cli_accepts_acp_runtime_option_flags() {
                 vec!["filesystem".to_owned(), "search".to_owned()]
             );
             assert_eq!(acp_cwd.as_deref(), Some("/workspace/project"));
-        }
-        other => panic!("unexpected command parse result: {other:?}"),
-    }
-}
-
-#[test]
-fn chat_cli_accepts_latest_session_selector() {
-    let cli = try_parse_cli(["loongclaw", "chat", "--session", "latest"])
-        .expect("chat CLI should accept the latest session selector");
-
-    match cli.command {
-        Some(Commands::Chat { session, .. }) => {
-            assert_eq!(session.as_deref(), Some("latest"));
         }
         other => panic!("unexpected command parse result: {other:?}"),
     }
@@ -2862,97 +2163,6 @@ fn multi_channel_serve_cli_help_mentions_session_and_channel_account_flags() {
     assert!(
         help.contains("runtime-backed service-channel"),
         "help: {help}"
-    );
-}
-
-#[test]
-fn gateway_run_cli_accepts_optional_session_and_channel_account_flags() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "gateway",
-        "run",
-        "--session",
-        "cli-gateway",
-        "--channel-account",
-        "telegram=bot_123456",
-        "--channel-account",
-        "matrix=bridge-sync",
-    ])
-    .expect("gateway run should parse");
-
-    match cli.command {
-        Some(Commands::Gateway { command }) => match command {
-            loongclaw_daemon::gateway::service::GatewayCommand::Run {
-                session,
-                channel_account,
-                ..
-            } => {
-                assert_eq!(session.as_deref(), Some("cli-gateway"));
-                assert_eq!(channel_account.len(), 2);
-                assert_eq!(channel_account[0].channel_id, "telegram");
-                assert_eq!(channel_account[0].account_id, "bot_123456");
-                assert_eq!(channel_account[1].channel_id, "matrix");
-                assert_eq!(channel_account[1].account_id, "bridge-sync");
-            }
-            other @ loongclaw_daemon::gateway::service::GatewayCommand::Status { .. }
-            | other @ loongclaw_daemon::gateway::service::GatewayCommand::Stop => {
-                panic!("unexpected gateway subcommand: {other:?}")
-            }
-        },
-        other => panic!("unexpected parse result: {other:?}"),
-    }
-}
-
-#[test]
-fn gateway_run_cli_allows_headless_mode_without_session() {
-    let cli = try_parse_cli(["loongclaw", "gateway", "run"])
-        .expect("gateway run should allow headless mode");
-
-    match cli.command {
-        Some(Commands::Gateway { command }) => match command {
-            loongclaw_daemon::gateway::service::GatewayCommand::Run { session, .. } => {
-                assert_eq!(session, None);
-            }
-            other @ loongclaw_daemon::gateway::service::GatewayCommand::Status { .. }
-            | other @ loongclaw_daemon::gateway::service::GatewayCommand::Stop => {
-                panic!("unexpected gateway subcommand: {other:?}")
-            }
-        },
-        other => panic!("unexpected parse result: {other:?}"),
-    }
-}
-
-#[test]
-fn gateway_status_cli_parses_json_flag() {
-    let cli = try_parse_cli(["loongclaw", "gateway", "status", "--json"])
-        .expect("gateway status should parse");
-
-    match cli.command {
-        Some(Commands::Gateway { command }) => match command {
-            loongclaw_daemon::gateway::service::GatewayCommand::Status { json } => {
-                assert!(json);
-            }
-            other @ loongclaw_daemon::gateway::service::GatewayCommand::Run { .. }
-            | other @ loongclaw_daemon::gateway::service::GatewayCommand::Stop => {
-                panic!("unexpected gateway subcommand: {other:?}")
-            }
-        },
-        other => panic!("unexpected parse result: {other:?}"),
-    }
-}
-
-#[test]
-fn gateway_cli_help_mentions_run_status_stop_and_optional_session() {
-    let help = render_cli_help(["gateway"]);
-    let run_help = render_cli_help(["gateway", "run"]);
-
-    assert!(help.contains("run"), "help: {help}");
-    assert!(help.contains("status"), "help: {help}");
-    assert!(help.contains("stop"), "help: {help}");
-    assert!(run_help.contains("--session <SESSION>"), "help: {run_help}");
-    assert!(
-        run_help.contains("--channel-account <CHANNEL=ACCOUNT>"),
-        "help: {run_help}"
     );
 }
 

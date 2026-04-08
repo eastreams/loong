@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-29
+Last updated: 2026-03-20
 
 This roadmap is execution-focused. Every stage has:
 
@@ -61,9 +61,8 @@ Delivered:
 - external profile integrity lock (`security_scan.profile_sha256`) with fail-closed behavior
 - external profile signature verification (`security_scan.profile_signature`, ed25519)
 - JSONL SIEM export lane (`security_scan.siem_export`) with optional fail-closed mode
-- kernel-level request-policy gate for tool calls through `PolicyEngine::authorize(...)`
-  plus `PolicyExtensionChain`, with explicit deny/approval-required outcomes before
-  tool dispatch (Rule of Two)
+- kernel-level tool-call policy gate (`PolicyEngine::check_tool_call`) with explicit
+  deny/approval-required outcomes before tool dispatch (Rule of Two)
 - WASM static scan controls:
   - allowed artifact paths
   - module size cap
@@ -91,24 +90,12 @@ Focus: runtime-grade isolation for untrusted extension execution.
 Delivered in current baseline:
 
 - WASM runtime execution lane wired into `bridge_execution` with Wasmtime backend.
-- Core-module WASM host ABI v0 for plugin data exchange:
-  - request payload delivery into guest memory
-  - structured JSON output capture from guest memory
-  - allowlisted guest-readable config access via namespaced `provider.` / `channel.` keys
-  - bounded guest logging surfaced in runtime evidence
-  - explicit guest abort propagation
-  - backward-compatible fallback to legacy `run() -> ()`
 - Policy-driven runtime guardrails in `bridge_support.security_scan.runtime`:
   - required `allowed_path_prefixes` when `execute_wasm_component=true` (fail closed)
-  - optional `guest_readable_config_keys` allowlist for WASM guest config reads
   - `max_component_bytes`
-  - optional `max_output_bytes` for host ABI output capture
   - optional `fuel_limit`
-  - optional `timeout_ms` enforced through Wasmtime epoch interruption
 - Runtime isolation tests for:
   - successful wasm execution
-  - timeout-guarded execution without cache reuse
-  - timeout-triggered termination for non-returning modules
   - runtime prefix denial
   - runtime size-limit denial
   - invalid runtime policy denial
@@ -118,6 +105,7 @@ Remaining deliverables:
 - WASM runtime lane with enforced resource limits:
   - CPU budget refinement
   - memory limits
+  - timeout/termination policy
 - process bridge sandbox profile tiers (`restricted`, `balanced`, `trusted`) aligned with the
   shared execution-tier contract used by browser and WASM evidence surfaces
 - hot-reload lifecycle hooks:
@@ -179,66 +167,9 @@ Delivered in current baseline:
 - `tool_search` operation for runtime tool discovery over:
   - loaded providers in integration catalog
   - scanned-but-not-absorbed plugin descriptors
-  - explicit trust-aware filtering via query prefixes (`trust:official`, `tier:verified-community`)
-    and structured `trust_tiers` spec fields for deterministic operator workflows
-  - operator-visible `trust_filter_summary` output so filtered scope and fail-closed
-    conflicts are auditable in `run-spec` reports
-  - top-level `tool_search_summary` on spec run reports so operators can review
-    trust scope and top matches without digging through raw `outcome.results`
-  - `run-spec --render-summary` stderr rendering for operator-facing trust review
-    and discovery summaries without breaking stdout JSON consumers
-  - typed audit emission for trust-aware discovery (`ToolSearchEvaluated`) so
-    audit triage can flag conflicting trust filters and trust-filtered empty
-    result sets
-  - operator-facing audit summary hints (`last_triage_label`,
-    `last_triage_summary`, `last_triage_hint`) so trust-aware discovery failures
-    remain actionable after the original `run-spec` output is gone
-  - audit browser filters (`audit recent/summary --kind`, `--triage-label`) so
-    operators can inspect trust-sensitive discovery failures without manually
-    scanning unrelated audit history
-  - dedicated `audit discovery` operator view so trust-aware tool search
-    failures can be triaged by query substring, requested/effective trust tier,
-    and last filtered discovery context without hand-composing event-kind
-    filters
-  - inclusive audit time-window filters (`--since-epoch-s`,
-    `--until-epoch-s`) across recent/summary/discovery so retained operator
-    review can isolate a single rollout or incident window
-  - pack/agent scoped audit filters (`--pack-id`, `--agent-id`) so retained
-    review can collapse to one workload or one operator session without raw
-    journal post-processing
-  - event/token scoped audit drill-down (`--event-id`, `--token-id`) across
-    recent/summary/discovery so operators can isolate one retained event or
-    follow a token across `TokenIssued`, `TokenRevoked`, and
-    `AuthorizationDenied` without journal post-processing
-  - grouped `audit summary --group-by pack|agent|token` rollups so retained
-    audit windows can be collapsed into per-identity event/triage summaries
-    before operators jump into one incident trail
-  - grouped `audit discovery --group-by pack|agent` rollups so trust-aware
-    tool-search history can be collapsed into per-workload trust/triage
-    summaries before operators inspect one filtered event slice
-  - grouped discovery `drill_down_command` handoff plus `audit recent`
-    trust-aware filters (`--query-contains`, `--trust-tier`) so grouped
-    hotspots can be replayed directly as exact retained event windows
-  - grouped discovery `correlated_summary_command` handoff so the same hotspot
-    can be widened into workload-scoped `audit summary` review without
-    discovery-only filters masking adjacent audit failures
-  - grouped discovery correlated summary preview so widened audit triage is
-    visible inline before operators leave the discovery surface
-  - grouped discovery focus signals (`additional_events`,
-    `non_discovery_*_counts`, `attention_hint`) so adjacent audit degradation
-    is highlighted instead of being hidden inside the full correlated preview
-  - grouped discovery `remediation_hint` so adjacent audit signals can point to
-    the next operator action instead of only surfacing more widened evidence
-  - grouped discovery `correlated_remediation_command` so the strongest
-    adjacent signal can jump straight into the next retained-audit command
-  - dedicated `audit token-trail` lifecycle view so one retained token can be
-    reconstructed with issued/denied/revoked summary fields, full matching
-    timeline entries, and explicit truncation reporting when the selected
-    window is too small
 - translation-aligned retrieval payloads:
   - runtime profile hints (`bridge_kind`, `adapter_family`, `entrypoint_hint`, `source_language`)
   - plugin semantic fields (`summary`, `tags`, `input_examples`, `output_examples`, `defer_loading`)
-  - plugin provenance/trust fields (`provenance_summary`, `trust_tier`)
 - `programmatic_tool_call` operation for server-side tool orchestration:
   - step model (`set_literal`, `json_pointer`, `connector_call`, `connector_batch`, `conditional`)
   - connector allowlist and call-budget enforcement
@@ -295,20 +226,6 @@ Acceptance criteria:
 
 Status: planned
 Focus: open ecosystem without sacrificing trust boundaries.
-
-Delivered in current baseline:
-
-- `loongclaw plugins init <package_root>` scaffolds a manifest-first plugin
-  package root with a canonical `loongclaw.plugin.json`, current host
-  compatibility defaults, and a README that routes authors into shared
-  package diagnosis instead of internal crate spelunking
-- `loongclaw plugins doctor --root <package_root>` reuses the shared
-  `plugin_preflight` contract for author-facing package diagnosis, defaulting
-  to the `sdk_release` profile while surfacing setup truth, remediation
-  classes, and required operator follow-up actions
-- package-manifest runtime projection now also honors explicit
-  `metadata.source_language`, so language-specific scaffolded packages keep
-  canonical bridge, adapter-family, and preflight language semantics
 
 Planned deliverables:
 
@@ -376,7 +293,7 @@ Delivered in current baseline:
 - release-first install flow with checksum-verified prebuilt binaries and explicit source fallback (`scripts/install.sh`, `scripts/install.ps1`)
 - runtime-visible tool advertising so capability snapshots and provider tool schemas follow the actually enabled tool surface
 - Cargo feature flags for MVP packaging controls
-- product specs for installation, onboarding, one-shot ask, doctor, browser automation, tool surface, channel setup, runtime experiment, the local product control plane, and Web UI expectations
+- product specs for installation, onboarding, one-shot ask, doctor, browser automation, tool surface, channel setup, runtime experiment, and Web UI expectations
 - experiment-state operator surface foundation:
   - `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
   - `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
@@ -384,7 +301,7 @@ Delivered in current baseline:
   - `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, explicit operator review, and any recorded snapshot-backed delta evidence without mutating live runtime state
   - `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
   - `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, and the same family-level delta evidence digest
-  - `runtime-capability apply` materializes one deterministic governed `memory_stage_profile` artifact from a promotable capability family, keeps the output idempotent, and rejects conflicting or unsupported apply paths instead of mutating live runtime state directly
+  - `runtime-capability apply` materializes one governed draft artifact under the planned delivery surface for a promotable family while keeping repeated applies idempotent and leaving live runtime state untouched
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification
@@ -404,20 +321,7 @@ Remaining deliverables:
   - expand beyond installer scripts into package-manager distribution only after release adoption is stable
 - experiment-state operator surface follow-through:
   - use the shipped snapshot/restore/experiment/capability record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
-  - keep the new promotion planner as the contract for governed executors; only the explicit `memory_stage_profile` apply lane is shipped today, and other promotion targets stay read-only until their executor contracts exist
-- runtime productization over already-shipped substrate:
-  - background task UX on top of session runtime:
-    - expose task-shaped create, inspect, wait, follow, cancel, and recover flows over the current async delegate child-session substrate
-    - surface approval-pending and tool-narrowing state as task diagnostics instead of raw session-runtime detail only
-    - keep cron, heartbeat, and service-owned scheduling out of the first slice
-  - product-mode managed skills UX:
-    - add search, recommendation, and explicit acquisition guidance over the current managed, user, and project skill inventory
-    - explain eligibility, visibility, shadowing, first-use guidance, and product-mode fit rather than requiring operators to know a `skill_id` up front
-    - keep install and invoke explicit and governed instead of drifting into blind auto-install
-  - scoped memory retrieval productization:
-    - add query-aware retrieval and broaden beyond session-summary-only hydration
-    - make provenance and injection reason operator-visible
-    - ship local text search before embedding-dependent retrieval
+  - keep the new dry-run promotion planner read-only and use it as the contract for any future promotion executor instead of jumping directly to automatic mutation
 - managed browser automation companion:
   - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
   - partial governed adapter skeleton now exists for richer page actions:
@@ -426,22 +330,7 @@ Remaining deliverables:
   - still add isolated browser profile lifecycle and release packaging around the companion runtime
   - keep richer browser automation exposed only through truthful runtime-visible tool advertising and governed tool contracts
 - browser-facing product surface:
-  - Web UI implementation as a thin shell over the local product control plane plus existing ask/chat, onboarding, dashboard, and browser semantics, not a separate assistant runtime
-  - current product mode stays same-origin and localhost-only by default, but
-    that operating boundary is not the long-term architecture endpoint
-- gateway service foundation:
-  - land the first explicit daemon-owned gateway owner contract through
-    `gateway run`, `gateway status`, and `gateway stop`, while keeping
-    `multi-channel-serve` as the attached compatibility wrapper instead of the
-    long-term runtime-owner noun
-  - extract channel, ACP, and runtime-snapshot payload builders into shared
-    service read models that can feed CLI, dashboard, Web UI, and future
-    paired/browser/mobile clients
-  - centralize bind ownership, route mounting, local admin auth, pairing, and
-    detached service lifecycle in the gateway while preserving kernel, app, and
-    ACP boundaries
-  - use the gateway layer as the prerequisite for richer long-lived runtimes
-    such as Discord, Slack, WhatsApp, and other gateway-native channel surfaces
+  - Web UI implementation as a thin shell over existing ask/chat, onboarding, dashboard, and browser semantics, not a separate assistant runtime
 
 Acceptance criteria:
 
@@ -450,9 +339,6 @@ Acceptance criteria:
 - shell/file/web/browser tools obey policy constraints and emit auditable outcomes
 - advertised tools match the actually invokable runtime surface for the current config and compiled features
 - channel/provider modules can be toggled by feature flags without core code edits
-- service-oriented product surfaces can converge on one daemon-owned gateway
-  host without introducing a second assistant runtime or weakening kernel/app
-  governance
 
 ## Quality Gate Matrix (Always On)
 
@@ -554,39 +440,7 @@ adding more surface breadth.
 Trade-off: lowers merge risk and control-plane debt, but requires disciplined ownership extraction
 instead of feature-driven growth inside large files.
 
-### D8: Local product control plane foundation
-
-LoongClaw now has enough real runtime substrate that the next platform risk is
-surface drift rather than missing primitives.
-
-The repo already has:
-
-- a real ACP control plane
-- a durable session repository
-- operator-facing `onboard`, `doctor`, `acp-status`, and observability surfaces
-
-What it still lacks is one localhost-only product control plane contract that
-future HTTP and Web UI work can consume.
-
-Without that layer, `#217`, `#296`, and `#403` can drift into:
-
-- browser-only runtime semantics
-- a gateway-local session model
-- a giant product gateway that starts stealing authority from the kernel
-
-The preferred path is smaller:
-
-- keep the kernel as authority
-- keep ACP internal and real
-- use `SessionRepository` as the canonical product session plane
-- extract a shared local control plane for status, sessions, approvals, support
-  flows, and future turn submission
-
-Trade-off: this adds one explicit platform layer, but it prevents duplicated
-surface logic and keeps future gateway/UI work aligned with the kernel-first
-architecture.
-
-### D9: Shared execution security tiers
+### D8: Shared execution security tiers
 
 The roadmap already names process sandbox profile tiers, but the wider runtime still needs one
 shared execution-tier vocabulary across process, browser, and WASM lanes. Without that, each lane
@@ -602,7 +456,7 @@ Current first-slice mapping:
   its runtime gate is open
 - `trusted` - reserved for future explicit high-trust runtime lanes rather than assumed by default
 
-### D10: First-party workflow packs on hardened primitives
+### D9: First-party workflow packs on hardened primitives
 
 Once the runtime base is harder, LoongClaw should turn that into a small set of first-party
 workflow packs that prove the kernel's value in operator-facing tasks such as release/review work,
@@ -616,9 +470,8 @@ instead of preceding it.
 1. Kernel-first runtime closure and direct-path retirement
 2. Persistent audit sink and query baseline
 3. ACP control-plane hardening and recovery
-4. Local product control plane foundation
-5. Shared execution security tiers across process/browser/WASM lanes
-6. First-party workflow packs on hardened runtime primitives
+4. Shared execution security tiers across process/browser/WASM lanes
+5. First-party workflow packs on hardened runtime primitives
 
 Execution package for this order:
 
