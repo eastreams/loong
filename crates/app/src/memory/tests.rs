@@ -43,6 +43,27 @@ fn fallback_memory_operation_stays_compatible() {
     assert_eq!(outcome.payload["adapter"], "kv-core");
 }
 
+#[test]
+fn supported_memory_core_operations_for_sqlite_are_stable() {
+    let operations = supported_memory_core_operations(crate::config::MemoryBackendKind::Sqlite);
+    let operation_names = operations
+        .into_iter()
+        .map(MemoryCoreOperation::as_str)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        operation_names,
+        vec![
+            "append_turn",
+            "window",
+            "clear_session",
+            "read_context",
+            "replace_turns",
+            "read_stage_envelope",
+        ]
+    );
+}
+
 #[tokio::test]
 async fn mvp_memory_adapter_routes_through_kernel() {
     use std::collections::{BTreeMap, BTreeSet};
@@ -769,4 +790,62 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
         envelope.hydrated.diagnostics.system_id,
         "registry-runtime-executing"
     );
+}
+
+#[tokio::test]
+async fn registry_selected_system_can_use_compact_stage_hook_without_custom_runtime() {
+    struct CompactHookMemorySystem;
+
+    impl MemorySystem for CompactHookMemorySystem {
+        fn id(&self) -> &'static str {
+            "registry-compact-hook"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-compact-hook",
+                [MemorySystemCapability::PromptHydration],
+                "Registry compact hook test system",
+            )
+            .with_runtime_fallback_kind(
+                crate::memory::MemorySystemRuntimeFallbackKind::SystemBacked,
+            )
+            .with_supported_stage_families([MemoryStageFamily::Compact])
+        }
+
+        fn run_compact_stage(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+            _config: &runtime_config::MemoryRuntimeConfig,
+        ) -> Result<Option<StageDiagnostics>, String> {
+            let diagnostics = StageDiagnostics::succeeded(MemoryStageFamily::Compact);
+
+            Ok(Some(diagnostics))
+        }
+    }
+
+    fn ensure_registry_compact_hook_system_registered() {
+        static REGISTRY_COMPACT_HOOK_SYSTEM: OnceLock<()> = OnceLock::new();
+        REGISTRY_COMPACT_HOOK_SYSTEM.get_or_init(|| {
+            register_memory_system("registry-compact-hook", || {
+                Box::new(CompactHookMemorySystem)
+            })
+            .expect("register compact-hook memory system");
+        });
+    }
+
+    ensure_registry_compact_hook_system_registered();
+
+    let config = runtime_config::MemoryRuntimeConfig {
+        resolved_system_id: Some("registry-compact-hook".to_owned()),
+        ..runtime_config::MemoryRuntimeConfig::default()
+    };
+    let diagnostics = run_compact_stage("compact-hook-session", None, &config)
+        .await
+        .expect("compact stage should run through system-backed runtime");
+
+    assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+    assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);
+    assert!(!diagnostics.fallback_activated);
 }

@@ -5840,6 +5840,12 @@ pub fn memory_system_metadata_json(
     metadata: &mvp::memory::MemorySystemMetadata,
     source: Option<&str>,
 ) -> Value {
+    let supported_stage_families = metadata
+        .supported_stage_families
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryStageFamily::as_str)
+        .collect::<Vec<_>>();
     let supported_pre_assembly_stage_families = metadata
         .supported_pre_assembly_stage_families
         .iter()
@@ -5858,6 +5864,14 @@ pub fn memory_system_metadata_json(
     payload.insert(
         "capabilities".to_owned(),
         json!(metadata.capability_names()),
+    );
+    payload.insert(
+        "runtime_fallback_kind".to_owned(),
+        json!(metadata.runtime_fallback_kind.as_str()),
+    );
+    payload.insert(
+        "supported_stage_families".to_owned(),
+        json!(supported_stage_families),
     );
     payload.insert(
         "supported_pre_assembly_stage_families".to_owned(),
@@ -5892,6 +5906,15 @@ fn format_memory_recall_mode_names(recall_modes: &[mvp::memory::MemoryRecallMode
     render_string_list(names)
 }
 
+fn format_memory_core_operation_names(operations: &[mvp::memory::MemoryCoreOperation]) -> String {
+    let names = operations
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryCoreOperation::as_str)
+        .collect::<Vec<_>>();
+    render_string_list(names)
+}
+
 pub fn memory_system_policy_json(policy: &mvp::memory::MemorySystemPolicySnapshot) -> Value {
     json!({
         "backend": policy.backend.as_str(),
@@ -5920,6 +5943,12 @@ pub fn build_memory_systems_cli_json_payload(
             .iter()
             .map(|metadata| memory_system_metadata_json(metadata, None))
             .collect::<Vec<_>>(),
+        "core_operations": snapshot
+            .core_operations
+            .iter()
+            .copied()
+            .map(mvp::memory::MemoryCoreOperation::as_str)
+            .collect::<Vec<_>>(),
         "policy": memory_system_policy_json(&snapshot.policy),
     })
 }
@@ -5929,6 +5958,8 @@ pub fn render_memory_system_snapshot_text(
     snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
 ) -> String {
     let selected_capabilities = snapshot.selected_metadata.capability_names();
+    let selected_stage_families =
+        format_memory_stage_family_names(&snapshot.selected_metadata.supported_stage_families);
     let selected_pre_assembly_stages = format_memory_stage_family_names(
         &snapshot
             .selected_metadata
@@ -5936,16 +5967,20 @@ pub fn render_memory_system_snapshot_text(
     );
     let selected_recall_modes =
         format_memory_recall_mode_names(&snapshot.selected_metadata.supported_recall_modes);
+    let core_operations = format_memory_core_operation_names(&snapshot.core_operations);
     let mut lines = vec![
         format!("config={config_path}"),
         format!(
-            "selected={} source={} api_version={} capabilities={} pre_assembly_stages={} recall_modes={} summary={}",
+            "selected={} source={} api_version={} capabilities={} runtime_fallback_kind={} stages={} pre_assembly_stages={} recall_modes={} core_operations={} summary={}",
             snapshot.selected_metadata.id,
             snapshot.selected.source.as_str(),
             snapshot.selected_metadata.api_version,
             format_capability_names(&selected_capabilities),
+            snapshot.selected_metadata.runtime_fallback_kind.as_str(),
+            selected_stage_families,
             selected_pre_assembly_stages,
             selected_recall_modes,
+            core_operations,
             snapshot.selected_metadata.summary
         ),
         format!(
@@ -5964,14 +5999,17 @@ pub fn render_memory_system_snapshot_text(
 
     for metadata in &snapshot.available {
         let capabilities = metadata.capability_names();
+        let stage_families = format_memory_stage_family_names(&metadata.supported_stage_families);
         let pre_assembly_stages =
             format_memory_stage_family_names(&metadata.supported_pre_assembly_stage_families);
         let recall_modes = format_memory_recall_mode_names(&metadata.supported_recall_modes);
         lines.push(format!(
-            "- {} api_version={} capabilities={} pre_assembly_stages={} recall_modes={} summary={}",
+            "- {} api_version={} capabilities={} runtime_fallback_kind={} stages={} pre_assembly_stages={} recall_modes={} summary={}",
             metadata.id,
             metadata.api_version,
             format_capability_names(&capabilities),
+            metadata.runtime_fallback_kind.as_str(),
+            stage_families,
             pre_assembly_stages,
             recall_modes,
             metadata.summary
