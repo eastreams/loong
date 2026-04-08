@@ -3147,7 +3147,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     fn set_browser_companion_env_var(key: &str, value: &str) {
         // SAFETY: daemon tests serialize process env mutations behind
         // `lock_daemon_test_environment`, so no concurrent env readers/writers
