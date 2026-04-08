@@ -56,6 +56,17 @@ impl MemoryCoreOperation {
     }
 }
 
+pub fn parse_exact_memory_core_operation(raw: &str) -> Option<MemoryCoreOperation> {
+    let parsed_operation = MemoryCoreOperation::parse_id(raw)?;
+    let canonical_operation = parsed_operation.as_str();
+    let is_exact_match = raw == canonical_operation;
+    if !is_exact_match {
+        return None;
+    }
+
+    Some(parsed_operation)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowTurn {
     pub role: String,

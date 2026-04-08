@@ -1291,10 +1291,14 @@ mod tests {
                 .iter()
                 .map(|diag| (diag.family, diag.outcome))
                 .collect::<Vec<_>>(),
-            vec![(MemoryStageFamily::Retrieve, StageOutcome::Skipped)]
+            vec![
+                (MemoryStageFamily::Derive, StageOutcome::Skipped),
+                (MemoryStageFamily::Retrieve, StageOutcome::Skipped),
+                (MemoryStageFamily::Rank, StageOutcome::Skipped),
+            ]
         );
         assert_eq!(
-            envelope.diagnostics[0].message.as_deref(),
+            envelope.diagnostics[1].message.as_deref(),
             Some(
                 "memory system declares `retrieve` stage support but provides no execution adapter"
             )
