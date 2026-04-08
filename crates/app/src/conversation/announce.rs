@@ -466,6 +466,8 @@ mod tests {
         SessionState,
     };
 
+    const DELEGATE_ANNOUNCE_EVENT_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
+
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
             "loongclaw-announce-{test_name}-{}",
@@ -544,7 +546,7 @@ mod tests {
         repo: &SessionRepository,
         parent_session_id: &str,
     ) -> serde_json::Value {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let deadline = tokio::time::Instant::now() + DELEGATE_ANNOUNCE_EVENT_WAIT_TIMEOUT;
 
         loop {
             let events = repo

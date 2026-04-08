@@ -125,17 +125,17 @@ impl GatewayLocalClient {
     }
 
     pub async fn status(&self) -> CliResult<GatewayOwnerStatus> {
-        let path = "/api/gateway/status";
+        let path = "/v1/status";
         self.request_json(Method::GET, path).await
     }
 
     pub async fn channels(&self) -> CliResult<Value> {
-        let path = "/api/gateway/channels";
+        let path = "/v1/channels";
         self.request_json(Method::GET, path).await
     }
 
     pub async fn runtime_snapshot(&self) -> CliResult<Value> {
-        let path = "/api/gateway/runtime-snapshot";
+        let path = "/v1/runtime/snapshot";
         self.request_json(Method::GET, path).await
     }
 
@@ -157,8 +157,48 @@ impl GatewayLocalClient {
     }
 
     pub async fn acp_observability(&self) -> CliResult<Value> {
-        let path = "/api/gateway/acp/observability";
+        let path = "/v1/acp/observability";
         self.request_json(Method::GET, path).await
+    }
+
+    pub async fn acp_status_for_address(
+        &self,
+        session_id: &str,
+        channel_id: Option<&str>,
+        conversation_id: Option<&str>,
+        account_id: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> CliResult<Value> {
+        let path = "/v1/acp/status";
+        let query = build_gateway_acp_address_query(
+            session_id,
+            channel_id,
+            conversation_id,
+            account_id,
+            thread_id,
+        );
+        self.request_json_with_query(Method::GET, path, &query)
+            .await
+    }
+
+    pub async fn acp_dispatch(
+        &self,
+        session_id: &str,
+        channel_id: Option<&str>,
+        conversation_id: Option<&str>,
+        account_id: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> CliResult<Value> {
+        let path = "/v1/acp/dispatch";
+        let query = build_gateway_acp_address_query(
+            session_id,
+            channel_id,
+            conversation_id,
+            account_id,
+            thread_id,
+        );
+        self.request_json_with_query(Method::GET, path, &query)
+            .await
     }
 
     pub async fn stop(&self) -> CliResult<GatewayStopResponse> {
@@ -278,6 +318,48 @@ impl GatewayLocalClient {
         let endpoint = format!("{base_url}{path}");
         Ok(endpoint)
     }
+}
+
+fn build_gateway_acp_address_query(
+    session_id: &str,
+    channel_id: Option<&str>,
+    conversation_id: Option<&str>,
+    account_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut query = Vec::new();
+    query.push(("session_id".to_owned(), session_id.to_owned()));
+
+    let channel_id = trimmed_non_empty(channel_id);
+    if let Some(channel_id) = channel_id {
+        query.push(("channel_id".to_owned(), channel_id));
+    }
+
+    let conversation_id = trimmed_non_empty(conversation_id);
+    if let Some(conversation_id) = conversation_id {
+        query.push(("conversation_id".to_owned(), conversation_id));
+    }
+
+    let account_id = trimmed_non_empty(account_id);
+    if let Some(account_id) = account_id {
+        query.push(("account_id".to_owned(), account_id));
+    }
+
+    let thread_id = trimmed_non_empty(thread_id);
+    if let Some(thread_id) = thread_id {
+        query.push(("thread_id".to_owned(), thread_id));
+    }
+
+    query
+}
+
+fn trimmed_non_empty(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
 }
 
 async fn parse_json_response(response: Response) -> CliResult<Value> {
