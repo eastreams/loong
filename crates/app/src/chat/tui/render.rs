@@ -845,9 +845,10 @@ fn render_theme_picker(
             Constraint::Length(2),
             Constraint::Length(2),
             Constraint::Min(4),
+            Constraint::Length(3),
         ])
         .split(inner_area);
-    let [intro_area, meta_area, list_area] = sections.as_ref() else {
+    let [intro_area, meta_area, list_area, preview_area] = sections.as_ref() else {
         return;
     };
 
@@ -936,6 +937,36 @@ fn render_theme_picker(
         option_lines.push(option_line);
     }
     frame.render_widget(Paragraph::new(option_lines), *list_area);
+
+    let preview_lines = vec![
+        Line::from(vec![
+            Span::styled(" Preview ".to_owned(), Style::default().fg(palette.dim)),
+            Span::styled(
+                "LoongClaw session chrome".to_owned(),
+                Style::default()
+                    .fg(palette.brand)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  • ".to_owned(), Style::default().fg(palette.brand)),
+            Span::styled(
+                "Assistant reply".to_owned(),
+                Style::default().fg(palette.text),
+            ),
+            Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
+            Span::styled("tool ready".to_owned(), Style::default().fg(palette.info)),
+        ]),
+        Line::from(vec![
+            Span::styled("  • ".to_owned(), Style::default().fg(palette.info)),
+            Span::styled("edits".to_owned(), Style::default().fg(palette.info)),
+            Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
+            Span::styled("render.rs +2".to_owned(), Style::default().fg(palette.text)),
+            Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
+            Span::styled("sub 2".to_owned(), Style::default().fg(palette.dim)),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(preview_lines), *preview_area);
 }
 
 fn render_session_picker(
@@ -1028,7 +1059,8 @@ fn render_session_picker(
     let has_more_above = scroll_offset > 0;
     let has_more_below = visible_end < filtered_count;
     let visible_indices = filtered_indices
-        .into_iter()
+        .iter()
+        .copied()
         .skip(scroll_offset)
         .take(item_rows)
         .collect::<Vec<_>>();
@@ -1058,7 +1090,11 @@ fn render_session_picker(
         ),
         Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
         Span::styled(
-            session_picker_summary_detail(session_picker.picker.mode, filtered_count),
+            session_picker_summary_detail(
+                session_picker.picker.mode,
+                &session_picker.picker.sessions,
+                filtered_indices.as_slice(),
+            ),
             Style::default().fg(palette.dim),
         ),
     ]);
@@ -1172,11 +1208,41 @@ fn render_session_picker(
 
 fn session_picker_summary_detail(
     picker_mode: state::SessionPickerMode,
-    filtered_count: usize,
+    sessions: &[state::VisibleSessionSuggestion],
+    filtered_indices: &[usize],
 ) -> String {
     match picker_mode {
-        state::SessionPickerMode::Resume => format!("{filtered_count} visible sessions"),
-        state::SessionPickerMode::Subagents => format!("{filtered_count} active threads"),
+        state::SessionPickerMode::Resume => {
+            let filtered_count = filtered_indices.len();
+            format!("{filtered_count} visible sessions")
+        }
+        state::SessionPickerMode::Subagents => {
+            let mut root_count = 0usize;
+            let mut delegate_count = 0usize;
+
+            for session_index in filtered_indices {
+                let maybe_session = sessions.get(*session_index);
+                let Some(session) = maybe_session else {
+                    continue;
+                };
+
+                if session.kind == "root" {
+                    root_count = root_count.saturating_add(1);
+                    continue;
+                }
+
+                delegate_count = delegate_count.saturating_add(1);
+            }
+
+            if root_count > 0 && delegate_count > 0 {
+                return format!("{root_count} root · {delegate_count} delegate");
+            }
+            if root_count > 0 {
+                return format!("{root_count} root thread");
+            }
+
+            format!("{delegate_count} delegate threads")
+        }
     }
 }
 
@@ -3294,6 +3360,10 @@ mod tests {
             text.contains("Preview"),
             "theme picker should explain preview"
         );
+        assert!(
+            text.contains("LoongClaw session chrome"),
+            "theme picker should render a preview sample"
+        );
     }
 
     #[test]
@@ -3822,6 +3892,10 @@ mod tests {
         assert!(
             text.contains("Subagents 1/2"),
             "picker summary should include position and count: {text:?}"
+        );
+        assert!(
+            text.contains("1 root · 1 delegate"),
+            "picker summary should describe thread composition: {text:?}"
         );
         assert!(
             text.contains("Main thread"),

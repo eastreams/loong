@@ -62,6 +62,7 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 }
 
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
+    validate_migrate_cli_required_flags(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
     let kernel_ctx = mvp::context::bootstrap_kernel_context_with_config(
         "daemon-migrate-cli",
@@ -79,6 +80,27 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
     .map_err(|error| translate_migrate_cli_error(&options, error))?;
 
     render_migrate_tool_outcome(&options, outcome)
+}
+
+fn validate_migrate_cli_required_flags(options: &MigrateCommandOptions) -> CliResult<()> {
+    let command_name = mvp::config::active_cli_command_name();
+    let mode_id = options.mode.as_id();
+
+    if matches!(options.mode, MigrateMode::Apply) && options.input.is_none() {
+        return Err(format!(
+            "`--input` is required for `{command_name} migrate --mode {mode_id}`"
+        ));
+    }
+
+    let output_required = matches!(options.mode, MigrateMode::Apply)
+        || matches!(options.mode, MigrateMode::RollbackLastApply);
+    if output_required && options.output.is_none() {
+        return Err(format!(
+            "`--output` is required for `{command_name} migrate --mode {mode_id}`"
+        ));
+    }
+
+    Ok(())
 }
 
 fn block_on_migrate_cli<F>(future: F) -> CliResult<()>

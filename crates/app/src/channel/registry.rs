@@ -9169,6 +9169,8 @@ mod tests {
 
     #[test]
     fn discord_status_splits_config_backed_send_and_stub_serve() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.remove(DISCORD_BOT_TOKEN_ENV);
         let mut config = LoongClawConfig::default();
         config.discord.enabled = true;
 
@@ -9203,6 +9205,8 @@ mod tests {
 
     #[test]
     fn discord_status_rejects_non_http_api_base_url() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.remove(DISCORD_BOT_TOKEN_ENV);
         let mut config = LoongClawConfig::default();
         config.discord.enabled = true;
         config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
