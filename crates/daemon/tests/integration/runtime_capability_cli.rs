@@ -1764,6 +1764,19 @@ fn runtime_capability_plan_builds_promotable_managed_skill_plan() {
             .ends_with(&family.family_id[..12]),
         "artifact id should be family-derived"
     );
+    assert_eq!(plan.planned_payload.artifact_kind, "managed_skill_bundle");
+    assert_eq!(
+        plan.planned_payload.target,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill
+    );
+    assert_eq!(
+        plan.planned_payload.draft_id,
+        plan.planned_artifact.artifact_id
+    );
+    assert_eq!(
+        plan.planned_payload.provenance.accepted_candidate_ids.len(),
+        2
+    );
     assert!(
         plan.blockers.is_empty(),
         "ready family should have no blockers"
@@ -2019,6 +2032,11 @@ fn runtime_capability_plan_reports_missing_evidence_for_programmatic_flow_family
         "programmatic_flow_spec"
     );
     assert_eq!(plan.planned_artifact.delivery_surface, "programmatic_flows");
+    assert_eq!(
+        plan.planned_payload.target,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProgrammaticFlow
+    );
+    assert_eq!(plan.planned_payload.artifact_kind, "programmatic_flow_spec");
     assert!(
         plan.blockers.iter().any(|blocker| {
             blocker.dimension == "stability"
@@ -2127,6 +2145,11 @@ fn runtime_capability_plan_reports_blocked_profile_note_family() {
     );
     assert_eq!(plan.planned_artifact.artifact_kind, "profile_note_addendum");
     assert_eq!(plan.planned_artifact.delivery_surface, "profile_note");
+    assert_eq!(
+        plan.planned_payload.target,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ProfileNoteAddendum
+    );
+    assert_eq!(plan.planned_payload.artifact_kind, "profile_note_addendum");
     assert!(
         plan.blockers.iter().any(|blocker| {
             blocker.dimension == "review_consensus"

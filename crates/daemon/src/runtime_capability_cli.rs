@@ -294,6 +294,25 @@ pub struct RuntimeCapabilityPromotionProvenance {
     pub latest_reviewed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityPromotionPlannedPayload {
+    pub artifact_kind: String,
+    pub target: RuntimeCapabilityTarget,
+    pub draft_id: String,
+    pub summary: String,
+    pub review_scope: String,
+    pub required_capabilities: Vec<String>,
+    pub tags: Vec<String>,
+    pub provenance: RuntimeCapabilityPromotionPlannedPayloadProvenance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityPromotionPlannedPayloadProvenance {
+    pub family_id: String,
+    pub accepted_candidate_ids: Vec<String>,
+    pub changed_surfaces: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RuntimeCapabilityPromotionPlanReport {
     pub generated_at: String,
@@ -308,6 +327,7 @@ pub struct RuntimeCapabilityPromotionPlanReport {
     pub approval_checklist: Vec<String>,
     pub rollback_hints: Vec<String>,
     pub provenance: RuntimeCapabilityPromotionProvenance,
+    pub planned_payload: RuntimeCapabilityPromotionPlannedPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -535,6 +555,12 @@ pub fn execute_runtime_capability_plan_command(
         approval_checklist: build_runtime_capability_approval_checklist(&planned_artifact),
         rollback_hints: build_runtime_capability_rollback_hints(&planned_artifact),
         provenance: build_runtime_capability_promotion_provenance(
+            &family_artifacts,
+            &family.evidence,
+        ),
+        planned_payload: build_runtime_capability_promotion_planned_payload(
+            &family.family_id,
+            &planned_artifact,
             &family_artifacts,
             &family.evidence,
         ),
@@ -1294,6 +1320,7 @@ fn build_runtime_capability_apply_artifact(
     let planned_artifact = &plan.planned_artifact;
     let provenance = &plan.provenance;
     let evidence = &plan.evidence;
+    let planned_payload = &plan.planned_payload;
 
     RuntimeCapabilityAppliedArtifactDocument {
         schema: RuntimeCapabilityArtifactSchema {
@@ -1302,19 +1329,19 @@ fn build_runtime_capability_apply_artifact(
             purpose: RUNTIME_CAPABILITY_APPLY_ARTIFACT_PURPOSE.to_owned(),
         },
         family_id: plan.family_id.clone(),
-        artifact_kind: planned_artifact.artifact_kind.clone(),
-        artifact_id: planned_artifact.artifact_id.clone(),
+        artifact_kind: planned_payload.artifact_kind.clone(),
+        artifact_id: planned_payload.draft_id.clone(),
         delivery_surface: planned_artifact.delivery_surface.clone(),
-        target: planned_artifact.target_kind,
-        summary: planned_artifact.summary.clone(),
-        bounded_scope: planned_artifact.bounded_scope.clone(),
-        required_capabilities: planned_artifact.required_capabilities.clone(),
-        tags: planned_artifact.tags.clone(),
+        target: planned_payload.target,
+        summary: planned_payload.summary.clone(),
+        bounded_scope: planned_payload.review_scope.clone(),
+        required_capabilities: planned_payload.required_capabilities.clone(),
+        tags: planned_payload.tags.clone(),
         approval_checklist: plan.approval_checklist.clone(),
         rollback_hints: plan.rollback_hints.clone(),
         delta_candidate_count: evidence.delta_candidate_count,
         changed_surfaces: evidence.changed_surfaces.clone(),
-        candidate_ids: provenance.candidate_ids.clone(),
+        candidate_ids: planned_payload.provenance.accepted_candidate_ids.clone(),
         source_run_ids: provenance.source_run_ids.clone(),
         experiment_ids: provenance.experiment_ids.clone(),
         source_run_artifact_paths: provenance.source_run_artifact_paths.clone(),
@@ -1715,6 +1742,21 @@ fn render_runtime_capability_apply_outcome(outcome: RuntimeCapabilityApplyOutcom
     }
 }
 
+fn render_runtime_capability_planned_payload(
+    payload: &RuntimeCapabilityPromotionPlannedPayload,
+) -> String {
+    let accepted_candidate_ids = render_string_values(&payload.provenance.accepted_candidate_ids);
+    let changed_surfaces = render_string_values(&payload.provenance.changed_surfaces);
+    format!(
+        "target={} draft_id={} review_scope={} accepted_candidate_ids={} changed_surfaces={}",
+        render_target(payload.target),
+        payload.draft_id,
+        payload.review_scope,
+        accepted_candidate_ids,
+        changed_surfaces
+    )
+}
+
 fn render_experiment_status(status: RuntimeExperimentStatus) -> &'static str {
     match status {
         RuntimeExperimentStatus::Planned => "planned",
@@ -1890,6 +1932,34 @@ fn build_runtime_capability_promotion_provenance(
     }
 }
 
+fn build_runtime_capability_promotion_planned_payload(
+    family_id: &str,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityPromotionPlannedPayload {
+    let accepted_candidate_ids = artifacts
+        .iter()
+        .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+        .map(|artifact| artifact.candidate_id.clone())
+        .collect::<Vec<_>>();
+
+    RuntimeCapabilityPromotionPlannedPayload {
+        artifact_kind: planned_artifact.artifact_kind.clone(),
+        target: planned_artifact.target_kind,
+        draft_id: planned_artifact.artifact_id.clone(),
+        summary: planned_artifact.summary.clone(),
+        review_scope: planned_artifact.bounded_scope.clone(),
+        required_capabilities: planned_artifact.required_capabilities.clone(),
+        tags: planned_artifact.tags.clone(),
+        provenance: RuntimeCapabilityPromotionPlannedPayloadProvenance {
+            family_id: family_id.to_owned(),
+            accepted_candidate_ids,
+            changed_surfaces: evidence.changed_surfaces.clone(),
+        },
+    }
+}
+
 pub fn render_runtime_capability_promotion_plan_text(
     report: &RuntimeCapabilityPromotionPlanReport,
 ) -> String {
@@ -1962,6 +2032,10 @@ pub fn render_runtime_capability_promotion_plan_text(
                 &report.provenance.source_run_artifact_paths,
                 " | "
             )
+        ),
+        format!(
+            "planned_payload={}",
+            render_runtime_capability_planned_payload(&report.planned_payload)
         ),
     ]
     .join("\n")
