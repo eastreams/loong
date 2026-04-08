@@ -1,12 +1,12 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-08T09:47:32Z
+- Generated at: 2026-04-08T10:34:10Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
 - Boundary checks tracked: 5
-- SLO status: PASS
+- SLO status: FAIL
 
 ## Hotspot Metrics
 
@@ -15,10 +15,10 @@
 | spec_runtime | `foundation` | `crates/spec/src/spec_runtime.rs` | 3528 | 3600 | 72 | 65 | 65 | 0 | 100.0% | TIGHT | 3455 | 2.1% | PASS | 65 |
 | spec_execution | `foundation` | `crates/spec/src/spec_execution.rs` | 3573 | 3700 | 127 | 48 | 80 | 32 | 96.6% | TIGHT | 3547 | 0.7% | PASS | 43 |
 | provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 378 | 1000 | 622 | 10 | 20 | 10 | 50.0% | HEALTHY | 375 | 0.8% | PASS | 10 |
-| memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 381 | 650 | 269 | 14 | 16 | 2 | 87.5% | WATCH | 356 | 7.0% | PASS | 14 |
+| memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 395 | 650 | 255 | 14 | 16 | 2 | 87.5% | WATCH | 356 | 11.0% | BREACH | 14 |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3476 | 3600 | 124 | 12 | 12 | 0 | 100.0% | TIGHT | 3383 | 2.7% | PASS | 8 |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2800 | 2800 | 0 | 56 | 65 | 9 | 100.0% | TIGHT | 2698 | 3.8% | PASS | 56 |
-| channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 9446 | 10500 | 1054 | 72 | 90 | 18 | 90.0% | WATCH | 9922 | -4.8% | PASS | 88 |
+| channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 9449 | 10500 | 1051 | 72 | 90 | 18 | 90.0% | WATCH | 9922 | -4.8% | PASS | 88 |
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9716 | 9800 | 84 | 90 | 90 | 0 | 100.0% | TIGHT | 9796 | -0.8% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6848 | 7300 | 452 | 123 | 160 | 37 | 93.8% | WATCH | 6936 | -1.3% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1786 | 6400 | 4614 | 0 | 110 | 110 | 27.9% | HEALTHY | 1779 | 0.4% | PASS | 0 |
@@ -44,9 +44,9 @@
 | spec_app_dependency | PASS | PASS | spec crate remains detached from app crate at the Cargo dependency boundary |
 
 ## SLO Assessment
-- Hotspot growth SLO (>10% month-over-month): PASS
+- Hotspot growth SLO (>10% month-over-month): FAIL
 - Boundary ownership SLO (helpers stay behind their module boundaries): PASS
-- Overall architecture SLO status: PASS
+- Overall architecture SLO status: FAIL
 
 ## Refactor Budget Policy
 - Monthly drift report command: `scripts/generate_architecture_drift_report.sh`
@@ -61,10 +61,10 @@
 <!-- arch-hotspot key=spec_runtime lines=3528 functions=65 -->
 <!-- arch-hotspot key=spec_execution lines=3573 functions=48 -->
 <!-- arch-hotspot key=provider_mod lines=378 functions=10 -->
-<!-- arch-hotspot key=memory_mod lines=381 functions=14 -->
+<!-- arch-hotspot key=memory_mod lines=395 functions=14 -->
 <!-- arch-hotspot key=acp_manager lines=3476 functions=12 -->
 <!-- arch-hotspot key=acpx_runtime lines=2800 functions=56 -->
-<!-- arch-hotspot key=channel_registry lines=9446 functions=72 -->
+<!-- arch-hotspot key=channel_registry lines=9449 functions=72 -->
 <!-- arch-hotspot key=channel_config lines=9716 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6848 functions=123 -->
 <!-- arch-hotspot key=channel_mod lines=1786 functions=0 -->

@@ -203,6 +203,18 @@ pub fn resolve_memory_system_runtime(
     let system = resolve_memory_system(Some(resolved_system_id.as_str()))?;
     let custom_runtime = system.create_runtime(config)?;
     if let Some(runtime) = custom_runtime {
+        let runtime_metadata = runtime.metadata();
+        let runtime_id = super::normalize_system_id(runtime_metadata.id)
+            .ok_or_else(|| "memory system runtime id must not be empty".to_owned())?;
+        if runtime_id != resolved_system_id {
+            let error = format!(
+                "memory system runtime id `{}` must match selected system `{resolved_system_id}`",
+                runtime_metadata.id
+            );
+
+            return Err(error);
+        }
+
         return Ok(runtime);
     }
 
@@ -303,6 +315,7 @@ pub fn collect_memory_system_runtime_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::{BuiltinMemorySystemRuntime, MemorySystemRuntime};
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemoryRecallMode, MemorySystemCapability};
     use crate::test_support::ScopedEnv;
 
@@ -420,6 +433,35 @@ mod tests {
         }
     }
 
+    struct RuntimeIdMismatchRegistrySystem;
+
+    impl MemorySystem for RuntimeIdMismatchRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-runtime-mismatch"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-runtime-mismatch",
+                [MemorySystemCapability::PromptHydration],
+                "Registry system with mismatched runtime id",
+            )
+        }
+
+        fn create_runtime(
+            &self,
+            config: &MemoryRuntimeConfig,
+        ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+            let runtime_config = config.clone();
+            let metadata = BuiltinMemorySystem.metadata();
+            let system: std::sync::Arc<dyn MemorySystem> = std::sync::Arc::new(BuiltinMemorySystem);
+            let runtime = BuiltinMemorySystemRuntime::new(runtime_config, metadata, system);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            Ok(Some(boxed_runtime))
+        }
+    }
+
     #[test]
     fn resolve_memory_system_includes_builtin() {
         let ids = list_memory_system_ids().expect("list ids");
@@ -486,6 +528,34 @@ mod tests {
         .expect_err("duplicate custom ids should fail");
 
         assert!(error.contains("already registered"), "error: {error}");
+    }
+
+    #[test]
+    fn resolve_memory_system_runtime_rejects_mismatched_custom_runtime_id() {
+        register_memory_system("registry-runtime-mismatch", || {
+            Box::new(RuntimeIdMismatchRegistrySystem)
+        })
+        .expect("register runtime mismatch system");
+
+        let config = MemoryRuntimeConfig {
+            resolved_system_id: Some("registry-runtime-mismatch".to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let error = match resolve_memory_system_runtime(&config) {
+            Ok(_runtime) => panic!("mismatched runtime id should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.contains("must match selected system"),
+            "error: {error}"
+        );
+        assert!(error.contains("builtin"), "error: {error}");
+        assert!(
+            error.contains("registry-runtime-mismatch"),
+            "error: {error}"
+        );
     }
 
     #[test]
