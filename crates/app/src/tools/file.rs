@@ -227,8 +227,10 @@ pub(super) fn resolve_safe_file_path_with_config(
 
 fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
     if path.exists() {
-        return dunce::canonicalize(&path)
+        let canonical = dunce::canonicalize(&path)
             .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()));
+        let canonical = canonical.map(|resolved| dunce::simplified(&resolved).to_path_buf())?;
+        return Ok(canonical);
     }
     Ok(super::normalize_without_fs(&path))
 }
@@ -243,6 +245,7 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
                 normalized.display()
             )
         })?;
+        let canonical = dunce::simplified(&canonical).to_path_buf();
         ensure_path_within_root(root, &canonical)?;
         return Ok(canonical);
     }
@@ -254,6 +257,7 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
             ancestor.display()
         )
     })?;
+    let canonical_ancestor = dunce::simplified(&canonical_ancestor).to_path_buf();
     ensure_path_within_root(root, &canonical_ancestor)?;
 
     let mut reconstructed = canonical_ancestor;
@@ -265,7 +269,9 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
 }
 
 fn ensure_path_within_root(root: &Path, path: &Path) -> Result<(), String> {
-    if path.starts_with(root) {
+    let normalized_root = dunce::simplified(root);
+    let normalized_path = dunce::simplified(path);
+    if normalized_path.starts_with(normalized_root) {
         return Ok(());
     }
     Err(format!(
