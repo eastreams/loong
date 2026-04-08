@@ -869,6 +869,12 @@ fn execute_skills_command_enable_browser_preview_rolls_back_config_on_install_fa
 
 #[test]
 fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_persist_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if integration_permission_test_running_as_root() {
+        eprintln!("skipping browser preview config write failure test under uid 0");
+        return;
+    }
     let root = unique_temp_dir("loongclaw-skills-cli-browser-preview-config-failure");
     let install_root = root.join("managed-skills");
     let config_path = root.join("loongclaw.toml");

@@ -330,6 +330,12 @@ fn chat_without_config_reports_onboard_failure() {
 
 #[test]
 fn chat_without_config_surfaces_config_path_access_errors() {
+    #[cfg(unix)]
+    if integration_permission_test_running_as_root() {
+        eprintln!("skipping config access permission test under uid 0");
+        return;
+    }
+
     let fixture = ChatCliFixture::new("config-access-error");
 
     let blocked_parent = fixture.root.join("blocked");
