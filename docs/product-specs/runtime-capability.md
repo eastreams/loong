@@ -36,12 +36,12 @@ experiment should be crystallized into a reusable lower-layer capability.
 - [ ] `runtime-capability plan` resolves one indexed family into a dry-run
       promotion plan that describes the target lower-layer artifact, stable
       artifact id, blockers, approval checklist, rollback hints, provenance
-      references, and the aggregated delta-evidence digest without mutating
-      runtime state.
+      references, the aggregated delta-evidence digest, and one structured
+      draft payload preview without mutating runtime state.
 - [ ] `runtime-capability apply` materializes one governed draft artifact for a
       promotable family under the target delivery surface without mutating live
-      runtime state, and repeated applies remain idempotent when the output
-      already matches.
+      runtime state, reuses the planned payload shape, and remains idempotent
+      when the output already matches.
 - [ ] Product docs describe `runtime-capability` as the governed review layer
       above `runtime-experiment`, with `index`/readiness, `plan`, and `apply`
       forming the promotion ladder below any future activation executor or
