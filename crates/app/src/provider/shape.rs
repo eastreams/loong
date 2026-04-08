@@ -1378,7 +1378,7 @@ fn parse_invoke_block_sequence(
 
         let header_start = cursor + INVOKE_OPEN.len();
         let header_remainder = &body[header_start..];
-        let Some(header_end) = header_remainder.find('>') else {
+        let Some(header_end) = find_unquoted_tag_close(header_remainder) else {
             return Err(InvokeBlockParseError::MissingInvokeHeaderClose);
         };
         let raw_header = &header_remainder[..header_end];
@@ -1425,6 +1425,28 @@ fn parse_invoke_block_sequence(
     }
 
     Ok(tool_intents)
+}
+
+fn find_unquoted_tag_close(raw: &str) -> Option<usize> {
+    let mut active_quote = None;
+
+    for (index, ch) in raw.char_indices() {
+        if active_quote == Some(ch) {
+            active_quote = None;
+            continue;
+        }
+
+        if active_quote.is_none() && (ch == '"' || ch == '\'') {
+            active_quote = Some(ch);
+            continue;
+        }
+
+        if active_quote.is_none() && ch == '>' {
+            return Some(index);
+        }
+    }
+
+    None
 }
 
 fn parse_invoke_attributes(raw: &str) -> Result<BTreeMap<String, String>, InvokeBlockParseError> {
@@ -2702,6 +2724,30 @@ mod tests {
         assert_eq!(
             turn.raw_meta["loongclaw_provider_parse"]["invoke_block"]["status"],
             "parsed"
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_parses_invoke_blocks_with_quoted_gt_in_arguments() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "let me run the shell command.\n<function_calls>\n<invoke name=\"shell.exec\" arguments=\"{&quot;command&quot;:&quot;sh&quot;,&quot;args&quot;:[&quot;-lc&quot;,&quot;echo hi > out.txt&quot;]}\"></invoke>\n</function_calls>"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+
+        assert_eq!(turn.assistant_text, "let me run the shell command.");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
+        assert_eq!(
+            turn.tool_intents[0].args_json,
+            json!({
+                "command": "sh",
+                "args": ["-lc", "echo hi > out.txt"]
+            })
         );
     }
 
