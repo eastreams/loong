@@ -129,7 +129,7 @@ fn resolve_shell_cwd_override(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<PathBuf, String> {
     if config.file_root.is_some() {
-        return super::file::resolve_safe_file_path_with_config(raw_cwd, config);
+        return super::file::resolve_safe_directory_path_with_config(raw_cwd, config);
     }
 
     let requested_path = PathBuf::from(raw_cwd);

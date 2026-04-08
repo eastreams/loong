@@ -1077,17 +1077,80 @@ pub fn capability_snapshot_for_view(view: &ToolView) -> String {
 }
 
 pub(crate) fn capability_snapshot_for_view_with_config(
-    _view: &ToolView,
-    _config: &runtime_config::ToolRuntimeConfig,
+    view: &ToolView,
+    config: &runtime_config::ToolRuntimeConfig,
 ) -> String {
     let mut lines = vec!["[tool_discovery_runtime]".to_owned()];
-    for entry in catalog::provider_core_tool_catalog() {
+    let provider_core_entries = catalog::provider_core_tool_catalog();
+    for entry in provider_core_entries {
         lines.push(format!("- {}: {}", entry.canonical_name, entry.summary));
     }
-    lines.push(
-        "Non-core tools are intentionally hidden until discovered with tool.search.".to_owned(),
-    );
+    let hidden_tools_line =
+        "Non-core tools are intentionally hidden until discovered with tool.search.".to_owned();
+    lines.push(hidden_tools_line);
+
+    if let Some(capability_tag_line) = discoverable_capability_tag_line(view, config) {
+        lines.push(capability_tag_line);
+    }
+
+    let tool_search_guidance_line =
+        "If no visible tool fits, call tool.search with a capability description. tool.search accepts multilingual queries and an empty payload can act as a coarse capability listing fallback.".to_owned();
+    lines.push(tool_search_guidance_line);
     lines.join("\n")
+}
+
+fn discoverable_capability_tag_line(
+    view: &ToolView,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Option<String> {
+    let discoverable_entries = runtime_discoverable_tool_entries(config, Some(view));
+    let discoverable_tags = summarize_discoverable_capability_tags(&discoverable_entries);
+    if discoverable_tags.is_empty() {
+        return None;
+    }
+
+    let joined_tags = discoverable_tags.join(", ");
+    let line = format!("Discoverable capability tags currently available: {joined_tags}.");
+    Some(line)
+}
+
+fn summarize_discoverable_capability_tags(entries: &[SearchableToolEntry]) -> Vec<String> {
+    const IGNORED_TAGS: &[&str] = &["core", "discover", "search", "dispatch", "invoke"];
+    const MAX_DISCOVERABLE_CAPABILITY_TAGS: usize = 8;
+
+    let mut tag_counts = BTreeMap::<String, usize>::new();
+
+    for entry in entries {
+        for tag in &entry.tags {
+            let normalized_tag = tag.trim();
+            if normalized_tag.is_empty() {
+                continue;
+            }
+
+            let ignored_tag = IGNORED_TAGS.contains(&normalized_tag);
+            if ignored_tag {
+                continue;
+            }
+
+            let count_entry = tag_counts.entry(normalized_tag.to_owned()).or_insert(0);
+            *count_entry += 1;
+        }
+    }
+
+    let mut ranked_tags = tag_counts.into_iter().collect::<Vec<_>>();
+    ranked_tags.sort_by(|left, right| {
+        let left_count = left.1;
+        let right_count = right.1;
+        right_count
+            .cmp(&left_count)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    ranked_tags
+        .into_iter()
+        .take(MAX_DISCOVERABLE_CAPABILITY_TAGS)
+        .map(|(tag, _count)| tag)
+        .collect()
 }
 
 /// Provider request tool schema for function-calling capable models.
@@ -1256,8 +1319,6 @@ fn execute_tool_search_tool_with_config(
         .as_deref()
         .map(canonical_tool_name)
         .map(str::to_owned);
-    let has_query = query.is_some();
-    let has_exact_tool_id = requested_exact_tool_id.is_some();
 
     let limit = payload
         .get("limit")
@@ -1295,14 +1356,14 @@ fn execute_tool_search_tool_with_config(
         diagnostics_reason = ranking.diagnostics_reason;
 
         ranking
-        .results
-        .into_iter()
-        .map(|ranked_entry| {
-            let RankedSearchableToolEntry { entry, why } = ranked_entry;
+            .results
+            .into_iter()
+            .map(|ranked_entry| {
+                let RankedSearchableToolEntry { entry, why } = ranked_entry;
 
-            tool_search_result_entry_json(&entry, why, payload)
-        })
-        .collect()
+                tool_search_result_entry_json(&entry, why, payload)
+            })
+            .collect()
     } else {
         let ranking = rank_searchable_entries(searchable_entries, "", limit);
         diagnostics_reason = ranking.diagnostics_reason;
@@ -1999,6 +2060,8 @@ mod tests {
         assert!(snapshot.starts_with("[tool_discovery_runtime]"));
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
+        assert!(snapshot.contains("Discoverable capability tags currently available:"));
+        assert!(snapshot.contains("tool.search accepts multilingual queries"));
         assert!(!snapshot.contains("shell.exec"));
         assert!(!snapshot.contains("file.read"));
 
@@ -2071,6 +2134,7 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Non-core tools are intentionally hidden"));
+        assert!(snapshot.contains("Discoverable capability tags currently available:"));
         assert!(snapshot.contains("tool.search accepts multilingual queries"));
         assert!(!snapshot.contains("claw.migrate"));
         assert!(!snapshot.contains("external_skills.fetch"));
@@ -2078,7 +2142,7 @@ mod tests {
         assert!(!snapshot.contains("shell.exec"));
 
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 5);
         assert!(lines[0].starts_with("- tool.invoke"));
         assert!(lines[1].starts_with("- tool.search"));
     }
@@ -2528,6 +2592,34 @@ mod tests {
                 .split(',')
                 .any(|part| part == "timeout_ms?:integer"),
             "shell.exec argument hint should expose timeout_ms"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn file_write_catalog_exposes_overwrite_flag() {
+        let catalog = tool_catalog();
+        let descriptor = catalog
+            .descriptor("file.write")
+            .expect("file.write should be in the catalog");
+        let definition = descriptor.provider_definition();
+        let properties = definition["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("file.write parameters");
+
+        assert!(
+            properties.contains_key("overwrite"),
+            "file.write schema should expose overwrite parameter"
+        );
+
+        let entry = catalog::find_tool_catalog_entry("file.write")
+            .expect("file.write should be in catalog entries");
+        assert!(
+            entry
+                .argument_hint
+                .split(',')
+                .any(|part| part == "overwrite?:boolean"),
+            "file.write argument hint should expose overwrite"
         );
     }
 
@@ -3172,6 +3264,66 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn shell_exec_rejects_cwd_outside_file_root() {
+        let root = unique_tool_temp_dir("loongclaw-shell-cwd-root");
+        let outside_root = unique_tool_temp_dir("loongclaw-shell-cwd-outside");
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::create_dir_all(&outside_root).expect("create outside root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outside_cwd = outside_root.display().to_string();
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({
+                    "command": "ls",
+                    "cwd": outside_cwd,
+                }),
+            },
+            &config,
+        )
+        .expect_err("cwd outside file_root should be denied");
+
+        assert!(
+            error.contains("escapes configured file root"),
+            "expected file-root escape denial, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside_root).ok();
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn shell_exec_rejects_cwd_that_is_not_directory() {
+        let root = unique_tool_temp_dir("loongclaw-shell-cwd-file");
+        std::fs::create_dir_all(&root).expect("create root");
+        let file_path = root.join("note.txt");
+        std::fs::write(&file_path, "hello").expect("write file");
+
+        let config = test_tool_runtime_config(root.clone());
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({
+                    "command": "ls",
+                    "cwd": "note.txt",
+                }),
+            },
+            &config,
+        )
+        .expect_err("file cwd should be denied");
+
+        assert!(
+            error.contains("is not a directory"),
+            "expected non-directory cwd denial, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn tool_execution_config_timeout_for_tool_prefers_per_tool() {
         use std::collections::BTreeMap;
@@ -3791,6 +3943,88 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-missing-query");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "limit": 4
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed without a query");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            !results.is_empty(),
+            "missing-query fallback should still list runtime-visible tools"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["why"].as_array().is_some_and(|why| why
+                    .iter()
+                    .any(|reason| reason.as_str() == Some("coarse_fallback")))),
+            "missing-query fallback should explain its coarse listing mode: {results:?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_prefers_file_write_for_write_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-write-query");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "write content into a file",
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let first_tool_id = results
+            .first()
+            .and_then(|entry| entry.get("tool_id"))
+            .and_then(Value::as_str);
+        assert_eq!(first_tool_id, Some("file.write"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn capability_snapshot_summarizes_discoverable_tags_without_tool_names() {
+        let snapshot = capability_snapshot();
+        let discoverable_tag_line = snapshot
+            .lines()
+            .find(|line| line.starts_with("Discoverable capability tags currently available:"))
+            .expect("discoverable capability tag line");
+
+        assert!(
+            !discoverable_tag_line.contains("file.read"),
+            "capability summary should expose tags, not tool names: {discoverable_tag_line}"
+        );
+        assert!(
+            discoverable_tag_line.contains("file"),
+            "expected the summary to surface runtime file capabilities: {discoverable_tag_line}"
+        );
     }
 
     #[cfg(feature = "tool-file")]

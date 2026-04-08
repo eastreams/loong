@@ -2698,6 +2698,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                 ingress,
                 observer,
                 1,
+                false,
             )
             .await;
             continue_phase
@@ -2781,6 +2782,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
     provider_round: usize,
+    followup_chain_active: bool,
 ) -> ProviderTurnContinuePhase {
     let tool_intents = turn.tool_intents.len();
     let lane = preparation.lane_plan.decision.lane;
@@ -2798,6 +2800,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         &turn,
         binding,
         ingress,
+        followup_chain_active,
     )
     .await;
     let should_emit_binding_trust_event =
@@ -3245,7 +3248,7 @@ fn build_turn_reply_guard_messages(
         reason,
         user_input,
         latest_tool_payload.map(ToolDrivenFollowupPayload::message_context),
-        |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
+        |label, text| reduce_followup_payload_for_model(label.as_str(), text).into_owned(),
     ));
     messages
 }
@@ -4537,6 +4540,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     turn: &ProviderTurn,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
+    followup_chain_active: bool,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
     let discovery_search_turn = turn

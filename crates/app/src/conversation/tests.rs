@@ -8322,6 +8322,118 @@ async fn handle_turn_with_runtime_multi_step_chain_continues_after_first_tool_su
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_auto_recovers_provider_unknown_tool_into_discovery_followup() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let input_path = harness.temp_dir.join("note.md");
+    let note_contents = "hello from recovery followup test";
+
+    std::fs::write(&input_path, note_contents).expect("seed input note");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "I'll read the file directly.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "note.md"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-tool-recovery".to_owned(),
+                    turn_id: "turn-tool-recovery-1".to_owned(),
+                    tool_call_id: "call-tool-recovery-1".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for the right tool first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-recovery",
+                    "turn-tool-recovery-2",
+                    "call-tool-recovery-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I'll read the file.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({"path": "note.md"}),
+                    "session-tool-recovery",
+                    "turn-tool-recovery-3",
+                    "call-tool-recovery-3",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: note_contents.to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-recovery",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("recovery followup turn should succeed");
+
+    assert_eq!(reply, note_contents);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 4);
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.starts_with("[tool_recovery]\n"))
+        }),
+        "second provider turn should receive typed recovery context: {requested_turn_messages:?}"
+    );
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("user")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content
+                            .contains("The previous tool call could not be executed as requested.")
+                    })
+        }),
+        "second provider turn should receive recovery followup instructions: {requested_turn_messages:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_provider_shape_function_calls_multi_step_chain_continues() {
     use crate::test_support::TurnTestHarness;
 
