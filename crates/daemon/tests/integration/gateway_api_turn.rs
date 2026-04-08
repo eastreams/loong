@@ -20,7 +20,7 @@ use axum::{
 use loongclaw_daemon::{
     CliResult,
     gateway::{
-        client::GatewayLocalClient,
+        client::{GatewayAcpSessionsRequest, GatewayAcpStatusRequest, GatewayLocalClient},
         service::run_gateway_run_with_hooks_for_test,
         state::{load_gateway_owner_status, request_gateway_stop},
     },
@@ -379,6 +379,109 @@ async fn gateway_run_turn_persists_acp_session_metadata_into_configured_sqlite_s
         persisted.conversation_id.as_deref(),
         Some("gateway-session")
     );
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+
+    let supervisor = timeout(GATEWAY_TURN_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
+    let backend_id = register_gateway_echo_backend("gateway-acp-surface");
+    let sqlite_path = unique_sqlite_path("gateway-acp-surface-store");
+    let runtime_dir = super::unique_temp_dir("gateway-acp-surface-runtime");
+    let runtime_dir_for_run = runtime_dir.clone();
+    let sqlite_path_for_config = sqlite_path.clone();
+    let backend_id_for_config = backend_id.to_owned();
+
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(move |_| {
+            let config = gateway_turn_loaded_config_fixture(
+                sqlite_path_for_config.as_path(),
+                backend_id_for_config.as_str(),
+            );
+            Ok(config)
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+
+    let client_result = GatewayLocalClient::discover(runtime_dir.as_path());
+    let client = client_result.expect("discover gateway client");
+    let turn_result = client
+        .turn("gateway-session", "operator truth")
+        .await
+        .expect("gateway turn should succeed");
+
+    assert_eq!(turn_result["output_text"], "echo: operator truth");
+
+    let sessions_request = GatewayAcpSessionsRequest { limit: Some(10) };
+    let sessions = client
+        .acp_sessions(&sessions_request)
+        .await
+        .expect("read gateway ACP sessions");
+
+    assert_eq!(sessions["matched_count"].as_u64(), Some(1));
+    assert_eq!(sessions["returned_count"].as_u64(), Some(1));
+    let sessions_array = sessions["sessions"]
+        .as_array()
+        .expect("gateway ACP sessions array");
+    assert_eq!(sessions_array.len(), 1);
+    let session = sessions_array.first().expect("gateway ACP session");
+    assert_eq!(session["session_key"], "agent:codex:gateway-session");
+    assert_eq!(session["backend_id"], backend_id);
+    assert_eq!(session["conversation_id"], "gateway-session");
+
+    let status_request = GatewayAcpStatusRequest {
+        session: None,
+        conversation_id: Some("gateway-session"),
+        route_session_id: None,
+    };
+    let status = client
+        .acp_status(&status_request)
+        .await
+        .expect("read gateway ACP status");
+
+    assert_eq!(
+        status["resolved_session_key"],
+        "agent:codex:gateway-session"
+    );
+    assert_eq!(status["status"]["backend_id"], backend_id);
+    assert_eq!(status["status"]["state"], "ready");
+
+    let observability = client
+        .acp_observability()
+        .await
+        .expect("read gateway ACP observability");
+
+    assert_eq!(observability["config"], "/tmp/loongclaw-gateway-acp.toml");
+    let active_sessions = observability["snapshot"]["runtime_cache"]["active_sessions"].as_u64();
+    assert!(active_sessions.is_some());
+    let errors_by_code = observability["snapshot"]["errors_by_code"].as_object();
+    assert!(errors_by_code.is_some());
 
     request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
 
