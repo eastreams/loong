@@ -70,20 +70,15 @@ impl GatewayEventBus {
     }
 
     pub fn publish(&self, payload: Value) -> GatewayEventRecord {
+        let retention_guard = self.retention_state.write();
+        let mut retention_guard = retention_guard.unwrap_or_else(|error| error.into_inner());
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let record = GatewayEventRecord { seq, payload };
-
-        {
-            let retention_guard = self.retention_state.write();
-            let mut retention_guard = retention_guard.unwrap_or_else(|error| error.into_inner());
-            retention_guard.recent_events.push_back(record.clone());
-            while retention_guard.recent_events.len() > self.retention_limit {
-                retention_guard.recent_events.pop_front();
-            }
+        retention_guard.recent_events.push_back(record.clone());
+        while retention_guard.recent_events.len() > self.retention_limit {
+            retention_guard.recent_events.pop_front();
         }
-
         let _ = self.sender.send(record.clone());
-
         record
     }
 

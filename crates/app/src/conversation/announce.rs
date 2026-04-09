@@ -457,6 +457,7 @@ mod tests {
 
     use super::{
         DELEGATE_RESULTS_ANNOUNCED_EVENT_KIND, DelegateAnnounceSettings,
+        delegate_announce_queue_key, drain_delegate_announce_queue,
         enqueue_delegate_result_announce, reset_delegate_announce_queues_for_tests,
     };
     use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -543,12 +544,13 @@ mod tests {
     }
 
     async fn wait_for_parent_announce_event(
-        repo: &SessionRepository,
+        memory_config: &MemoryRuntimeConfig,
         parent_session_id: &str,
     ) -> serde_json::Value {
         let deadline = tokio::time::Instant::now() + DELEGATE_ANNOUNCE_EVENT_WAIT_TIMEOUT;
 
         loop {
+            let repo = SessionRepository::new(memory_config).expect("session repository");
             let events = repo
                 .list_recent_events(parent_session_id, 20)
                 .expect("list parent events");
@@ -565,6 +567,16 @@ mod tests {
 
             sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    async fn flush_delegate_announce_queue_for_tests(
+        memory_config: &MemoryRuntimeConfig,
+        parent_session_id: &str,
+    ) {
+        let queue_key = delegate_announce_queue_key(memory_config, parent_session_id);
+        let parent_session_id = parent_session_id.to_owned();
+        let memory_config = memory_config.clone();
+        drain_delegate_announce_queue(memory_config, queue_key, parent_session_id).await;
     }
 
     #[tokio::test]
@@ -586,7 +598,7 @@ mod tests {
             },
         );
 
-        let payload = wait_for_parent_announce_event(&repo, "root-session").await;
+        let payload = wait_for_parent_announce_event(&memory_config, "root-session").await;
         let results = payload["results"].as_array().expect("results array");
 
         assert_eq!(payload["announce_kind"], "delegate_result");
@@ -626,13 +638,14 @@ mod tests {
             settings.clone(),
         );
         enqueue_delegate_result_announce(
-            memory_config,
+            memory_config.clone(),
             "root-session".to_owned(),
             "child-3".to_owned(),
             settings,
         );
+        flush_delegate_announce_queue_for_tests(&memory_config, "root-session").await;
 
-        let payload = wait_for_parent_announce_event(&repo, "root-session").await;
+        let payload = wait_for_parent_announce_event(&memory_config, "root-session").await;
         let results = payload["results"].as_array().expect("results array");
         let events = repo
             .list_recent_events("root-session", 20)
@@ -676,13 +689,14 @@ mod tests {
             settings.clone(),
         );
         enqueue_delegate_result_announce(
-            memory_config,
+            memory_config.clone(),
             "root-session".to_owned(),
             "child-3".to_owned(),
             settings,
         );
+        flush_delegate_announce_queue_for_tests(&memory_config, "root-session").await;
 
-        let payload = wait_for_parent_announce_event(&repo, "root-session").await;
+        let payload = wait_for_parent_announce_event(&memory_config, "root-session").await;
         let results = payload["results"].as_array().expect("results array");
 
         assert_eq!(payload["announce_kind"], "batch_delegate_results");

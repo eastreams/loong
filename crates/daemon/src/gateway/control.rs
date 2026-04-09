@@ -660,7 +660,7 @@ async fn handle_gateway_stop(
     json_response(response_status, payload)
 }
 
-fn is_gateway_acp_not_found_error(error: &str) -> bool {
+pub(crate) fn is_gateway_acp_not_found_error(error: &str) -> bool {
     let is_session_error = error.starts_with("ACP session `");
     let is_conversation_error = error.starts_with("ACP conversation `");
     let is_route_error = error.starts_with("ACP route session `");

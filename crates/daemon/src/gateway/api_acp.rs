@@ -12,7 +12,9 @@ use serde_json::Value;
 use crate::CliResult;
 use crate::build_acp_dispatch_address;
 
-use super::control::{GatewayControlAppState, authorize_request_from_state};
+use super::control::{
+    GatewayControlAppState, authorize_request_from_state, is_gateway_acp_not_found_error,
+};
 use super::read_models::{
     build_acp_dispatch_read_model, build_acp_observability_read_model, build_acp_status_read_model,
 };
@@ -59,26 +61,18 @@ pub(crate) async fn handle_acp_status(
         Err(error) => return json_error(StatusCode::BAD_REQUEST, error.as_str()),
     };
 
-    let sessions_result = acp_manager.list_sessions();
-    let sessions = match sessions_result {
-        Ok(sessions) => sessions,
-        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error.as_str()),
-    };
-
-    let session_registered = sessions
-        .iter()
-        .any(|metadata| metadata.session_key == route.session_key);
-    if !session_registered {
-        let message = format!("ACP session `{}` is not registered", route.session_key);
-        return json_error(StatusCode::NOT_FOUND, message.as_str());
-    }
-
     let status_result = acp_manager
         .get_status(config, route.session_key.as_str())
         .await;
     let status = match status_result {
         Ok(status) => status,
-        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error.as_str()),
+        Err(error) if is_gateway_acp_not_found_error(error.as_str()) => {
+            let message = format!("ACP session `{}` is not registered", route.session_key);
+            return json_error(StatusCode::NOT_FOUND, message.as_str());
+        }
+        Err(error) => {
+            return internal_server_error("load gateway ACP status", error.as_str());
+        }
     };
 
     let requested_route_session_id = route
@@ -114,7 +108,9 @@ pub(crate) async fn handle_acp_observability(
     let snapshot_result = acp_manager.observability_snapshot(config).await;
     let snapshot = match snapshot_result {
         Ok(snapshot) => snapshot,
-        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error.as_str()),
+        Err(error) => {
+            return internal_server_error("load gateway ACP observability", error.as_str());
+        }
     };
 
     let payload =
@@ -234,8 +230,8 @@ where
     match payload_result {
         Ok(payload) => (StatusCode::OK, Json(payload)),
         Err(error) => {
-            let message = format!("serialize {context} failed: {error}");
-            json_error(StatusCode::INTERNAL_SERVER_ERROR, message.as_str())
+            let error_message = error.to_string();
+            internal_server_error(context, error_message.as_str())
         }
     }
 }
@@ -260,4 +256,14 @@ fn gateway_acp_error_code(status_code: StatusCode) -> &'static str {
         StatusCode::INTERNAL_SERVER_ERROR => "internal_server_error",
         _ => "unknown_error",
     }
+}
+
+fn internal_server_error(context: &str, error: &str) -> GatewayAcpJsonResponse {
+    tracing::error!(
+        target: "loongclaw.gateway",
+        context = context,
+        error = %error,
+        "gateway ACP request failed"
+    );
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
 }
