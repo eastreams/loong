@@ -128,14 +128,10 @@ pub(crate) async fn handle_acp_dispatch(
         return json_error(StatusCode::UNAUTHORIZED, error.as_str());
     }
 
-    let config = match app_state.config.as_ref() {
-        Some(config) => config,
-        None => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "gateway config is unavailable",
-            );
-        }
+    let acp_context = gateway_acp_runtime_context(app_state.as_ref());
+    let (config, _acp_manager) = match acp_context {
+        Ok(context) => context,
+        Err(response) => return response,
     };
 
     let address_result = build_query_address(&query);

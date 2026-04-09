@@ -80,6 +80,32 @@ async fn gateway_acp_status_returns_service_unavailable_when_acp_disabled() {
 }
 
 #[tokio::test]
+async fn gateway_acp_dispatch_returns_service_unavailable_when_acp_disabled() {
+    let (config, root_dir) = gateway_acp_test_config("gateway-acp-dispatch-disabled", false);
+    let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
+    let app = loongclaw_daemon::gateway::control::build_gateway_acp_test_router(
+        "test-token".to_owned(),
+        config,
+        manager,
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/acp/dispatch?session_id=opaque-session")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    std::fs::remove_dir_all(root_dir).ok();
+}
+
+#[tokio::test]
 async fn gateway_acp_status_returns_not_found_for_unregistered_session() {
     let (config, root_dir) = gateway_acp_test_config("gateway-acp-status-missing", true);
     let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
