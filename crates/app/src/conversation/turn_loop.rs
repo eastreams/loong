@@ -19,12 +19,12 @@ use super::turn_engine::{
 };
 use super::turn_observer::map_streaming_callback_data_to_token_event;
 use super::turn_shared::{
-    ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
-    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
-    build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
-    decide_provider_turn_request_action, reduce_followup_payload_for_model,
-    request_completion_with_raw_fallback, tool_loop_circuit_breaker_reply,
-    user_requested_raw_tool_output,
+    ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupLabel,
+    ToolDrivenFollowupPayload, ToolDrivenFollowupTextRef, ToolDrivenReplyBaseDecision,
+    ToolDrivenReplyPhase, build_tool_driven_followup_tail_with_request_summary,
+    build_tool_loop_guard_tail, decide_provider_turn_request_action,
+    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
+    tool_loop_circuit_breaker_reply, user_requested_raw_tool_output,
 };
 
 #[derive(Default)]
@@ -542,7 +542,9 @@ fn append_round_followup_messages(
     }
 }
 
-fn round_tool_payload_context(payload: &ToolDrivenFollowupPayload) -> (&'static str, &str) {
+fn round_tool_payload_context(
+    payload: &ToolDrivenFollowupPayload,
+) -> ToolDrivenFollowupTextRef<'_> {
     payload.message_context()
 }
 
@@ -563,7 +565,7 @@ fn append_tool_driven_followup_messages(
         tool_request_summary,
         |label, text| {
             let reduced = reduce_followup_payload_for_model(label, text);
-            followup_payload_budget.truncate_payload(label, reduced.as_ref())
+            followup_payload_budget.truncate_payload_text_label(label, reduced.as_ref())
         },
     ));
 }
@@ -573,7 +575,7 @@ fn append_repeated_tool_guard_followup_messages(
     assistant_preface: &str,
     reason: &str,
     user_input: &str,
-    latest_tool_context: Option<(&str, &str)>,
+    latest_tool_context: Option<ToolDrivenFollowupTextRef<'_>>,
     followup_payload_budget: &mut FollowupPayloadBudget,
 ) {
     messages.extend(build_tool_loop_guard_tail(
@@ -582,7 +584,7 @@ fn append_repeated_tool_guard_followup_messages(
         user_input,
         latest_tool_context,
         |label, text| {
-            let reduced = reduce_followup_payload_for_model(label, text);
+            let reduced = reduce_followup_payload_for_model(label.as_str(), text);
             followup_payload_budget.truncate_payload(label, reduced.as_ref())
         },
     ));
@@ -616,16 +618,23 @@ impl FollowupPayloadBudget {
         }
     }
 
-    fn truncate_payload(&mut self, label: &str, text: &str) -> String {
+    fn truncate_payload(&mut self, label: ToolDrivenFollowupLabel, text: &str) -> String {
+        let label_text = label.as_str();
+        self.truncate_payload_text_label(label_text, text)
+    }
+
+    fn truncate_payload_text_label(&mut self, label_text: &str, text: &str) -> String {
         let per_round_allowed = self
             .per_round_max_chars
             .min(self.remaining_total_chars.max(1));
         if self.remaining_total_chars == 0 {
             let removed = text.trim().chars().count();
-            return format!("[{label}_truncated] removed_chars={removed} budget_exhausted=true");
+            return format!(
+                "[{label_text}_truncated] removed_chars={removed} budget_exhausted=true"
+            );
         }
 
-        let bounded = truncate_followup_tool_payload(label, text, per_round_allowed);
+        let bounded = truncate_followup_tool_payload(label_text, text, per_round_allowed);
         let normalized = text.trim();
         let total_chars = normalized.chars().count();
         let consumed_chars = if total_chars <= per_round_allowed {
@@ -1424,7 +1433,10 @@ mod tests {
             "preface",
             "stop",
             "summarize README.md",
-            Some(("tool_result", tool_result.as_str())),
+            Some(ToolDrivenFollowupTextRef::new(
+                ToolDrivenFollowupLabel::ToolResult,
+                tool_result.as_str(),
+            )),
             &mut budget,
         );
 
@@ -1442,7 +1454,10 @@ mod tests {
             "preface",
             "stop",
             "summarize the test run",
-            Some(("tool_result", tool_result.as_str())),
+            Some(ToolDrivenFollowupTextRef::new(
+                ToolDrivenFollowupLabel::ToolResult,
+                tool_result.as_str(),
+            )),
             &mut budget,
         );
 
@@ -1506,7 +1521,10 @@ mod tests {
             "preface",
             "stop",
             "find the right tool",
-            Some(("tool_result", tool_result.as_str())),
+            Some(ToolDrivenFollowupTextRef::new(
+                ToolDrivenFollowupLabel::ToolResult,
+                tool_result.as_str(),
+            )),
             &mut budget,
         );
 

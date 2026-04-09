@@ -7,6 +7,10 @@ use std::{
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-file")]
 use serde_json::{Value, json};
+#[cfg(feature = "tool-file")]
+use std::io::Write as _;
+#[cfg(feature = "tool-file")]
+use tempfile::NamedTempFile;
 
 pub(super) fn execute_file_read_tool_with_config(
     request: ToolCoreRequest,
@@ -97,8 +101,18 @@ pub(super) fn execute_file_write_tool_with_config(
             .get("create_dirs")
             .and_then(Value::as_bool)
             .unwrap_or(true);
+        let overwrite = payload
+            .get("overwrite")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         let resolved = resolve_safe_file_path_with_config(target, config)?;
+        if resolved.is_dir() {
+            return Err(format!(
+                "path '{}' is a directory, not a file",
+                resolved.display()
+            ));
+        }
         if create_dirs && let Some(parent) = resolved.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 format!(
@@ -107,8 +121,19 @@ pub(super) fn execute_file_write_tool_with_config(
                 )
             })?;
         }
-        fs::write(&resolved, content)
-            .map_err(|error| format!("failed to write file {}: {error}", resolved.display()))?;
+        let path_is_symlink = symlink_metadata_is_symlink(&resolved);
+        if path_is_symlink {
+            return Err(format!(
+                "policy_denied: file.write refuses to open symlink {}",
+                resolved.display()
+            ));
+        }
+
+        if overwrite {
+            write_file_atomically(&resolved, content)?;
+        } else {
+            write_new_file_without_overwrite(&resolved, content)?;
+        }
 
         Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
@@ -120,6 +145,53 @@ pub(super) fn execute_file_write_tool_with_config(
             }),
         })
     }
+}
+
+#[cfg(feature = "tool-file")]
+fn symlink_metadata_is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "tool-file")]
+fn write_new_file_without_overwrite(path: &Path, content: &str) -> Result<(), String> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    options.create_new(true);
+
+    let mut file = options.open(path).map_err(|error| {
+        let error_kind = error.kind();
+        if error_kind == std::io::ErrorKind::AlreadyExists {
+            return format!(
+                "policy_denied: file.write requires overwrite=true for existing file {}",
+                path.display()
+            );
+        }
+
+        format!("failed to open file {}: {error}", path.display())
+    })?;
+    file.write_all(content.as_bytes())
+        .map_err(|error| format!("failed to write file {}: {error}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(feature = "tool-file")]
+fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp_file = NamedTempFile::new_in(parent)
+        .map_err(|error| format!("failed to open file {}: {error}", path.display()))?;
+    temp_file
+        .write_all(content.as_bytes())
+        .map_err(|error| format!("failed to write file {}: {error}", path.display()))?;
+    temp_file
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("failed to write file {}: {error}", path.display()))?;
+    temp_file
+        .persist(path)
+        .map_err(|error| format!("failed to write file {}: {}", path.display(), error.error))?;
+    Ok(())
 }
 
 pub(super) fn execute_file_edit_tool_with_config(
@@ -223,6 +295,30 @@ pub(super) fn resolve_safe_file_path_with_config(
     };
     let normalized = super::normalize_without_fs(&combined);
     resolve_path_within_root(&root, &normalized)
+}
+
+pub(super) fn resolve_safe_directory_path_with_config(
+    raw: &str,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<PathBuf, String> {
+    let resolved = resolve_safe_file_path_with_config(raw, config)?;
+    let exists = resolved.exists();
+    if !exists {
+        let message = format!(
+            "policy_denied: shell cwd {} does not exist",
+            resolved.display()
+        );
+        return Err(message);
+    }
+    let is_directory = resolved.is_dir();
+    if !is_directory {
+        let message = format!(
+            "policy_denied: shell cwd {} is not a directory",
+            resolved.display()
+        );
+        return Err(message);
+    }
+    Ok(resolved)
 }
 
 fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
@@ -434,6 +530,103 @@ mod tests {
 
         let written = fs::read_to_string(root.join("safe/note.txt")).expect("read written file");
         assert_eq!(written, "hello");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_write_rejects_existing_file_without_overwrite_flag() {
+        let base = unique_temp_dir("loongclaw-file-overwrite-denied");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+
+        let target_path = root.join("note.txt");
+        fs::write(&target_path, "original").expect("seed original file");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "file.write".to_owned(),
+            payload: json!({
+                "path": "note.txt",
+                "content": "updated",
+                "create_dirs": true
+            }),
+        };
+        let error = execute_file_write_tool_with_config(request, &config)
+            .expect_err("existing file should require overwrite=true");
+
+        assert!(
+            error.contains("overwrite=true"),
+            "unexpected error: {error}"
+        );
+        let written = fs::read_to_string(&target_path).expect("read original file");
+        assert_eq!(written, "original");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_write_allows_existing_file_with_overwrite_true() {
+        let base = unique_temp_dir("loongclaw-file-overwrite-allowed");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+
+        let target_path = root.join("note.txt");
+        fs::write(&target_path, "original").expect("seed original file");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "file.write".to_owned(),
+            payload: json!({
+                "path": "note.txt",
+                "content": "updated",
+                "create_dirs": true,
+                "overwrite": true
+            }),
+        };
+        let outcome = execute_file_write_tool_with_config(request, &config)
+            .expect("overwrite=true should allow replacing an existing file");
+
+        assert_eq!(outcome.status, "ok");
+        let written = fs::read_to_string(&target_path).expect("read updated file");
+        assert_eq!(written, "updated");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_write_rejects_dangling_symlink_even_with_overwrite_true() {
+        let base = unique_temp_dir("loongclaw-file-overwrite-symlink");
+        let root = base.join("root");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(&outside).expect("create outside");
+
+        let dangling_target = outside.join("secret.txt");
+        let link_path = root.join("dangling-link");
+        create_symlink(&dangling_target, &link_path).expect("create dangling symlink");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "file.write".to_owned(),
+            payload: json!({
+                "path": "dangling-link",
+                "content": "updated",
+                "overwrite": true
+            }),
+        };
+        let error =
+            execute_file_write_tool_with_config(request, &config).expect_err("symlink denied");
+
+        assert!(error.contains("refuses to open symlink"));
+        assert!(!dangling_target.exists());
         let _ = fs::remove_dir_all(base);
     }
 

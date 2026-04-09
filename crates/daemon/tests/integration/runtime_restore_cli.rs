@@ -873,6 +873,12 @@ fn runtime_restore_apply_reports_verification_failure_without_reverting_applied_
 
 #[test]
 fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fails() {
+    #[cfg(unix)]
+    if integration_permission_test_running_as_root() {
+        eprintln!("skipping runtime restore config write failure test under uid 0");
+        return;
+    }
+
     let root = unique_temp_dir("loongclaw-runtime-restore-rollback");
     let (config_path, config) = write_runtime_restore_config(&root);
     let config_path_text = config_path.to_string_lossy().to_string();

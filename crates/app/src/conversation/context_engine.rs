@@ -650,10 +650,11 @@ mod tests {
         )
         .await
         .expect("load staged memory envelope");
+        let runtime_tool_view = crate::tools::runtime_tool_view_from_loongclaw_config(config);
         crate::provider::project_hydrated_memory_context_for_view_with_binding(
             config,
             true,
-            &crate::tools::runtime_tool_view(),
+            &runtime_tool_view,
             crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
             &envelope.hydrated,
         )

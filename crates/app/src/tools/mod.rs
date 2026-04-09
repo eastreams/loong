@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     future::Future,
@@ -1077,17 +1078,80 @@ pub fn capability_snapshot_for_view(view: &ToolView) -> String {
 }
 
 pub(crate) fn capability_snapshot_for_view_with_config(
-    _view: &ToolView,
-    _config: &runtime_config::ToolRuntimeConfig,
+    view: &ToolView,
+    config: &runtime_config::ToolRuntimeConfig,
 ) -> String {
     let mut lines = vec!["[tool_discovery_runtime]".to_owned()];
-    for entry in catalog::provider_core_tool_catalog() {
+    let provider_core_entries = catalog::provider_core_tool_catalog();
+    for entry in provider_core_entries {
         lines.push(format!("- {}: {}", entry.canonical_name, entry.summary));
     }
-    lines.push(
-        "Non-core tools are intentionally hidden until discovered with tool.search.".to_owned(),
-    );
+    let hidden_tools_line =
+        "Non-core tools are intentionally hidden until discovered with tool.search.".to_owned();
+    lines.push(hidden_tools_line);
+
+    if let Some(capability_tag_line) = discoverable_capability_tag_line(view, config) {
+        lines.push(capability_tag_line);
+    }
+
+    let tool_search_guidance_line =
+        "If no visible tool fits, call tool.search with a capability description. tool.search accepts multilingual queries and an empty payload can act as a coarse capability listing fallback.".to_owned();
+    lines.push(tool_search_guidance_line);
     lines.join("\n")
+}
+
+fn discoverable_capability_tag_line(
+    view: &ToolView,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Option<String> {
+    let discoverable_entries = runtime_discoverable_tool_entries(config, Some(view));
+    let discoverable_tags = summarize_discoverable_capability_tags(&discoverable_entries);
+    if discoverable_tags.is_empty() {
+        return None;
+    }
+
+    let joined_tags = discoverable_tags.join(", ");
+    let line = format!("Discoverable capability tags currently discoverable: {joined_tags}.");
+    Some(line)
+}
+
+fn summarize_discoverable_capability_tags(entries: &[SearchableToolEntry]) -> Vec<String> {
+    const IGNORED_TAGS: &[&str] = &["core", "discover", "search", "dispatch", "invoke"];
+    const MAX_DISCOVERABLE_CAPABILITY_TAGS: usize = 8;
+
+    let mut tag_counts = BTreeMap::<String, usize>::new();
+
+    for entry in entries {
+        for tag in &entry.tags {
+            let normalized_tag = tag.trim();
+            if normalized_tag.is_empty() {
+                continue;
+            }
+
+            let ignored_tag = IGNORED_TAGS.contains(&normalized_tag);
+            if ignored_tag {
+                continue;
+            }
+
+            let count_entry = tag_counts.entry(normalized_tag.to_owned()).or_insert(0);
+            *count_entry += 1;
+        }
+    }
+
+    let mut ranked_tags = tag_counts.into_iter().collect::<Vec<_>>();
+    ranked_tags.sort_by(|left, right| {
+        let left_count = left.1;
+        let right_count = right.1;
+        right_count
+            .cmp(&left_count)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    ranked_tags
+        .into_iter()
+        .take(MAX_DISCOVERABLE_CAPABILITY_TAGS)
+        .map(|(tag, _count)| tag)
+        .collect()
 }
 
 /// Provider request tool schema for function-calling capable models.
@@ -1245,12 +1309,7 @@ fn execute_tool_search_tool_with_config(
         .payload
         .as_object()
         .ok_or_else(|| "tool.search payload must be an object".to_owned())?;
-    let query = payload
-        .get("query")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
+    let query = tool_search_query_from_payload(payload).map(Cow::into_owned);
     let requested_exact_tool_id = payload
         .get("exact_tool_id")
         .and_then(Value::as_str)
@@ -1261,12 +1320,6 @@ fn execute_tool_search_tool_with_config(
         .as_deref()
         .map(canonical_tool_name)
         .map(str::to_owned);
-    let has_query = query.is_some();
-    let has_exact_tool_id = requested_exact_tool_id.is_some();
-
-    if !has_query && !has_exact_tool_id {
-        return Err("tool.search requires payload.query or payload.exact_tool_id".to_owned());
-    }
 
     let limit = payload
         .get("limit")
@@ -1313,7 +1366,18 @@ fn execute_tool_search_tool_with_config(
             })
             .collect()
     } else {
-        Vec::new()
+        let ranking = rank_searchable_entries(searchable_entries, "", limit);
+        diagnostics_reason = ranking.diagnostics_reason;
+
+        ranking
+            .results
+            .into_iter()
+            .map(|ranked_entry| {
+                let RankedSearchableToolEntry { entry, why } = ranked_entry;
+
+                tool_search_result_entry_json(&entry, why, payload)
+            })
+            .collect()
     };
     let diagnostics = tool_search_diagnostics_json(
         requested_exact_tool_id.as_deref(),
@@ -1387,6 +1451,66 @@ fn tool_search_diagnostics_json(
     }
 
     Value::Null
+}
+
+fn tool_search_query_from_payload(
+    payload: &serde_json::Map<String, Value>,
+) -> Option<Cow<'_, str>> {
+    const QUERY_KEYS: &[&str] = &["query", "input", "text", "prompt", "keyword", "keywords"];
+
+    for key in QUERY_KEYS {
+        let Some(value) = payload.get(*key) else {
+            continue;
+        };
+
+        if let Some(query) = tool_search_query_from_value(value) {
+            return Some(query);
+        }
+    }
+
+    None
+}
+
+fn tool_search_query_from_value(value: &Value) -> Option<Cow<'_, str>> {
+    let string_value = value.as_str();
+    if let Some(string_value) = string_value {
+        let trimmed_value = string_value.trim();
+        if !trimmed_value.is_empty() {
+            return Some(Cow::Borrowed(trimmed_value));
+        }
+    }
+
+    let values = value.as_array()?;
+    let joined_value = join_tool_search_query_values(values);
+    if joined_value.is_empty() {
+        return None;
+    }
+
+    Some(Cow::Owned(joined_value))
+}
+
+fn join_tool_search_query_values(values: &[Value]) -> String {
+    let mut query_parts = Vec::new();
+
+    for value in values {
+        let query_part = tool_search_query_part(value);
+        if query_part.is_empty() {
+            continue;
+        }
+
+        query_parts.push(query_part);
+    }
+
+    query_parts.join(" ")
+}
+
+fn tool_search_query_part(value: &Value) -> String {
+    let string_value = value.as_str();
+    if let Some(string_value) = string_value {
+        return string_value.trim().to_owned();
+    }
+
+    value.to_string()
 }
 
 fn tool_search_entry_is_runtime_usable(
@@ -1987,11 +2111,13 @@ mod tests {
         assert!(snapshot.starts_with("[tool_discovery_runtime]"));
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
+        assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("tool.search accepts multilingual queries"));
         assert!(!snapshot.contains("shell.exec"));
         assert!(!snapshot.contains("file.read"));
 
-        let snapshot2 =
-            capability_snapshot_with_config(&runtime_config::ToolRuntimeConfig::default());
+        let runtime_config = runtime_config::get_tool_runtime_config().clone();
+        let snapshot2 = capability_snapshot_with_config(&runtime_config);
         assert_eq!(snapshot, snapshot2);
     }
 
@@ -2059,13 +2185,15 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Non-core tools are intentionally hidden"));
-        assert!(!snapshot.contains("config.import"));
+        assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("tool.search accepts multilingual queries"));
+        assert!(!snapshot.contains("claw.migrate"));
         assert!(!snapshot.contains("external_skills.fetch"));
         assert!(!snapshot.contains("file.read"));
         assert!(!snapshot.contains("shell.exec"));
 
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 5);
         assert!(lines[0].starts_with("- tool.invoke"));
         assert!(lines[1].starts_with("- tool.search"));
     }
@@ -2515,6 +2643,40 @@ mod tests {
                 .split(',')
                 .any(|part| part == "timeout_ms?:integer"),
             "shell.exec argument hint should expose timeout_ms"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn file_write_catalog_exposes_overwrite_flag() {
+        let catalog = tool_catalog();
+        let descriptor = catalog
+            .descriptor("file.write")
+            .expect("file.write should be in the catalog");
+        let definition = descriptor.provider_definition();
+        let properties = definition["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("file.write parameters");
+        let required_fields = definition["function"]["parameters"]["required"].as_array();
+
+        assert!(
+            properties.contains_key("overwrite"),
+            "file.write schema should expose overwrite parameter"
+        );
+        assert!(
+            required_fields
+                .is_none_or(|fields| !fields.contains(&Value::String("overwrite".to_owned()))),
+            "file.write schema should keep overwrite optional"
+        );
+
+        let entry = catalog::find_tool_catalog_entry("file.write")
+            .expect("file.write should be in catalog entries");
+        assert!(
+            entry
+                .argument_hint
+                .split(',')
+                .any(|part| part == "overwrite?:boolean"),
+            "file.write argument hint should expose overwrite"
         );
     }
 
@@ -3066,603 +3228,8 @@ mod tests {
         assert!(!missing_non_corpus_error.contains("not an existing file"));
     }
 
-    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
-    #[test]
-    fn tool_search_hides_filesystem_tools_without_filesystem_capabilities() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-cap-filter-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&root).expect("create fixture root");
-
-        let config = test_tool_runtime_config(root.clone());
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "tool.search".to_owned(),
-                payload: json!({
-                    "query": "read file import config",
-                    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: serde_json::to_value(BTreeSet::from([Capability::InvokeTool]))
-                        .expect("serialize capabilities")
-                }),
-            },
-            &config,
-        )
-        .expect("tool search should succeed");
-
-        let results = outcome.payload["results"].as_array().expect("results");
-        assert!(results.iter().all(|entry| entry["tool_id"] != "file.read"));
-        assert!(results.iter().all(|entry| entry["tool_id"] != "file.write"));
-        assert!(
-            results
-                .iter()
-                .all(|entry| entry["tool_id"] != "config.import")
-        );
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[cfg(feature = "tool-shell")]
-    #[test]
-    fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-shell-filter-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&root).expect("create fixture root");
-
-        let config = runtime_config::ToolRuntimeConfig {
-            shell_allow: BTreeSet::new(),
-            shell_default_mode: shell_policy_ext::ShellPolicyDefault::Deny,
-            file_root: Some(root.clone()),
-            messages_enabled: true,
-            ..Default::default()
-        };
-
-        let request = ToolCoreRequest {
-            tool_name: "tool.search".to_owned(),
-            payload: json!({"exact_tool_id": "shell.exec"}),
-        };
-        let outcome =
-            execute_tool_core_with_config(request, &config).expect("tool search should succeed");
-
-        let results = outcome.payload["results"].as_array().expect("results");
-        let shell_entry = results
-            .iter()
-            .find(|entry| entry["tool_id"] == "shell.exec")
-            .expect("shell.exec should remain discoverable");
-        let lease = shell_entry["lease"]
-            .as_str()
-            .expect("shell.exec should include a lease");
-
-        assert!(!lease.is_empty(), "lease should not be empty");
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[cfg(feature = "tool-shell")]
-    #[test]
-    fn shell_exec_rejects_path_qualified_commands() {
-        let config = test_tool_runtime_config(std::env::temp_dir());
-        for cmd in ["/tmp/git", "./git", "../git", "..\\git", "/usr/bin/ls"] {
-            let error = execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "shell.exec".to_owned(),
-                    payload: json!({"command": cmd}),
-                },
-                &config,
-            )
-            .expect_err(&format!("path-qualified `{cmd}` should be denied"));
-            assert!(
-                error.contains("path separators"),
-                "expected path separator rejection for `{cmd}`, got: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn tool_execution_config_timeout_for_tool_prefers_per_tool() {
-        use std::collections::BTreeMap;
-
-        let mut per_tool = BTreeMap::new();
-        per_tool.insert("file.read".to_owned(), 30u64);
-
-        let config = runtime_config::ToolExecutionConfig {
-            default_timeout_seconds: Some(60u64),
-            per_tool_timeout: per_tool,
-        };
-
-        assert_eq!(config.timeout_for_tool("file.read"), Some(30));
-        assert_eq!(config.timeout_for_tool("file.write"), Some(60));
-        assert_eq!(config.timeout_for_tool("unknown"), Some(60));
-    }
-
-    #[test]
-    fn tool_execution_config_timeout_for_tool_none_when_no_default() {
-        let config = runtime_config::ToolExecutionConfig {
-            default_timeout_seconds: None,
-            per_tool_timeout: BTreeMap::new(),
-        };
-
-        assert_eq!(config.timeout_for_tool("file.read"), None);
-    }
-
-    #[test]
-    fn tool_execution_config_default_is_no_timeout() {
-        let config = runtime_config::ToolExecutionConfig::default();
-        assert_eq!(config.default_timeout_seconds, None);
-        assert!(config.per_tool_timeout.is_empty());
-    }
-
-    #[test]
-    fn framework_timeout_excludes_tools_with_dedicated_timeout_controls() {
-        assert!(tool_uses_dedicated_timeout(
-            "browser.companion.session.start"
-        ));
-        assert!(tool_uses_dedicated_timeout("browser.companion.wait"));
-        assert!(tool_uses_dedicated_timeout("delegate"));
-        assert!(tool_uses_dedicated_timeout("delegate_async"));
-        assert!(tool_uses_dedicated_timeout("shell.exec"));
-        assert!(tool_uses_dedicated_timeout("web.fetch"));
-        assert!(tool_uses_dedicated_timeout("web.search"));
-        assert!(!tool_uses_dedicated_timeout("file.read"));
-    }
-
-    #[test]
-    fn tool_without_timeout_config_completes_normally() {
-        use std::fs;
-
-        let root = unique_temp_dir("no-timeout-test");
-        fs::create_dir_all(&root).expect("create temp dir");
-        let readme_path = root.join("README.md");
-        fs::write(&readme_path, "readme content").expect("write test file");
-
-        let config = test_tool_runtime_config(root);
-
-        let request = ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": "README.md"
-            }),
-        };
-
-        let result = execute_tool_core_with_test_context(request, &config);
-
-        assert!(
-            result.is_ok(),
-            "tool should complete normally without timeout, got: {result:?}"
-        );
-    }
-
-    #[test]
-    fn framework_timeout_returns_without_waiting_for_worker_completion() {
-        let start = std::time::Instant::now();
-
-        let error = run_blocking_with_timeout(
-            || {
-                let (_sender, receiver) = mpsc::channel::<()>();
-                let _ = receiver.recv_timeout(Duration::from_secs(3));
-                Ok::<(), String>(())
-            },
-            1,
-            "file.read",
-        )
-        .expect_err("timeout should be reported");
-
-        let elapsed = start.elapsed();
-
-        assert_eq!(error, "tool_execution_timeout: file.read exceeded 1s");
-        assert!(
-            elapsed < Duration::from_secs(2),
-            "timeout helper should return promptly, got {elapsed:?}"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn framework_timeout_supports_async_core_tool_calls() {
-        use std::fs;
-
-        let root = unique_temp_dir("tool-timeout-async-core");
-        fs::create_dir_all(&root).expect("create temp dir");
-        let readme_path = root.join("README.md");
-        fs::write(&readme_path, "readme content").expect("write test file");
-
-        let mut config = test_tool_runtime_config(root);
-        config.tool_execution.default_timeout_seconds = Some(1);
-
-        let adapter = MvpToolAdapter::with_config(config);
-        let request = ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({
-                "path": "README.md"
-            }),
-        };
-
-        let result = loongclaw_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
-
-        assert!(
-            result.is_ok(),
-            "async core tool execution should stay usable with framework timeouts, got: {result:?}"
-        );
-    }
-
-    #[cfg(feature = "tool-shell")]
-    #[test]
-    fn shell_exec_normalizes_embedded_whitespace_into_args_when_args_missing() {
-        #[cfg(unix)]
-        let config = test_tool_runtime_config(std::env::temp_dir());
-        #[cfg(windows)]
-        let mut config = test_tool_runtime_config(std::env::temp_dir());
-        #[cfg(windows)]
-        config.shell_allow.insert("cmd".to_owned());
-        #[cfg(unix)]
-        let command = "echo hello world";
-        #[cfg(windows)]
-        let command = "cmd /C echo hello world";
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({"command": command}),
-            },
-            &config,
-        )
-        .expect("embedded whitespace should be normalized into args");
-        assert_eq!(outcome.status, "ok");
-        #[cfg(unix)]
-        assert_eq!(outcome.payload["command"], "echo");
-        #[cfg(unix)]
-        assert_eq!(outcome.payload["args"], json!(["hello", "world"]));
-        #[cfg(windows)]
-        assert_eq!(outcome.payload["command"], "cmd");
-        #[cfg(windows)]
-        assert_eq!(
-            outcome.payload["args"],
-            json!(["/C", "echo", "hello", "world"])
-        );
-        assert_eq!(outcome.payload["stdout"], json!("hello world"));
-    }
-
-    #[cfg(feature = "tool-shell")]
-    #[test]
-    fn tool_invoke_shell_exec_normalizes_embedded_whitespace_into_args_when_args_missing() {
-        #[cfg(unix)]
-        let config = test_tool_runtime_config(std::env::temp_dir());
-        #[cfg(windows)]
-        let mut config = test_tool_runtime_config(std::env::temp_dir());
-        #[cfg(windows)]
-        config.shell_allow.insert("cmd".to_owned());
-        #[cfg(unix)]
-        let command = "echo hello from invoke";
-        #[cfg(windows)]
-        let command = "cmd /C echo hello from invoke";
-        let lease = issue_tool_lease("shell.exec", &serde_json::Map::new());
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "tool.invoke".to_owned(),
-                payload: json!({
-                    "tool_id": "shell.exec",
-                    "lease": lease,
-                    "arguments": {"command": command}
-                }),
-            },
-            &config,
-        )
-        .expect("tool.invoke shell payload should be normalized into args");
-        assert_eq!(outcome.status, "ok");
-        #[cfg(unix)]
-        assert_eq!(outcome.payload["command"], "echo");
-        #[cfg(unix)]
-        assert_eq!(outcome.payload["args"], json!(["hello", "from", "invoke"]));
-        #[cfg(windows)]
-        assert_eq!(outcome.payload["command"], "cmd");
-        #[cfg(windows)]
-        assert_eq!(
-            outcome.payload["args"],
-            json!(["/C", "echo", "hello", "from", "invoke"])
-        );
-        assert_eq!(outcome.payload["stdout"], json!("hello from invoke"));
-    }
-
-    #[cfg(feature = "tool-shell")]
-    #[test]
-    fn shell_exec_does_not_normalize_multiline_command_into_args() {
-        let config = test_tool_runtime_config(std::env::temp_dir());
-        let error = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({"command": "echo hello\nworld"}),
-            },
-            &config,
-        )
-        .expect_err("multiline commands should stay repairable instead of executing");
-
-        assert!(
-            error.contains("payload.command"),
-            "expected payload.command validation failure, got: {error}"
-        );
-    }
-
-    #[cfg(all(feature = "tool-shell", unix))]
-    #[test]
-    fn shell_exec_rejects_non_lowercase_command_names_before_execution() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        fn unique_temp_dir(prefix: &str) -> PathBuf {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock should be after epoch")
-                .as_nanos();
-            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
-        }
-
-        let root = unique_temp_dir("loongclaw-shell-mixed-case");
-        fs::create_dir_all(&root).expect("create fixture root");
-
-        let script = root.join("MiXeDCmd");
-        fs::write(&script, "#!/bin/sh\nprintf '%s' \"$0\"\n").expect("write mixed-case script");
-        let mut perms = fs::metadata(&script)
-            .expect("script metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script, perms).expect("mark script executable");
-
-        let mut env = ScopedEnv::new();
-        let original_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut path_value = root.clone().into_os_string();
-        if !original_path.is_empty() {
-            path_value.push(std::ffi::OsStr::new(":"));
-            path_value.push(original_path);
-        }
-        env.set("PATH", path_value);
-
-        let mut config = test_tool_runtime_config(&root);
-        config.shell_allow = BTreeSet::from(["mixedcmd".to_owned()]);
-
-        let error = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({"command": "MiXeDCmd"}),
-            },
-            &config,
-        )
-        .expect_err("mixed-case commands should be rejected before execution");
-
-        assert!(
-            error.contains("lowercase"),
-            "expected lowercase command rejection, got: {error}"
-        );
-
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[cfg(feature = "tool-shell")]
-    #[test]
-    fn shell_exec_times_out_when_timeout_ms_is_small() {
-        let mut config = test_tool_runtime_config(std::env::temp_dir());
-        #[cfg(unix)]
-        {
-            config.shell_allow.insert("sleep".to_owned());
-        }
-        #[cfg(windows)]
-        {
-            config.shell_allow.insert("ping".to_owned());
-        }
-
-        #[cfg(unix)]
-        let (command, args) = ("sleep", vec!["10"]);
-        #[cfg(windows)]
-        let (command, args) = ("ping", vec!["127.0.0.1", "-n", "10"]);
-
-        let error = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({
-                    "command": command,
-                    "args": args,
-                    "timeout_ms": 1,
-                }),
-            },
-            &config,
-        )
-        .expect_err("slow command should time out");
-
-        assert!(
-            error.contains("timed out after"),
-            "expected timeout failure for long command, got: {error}"
-        );
-    }
-
-    #[cfg(all(feature = "tool-shell", unix))]
-    #[test]
-    fn shell_exec_timeout_returns_without_waiting_for_descendant_pipe_holders() {
-        let mut config = test_tool_runtime_config(std::env::temp_dir());
-        let args = vec!["-c", "sleep 5 & wait"];
-        let started_at = std::time::Instant::now();
-
-        config.shell_allow.insert("sh".to_owned());
-
-        let error = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({
-                    "command": "sh",
-                    "args": args,
-                    "timeout_ms": 1_000,
-                }),
-            },
-            &config,
-        )
-        .expect_err("timed-out shell should return an error");
-
-        let elapsed = started_at.elapsed();
-
-        assert!(
-            error.contains("timed out after 1000ms"),
-            "expected timeout message, got: {error}"
-        );
-        assert!(
-            elapsed < std::time::Duration::from_millis(2_500),
-            "timeout path should not wait for descendant pipe holders; elapsed={elapsed:?}"
-        );
-    }
-
-    #[cfg(feature = "tool-shell")]
-    #[test]
-    fn shell_exec_succeeds_when_fast_command_receives_timeout_ms() {
-        #[cfg(unix)]
-        let config = test_tool_runtime_config(std::env::temp_dir());
-        #[cfg(windows)]
-        let mut config = test_tool_runtime_config(std::env::temp_dir());
-
-        #[cfg(unix)]
-        let (command, args, expected_stdout) = ("echo", vec!["hello"], "hello");
-        #[cfg(windows)]
-        {
-            config.shell_allow.insert("cmd".to_owned());
-        }
-        #[cfg(windows)]
-        let (command, args, expected_stdout) = ("cmd", vec!["/C", "echo", "hello"], "hello");
-
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({
-                    "command": command,
-                    "args": args,
-                    "timeout_ms": 5_000,
-                }),
-            },
-            &config,
-        )
-        .expect("fast command should succeed");
-
-        assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["stdout"].as_str(), Some(expected_stdout));
-    }
-
-    #[cfg(all(feature = "tool-shell", unix))]
-    #[test]
-    fn shell_exec_truncates_large_stdout_without_failing_command() {
-        let mut config = test_tool_runtime_config(std::env::temp_dir());
-        config.shell_allow.insert("perl".to_owned());
-
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "shell.exec".to_owned(),
-                payload: json!({
-                    "command": "perl",
-                    "args": ["-e", "print chr(97) x 2000000"],
-                    "timeout_ms": 5_000,
-                }),
-            },
-            &config,
-        )
-        .expect("large-output command should still complete");
-
-        assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["exit_code"].as_i64(), Some(0));
-
-        let stdout = outcome.payload["stdout"]
-            .as_str()
-            .expect("stdout should be present");
-        assert_eq!(stdout.len(), 1_048_576);
-        assert!(stdout.bytes().all(|byte| byte == b'a'));
-    }
-
-    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
-    #[test]
-    fn tool_search_result_includes_compact_argument_hints() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-hints-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&root).expect("create fixture root");
-
-        let config = test_tool_runtime_config(root.clone());
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "tool.search".to_owned(),
-                payload: json!({"query": "shell command"}),
-            },
-            &config,
-        )
-        .expect("tool search should succeed");
-
-        let results = outcome.payload["results"].as_array().expect("results");
-        assert!(results.iter().any(|entry| {
-            entry["tool_id"] == "shell.exec"
-                && entry["argument_hint"].as_str()
-                    == Some("command:string,args?:string[],timeout_ms?:integer,cwd?:string")
-        }));
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[cfg(feature = "tool-file")]
-    #[test]
-    fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh");
-        std::fs::create_dir_all(&root).expect("create fixture root");
-
-        let config = test_tool_runtime_config(root.clone());
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "tool.search".to_owned(),
-                payload: json!({
-                    "exact_tool_id": "file.read"
-                }),
-            },
-            &config,
-        )
-        .expect("tool search should succeed");
-
-        let results = outcome.payload["results"].as_array().expect("results");
-        let first = results.first().expect("one result should be returned");
-
-        assert_eq!(outcome.payload["returned"], 1);
-        assert_eq!(first["tool_id"], "file.read");
-        assert!(first["lease"].as_str().is_some());
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
-    #[test]
-    fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_with_fallback_results()
-     {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh-fallback");
-        std::fs::create_dir_all(&root).expect("create fixture root");
-
-        let config = test_tool_runtime_config(root.clone());
-        let outcome = execute_tool_core_with_test_context(
-            ToolCoreRequest {
-                tool_name: "tool.search".to_owned(),
-                payload: json!({
-                    "exact_tool_id": "file_read",
-                    "query": "run shell command",
-                    "_loongclaw": {
-                        "tool_search": {
-                            "visible_tool_ids": ["tool.search", "tool.invoke", "shell.exec"],
-                        }
-                    }
-                }),
-            },
-            &config,
-        )
-        .expect("tool search should succeed");
-
-        let results = outcome.payload["results"].as_array().expect("results");
-        let diagnostics = &outcome.payload["diagnostics"];
-
-        assert!(!results.is_empty());
-        assert_eq!(results[0]["tool_id"], "shell.exec");
-        assert_eq!(outcome.payload["exact_tool_id"], "file_read");
-        assert_eq!(diagnostics["reason"], "exact_tool_id_not_visible");
-        assert_eq!(diagnostics["requested_tool_id"], "file_read");
-
-        std::fs::remove_dir_all(&root).ok();
-    }
+    #[path = "mod_tests_search_and_shell.rs"]
+    mod search_and_shell;
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
@@ -3691,6 +3258,34 @@ mod tests {
 
         assert!(shell_entry["search_hint"].as_str().is_some());
         assert!(shell_entry["schema_preview"].is_object());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn tool_search_accepts_keywords_array_payloads() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-array");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "keywords": ["run", "shell", "command"],
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+
+        assert!(!results.is_empty());
+        assert_eq!(outcome.payload["query"], json!("run shell command"));
+        assert_eq!(results[0]["tool_id"], "shell.exec");
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -3778,6 +3373,123 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-missing-query");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "limit": 4
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed without a query");
+
+        let diagnostics = &outcome.payload["diagnostics"];
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            !results.is_empty(),
+            "missing-query fallback should still list runtime-visible tools"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["why"].as_array().is_some_and(|why| why
+                    .iter()
+                    .any(|reason| reason.as_str() == Some("coarse_fallback")))),
+            "missing-query fallback should explain its coarse listing mode: {results:?}"
+        );
+        assert_eq!(diagnostics["reason"], "coarse_fallback");
+        assert_eq!(diagnostics["query"], "");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_prefers_file_write_for_write_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-write-query");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "write content into a file",
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let first_tool_id = results
+            .first()
+            .and_then(|entry| entry.get("tool_id"))
+            .and_then(Value::as_str);
+        assert_eq!(first_tool_id, Some("file.write"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_accepts_keywords_array_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-query");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "keywords": ["write", "file"],
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let query = outcome.payload["query"].as_str();
+        let results = outcome.payload["results"].as_array().expect("results");
+        let first_tool_id = results
+            .first()
+            .and_then(|entry| entry.get("tool_id"))
+            .and_then(Value::as_str);
+
+        assert_eq!(query, Some("write file"));
+        assert_eq!(first_tool_id, Some("file.write"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn capability_snapshot_summarizes_discoverable_tags_without_tool_names() {
+        let snapshot = capability_snapshot();
+        let discoverable_tag_line = snapshot
+            .lines()
+            .find(|line| line.starts_with("Discoverable capability tags currently discoverable:"))
+            .expect("discoverable capability tag line");
+
+        assert!(
+            !discoverable_tag_line.contains("file.read"),
+            "capability summary should expose tags, not tool names: {discoverable_tag_line}"
+        );
+        assert!(
+            discoverable_tag_line.contains("file"),
+            "expected the summary to surface runtime file capabilities: {discoverable_tag_line}"
+        );
     }
 
     #[cfg(feature = "tool-file")]
