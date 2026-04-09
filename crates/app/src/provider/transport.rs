@@ -1,6 +1,7 @@
 #[cfg(feature = "provider-bedrock")]
 use std::time::SystemTime;
 
+use async_trait::async_trait;
 #[cfg(feature = "provider-bedrock")]
 use aws_config::{
     Region,
@@ -14,17 +15,22 @@ use aws_sigv4::{
     sign::v4,
 };
 use bytes::Bytes;
-use futures_util::Stream;
 use futures_util::StreamExt;
 use reqwest::header::{
     AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::CliResult;
 use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind, active_cli_command_name};
 
 use super::auth_profile_runtime::ProviderAuthProfile;
+use super::sse::SseEventStream;
+use super::transport_trait::{
+    ProviderTransport, TransportError, TransportRequest, TransportResponse, TransportStream,
+    resolve_transport_auth,
+};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct RequestAuthContext {
@@ -71,74 +77,98 @@ impl BedrockService {
 
 #[derive(Debug)]
 pub(super) enum RequestExecutionError {
-    Transport(reqwest::Error),
+    Transport(TransportError),
     Setup(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub(super) enum SseLine {
-    EventType { name: String },
-    Data { content: String },
-    Retry { timeout_ms: u64 },
-    Comment,
-    Empty,
+#[derive(Clone)]
+pub(super) struct ReqwestTransport {
+    client: reqwest::Client,
+    auth_context: RequestAuthContext,
 }
 
-pub(super) fn parse_sse_line(line: &str) -> SseLine {
-    if line.is_empty() {
-        return SseLine::Empty;
-    }
-    if line.starts_with(':') {
-        return SseLine::Comment;
-    }
-    if let Some(rest) = line.strip_prefix("event:") {
-        let trimmed = rest.trim();
-        return SseLine::EventType {
-            name: trimmed.to_owned(),
-        };
-    }
-    if let Some(rest) = line.strip_prefix("retry:") {
-        let trimmed = rest.trim();
-        let timeout_ms = trimmed.parse().unwrap_or(3000);
-        return SseLine::Retry { timeout_ms };
-    }
-    if let Some(rest) = line.strip_prefix("data:") {
-        let content = rest.trim().to_owned();
-        return SseLine::Data { content };
-    }
-    SseLine::Empty
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum SseStreamEvent {
-    Message {
-        data: Value,
-        event_type: Option<String>,
-    },
-    #[allow(dead_code)]
-    Error { message: String },
-    #[allow(dead_code)]
-    Done,
-}
-
-impl SseStreamEvent {
-    pub(super) fn from_sse_lines(
-        event_type: Option<String>,
-        data_lines: &[String],
-    ) -> Result<Option<Self>, serde_json::Error> {
-        if data_lines.is_empty() {
-            return Ok(None);
+impl ReqwestTransport {
+    pub(super) fn new(client: reqwest::Client, auth_context: RequestAuthContext) -> Self {
+        Self {
+            client,
+            auth_context,
         }
-        let combined = data_lines.join("\n");
-        if combined.is_empty() {
-            return Ok(None);
+    }
+
+    fn build_request(
+        &self,
+        request: &TransportRequest,
+    ) -> Result<reqwest::Request, TransportError> {
+        self.client
+            .request(request.method.clone(), request.url.as_str())
+            .headers(request.headers.clone())
+            .body(request.body.clone())
+            .build()
+            .map_err(|error| {
+                TransportError::other(format!("provider request setup failed: {error}"))
+            })
+    }
+}
+
+#[async_trait]
+impl ProviderTransport for ReqwestTransport {
+    async fn execute(
+        &self,
+        request: TransportRequest,
+    ) -> Result<TransportResponse, TransportError> {
+        let body_bytes = request.body.clone();
+        let req = self.build_request(&request)?;
+        let response = execute_request(
+            &self.client,
+            req,
+            Some(body_bytes.as_slice()),
+            &self.auth_context,
+            Some(BedrockService::Runtime),
+        )
+        .await
+        .map_err(map_request_execution_error)?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = decode_response_body(response)
+            .await
+            .map_err(TransportError::response_decode)?;
+        Ok(TransportResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    async fn stream(&self, request: TransportRequest) -> Result<TransportStream, TransportError> {
+        let body_bytes = request.body.clone();
+        let req = self.build_request(&request)?;
+        let response = execute_request(
+            &self.client,
+            req,
+            Some(body_bytes.as_slice()),
+            &self.auth_context,
+            Some(BedrockService::Runtime),
+        )
+        .await
+        .map_err(map_request_execution_error)?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        if !status.is_success() {
+            let body = decode_response_body(response)
+                .await
+                .map_err(TransportError::response_decode)?;
+            return Ok(TransportStream::Response(TransportResponse {
+                status,
+                headers,
+                body,
+            }));
         }
-        let parsed: Value = serde_json::from_str(&combined)?;
-        Ok(Some(SseStreamEvent::Message {
-            data: parsed,
-            event_type,
-        }))
+        let byte_stream = decode_streaming_response(response);
+        let _ = status;
+        let _ = headers;
+        Ok(TransportStream::Events {
+            events: Box::pin(SseEventStream::new(Box::pin(byte_stream))),
+        })
     }
 }
 
@@ -296,6 +326,34 @@ pub(super) fn build_request_headers_without_provider_auth(
     build_request_headers_internal(provider, false)
 }
 
+pub(super) fn build_request_headers_without_provider_auth_for_transport(
+    provider: &ProviderConfig,
+    default_user_agent: Option<&str>,
+    default_headers: &[(&str, &str)],
+) -> CliResult<HeaderMap> {
+    build_request_headers_with_defaults(provider, default_user_agent, default_headers, false)
+}
+
+pub(super) fn build_transport_request(
+    method: reqwest::Method,
+    url: String,
+    headers: HeaderMap,
+    body: Vec<u8>,
+    profile: Option<&ProviderAuthProfile>,
+    auth_scheme: ProviderAuthScheme,
+) -> CliResult<TransportRequest> {
+    let mut headers = headers;
+    if let Some(auth) = resolve_transport_auth(profile, auth_scheme)? {
+        auth.apply(&mut headers);
+    }
+    Ok(TransportRequest {
+        method,
+        url,
+        headers,
+        body,
+    })
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_request_headers(provider: &ProviderConfig) -> CliResult<HeaderMap> {
     build_request_headers_internal(provider, true)
@@ -303,6 +361,20 @@ pub(super) fn build_request_headers(provider: &ProviderConfig) -> CliResult<Head
 
 fn build_request_headers_internal(
     provider: &ProviderConfig,
+    include_provider_auth: bool,
+) -> CliResult<HeaderMap> {
+    build_request_headers_with_defaults(
+        provider,
+        provider.kind.default_user_agent(),
+        provider.kind.default_headers(),
+        include_provider_auth,
+    )
+}
+
+fn build_request_headers_with_defaults(
+    provider: &ProviderConfig,
+    default_user_agent: Option<&str>,
+    default_headers: &[(&str, &str)],
     include_provider_auth: bool,
 ) -> CliResult<HeaderMap> {
     let mut headers = HeaderMap::new();
@@ -314,18 +386,19 @@ fn build_request_headers_internal(
         headers.insert(name, header_value);
     }
     if !headers.contains_key(USER_AGENT)
-        && let Some(default_user_agent) = provider.kind.default_user_agent()
+        && let Some(default_user_agent) = default_user_agent
     {
         let header_value = HeaderValue::from_str(default_user_agent).map_err(|error| {
             format!("invalid default provider user-agent `{default_user_agent}`: {error}")
         })?;
         headers.insert(USER_AGENT, header_value);
     }
-    for (key, value) in provider.kind.default_headers() {
+    for (key, value) in default_headers {
         if headers.contains_key(*key) {
             continue;
         }
-        let name = HeaderName::from_static(key);
+        let name = HeaderName::from_bytes(key.as_bytes())
+            .map_err(|error| format!("invalid default provider header name `{key}`: {error}"))?;
         let header_value = HeaderValue::from_str(value)
             .map_err(|error| format!("invalid default provider header `{key}`: {error}"))?;
         headers.insert(name, header_value);
@@ -336,27 +409,116 @@ fn build_request_headers_internal(
     Ok(headers)
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct PromptCacheHeaderPlan {
+    pub(super) stable_prefix_sha256: Option<String>,
+    pub(super) cached_prefix_sha256: Option<String>,
+    pub(super) cache_eligible: bool,
+}
+
+pub(super) fn derive_prompt_cache_header_plan(messages: &[Value]) -> PromptCacheHeaderPlan {
+    let stable_prefix_messages = messages
+        .iter()
+        .take_while(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let stable_prefix_sha256 = hash_prompt_cache_messages(stable_prefix_messages.as_slice());
+
+    let cached_prefix_messages = match messages.last() {
+        Some(last) if last.get("role").and_then(Value::as_str) == Some("user") => messages
+            .get(..messages.len().saturating_sub(1))
+            .unwrap_or(&[]),
+        Some(_) => messages,
+        None => &[],
+    };
+    let cached_prefix_sha256 = hash_prompt_cache_messages(cached_prefix_messages);
+    let cache_eligible = cached_prefix_sha256.is_some();
+
+    PromptCacheHeaderPlan {
+        stable_prefix_sha256,
+        cached_prefix_sha256,
+        cache_eligible,
+    }
+}
+
+pub(super) fn append_prompt_cache_headers(
+    headers: &mut HeaderMap,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    messages: &[Value],
+) -> CliResult<()> {
+    let plan = derive_prompt_cache_header_plan(messages);
+
+    if let Some(session_id) = session_id {
+        let hashed_session_id = hash_runtime_identifier(session_id);
+        insert_runtime_header(
+            headers,
+            "x-loongclaw-session-id",
+            hashed_session_id.as_str(),
+        )?;
+    }
+    if let Some(turn_id) = turn_id {
+        let hashed_turn_id = hash_runtime_identifier(turn_id);
+        insert_runtime_header(headers, "x-loongclaw-turn-id", hashed_turn_id.as_str())?;
+    }
+    if let Some(stable_prefix_sha256) = plan.stable_prefix_sha256.as_deref() {
+        insert_runtime_header(
+            headers,
+            "x-loongclaw-stable-prefix-sha256",
+            stable_prefix_sha256,
+        )?;
+    }
+    if let Some(cached_prefix_sha256) = plan.cached_prefix_sha256.as_deref() {
+        insert_runtime_header(
+            headers,
+            "x-loongclaw-cached-prefix-sha256",
+            cached_prefix_sha256,
+        )?;
+    }
+    insert_runtime_header(
+        headers,
+        "x-loongclaw-cache-eligible",
+        if plan.cache_eligible { "true" } else { "false" },
+    )?;
+
+    Ok(())
+}
+
+fn insert_runtime_header(headers: &mut HeaderMap, name: &str, value: &str) -> CliResult<()> {
+    let header_name = HeaderName::from_bytes(name.as_bytes())
+        .map_err(|error| format!("invalid runtime request header name `{name}`: {error}"))?;
+    let header_value = HeaderValue::from_str(value)
+        .map_err(|error| format!("invalid runtime request header `{name}`: {error}"))?;
+    headers.insert(header_name, header_value);
+    Ok(())
+}
+
+fn hash_prompt_cache_messages(messages: &[Value]) -> Option<String> {
+    if messages.is_empty() {
+        return None;
+    }
+
+    let Ok(serialized) = serde_json::to_vec(messages) else {
+        return None;
+    };
+    let digest = Sha256::digest(serialized);
+    Some(hex::encode(digest))
+}
+
+fn hash_runtime_identifier(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    hex::encode(digest)
+}
+
 pub(super) fn apply_auth_profile_headers(
     headers: &mut HeaderMap,
     profile: Option<&ProviderAuthProfile>,
+    auth_scheme: ProviderAuthScheme,
 ) -> CliResult<()> {
-    let Some(profile) = profile else {
+    let Some(auth) = resolve_transport_auth(profile, auth_scheme)? else {
         return Ok(());
     };
-    if let Some(value) = profile.authorization_header.as_deref()
-        && !headers.contains_key(AUTHORIZATION)
-    {
-        let header_value = HeaderValue::from_str(value)
-            .map_err(|error| format!("invalid provider authorization header: {error}"))?;
-        headers.insert(AUTHORIZATION, header_value);
-    }
-    if let Some(value) = profile.x_api_key_header.as_deref()
-        && !headers.contains_key("x-api-key")
-    {
-        let header_value = HeaderValue::from_str(value)
-            .map_err(|error| format!("invalid provider x-api-key header: {error}"))?;
-        headers.insert(HeaderName::from_static("x-api-key"), header_value);
-    }
+    auth.apply(headers);
     Ok(())
 }
 
@@ -381,6 +543,14 @@ fn apply_raw_auth_secret(
             let header_value = HeaderValue::from_str(secret)
                 .map_err(|error| format!("invalid provider x-api-key header: {error}"))?;
             headers.insert(HeaderName::from_static("x-api-key"), header_value);
+        }
+        ProviderAuthScheme::XGoogApiKey => {
+            if headers.contains_key("x-goog-api-key") {
+                return Ok(());
+            }
+            let header_value = HeaderValue::from_str(secret)
+                .map_err(|error| format!("invalid provider x-goog-api-key header: {error}"))?;
+            headers.insert(HeaderName::from_static("x-goog-api-key"), header_value);
         }
     }
     Ok(())
@@ -424,6 +594,7 @@ pub(super) async fn execute_request(
     client
         .execute(request)
         .await
+        .map_err(TransportError::from)
         .map_err(RequestExecutionError::Transport)
 }
 
@@ -456,12 +627,17 @@ pub(super) async fn decode_response_body(response: reqwest::Response) -> CliResu
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn decode_streaming_response(
     response: reqwest::Response,
-) -> impl Stream<Item = Result<Bytes, RequestExecutionError>> + Unpin {
+) -> impl futures_util::Stream<Item = Result<Bytes, TransportError>> + Unpin {
     response
         .bytes_stream()
-        .map(|result: Result<Bytes, reqwest::Error>| {
-            result.map_err(RequestExecutionError::Transport)
-        })
+        .map(|result: Result<Bytes, reqwest::Error>| result.map_err(TransportError::from))
+}
+
+fn map_request_execution_error(error: RequestExecutionError) -> TransportError {
+    match error {
+        RequestExecutionError::Transport(error) => error,
+        RequestExecutionError::Setup(error) => TransportError::other(error),
+    }
 }
 
 async fn resolve_bedrock_region(provider: &ProviderConfig) -> CliResult<String> {
@@ -630,6 +806,7 @@ fn percent_encode_path_segment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::sse::{SseLine, SseStreamEvent, parse_sse_line};
     use crate::test_support::ScopedEnv;
     use std::collections::BTreeMap;
 
@@ -658,6 +835,61 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("custom-key")
         );
+    }
+
+    #[test]
+    fn derive_prompt_cache_header_plan_uses_leading_system_and_cached_prefix() {
+        let messages = vec![
+            json!({"role": "system", "content": "sys-a"}),
+            json!({"role": "system", "content": "sys-b"}),
+            json!({"role": "assistant", "content": "prior-answer"}),
+            json!({"role": "user", "content": "hello"}),
+        ];
+
+        let plan = derive_prompt_cache_header_plan(messages.as_slice());
+
+        assert!(plan.stable_prefix_sha256.is_some());
+        assert!(plan.cached_prefix_sha256.is_some());
+        assert!(plan.cache_eligible);
+        assert_ne!(plan.stable_prefix_sha256, plan.cached_prefix_sha256);
+    }
+
+    #[test]
+    fn append_prompt_cache_headers_inserts_runtime_request_metadata() {
+        let mut headers = HeaderMap::new();
+        let messages = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "hello"}),
+        ];
+
+        append_prompt_cache_headers(
+            &mut headers,
+            Some("session-1"),
+            Some("turn-1"),
+            messages.as_slice(),
+        )
+        .expect("append prompt cache headers");
+
+        assert_eq!(
+            headers
+                .get("x-loongclaw-session-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(hash_runtime_identifier("session-1").as_str())
+        );
+        assert_eq!(
+            headers
+                .get("x-loongclaw-turn-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(hash_runtime_identifier("turn-1").as_str())
+        );
+        assert_eq!(
+            headers
+                .get("x-loongclaw-cache-eligible")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        assert!(headers.contains_key("x-loongclaw-stable-prefix-sha256"));
+        assert!(headers.contains_key("x-loongclaw-cached-prefix-sha256"));
     }
 
     #[test]
@@ -848,9 +1080,7 @@ mod tests {
                 );
                 assert_eq!(data.get("text").and_then(|v| v.as_str()), Some("Hello"));
             }
-            Ok(Some(SseStreamEvent::Error { .. } | SseStreamEvent::Done)) | Err(_) | Ok(None) => {
-                panic!("expected SseStreamEvent::Message, got {:?}", event)
-            }
+            Err(_) | Ok(None) => panic!("expected SseStreamEvent::Message, got {:?}", event),
         }
     }
 
@@ -868,5 +1098,22 @@ mod tests {
         let data_lines = vec!["not valid json".to_owned()];
         let event = SseStreamEvent::from_sse_lines(event_type, &data_lines);
         assert!(event.is_err());
+    }
+
+    #[test]
+    fn sse_decoder_buffers_partial_chunks_until_event_is_complete() {
+        let mut decoder = crate::provider::sse::SseDecoder::default();
+
+        let first = decoder
+            .push_chunk(b"event: content_block_delta\ndata: {\"type\":\"text_delta\"")
+            .expect("first chunk");
+        assert!(first.is_empty());
+
+        let second = decoder
+            .push_chunk(b",\"text\":\"hello\"}\n\n")
+            .expect("second chunk");
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0]["type"], "text_delta");
+        assert_eq!(second[0]["text"], "hello");
     }
 }

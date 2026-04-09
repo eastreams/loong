@@ -364,17 +364,20 @@ fn collect_domain_previews(
     }
 
     let default_tools = mvp::config::ToolConfig::default();
-    if config.tools.shell_allow != default_tools.shell_allow
-        || config.tools.file_root != default_tools.file_root
-    {
+    let configured_file_root = config.tools.configured_file_root();
+    let default_configured_file_root = default_tools.configured_file_root();
+    let explicit_file_root_changed = configured_file_root != default_configured_file_root;
+    let shell_allow_changed = config.tools.shell_allow != default_tools.shell_allow;
+
+    if shell_allow_changed || explicit_file_root_changed {
         let mut parts = Vec::new();
-        if config.tools.file_root != default_tools.file_root {
+        if explicit_file_root_changed {
             parts.push(format!(
                 "workspace root {}",
                 config.tools.resolved_file_root().display()
             ));
         }
-        if config.tools.shell_allow != default_tools.shell_allow {
+        if shell_allow_changed {
             parts.push(format!(
                 "shell permissions {}",
                 config.tools.shell_allow.join(", ")

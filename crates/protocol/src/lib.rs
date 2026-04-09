@@ -12,6 +12,7 @@ mod control_plane;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 const CONTROL_READ_CAPABILITY: &str = "control_read";
+const CONTROL_WRITE_CAPABILITY: &str = "control_write";
 const CONTROL_APPROVALS_CAPABILITY: &str = "control_approvals";
 const CONTROL_PAIRING_CAPABILITY: &str = "control_pairing";
 const CONTROL_ACP_CAPABILITY: &str = "control_acp";
@@ -32,7 +33,9 @@ pub use control_plane::{
     ControlPlaneSessionEvent, ControlPlaneSessionKind, ControlPlaneSessionListResponse,
     ControlPlaneSessionObservation, ControlPlaneSessionReadResponse, ControlPlaneSessionState,
     ControlPlaneSessionSummary, ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot,
-    ControlPlaneSnapshotResponse, ControlPlaneStateVersion,
+    ControlPlaneSnapshotResponse, ControlPlaneStateVersion, ControlPlaneTurnEventEnvelope,
+    ControlPlaneTurnResultResponse, ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest,
+    ControlPlaneTurnSubmitResponse, ControlPlaneTurnSummary,
 };
 
 fn default_frame_version() -> u32 {
@@ -77,6 +80,9 @@ pub enum ProtocolRoute {
     HealthRead,
     SessionList,
     SessionRead,
+    TurnSubmit,
+    TurnResult,
+    TurnStream,
     ApprovalList,
     ApprovalResolve,
     PairingList,
@@ -100,6 +106,9 @@ impl ProtocolRoute {
             "health/read" => Self::HealthRead,
             "session/list" => Self::SessionList,
             "session/read" => Self::SessionRead,
+            "turn/submit" => Self::TurnSubmit,
+            "turn/result" => Self::TurnResult,
+            "turn/stream" => Self::TurnStream,
             "approval/list" => Self::ApprovalList,
             "approval/resolve" => Self::ApprovalResolve,
             "pairing/list" => Self::PairingList,
@@ -123,6 +132,9 @@ impl ProtocolRoute {
             Self::HealthRead => "health/read",
             Self::SessionList => "session/list",
             Self::SessionRead => "session/read",
+            Self::TurnSubmit => "turn/submit",
+            Self::TurnResult => "turn/result",
+            Self::TurnStream => "turn/stream",
             Self::ApprovalList => "approval/list",
             Self::ApprovalResolve => "approval/resolve",
             Self::PairingList => "pairing/list",
@@ -147,6 +159,9 @@ impl ProtocolRoute {
                 | Self::HealthRead
                 | Self::SessionList
                 | Self::SessionRead
+                | Self::TurnSubmit
+                | Self::TurnResult
+                | Self::TurnStream
                 | Self::ApprovalList
                 | Self::ApprovalResolve
                 | Self::PairingList
@@ -249,11 +264,20 @@ impl ProtocolRouter {
             | ProtocolRoute::PresenceRead
             | ProtocolRoute::HealthRead
             | ProtocolRoute::SessionList
-            | ProtocolRoute::SessionRead => Ok(ResolvedRoute {
+            | ProtocolRoute::SessionRead
+            | ProtocolRoute::TurnResult
+            | ProtocolRoute::TurnStream => Ok(ResolvedRoute {
                 route,
                 policy: RoutePolicy {
                     allow_anonymous: false,
                     required_capability: Some(CONTROL_READ_CAPABILITY.to_owned()),
+                },
+            }),
+            ProtocolRoute::TurnSubmit => Ok(ResolvedRoute {
+                route,
+                policy: RoutePolicy {
+                    allow_anonymous: false,
+                    required_capability: Some(CONTROL_WRITE_CAPABILITY.to_owned()),
                 },
             }),
             ProtocolRoute::ApprovalList | ProtocolRoute::ApprovalResolve => Ok(ResolvedRoute {

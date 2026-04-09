@@ -375,6 +375,26 @@ pub(crate) async fn execute_acp_conversation_turn_for_address(
 ) -> CliResult<ExecutedAcpConversationTurn> {
     let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
     let manager = shared_acp_session_manager(config)?;
+    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
+}
+
+pub(crate) async fn execute_acp_conversation_turn_for_address_with_manager(
+    config: &LoongClawConfig,
+    address: &ConversationSessionAddress,
+    user_input: &str,
+    options: &AcpConversationTurnOptions<'_>,
+    manager: Arc<AcpSessionManager>,
+) -> CliResult<ExecutedAcpConversationTurn> {
+    let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
+    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
+}
+
+async fn execute_prepared_acp_conversation_turn(
+    config: &LoongClawConfig,
+    prepared: PreparedAcpConversationTurn,
+    options: &AcpConversationTurnOptions<'_>,
+    manager: Arc<AcpSessionManager>,
+) -> CliResult<ExecutedAcpConversationTurn> {
     let backend_selection = resolve_acp_backend_selection(config);
     let persistence_event_sink = config
         .acp
@@ -504,6 +524,17 @@ pub fn prepare_acp_conversation_turn_for_address(
     options
         .provenance
         .extend_request_metadata(&mut request_metadata);
+    if let Some(extra_metadata) = options.metadata {
+        for (key, value) in extra_metadata {
+            let is_reserved_key =
+                key.starts_with("loongclaw.acp.") || key.starts_with("loongclaw.channel.");
+            if is_reserved_key {
+                continue;
+            }
+            insert_trimmed_metadata(&mut bootstrap_metadata, key.as_str(), Some(value.as_str()));
+            insert_trimmed_metadata(&mut request_metadata, key.as_str(), Some(value.as_str()));
+        }
+    }
     let additional_bootstrap_mcp_servers = options.additional_bootstrap_mcp_servers.unwrap_or(&[]);
     let bootstrap_mcp_servers = config
         .acp

@@ -234,6 +234,7 @@ pub struct GatewayRuntimeSnapshotToolsReadModel {
     pub visible_tool_names: Vec<String>,
     pub capability_snapshot_sha256: String,
     pub capability_snapshot: String,
+    pub tool_calling: GatewayToolCallingReadModel,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -294,6 +295,16 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub capability_snapshot_sha256: String,
     pub active_provider_profile_id: Option<String>,
     pub active_provider_label: Option<String>,
+    pub tool_calling: GatewayToolCallingReadModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayToolCallingReadModel {
+    pub availability: String,
+    pub structured_tool_schema_enabled: bool,
+    pub effective_tool_schema_mode: String,
+    pub active_model: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -444,11 +455,13 @@ pub fn build_runtime_snapshot_read_model(
     let visible_tool_names = snapshot.visible_tool_names.clone();
     let capability_snapshot_sha256 = snapshot.capability_snapshot_sha256.clone();
     let capability_snapshot = snapshot.capability_snapshot.clone();
+    let tool_calling = build_tool_calling_read_model(&snapshot.tool_calling);
     let tools = GatewayRuntimeSnapshotToolsReadModel {
         visible_tool_count,
         visible_tool_names,
         capability_snapshot_sha256,
         capability_snapshot,
+        tool_calling,
     };
     let runtime_plugins = crate::runtime_snapshot_runtime_plugins_json(&snapshot.runtime_plugins);
     let external_skills = crate::runtime_snapshot_external_skills_json(&snapshot.external_skills);
@@ -889,6 +902,7 @@ fn build_operator_runtime_summary_read_model(
     let active_provider_profile_id =
         json_string_field(&runtime_snapshot.provider, "active_profile_id");
     let active_provider_label = json_string_field(&runtime_snapshot.provider, "active_label");
+    let tool_calling = runtime_snapshot.tools.tool_calling.clone();
 
     GatewayOperatorRuntimeSummaryReadModel {
         enabled_channel_ids,
@@ -897,6 +911,19 @@ fn build_operator_runtime_summary_read_model(
         capability_snapshot_sha256,
         active_provider_profile_id,
         active_provider_label,
+        tool_calling,
+    }
+}
+
+fn build_tool_calling_read_model(
+    state: &crate::RuntimeSnapshotToolCallingState,
+) -> GatewayToolCallingReadModel {
+    GatewayToolCallingReadModel {
+        availability: state.availability.clone(),
+        structured_tool_schema_enabled: state.structured_tool_schema_enabled,
+        effective_tool_schema_mode: state.effective_tool_schema_mode.clone(),
+        active_model: state.active_model.clone(),
+        reason: state.reason.clone(),
     }
 }
 

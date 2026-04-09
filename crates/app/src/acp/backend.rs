@@ -262,6 +262,7 @@ pub struct AcpConversationTurnOptions<'a> {
     pub event_sink: Option<&'a dyn AcpTurnEventSink>,
     pub additional_bootstrap_mcp_servers: Option<&'a [String]>,
     pub working_directory: Option<&'a Path>,
+    pub metadata: Option<&'a BTreeMap<String, String>>,
     pub provenance: AcpTurnProvenance<'a>,
 }
 
@@ -272,6 +273,7 @@ impl Default for AcpConversationTurnOptions<'_> {
             event_sink: None,
             additional_bootstrap_mcp_servers: None,
             working_directory: None,
+            metadata: None,
             provenance: AcpTurnProvenance::default(),
         }
     }
@@ -313,6 +315,11 @@ impl<'a> AcpConversationTurnOptions<'a> {
 
     pub fn with_working_directory(mut self, working_directory: Option<&'a Path>) -> Self {
         self.working_directory = working_directory.filter(|path| !path.as_os_str().is_empty());
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: Option<&'a BTreeMap<String, String>>) -> Self {
+        self.metadata = metadata.filter(|metadata| !metadata.is_empty());
         self
     }
 

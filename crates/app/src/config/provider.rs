@@ -16,6 +16,11 @@ pub(crate) const GITHUB_COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot/1.155.0";
 pub(crate) const GITHUB_COPILOT_INTEGRATION_ID: &str = "vscode-chat";
 pub(crate) const GITHUB_COPILOT_USER_AGENT: &str = "GithubCopilot/1.155.0";
 pub(crate) const GITHUB_COPILOT_OAUTH_TOKEN_ENV: &str = "GITHUB_COPILOT_OAUTH_TOKEN";
+pub(crate) const ANTHROPIC_DEFAULT_HEADERS: [(&str, &str); 1] =
+    [("anthropic-version", "2023-06-01")];
+pub(crate) const OPENCODE_API_KEY_ENV: &str = "OPENCODE_API_KEY";
+pub(crate) const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
+pub(crate) const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 pub(crate) const GITHUB_COPILOT_DEFAULT_HEADERS: [(&str, &str); 3] = [
     ("Editor-Version", GITHUB_COPILOT_EDITOR_VERSION),
     (
@@ -102,6 +107,7 @@ impl ProviderProtocolFamily {
 pub enum ProviderAuthScheme {
     Bearer,
     XApiKey,
+    XGoogApiKey,
 }
 
 impl ProviderAuthScheme {
@@ -109,6 +115,7 @@ impl ProviderAuthScheme {
         match self {
             Self::Bearer => "bearer",
             Self::XApiKey => "x_api_key",
+            Self::XGoogApiKey => "x_goog_api_key",
         }
     }
 }
@@ -233,6 +240,24 @@ pub struct ProviderTransportPolicy {
     pub models_endpoint: String,
     pub readiness: ProviderTransportReadiness,
     pub fallback: Option<ProviderTransportFallback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderEffectiveUrlValues {
+    resolved_base_url: String,
+    endpoint: String,
+    models_endpoint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderUrlValidationProfile {
+    kind: ProviderKind,
+    extra_canonical_url_fingerprints: &'static [&'static str],
+    required_path_fragments: &'static [&'static str],
+    forbidden_path_fragments: &'static [&'static str],
+    forbidden_path_exceptions: &'static [&'static str],
+    route_expectation: &'static str,
+    path_validation_hint: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -657,6 +682,10 @@ pub enum ProviderKind {
     #[default]
     #[serde(alias = "openai_compatible")]
     Openai,
+    #[serde(alias = "opencode", alias = "opencode-zen")]
+    OpencodeZen,
+    #[serde(alias = "opencode-go", alias = "opencode_go")]
+    OpencodeGo,
     #[serde(alias = "openrouter_compatible")]
     Openrouter,
     #[serde(alias = "perplexity_compatible")]
@@ -1346,7 +1375,7 @@ impl ProviderConfig {
                 }
                 self.api_key()
             }
-            ProviderAuthScheme::XApiKey => self.api_key(),
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => self.api_key(),
         }
     }
 
@@ -1374,7 +1403,7 @@ impl ProviderConfig {
                 }
                 first_non_empty_env_name(&self.api_key_env_names())
             }
-            ProviderAuthScheme::XApiKey => {
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => {
                 let api_key_env_name = secret_ref_env_name(self.api_key.as_ref());
                 if let Some(api_key_env_name) = api_key_env_name {
                     return Some(api_key_env_name);
@@ -1394,7 +1423,7 @@ impl ProviderConfig {
                 self.push_oauth_access_token_hint_env_names(&mut env_names);
                 self.push_api_key_hint_env_names(&mut env_names);
             }
-            ProviderAuthScheme::XApiKey => {
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => {
                 self.push_api_key_hint_env_names(&mut env_names);
             }
         }
@@ -2008,35 +2037,18 @@ impl ProviderConfig {
     }
 
     pub fn configuration_hint(&self) -> Option<String> {
-        if self.kind == ProviderKind::Byteplus && self.uses_byteplus_coding_plan_path() {
-            return Some(
-                "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
-                    .to_owned(),
-            );
+        let effective_urls = self.effective_url_values();
+        let cross_routing_hint = self.cross_routing_configuration_hint(&effective_urls);
+        if let Some(hint) = cross_routing_hint {
+            return Some(hint);
         }
-        if self.kind == ProviderKind::Volcengine && self.uses_volcengine_coding_plan_path() {
-            return Some(
-                "volcengine uses the standard Ark API path under `/api/v3` and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"volcengine_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
-                    .to_owned(),
-            );
+
+        let path_validation_hint = self.path_validation_configuration_hint(&effective_urls);
+        if let Some(hint) = path_validation_hint {
+            return Some(hint);
         }
-        if self.kind == ProviderKind::ByteplusCoding
-            && (self.uses_generic_byteplus_modelark_v3_path()
-                || self.uses_ark_coding_anthropic_path())
-        {
-            return Some(
-                "byteplus_coding must use the dedicated BytePlus Coding path under `/api/coding/v3`; do not point it at the unsupported Anthropic-compatible `/api/coding` or generic `/api/v3` ModelArk endpoints because that bypasses Coding Plan quota and can incur standard model charges"
-                    .to_owned(),
-            );
-        }
-        if self.kind == ProviderKind::VolcengineCoding
-            && (self.uses_generic_volcengine_modelark_v3_path()
-                || self.uses_ark_coding_anthropic_path())
-        {
-            return Some(
-                "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges"
-                    .to_owned(),
-            );
+        if let Some(hint) = self.opencode_configuration_hint() {
+            return Some(hint);
         }
         if self.has_unresolved_custom_base_url() {
             let template = self.kind.profile().base_url;
@@ -2048,6 +2060,127 @@ impl ProviderConfig {
                 self.kind.as_str()
             ));
         }
+        None
+    }
+
+    fn effective_url_values(&self) -> ProviderEffectiveUrlValues {
+        let resolved_base_url = self.resolved_base_url();
+        let endpoint = self.endpoint();
+        let models_endpoint = self.models_endpoint();
+
+        ProviderEffectiveUrlValues {
+            resolved_base_url,
+            endpoint,
+            models_endpoint,
+        }
+    }
+
+    fn cross_routing_configuration_hint(
+        &self,
+        effective_urls: &ProviderEffectiveUrlValues,
+    ) -> Option<String> {
+        let current_profile = self.kind.url_validation_profile()?;
+        let sources = effective_urls.sources();
+
+        for (source_name, source_value, allow_host_only_base_match) in sources {
+            let current_match = current_profile
+                .matching_canonical_fingerprint(source_value, allow_host_only_base_match);
+            let candidate_match = find_cross_routed_validation_profile(
+                self.kind,
+                source_value,
+                allow_host_only_base_match,
+            );
+            let Some((candidate_profile, candidate_fingerprint)) = candidate_match else {
+                continue;
+            };
+            if current_match.is_some() {
+                continue;
+            }
+
+            let candidate_kind_id = candidate_profile.kind.as_str();
+            let current_kind_id = self.kind.as_str();
+            let route_expectation = current_profile.route_expectation;
+            let hint = format!(
+                "{current_kind_id} is pointing at the canonical `{candidate_kind_id}` {source_name} `{candidate_fingerprint}`; switch to `kind = \"{candidate_kind_id}\"` if that is intentional, or restore {route_expectation}"
+            );
+            return Some(hint);
+        }
+
+        None
+    }
+
+    fn path_validation_configuration_hint(
+        &self,
+        effective_urls: &ProviderEffectiveUrlValues,
+    ) -> Option<String> {
+        let validation_profile = self.kind.url_validation_profile()?;
+        let sources = effective_urls.sources();
+        let requires_path_validation = !validation_profile.required_path_fragments.is_empty();
+        if requires_path_validation {
+            for (_, value, _) in sources {
+                let path_match = validation_profile.matches_required_path_fragment(value);
+                if !path_match {
+                    return Some(validation_profile.path_validation_hint.to_owned());
+                }
+            }
+        }
+
+        for (_, value, _) in sources {
+            let path_match = validation_profile.matches_forbidden_path_fragment(value);
+            if path_match {
+                return Some(validation_profile.path_validation_hint.to_owned());
+            }
+        }
+
+        None
+    }
+
+    fn opencode_configuration_hint(&self) -> Option<String> {
+        let explicit_model = self.explicit_model();
+        let configured_base_url = self.base_url.trim().to_ascii_lowercase();
+        let resolved_base_url = self.resolved_base_url().to_ascii_lowercase();
+
+        if self.kind == ProviderKind::OpencodeZen {
+            if explicit_model.as_deref().is_some_and(|model| {
+                model
+                    .trim()
+                    .to_ascii_lowercase()
+                    .starts_with("opencode-go/")
+            }) {
+                return Some(
+                    "opencode_zen expects Zen model ids; switch to `kind = \"opencode_go\"` for `opencode-go/*` models or remove the copied OpenCode prefix and keep the matching provider kind"
+                        .to_owned(),
+                );
+            }
+            if configured_base_url.contains("/zen/go/") || resolved_base_url.contains("/zen/go/") {
+                return Some(
+                    "opencode_zen should point at the Zen root (`https://opencode.ai/zen/v1`), not the Go path; switch to `kind = \"opencode_go\"` or reset `provider.base_url`"
+                        .to_owned(),
+                );
+            }
+        }
+
+        if self.kind == ProviderKind::OpencodeGo {
+            if explicit_model
+                .as_deref()
+                .is_some_and(|model| model.trim().to_ascii_lowercase().starts_with("opencode/"))
+            {
+                return Some(
+                    "opencode_go expects Go model ids; switch to `kind = \"opencode_zen\"` for `opencode/*` models or remove the copied OpenCode prefix and keep the matching provider kind"
+                        .to_owned(),
+                );
+            }
+            let points_at_zen_root = configured_base_url.ends_with("/zen/v1")
+                || (resolved_base_url.ends_with("/zen/v1")
+                    && !resolved_base_url.contains("/zen/go/"));
+            if points_at_zen_root {
+                return Some(
+                    "opencode_go should point at the Go root (`https://opencode.ai/zen/go/v1`), not the Zen root; switch to `kind = \"opencode_zen\"` or reset `provider.base_url`"
+                        .to_owned(),
+                );
+            }
+        }
+
         None
     }
 
@@ -2099,94 +2232,6 @@ impl ProviderConfig {
     pub fn request_region_endpoint_failure_hint(&self) -> Option<String> {
         let support_facts = self.support_facts();
         support_facts.region_endpoint.request_failure_hint
-    }
-
-    fn uses_byteplus_coding_plan_path(&self) -> bool {
-        if self.kind != ProviderKind::Byteplus {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_plan_path)
-    }
-
-    fn uses_generic_byteplus_modelark_v3_path(&self) -> bool {
-        if self.kind != ProviderKind::ByteplusCoding {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_generic_ark_modelark_v3_path)
-    }
-
-    fn uses_volcengine_coding_plan_path(&self) -> bool {
-        if self.kind != ProviderKind::Volcengine {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_plan_path)
-    }
-
-    fn uses_generic_volcengine_modelark_v3_path(&self) -> bool {
-        if self.kind != ProviderKind::VolcengineCoding {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_generic_ark_modelark_v3_path)
-    }
-
-    fn uses_ark_coding_anthropic_path(&self) -> bool {
-        if !matches!(
-            self.kind,
-            ProviderKind::ByteplusCoding | ProviderKind::VolcengineCoding
-        ) {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_anthropic_path)
     }
 
     pub fn model_selection_fallback_hint(&self) -> Option<String> {
@@ -2310,11 +2355,12 @@ impl ProviderConfig {
                         self.configured_api_key_env_name(),
                     )
                 }),
-            ProviderAuthScheme::XApiKey => self.missing_auth_source_runtime_detail(
-                "api key",
-                self.api_key.as_ref(),
-                self.configured_api_key_env_name(),
-            ),
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => self
+                .missing_auth_source_runtime_detail(
+                    "api key",
+                    self.api_key.as_ref(),
+                    self.configured_api_key_env_name(),
+                ),
         }
     }
 
@@ -2520,23 +2566,82 @@ fn maybe_normalize_custom_chat_path(kind: ProviderKind, base_url: &str, path: &s
     normalized
 }
 
-fn is_ark_coding_plan_path(value: &str) -> bool {
-    value.trim().to_ascii_lowercase().contains("/api/coding")
+impl ProviderEffectiveUrlValues {
+    fn sources(&self) -> [(&'static str, &str, bool); 3] {
+        [
+            ("endpoint", self.endpoint.as_str(), false),
+            ("models endpoint", self.models_endpoint.as_str(), false),
+            ("base url", self.resolved_base_url.as_str(), true),
+        ]
+    }
 }
 
-fn is_ark_coding_anthropic_path(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized.contains("/api/coding") && !normalized.contains("/api/coding/v3")
-}
+impl ProviderUrlValidationProfile {
+    fn matching_canonical_fingerprint(
+        self,
+        value: &str,
+        allow_host_only_base_match: bool,
+    ) -> Option<&'static str> {
+        let profile = self.kind.profile();
+        let base_fingerprint = profile.base_url;
+        let base_match = matches_base_url_validation_fingerprint(
+            value,
+            base_fingerprint,
+            allow_host_only_base_match,
+        );
+        if base_match {
+            return Some(base_fingerprint);
+        }
 
-fn is_generic_ark_modelark_v3_path(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized.contains("/api/v3") && !normalized.contains("/api/coding/v3")
+        for fingerprint in self.extra_canonical_url_fingerprints {
+            let fingerprint_match = matches_url_validation_fingerprint(value, fingerprint);
+            if fingerprint_match {
+                return Some(fingerprint);
+            }
+        }
+
+        None
+    }
+
+    fn matches_required_path_fragment(self, value: &str) -> bool {
+        for fragment in self.required_path_fragments {
+            let fragment_match = url_contains_validation_fragment(value, fragment);
+            if fragment_match {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn matches_forbidden_path_fragment(self, value: &str) -> bool {
+        for fragment in self.forbidden_path_exceptions {
+            let exception_match = url_contains_validation_fragment(value, fragment);
+            if exception_match {
+                return false;
+            }
+        }
+
+        for fragment in self.forbidden_path_fragments {
+            let fragment_match = url_contains_validation_fragment(value, fragment);
+            if fragment_match {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 impl ProviderKind {
     pub fn all_sorted() -> &'static [ProviderKind] {
         &PROVIDER_KIND_ORDER
+    }
+
+    fn url_validation_profile(self) -> Option<&'static ProviderUrlValidationProfile> {
+        PROVIDER_URL_VALIDATION_PROFILES
+            .iter()
+            .find(|profile| profile.kind == self)
     }
 
     pub fn as_str(self) -> &'static str {
@@ -2568,6 +2673,8 @@ impl ProviderKind {
             ProviderKind::LmStudio => "LM Studio",
             ProviderKind::Ollama => "Ollama",
             ProviderKind::Openai => "OpenAI",
+            ProviderKind::OpencodeZen => "OpenCode Zen",
+            ProviderKind::OpencodeGo => "OpenCode Go",
             ProviderKind::Openrouter => "OpenRouter",
             ProviderKind::Perplexity => "Perplexity",
             ProviderKind::Qianfan => "Qianfan",
@@ -2621,6 +2728,8 @@ impl ProviderKind {
             nvidia,
             ollama,
             openai,
+            opencode_go,
+            opencode_zen,
             openrouter,
             perplexity,
             qianfan,
@@ -2667,6 +2776,8 @@ impl ProviderKind {
             ProviderKind::Nvidia => nvidia,
             ProviderKind::Ollama => ollama,
             ProviderKind::Openai => openai,
+            ProviderKind::OpencodeZen => opencode_zen,
+            ProviderKind::OpencodeGo => opencode_go,
             ProviderKind::Openrouter => openrouter,
             ProviderKind::Perplexity => perplexity,
             ProviderKind::Qianfan => qianfan,
@@ -2872,6 +2983,8 @@ impl ProviderKind {
             | ProviderKind::Nvidia
             | ProviderKind::Ollama
             | ProviderKind::Openai
+            | ProviderKind::OpencodeZen
+            | ProviderKind::OpencodeGo
             | ProviderKind::Openrouter
             | ProviderKind::Perplexity
             | ProviderKind::Qianfan
@@ -2933,6 +3046,136 @@ impl ProviderKind {
             variants,
         })
     }
+}
+
+const NON_CODING_ARK_FORBIDDEN_PATH_FRAGMENTS: [&str; 1] = ["/api/coding"];
+const CODING_ARK_REQUIRED_PATH_FRAGMENTS: [&str; 1] = ["/api/coding/v3"];
+const CODING_ARK_FORBIDDEN_PATH_FRAGMENTS: [&str; 2] = ["/api/v3", "/api/coding"];
+const CODING_ARK_FORBIDDEN_PATH_EXCEPTIONS: [&str; 1] = ["/api/coding/v3"];
+const VOLCENGINE_STANDARD_CANONICAL_URL_FINGERPRINTS: [&str; 1] =
+    ["https://ark.cn-beijing.volces.com/api/v3"];
+
+const PROVIDER_URL_VALIDATION_PROFILES: [ProviderUrlValidationProfile; 4] = [
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::Byteplus,
+        extra_canonical_url_fingerprints: &[],
+        required_path_fragments: &[],
+        forbidden_path_fragments: &NON_CODING_ARK_FORBIDDEN_PATH_FRAGMENTS,
+        forbidden_path_exceptions: &[],
+        route_expectation: "the standard BytePlus ModelArk route under `/api/v3`",
+        path_validation_hint: "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint",
+    },
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::ByteplusCoding,
+        extra_canonical_url_fingerprints: &[],
+        required_path_fragments: &CODING_ARK_REQUIRED_PATH_FRAGMENTS,
+        forbidden_path_fragments: &CODING_ARK_FORBIDDEN_PATH_FRAGMENTS,
+        forbidden_path_exceptions: &CODING_ARK_FORBIDDEN_PATH_EXCEPTIONS,
+        route_expectation: "the dedicated BytePlus Coding path under `/api/coding/v3`",
+        path_validation_hint: "byteplus_coding must use the dedicated BytePlus Coding path under `/api/coding/v3`; do not point it at the unsupported Anthropic-compatible `/api/coding` or generic `/api/v3` ModelArk endpoints because that bypasses Coding Plan quota and can incur standard model charges",
+    },
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::Volcengine,
+        extra_canonical_url_fingerprints: &VOLCENGINE_STANDARD_CANONICAL_URL_FINGERPRINTS,
+        required_path_fragments: &[],
+        forbidden_path_fragments: &NON_CODING_ARK_FORBIDDEN_PATH_FRAGMENTS,
+        forbidden_path_exceptions: &[],
+        route_expectation: "the standard Volcengine Ark route under `/api/v3`",
+        path_validation_hint: "volcengine uses the standard Ark API path under `/api/v3` and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"volcengine_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint",
+    },
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::VolcengineCoding,
+        extra_canonical_url_fingerprints: &[],
+        required_path_fragments: &CODING_ARK_REQUIRED_PATH_FRAGMENTS,
+        forbidden_path_fragments: &CODING_ARK_FORBIDDEN_PATH_FRAGMENTS,
+        forbidden_path_exceptions: &CODING_ARK_FORBIDDEN_PATH_EXCEPTIONS,
+        route_expectation: "the dedicated Volcengine Coding Plan path under `/api/coding/v3`",
+        path_validation_hint: "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges",
+    },
+];
+
+fn find_cross_routed_validation_profile(
+    current_kind: ProviderKind,
+    source_value: &str,
+    allow_host_only_base_match: bool,
+) -> Option<(&'static ProviderUrlValidationProfile, &'static str)> {
+    let mut best_match: Option<(&'static ProviderUrlValidationProfile, &'static str)> = None;
+
+    for profile in &PROVIDER_URL_VALIDATION_PROFILES {
+        let candidate_kind = profile.kind;
+        if candidate_kind == current_kind {
+            continue;
+        }
+
+        let matching_fingerprint =
+            profile.matching_canonical_fingerprint(source_value, allow_host_only_base_match);
+        if let Some(fingerprint) = matching_fingerprint {
+            let mut should_replace = true;
+            if let Some((_, best_fingerprint)) = best_match {
+                should_replace = fingerprint.len() > best_fingerprint.len();
+            }
+            if should_replace {
+                best_match = Some((profile, fingerprint));
+            }
+        }
+    }
+
+    best_match
+}
+
+fn matches_url_validation_fingerprint(value: &str, fingerprint: &str) -> bool {
+    let normalized_value = normalize_url_validation_value(value);
+    let normalized_fingerprint = normalize_url_validation_value(fingerprint);
+
+    matches_region_endpoint_url(normalized_value.as_str(), normalized_fingerprint.as_str())
+}
+
+fn matches_base_url_validation_fingerprint(
+    value: &str,
+    fingerprint: &str,
+    allow_host_only_base_match: bool,
+) -> bool {
+    let fingerprint_has_non_root_path = url_has_non_root_path(fingerprint);
+    if fingerprint_has_non_root_path {
+        return matches_url_validation_fingerprint(value, fingerprint);
+    }
+    if !allow_host_only_base_match {
+        return false;
+    }
+    is_same_base_url(value, fingerprint)
+}
+
+fn url_contains_validation_fragment(value: &str, fragment: &str) -> bool {
+    let normalized_value = normalize_url_validation_value(value);
+    let normalized_fragment = normalize_url_validation_value(fragment);
+
+    normalized_value.contains(normalized_fragment.as_str())
+}
+
+fn url_has_non_root_path(value: &str) -> bool {
+    let trimmed = value.trim();
+    let after_scheme = trimmed
+        .split_once("://")
+        .map(|(_, remainder)| remainder)
+        .unwrap_or(trimmed);
+    let Some((_, path_with_query)) = after_scheme.split_once('/') else {
+        return false;
+    };
+    let raw_path = format!("/{path_with_query}");
+    let path = raw_path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(raw_path.as_str());
+    let normalized_path = path.trim_end_matches('/');
+
+    !normalized_path.is_empty()
+}
+
+fn normalize_url_validation_value(value: &str) -> String {
+    let trimmed = value.trim();
+    let trimmed = trimmed.trim_end_matches('/');
+
+    trimmed.to_ascii_lowercase()
 }
 
 fn provider_descriptor_aliases(profile: &ProviderProfile) -> Vec<String> {
@@ -3025,7 +3268,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 43] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 45] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -3050,6 +3293,8 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 43] = [
     ProviderKind::Nvidia,
     ProviderKind::Ollama,
     ProviderKind::Openai,
+    ProviderKind::OpencodeGo,
+    ProviderKind::OpencodeZen,
     ProviderKind::Openrouter,
     ProviderKind::Perplexity,
     ProviderKind::Qianfan,
@@ -3071,7 +3316,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 43] = [
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 43] = [
+const PROVIDER_PROFILES: [ProviderProfile; 45] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -3081,7 +3326,7 @@ const PROVIDER_PROFILES: [ProviderProfile; 43] = [
         models_path: Some("/v1/models"),
         protocol_family: ProviderProtocolFamily::AnthropicMessages,
         auth_scheme: ProviderAuthScheme::XApiKey,
-        default_headers: &[("anthropic-version", "2023-06-01")],
+        default_headers: &ANTHROPIC_DEFAULT_HEADERS,
         default_api_key_env: Some("ANTHROPIC_API_KEY"),
         api_key_env_aliases: &[],
         default_user_agent: None,
@@ -3493,6 +3738,40 @@ const PROVIDER_PROFILES: [ProviderProfile; 43] = [
         default_user_agent: None,
         default_oauth_access_token_env: Some("OPENAI_CODEX_OAUTH_TOKEN"),
         oauth_access_token_env_aliases: &["OPENAI_OAUTH_ACCESS_TOKEN"],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::OpencodeGo,
+        id: "opencode_go",
+        aliases: &["opencode-go"],
+        base_url: OPENCODE_GO_BASE_URL,
+        chat_completions_path: "/chat/completions",
+        models_path: Some("/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some(OPENCODE_API_KEY_ENV),
+        api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::OpencodeZen,
+        id: "opencode_zen",
+        aliases: &["opencode", "opencode-zen"],
+        base_url: OPENCODE_ZEN_BASE_URL,
+        chat_completions_path: "/chat/completions",
+        models_path: Some("/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some(OPENCODE_API_KEY_ENV),
+        api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::OpenAiCompatible,
     },
     ProviderProfile {
@@ -4353,6 +4632,183 @@ mod tests {
         assert!(custom_hint.contains("Authorization"));
         assert!(custom_hint.contains("X-API-Key"));
         assert!(custom_hint.contains("provider.headers"));
+    }
+
+    #[test]
+    fn provider_configuration_hint_prefers_canonical_cross_routing_guidance() {
+        let cases = [
+            (
+                ProviderKind::Byteplus,
+                "https://ark.cn-beijing.volces.com/api/coding/v3",
+                "kind = \"volcengine_coding\"",
+            ),
+            (
+                ProviderKind::ByteplusCoding,
+                "https://ark.cn-beijing.volces.com",
+                "kind = \"volcengine\"",
+            ),
+        ];
+
+        for (kind, base_url, expected_kind_hint) in cases {
+            let provider = ProviderConfig {
+                kind,
+                base_url: base_url.to_owned(),
+                base_url_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("cross-routed provider configs should surface a hint");
+
+            assert!(
+                hint.contains(expected_kind_hint),
+                "expected cross-routing hint for {kind:?} with {base_url}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_requires_coding_path_even_for_proxy_hosts() {
+        let cases = [ProviderKind::ByteplusCoding, ProviderKind::VolcengineCoding];
+
+        for kind in cases {
+            let provider = ProviderConfig {
+                kind,
+                base_url: "https://proxy.example.com/openai/v1".to_owned(),
+                base_url_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("coding providers should reject proxy urls that drop the coding path");
+
+            assert!(
+                hint.contains("/api/coding/v3"),
+                "expected coding-path guidance for {kind:?}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_rejects_non_coding_profiles_on_coding_proxy_paths() {
+        let cases = [
+            (ProviderKind::Byteplus, "kind = \"byteplus_coding\""),
+            (ProviderKind::Volcengine, "kind = \"volcengine_coding\""),
+        ];
+
+        for (kind, expected_kind_hint) in cases {
+            let provider = ProviderConfig {
+                kind,
+                base_url: "https://proxy.example.com/api/coding/v3".to_owned(),
+                base_url_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("non-coding profiles should reject coding proxy paths");
+
+            assert!(
+                hint.contains(expected_kind_hint),
+                "expected non-coding guidance for {kind:?}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_allows_proxy_coding_routes_that_keep_the_required_path() {
+        let cases = [ProviderKind::ByteplusCoding, ProviderKind::VolcengineCoding];
+
+        for kind in cases {
+            let provider = ProviderConfig {
+                kind,
+                base_url: "https://proxy.example.com/api/coding/v3".to_owned(),
+                base_url_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider.configuration_hint();
+
+            assert!(
+                hint.is_none(),
+                "proxy coding routes should stay valid for {kind:?}: {hint:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_checks_explicit_endpoints_before_current_base_url() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::ByteplusCoding,
+            base_url: "https://ark.ap-southeast.bytepluses.com/api/coding/v3".to_owned(),
+            base_url_explicit: true,
+            endpoint: Some("https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_owned()),
+            endpoint_explicit: true,
+            ..ProviderConfig::default()
+        };
+        let hint = provider
+            .configuration_hint()
+            .expect("explicit cross-routed endpoints should surface a hint");
+
+        assert!(hint.contains("kind = \"volcengine\""));
+    }
+
+    #[test]
+    fn provider_configuration_hint_requires_coding_path_for_explicit_endpoint_overrides() {
+        let cases = [ProviderKind::ByteplusCoding, ProviderKind::VolcengineCoding];
+
+        for kind in cases {
+            let provider = ProviderConfig {
+                kind,
+                endpoint: Some("https://proxy.example.com/openai/v1/chat/completions".to_owned()),
+                endpoint_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("explicit endpoint overrides should keep the coding path");
+
+            assert!(
+                hint.contains("/api/coding/v3"),
+                "expected coding-path guidance for {kind:?}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_requires_coding_path_for_explicit_models_endpoints() {
+        let cases = [ProviderKind::ByteplusCoding, ProviderKind::VolcengineCoding];
+
+        for kind in cases {
+            let provider = ProviderConfig {
+                kind,
+                models_endpoint: Some("https://proxy.example.com/openai/v1/models".to_owned()),
+                models_endpoint_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("explicit models endpoints should keep the coding path");
+
+            assert!(
+                hint.contains("/api/coding/v3"),
+                "expected coding-path guidance for {kind:?}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_ignores_non_canonical_host_only_proxy_paths() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Byteplus,
+            base_url: "https://ark.cn-beijing.volces.com/custom/proxy".to_owned(),
+            base_url_explicit: true,
+            ..ProviderConfig::default()
+        };
+        let hint = provider.configuration_hint();
+
+        assert!(
+            hint.is_none(),
+            "non-canonical host-only proxy paths should not claim a canonical cross-route: {hint:?}"
+        );
     }
 
     #[test]

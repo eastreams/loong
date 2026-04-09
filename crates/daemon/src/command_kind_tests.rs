@@ -5,12 +5,19 @@ fn command_kind_for_logging_uses_stable_variant_names() {
     assert_eq!(Commands::Welcome.command_kind_for_logging(), "welcome");
     assert_eq!(Commands::AuditDemo.command_kind_for_logging(), "audit_demo");
     assert_eq!(
-        Commands::RunTask {
-            objective: "test".to_owned(),
-            payload: "{}".to_owned(),
+        Commands::Turn {
+            command: crate::TurnCommands::Run {
+                config: None,
+                session: None,
+                message: "test".to_owned(),
+                acp: false,
+                acp_event_stream: false,
+                acp_bootstrap_mcp_server: Vec::new(),
+                acp_cwd: None,
+            },
         }
         .command_kind_for_logging(),
-        "run_task"
+        "turn_run"
     );
     assert_eq!(
         Commands::ListMcpServers {

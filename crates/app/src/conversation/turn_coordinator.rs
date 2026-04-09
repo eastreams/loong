@@ -46,7 +46,9 @@ use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
 use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
-    finalize_and_announce_delegate_child_terminal, format_delegate_child_panic,
+    enqueue_delegate_result_announce_with_memory_config,
+    finalize_and_announce_delegate_child_terminal,
+    finalize_async_delegate_spawn_failure_with_recovery, format_delegate_child_panic,
     next_delegate_child_depth_for_delegate, spawn_async_delegate_detached,
 };
 use super::ingress::ConversationIngressContext;
@@ -193,6 +195,9 @@ pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRunt
 #[derive(Default)]
 pub struct ConversationTurnCoordinator;
 
+const PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING: &str =
+    "production conversation runtime requires kernel-bound execution";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextCompactionReport {
     pub status: AnalyticsTurnCheckpointProgressStatus,
@@ -228,6 +233,21 @@ impl ContextCompactionReport {
             AnalyticsTurnCheckpointProgressStatus::FailedOpen
         )
     }
+}
+
+fn require_production_kernel_binding<'a>(
+    binding: ConversationRuntimeBinding<'a>,
+    observer: Option<&ConversationTurnObserverHandle>,
+) -> CliResult<ConversationRuntimeBinding<'a>> {
+    if binding.is_kernel_bound() {
+        return Ok(binding);
+    }
+
+    let failed_event = ConversationTurnPhaseEvent::failed();
+    observe_turn_phase(observer, failed_event);
+
+    let error = PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING.to_owned();
+    Err(error)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1055,12 +1075,13 @@ fn parse_pending_approval_input_decision(input: &str) -> Option<PendingApprovalI
     }
 }
 
+#[allow(dead_code)]
 impl ConversationTurnCoordinator {
     pub fn new() -> Self {
         Self
     }
 
-    pub async fn compact_session(
+    pub(crate) async fn compact_session(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1071,7 +1092,20 @@ impl ConversationTurnCoordinator {
             .await
     }
 
-    pub async fn compact_session_with_runtime<R: ConversationRuntime + ?Sized>(
+    pub async fn compact_production_session(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ContextCompactionReport> {
+        let production_binding = require_production_kernel_binding(binding, None)?;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+
+        self.compact_session_with_runtime(config, session_id, &runtime, production_binding)
+            .await
+    }
+
+    pub(crate) async fn compact_session_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1133,7 +1167,7 @@ impl ConversationTurnCoordinator {
         Ok(report)
     }
 
-    pub async fn handle_turn(
+    pub(crate) async fn handle_turn(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1153,7 +1187,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_ingress(
+    pub(crate) async fn handle_turn_with_ingress(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1178,7 +1212,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_acp_options(
+    pub(crate) async fn handle_turn_with_acp_options(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1199,7 +1233,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn repair_turn_checkpoint_tail(
+    pub(crate) async fn repair_turn_checkpoint_tail(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1208,6 +1242,24 @@ impl ConversationTurnCoordinator {
         let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
         self.repair_turn_checkpoint_tail_with_runtime(config, session_id, &runtime, binding)
             .await
+    }
+
+    pub async fn repair_production_turn_checkpoint_tail(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<TurnCheckpointTailRepairOutcome> {
+        let production_binding = require_production_kernel_binding(binding, None)?;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+
+        self.repair_turn_checkpoint_tail_with_runtime(
+            config,
+            session_id,
+            &runtime,
+            production_binding,
+        )
+        .await
     }
 
     pub(crate) async fn load_turn_checkpoint_diagnostics(
@@ -1227,6 +1279,18 @@ impl ConversationTurnCoordinator {
         .await
     }
 
+    pub(crate) async fn load_production_turn_checkpoint_diagnostics(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<TurnCheckpointDiagnostics> {
+        let production_binding = require_production_kernel_binding(binding, None)?;
+
+        self.load_turn_checkpoint_diagnostics(config, session_id, production_binding)
+            .await
+    }
+
     pub(crate) async fn load_turn_checkpoint_diagnostics_with_limit(
         &self,
         config: &LoongClawConfig,
@@ -1241,7 +1305,25 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn probe_turn_checkpoint_tail_runtime_gate(
+    pub(crate) async fn load_production_turn_checkpoint_diagnostics_with_limit(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        limit: usize,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<TurnCheckpointDiagnostics> {
+        let production_binding = require_production_kernel_binding(binding, None)?;
+
+        self.load_turn_checkpoint_diagnostics_with_limit(
+            config,
+            session_id,
+            limit,
+            production_binding,
+        )
+        .await
+    }
+
+    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1258,7 +1340,26 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn probe_turn_checkpoint_tail_runtime_gate_with_limit(
+    pub async fn probe_production_turn_checkpoint_tail_runtime_gate(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
+        let production_binding = require_production_kernel_binding(binding, None)?;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+
+        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
+            config,
+            session_id,
+            config.memory.sliding_window,
+            &runtime,
+            production_binding,
+        )
+        .await
+    }
+
+    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_limit(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1272,7 +1373,27 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_acp_event_sink(
+    pub async fn probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        limit: usize,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
+        let production_binding = require_production_kernel_binding(binding, None)?;
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+
+        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
+            config,
+            session_id,
+            limit,
+            &runtime,
+            production_binding,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_turn_with_acp_event_sink(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1293,7 +1414,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_address(
+    pub(crate) async fn handle_turn_with_address(
         &self,
         config: &LoongClawConfig,
         address: &ConversationSessionAddress,
@@ -1313,7 +1434,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_address_and_acp_event_sink(
+    pub(crate) async fn handle_turn_with_address_and_acp_event_sink(
         &self,
         config: &LoongClawConfig,
         address: &ConversationSessionAddress,
@@ -1334,7 +1455,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_address_and_acp_options_and_ingress(
+    pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress(
         &self,
         config: &LoongClawConfig,
         address: &ConversationSessionAddress,
@@ -1358,7 +1479,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_address_and_acp_options(
+    pub(crate) async fn handle_turn_with_address_and_acp_options(
         &self,
         config: &LoongClawConfig,
         address: &ConversationSessionAddress,
@@ -1381,7 +1502,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+    pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer(
         &self,
         config: &LoongClawConfig,
         address: &ConversationSessionAddress,
@@ -1407,7 +1528,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_address_and_acp_options_and_observer(
+    pub(crate) async fn handle_turn_with_address_and_acp_options_and_observer(
         &self,
         config: &LoongClawConfig,
         address: &ConversationSessionAddress,
@@ -1430,6 +1551,31 @@ impl ConversationTurnCoordinator {
         .await
     }
 
+    pub async fn handle_production_turn_with_address_and_acp_options_and_observer(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<String> {
+        let observer_ref = observer.as_ref();
+        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
+
+        self.handle_turn_with_address_and_acp_options_and_observer(
+            config,
+            address,
+            user_input,
+            error_mode,
+            acp_options,
+            production_binding,
+            observer,
+        )
+        .await
+    }
+
     fn build_default_runtime_or_observe_failure(
         config: &LoongClawConfig,
         observer: Option<&ConversationTurnObserverHandle>,
@@ -1446,7 +1592,7 @@ impl ConversationTurnCoordinator {
         Ok(runtime)
     }
 
-    pub async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
+    pub(crate) async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1468,7 +1614,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_runtime_and_ingress<R: ConversationRuntime + ?Sized>(
+    pub(crate) async fn handle_turn_with_runtime_and_ingress<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1493,7 +1639,9 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn repair_turn_checkpoint_tail_with_runtime<R: ConversationRuntime + ?Sized>(
+    pub(crate) async fn repair_turn_checkpoint_tail_with_runtime<
+        R: ConversationRuntime + ?Sized,
+    >(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1576,7 +1724,7 @@ impl ConversationTurnCoordinator {
         }
     }
 
-    pub async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime<
+    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -1595,7 +1743,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit<
+    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -1623,7 +1771,9 @@ impl ConversationTurnCoordinator {
         }
     }
 
-    pub async fn handle_turn_with_runtime_and_acp_options<R: ConversationRuntime + ?Sized>(
+    pub(crate) async fn handle_turn_with_runtime_and_acp_options<
+        R: ConversationRuntime + ?Sized,
+    >(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1647,7 +1797,9 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_runtime_and_acp_event_sink<R: ConversationRuntime + ?Sized>(
+    pub(crate) async fn handle_turn_with_runtime_and_acp_event_sink<
+        R: ConversationRuntime + ?Sized,
+    >(
         &self,
         config: &LoongClawConfig,
         session_id: &str,
@@ -1670,7 +1822,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_runtime_and_address<R: ConversationRuntime + ?Sized>(
+    pub(crate) async fn handle_turn_with_runtime_and_address<R: ConversationRuntime + ?Sized>(
         &self,
         config: &LoongClawConfig,
         address: &ConversationSessionAddress,
@@ -1693,7 +1845,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_runtime_and_address_and_acp_options<
+    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -1745,7 +1897,7 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
+    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -2075,7 +2227,38 @@ impl ConversationTurnCoordinator {
             .unwrap_or_else(|_| config.clone())
     }
 
-    pub async fn handle_turn_with_runtime_and_address_and_acp_event_sink<
+    pub async fn handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<String> {
+        let observer_ref = observer.as_ref();
+        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
+
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            production_binding,
+            ingress,
+            observer,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_event_sink<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -2476,7 +2659,9 @@ fn observe_provider_turn_tool_batch_started(
 
     for intent in &turn.tool_intents {
         let tool_name = effective_result_tool_name(intent);
-        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name);
+        let request_summary = summarize_single_tool_followup_request(intent);
+        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name)
+            .with_request_summary(request_summary);
         observer.on_tool(event);
     }
 }
@@ -2802,6 +2987,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         &turn,
         binding,
         ingress,
+        observer,
         followup_chain_active,
     )
     .await;
@@ -4079,6 +4265,111 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     let spawner = runtime
         .async_delegate_spawner(config)
         .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
+    let delegate_request = build_delegate_async_enqueue_request(
+        config,
+        runtime,
+        session_context,
+        delegate_request,
+        binding,
+    )
+    .await?;
+    let detached_config = std::sync::Arc::new(config.clone());
+    spawn_async_delegate_detached(
+        runtime_handle,
+        detached_config,
+        delegate_request.memory_config,
+        spawner,
+        delegate_request.request,
+        config.tools.delegate.max_frozen_bytes,
+        DelegateAnnounceSettings::from_config(config),
+    );
+
+    Ok(delegate_request.outcome)
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    delegate_request: crate::tools::delegate::DelegateRequest,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    if !config.tools.delegate.enabled {
+        return Err("app_tool_disabled: delegate is disabled by config".to_owned());
+    }
+
+    let spawner = runtime
+        .background_task_spawner(config)
+        .ok_or_else(|| {
+            "background_task_host_unavailable: current runtime does not provide a durable async background-task host"
+                .to_owned()
+        })?;
+    let delegate_request = build_delegate_async_enqueue_request(
+        config,
+        runtime,
+        session_context,
+        delegate_request,
+        binding,
+    )
+    .await?;
+    let spawn_result = spawner.spawn(delegate_request.request.clone()).await;
+
+    if let Err(error) = spawn_result {
+        finalize_async_delegate_spawn_failure_with_recovery(
+            &delegate_request.memory_config,
+            &delegate_request.request.child_session_id,
+            &delegate_request.request.parent_session_id,
+            delegate_request.request.label.clone(),
+            delegate_request.request.profile,
+            &delegate_request.request.execution,
+            config.tools.delegate.max_frozen_bytes,
+            error.clone(),
+        )?;
+        enqueue_delegate_result_announce_with_memory_config(
+            delegate_request.memory_config.clone(),
+            delegate_request.request.parent_session_id.clone(),
+            delegate_request.request.child_session_id.clone(),
+            DelegateAnnounceSettings::from_config(config),
+        );
+        emit_async_delegate_child_terminal_event(
+            runtime,
+            &delegate_request.request.parent_session_id,
+            &delegate_request.request.child_session_id,
+            delegate_request.request.label.as_deref(),
+            delegate_request.request.profile,
+            "failed",
+            delegate_request.request.execution.isolation,
+            0,
+            None,
+            Some(error.as_str()),
+            None,
+            delegate_request.request.execution.workspace_root.as_deref(),
+            None,
+            binding,
+        )
+        .await;
+        return Err(error);
+    }
+
+    Ok(delegate_request.outcome)
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct PreparedAsyncDelegateEnqueue {
+    memory_config: MemoryRuntimeConfig,
+    request: AsyncDelegateSpawnRequest,
+    outcome: loongclaw_contracts::ToolCoreOutcome,
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    delegate_request: crate::tools::delegate::DelegateRequest,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
@@ -4147,26 +4438,17 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         binding,
     )
     .await;
-    let detached_config = std::sync::Arc::new(config.clone());
-    spawn_async_delegate_detached(
-        runtime_handle,
-        detached_config,
-        memory_config,
-        spawner,
-        AsyncDelegateSpawnRequest {
-            child_session_id: child_session_id.clone(),
-            parent_session_id: session_context.session_id.clone(),
-            task: delegate_request.task,
-            label: child_label,
-            profile: delegate_policy.profile,
-            execution: queued_execution,
-            runtime_self_continuity,
-            timeout_seconds: delegate_policy.timeout_seconds,
-            binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
-        },
-        config.tools.delegate.max_frozen_bytes,
-        DelegateAnnounceSettings::from_config(config),
-    );
+    let request = AsyncDelegateSpawnRequest {
+        child_session_id: child_session_id.clone(),
+        parent_session_id: session_context.session_id.clone(),
+        task: delegate_request.task,
+        label: child_label,
+        profile: delegate_policy.profile,
+        execution: queued_execution,
+        runtime_self_continuity,
+        timeout_seconds: delegate_policy.timeout_seconds,
+        binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
+    };
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
@@ -4176,7 +4458,12 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         delegate_policy.timeout_seconds,
     );
     inject_delegate_workspace_metadata(&mut outcome, &execution, None, None);
-    Ok(outcome)
+
+    Ok(PreparedAsyncDelegateEnqueue {
+        memory_config,
+        request,
+        outcome,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4211,7 +4498,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     }
     let delegate_request =
         crate::tools::delegate::parse_delegate_request_with_default_timeout(&delegate_payload)?;
-    enqueue_delegate_async_with_runtime(
+    enqueue_background_task_with_runtime(
         config,
         runtime,
         &session_context,
@@ -4551,6 +4838,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     turn: &ProviderTurn,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
     followup_chain_active: bool,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
@@ -4649,6 +4937,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                     &app_dispatcher,
                     binding,
                     ingress,
+                    observer,
                 )
                 .await;
             (result, None, trace)
@@ -6515,6 +6804,7 @@ mod tests {
         ConversationTurnObserver, ConversationTurnPhase, ConversationTurnToolState,
     };
     use crate::session::repository::FinalizeSessionTerminalResult;
+    use regex::Regex;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
@@ -6554,6 +6844,46 @@ mod tests {
 
         assert_eq!(error.kind, PlanNodeErrorKind::PolicyDenied);
         assert_eq!(error.message, "no_kernel_context");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_single_tool_intent_marks_repairable_file_read_failure_retryable() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
+            "file.read",
+            json!({}),
+            Some("root-session"),
+            Some("turn-file-read-plan-node"),
+        );
+        let intent = ToolIntent {
+            tool_name,
+            args_json,
+            source: "provider_tool_call".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-file-read-plan-node".to_owned(),
+            tool_call_id: "call-file-read-plan-node".to_owned(),
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::planned_root_tool_view(),
+        );
+
+        let error = execute_single_tool_intent(
+            &intent,
+            &session_context,
+            &DefaultAppToolDispatcher::runtime(),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+            None,
+            2_048,
+        )
+        .await
+        .expect_err("repairable file.read preflight should return a plan-node error");
+
+        assert_eq!(error.kind, PlanNodeErrorKind::Retryable);
+        assert!(error.message.contains("tool input needs repair"));
+        assert!(error.message.contains("file.read payload.path is required"));
     }
 
     #[cfg(feature = "tool-shell")]
@@ -7494,6 +7824,250 @@ mod tests {
             .map(|event| event.phase)
             .collect::<Vec<_>>();
         assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
+    }
+
+    #[tokio::test]
+    async fn handle_production_turn_with_observer_rejects_direct_binding_before_runtime_bootstrap()
+    {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+
+        let result = coordinator
+            .handle_production_turn_with_address_and_acp_options_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                Some(observer_handle),
+            )
+            .await;
+        let error = result.expect_err("direct production binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+
+        assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
+    }
+
+    #[tokio::test]
+    async fn handle_production_turn_with_runtime_rejects_direct_binding_before_provider_request() {
+        let mut config = LoongClawConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Anthropic;
+
+        let runtime = ObserverStreamingRuntime::default();
+        let coordinator = ConversationTurnCoordinator::new();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+
+        let result = coordinator
+            .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                Some(observer_handle),
+            )
+            .await;
+        let error = result.expect_err("direct production binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+
+        let streaming_calls = runtime
+            .streaming_calls
+            .lock()
+            .expect("streaming call lock should not be poisoned");
+
+        assert_eq!(*streaming_calls, 0);
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+
+        assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
+    }
+
+    #[tokio::test]
+    async fn compact_production_session_rejects_direct_binding_before_runtime_bootstrap() {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let result = coordinator
+            .compact_production_session(
+                &config,
+                "maintenance-session",
+                ConversationRuntimeBinding::direct(),
+            )
+            .await;
+        let error = result.expect_err("direct production maintenance binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_production_turn_checkpoint_tail_rejects_direct_binding_before_runtime_bootstrap()
+     {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let result = coordinator
+            .repair_production_turn_checkpoint_tail(
+                &config,
+                "maintenance-session",
+                ConversationRuntimeBinding::direct(),
+            )
+            .await;
+        let error = result.expect_err("direct production maintenance binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+    }
+
+    #[tokio::test]
+    async fn load_production_turn_checkpoint_diagnostics_rejects_direct_binding_before_runtime_bootstrap()
+     {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let result = coordinator
+            .load_production_turn_checkpoint_diagnostics(
+                &config,
+                "maintenance-session",
+                ConversationRuntimeBinding::direct(),
+            )
+            .await;
+        let error = result.expect_err("direct production maintenance binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_production_turn_checkpoint_tail_runtime_gate_rejects_direct_binding_before_runtime_bootstrap()
+     {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let result = coordinator
+            .probe_production_turn_checkpoint_tail_runtime_gate(
+                &config,
+                "maintenance-session",
+                ConversationRuntimeBinding::direct(),
+            )
+            .await;
+        let error = result.expect_err("direct production maintenance binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+    }
+
+    #[test]
+    fn generic_direct_capable_coordinator_entrypoints_are_not_public_api() {
+        let source = include_str!("turn_coordinator.rs");
+        let function_names = [
+            "compact_session",
+            "compact_session_with_runtime",
+            "handle_turn",
+            "handle_turn_with_ingress",
+            "handle_turn_with_acp_options",
+            "repair_turn_checkpoint_tail",
+            "probe_turn_checkpoint_tail_runtime_gate",
+            "probe_turn_checkpoint_tail_runtime_gate_with_limit",
+            "handle_turn_with_acp_event_sink",
+            "handle_turn_with_address",
+            "handle_turn_with_address_and_acp_event_sink",
+            "handle_turn_with_address_and_acp_options_and_ingress",
+            "handle_turn_with_address_and_acp_options",
+            "handle_turn_with_address_and_acp_options_and_ingress_and_observer",
+            "handle_turn_with_address_and_acp_options_and_observer",
+            "handle_turn_with_runtime",
+            "handle_turn_with_runtime_and_ingress",
+            "repair_turn_checkpoint_tail_with_runtime",
+            "probe_turn_checkpoint_tail_runtime_gate_with_runtime",
+            "probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit",
+            "handle_turn_with_runtime_and_acp_options",
+            "handle_turn_with_runtime_and_acp_event_sink",
+            "handle_turn_with_runtime_and_address",
+            "handle_turn_with_runtime_and_address_and_acp_options",
+            "handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer",
+            "handle_turn_with_runtime_and_address_and_acp_event_sink",
+        ];
+        let signature_pattern = Regex::new(
+            r"(?m)^(?:(?:\s*///[^\n]*\n)|(?:\s*#\[[^\n]+\]\s*\n))*\s*(?P<visibility>pub(?:\([^)]*\))?\s+)?async\s+fn\s+(?P<name>[A-Za-z0-9_]+)\b",
+        )
+        .expect("signature regex should compile");
+        let mut public_function_names = Vec::new();
+
+        for captures in signature_pattern.captures_iter(source) {
+            let Some(name_match) = captures.name("name") else {
+                continue;
+            };
+            let visibility = captures
+                .name("visibility")
+                .map(|match_value| match_value.as_str().trim())
+                .unwrap_or("");
+            if visibility != "pub" {
+                continue;
+            }
+
+            let function_name = name_match.as_str().to_owned();
+            public_function_names.push(function_name);
+        }
+
+        for function_name in function_names {
+            let is_public = public_function_names
+                .iter()
+                .any(|public_name| public_name == function_name);
+            assert!(
+                !is_public,
+                "generic direct-capable coordinator seam should stay internal: {function_name}"
+            );
+        }
     }
 
     #[test]

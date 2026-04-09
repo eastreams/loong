@@ -2,7 +2,7 @@ pub(in crate::channel) mod context;
 mod send;
 mod serve;
 
-pub(super) use context::{ChannelCommandContext, ChannelResolvedRuntimeAccount};
+pub(super) use context::ChannelCommandContext;
 pub(super) use send::{ChannelSendCommandSpec, run_channel_send_command};
 #[cfg(any(
     feature = "channel-telegram",

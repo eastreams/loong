@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
 use loongclaw_daemon::*;
 
@@ -106,6 +107,28 @@ async fn main() {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
+        Commands::Turn { command } => match command {
+            loongclaw_daemon::TurnCommands::Run {
+                config,
+                session,
+                message,
+                acp,
+                acp_event_stream,
+                acp_bootstrap_mcp_server,
+                acp_cwd,
+            } => {
+                run_ask_cli(
+                    config.as_deref(),
+                    session.as_deref(),
+                    &message,
+                    acp,
+                    acp_event_stream,
+                    &acp_bootstrap_mcp_server,
+                    acp_cwd.as_deref(),
+                )
+                .await
+            }
+        },
         Commands::InvokeConnector { operation, payload } => {
             invoke_connector_cli(&operation, &payload).await
         }
@@ -334,6 +357,9 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Status { config, json } => {
+            status_cli::run_status_cli(config.as_deref(), json).await
+        }
         Commands::Tasks {
             config,
             json,
@@ -348,6 +374,10 @@ async fn main() {
             })
             .await
         }
+        Commands::DelegateChildRun {
+            config_path,
+            payload_file,
+        } => run_detached_delegate_child_cli(&config_path, &payload_file).await,
         Commands::Sessions {
             config,
             json,
@@ -1126,7 +1156,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{error_code, redacted_command_name};
-    use loongclaw_daemon::{Commands, MultiChannelServeChannelAccount};
+    use loongclaw_daemon::{Commands, MultiChannelServeChannelAccount, TurnCommands};
 
     #[test]
     fn command_kind_uses_stable_snake_case_labels() {
@@ -1167,14 +1197,21 @@ mod tests {
 
     #[test]
     fn redacted_command_name_omits_struct_field_values() {
-        let command = Commands::RunTask {
-            objective: "ship feature".to_owned(),
-            payload: "{\"secret\":\"value\"}".to_owned(),
+        let command = Commands::Turn {
+            command: TurnCommands::Run {
+                config: None,
+                session: None,
+                message: "ship feature".to_owned(),
+                acp: false,
+                acp_event_stream: false,
+                acp_bootstrap_mcp_server: Vec::new(),
+                acp_cwd: None,
+            },
         };
 
         let redacted = redacted_command_name(&command);
 
-        assert_eq!(redacted, "run_task");
+        assert_eq!(redacted, "turn_run");
     }
 
     #[test]

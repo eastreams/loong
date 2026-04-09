@@ -49,6 +49,7 @@ config-toml = ["loongclaw-app/config-toml"]
 memory-sqlite = ["loongclaw-app/memory-sqlite"]
 tool-shell = ["loongclaw-app/tool-shell"]
 tool-file = ["loongclaw-app/tool-file"]
+tool-http = ["loongclaw-app/tool-http"]
 tool-webfetch = ["loongclaw-app/tool-webfetch"]
 tool-websearch = ["loongclaw-app/tool-websearch"]
 tool-browser = ["loongclaw-app/tool-browser"]
@@ -58,6 +59,7 @@ libc = "0.2"
 
 
 [dependencies]
+async-trait.workspace = true
 axum = { workspace = true, features = ["query"] }
 clap.workspace = true
 clap_complete = "4.5"

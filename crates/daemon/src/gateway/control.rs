@@ -29,6 +29,7 @@ use crate::{
     collect_runtime_snapshot_cli_state_from_loaded_config, mvp, supervisor::LoadedSupervisorConfig,
 };
 
+use super::api_acp::{handle_acp_dispatch, handle_acp_observability, handle_acp_status};
 use super::api_events::handle_events;
 use super::api_health::handle_health;
 use super::api_turn::handle_turn;
@@ -66,8 +67,8 @@ struct GatewayAcpStatusQuery {
 #[derive(Clone)]
 pub(crate) struct GatewayControlAppState {
     pub(crate) runtime_dir: PathBuf,
-    pub(crate) bearer_token: String,
     pub(crate) config_path: String,
+    pub(crate) bearer_token: String,
     pub(crate) channel_inventory: Arc<GatewayChannelInventoryReadModel>,
     pub(crate) runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
     pub(crate) event_bus: Option<GatewayEventBus>,
@@ -116,14 +117,21 @@ impl GatewayControlAppState {
                 visible_tool_names: vec![],
                 capability_snapshot_sha256: String::new(),
                 capability_snapshot: String::new(),
+                tool_calling: super::read_models::GatewayToolCallingReadModel {
+                    availability: "inactive".to_owned(),
+                    structured_tool_schema_enabled: false,
+                    effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
+                    active_model: String::new(),
+                    reason: "no runtime-visible tools are enabled".to_owned(),
+                },
             },
             runtime_plugins: json!({}),
             external_skills: json!({}),
         };
         Self {
             runtime_dir: PathBuf::from("/tmp/test"),
-            bearer_token,
             config_path: String::new(),
+            bearer_token,
             channel_inventory: Arc::new(channel_inventory),
             runtime_snapshot: Arc::new(runtime_snapshot),
             event_bus: None,
@@ -255,8 +263,8 @@ pub async fn start_gateway_control_surface(
 
     let app_state = GatewayControlAppState {
         runtime_dir: runtime_dir.to_path_buf(),
-        bearer_token,
         config_path: loaded_config.resolved_path.display().to_string(),
+        bearer_token,
         channel_inventory: Arc::new(channel_inventory),
         runtime_snapshot: Arc::new(runtime_snapshot),
         event_bus,
@@ -316,6 +324,12 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
             get(handle_gateway_acp_observability),
         )
         .route("/api/gateway/stop", post(handle_gateway_stop))
+        .route("/v1/status", get(handle_gateway_status))
+        .route("/v1/channels", get(handle_gateway_channels))
+        .route("/v1/runtime/snapshot", get(handle_gateway_runtime_snapshot))
+        .route("/v1/acp/status", get(handle_acp_status))
+        .route("/v1/acp/observability", get(handle_acp_observability))
+        .route("/v1/acp/dispatch", get(handle_acp_dispatch))
         .route("/v1/events", get(handle_events))
         .route("/v1/turn", post(handle_turn))
         .route("/health", get(handle_health))
@@ -653,7 +667,7 @@ async fn handle_gateway_stop(
     json_response(response_status, payload)
 }
 
-fn is_gateway_acp_not_found_error(error: &str) -> bool {
+pub(crate) fn is_gateway_acp_not_found_error(error: &str) -> bool {
     let is_session_error = error.starts_with("ACP session `");
     let is_conversation_error = error.starts_with("ACP conversation `");
     let is_route_error = error.starts_with("ACP route session `");
@@ -976,5 +990,23 @@ pub fn build_gateway_events_test_router(
     let app_state = Arc::new(state);
     Router::new()
         .route("/v1/events", get(handle_events))
+        .with_state(app_state)
+}
+
+/// Minimal router for ACP gateway endpoint integration tests.
+#[doc(hidden)]
+pub fn build_gateway_acp_test_router(
+    bearer_token: String,
+    config: LoongClawConfig,
+    acp_manager: Arc<AcpSessionManager>,
+) -> Router {
+    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    state.acp_manager = Some(acp_manager);
+    state.config = Some(config);
+    let app_state = Arc::new(state);
+    Router::new()
+        .route("/v1/acp/status", get(handle_acp_status))
+        .route("/v1/acp/observability", get(handle_acp_observability))
+        .route("/v1/acp/dispatch", get(handle_acp_dispatch))
         .with_state(app_state)
 }

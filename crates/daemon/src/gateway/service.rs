@@ -304,7 +304,7 @@ fn gateway_owner_mode(
     }
 }
 
-fn default_gateway_owner_status(runtime_dir: &Path) -> GatewayOwnerStatus {
+pub(crate) fn default_gateway_owner_status(runtime_dir: &Path) -> GatewayOwnerStatus {
     GatewayOwnerStatus {
         runtime_dir: runtime_dir.display().to_string(),
         phase: "stopped".to_owned(),

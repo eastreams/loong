@@ -30,7 +30,6 @@ use crate::tui_surface::TuiKeyValueSpec;
 use crate::tui_surface::TuiMessageSpec;
 use crate::tui_surface::TuiScreenSpec;
 use crate::tui_surface::TuiSectionSpec;
-use crate::tui_surface::render_tui_message_spec;
 use crate::tui_surface::render_tui_screen_spec;
 
 use super::CLI_CHAT_COMPACT_COMMAND;
@@ -60,9 +59,18 @@ use super::print_rendered_cli_chat_lines;
 use super::recovery_callout_tone;
 #[cfg(not(feature = "memory-sqlite"))]
 use super::render_cli_chat_feature_unavailable_lines_with_width;
+use super::render_cli_chat_message_spec_with_width;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::render_turn_checkpoint_health_error_lines_with_width;
 use super::tui_plain_item;
+
+const PRIMARY_QUICK_COMMANDS_HINT: &str = "Quick commands: /help · /status · /history · /compact";
+const STATUS_QUICK_COMMANDS_HINT: &str = "Quick commands: /history · /compact · /help";
+const TRANSCRIPT_START_HINT: &str = "Type any request to start the transcript.";
+const STATUS_OR_COMPACT_HINT: &str =
+    "Use /status for runtime state or /compact before the next turn.";
+const CONTINUE_OR_STATUS_HINT: &str =
+    "Continue chatting, or run /status to inspect maintenance settings.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CliChatStartupSummary {
@@ -136,7 +144,7 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
     #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics(
             &runtime.config,
             &runtime.session_id,
             crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
@@ -186,7 +194,7 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
     #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics(
             &runtime.config,
             &runtime.session_id,
             crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
@@ -331,7 +339,7 @@ pub(super) fn render_cli_chat_missing_config_decline_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_cli_chat_missing_config_decline_message_spec(onboard_hint);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 fn build_cli_chat_missing_config_decline_message_spec(onboard_hint: &str) -> TuiMessageSpec {
@@ -356,7 +364,7 @@ fn build_cli_chat_missing_config_decline_message_spec(onboard_hint: &str) -> Tui
         role: "chat".to_owned(),
         caption: Some("setup required".to_owned()),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec!["Run setup now to unlock the full chat surface.".to_owned()],
     }
 }
 
@@ -373,7 +381,7 @@ pub(super) fn render_cli_chat_status_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_cli_chat_status_message_spec(summary);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
@@ -402,7 +410,10 @@ fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScr
         intro_lines: Vec::new(),
         sections,
         choices: Vec::new(),
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            PRIMARY_QUICK_COMMANDS_HINT.to_owned(),
+            TRANSCRIPT_START_HINT.to_owned(),
+        ],
     }
 }
 
@@ -422,7 +433,7 @@ fn build_cli_chat_status_message_spec(summary: &CliChatStartupSummary) -> TuiMes
         role: "status".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![STATUS_QUICK_COMMANDS_HINT.to_owned()],
     }
 }
 
@@ -512,7 +523,7 @@ fn build_cli_chat_runtime_sections(summary: &CliChatStartupSummary) -> Vec<TuiSe
 
 pub(super) fn render_cli_chat_help_lines_with_width(width: usize) -> Vec<String> {
     let message_spec = build_cli_chat_help_message_spec();
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
@@ -574,7 +585,10 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
         role: "chat".to_owned(),
         caption: Some("commands".to_owned()),
         sections: vec![command_section, usage_section],
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Send normal text to continue the transcript.".to_owned(),
+            "Use /exit to leave chat.".to_owned(),
+        ],
     }
 }
 
@@ -585,7 +599,7 @@ pub(super) fn render_cli_chat_history_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_cli_chat_history_message_spec(session_id, limit, history_lines);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 fn build_cli_chat_history_message_spec(
@@ -603,7 +617,7 @@ fn build_cli_chat_history_message_spec(
         role: "history".to_owned(),
         caption: Some(caption),
         sections: vec![history_section],
-        footer_lines: Vec::new(),
+        footer_lines: vec![STATUS_OR_COMPACT_HINT.to_owned()],
     }
 }
 
@@ -613,7 +627,7 @@ pub(super) fn render_manual_compaction_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_manual_compaction_message_spec(session_id, result);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 fn build_manual_compaction_message_spec(
@@ -652,7 +666,7 @@ fn build_manual_compaction_message_spec(
         role: "compact".to_owned(),
         caption: Some(caption),
         sections: vec![result_section, detail_section],
-        footer_lines: Vec::new(),
+        footer_lines: vec![CONTINUE_OR_STATUS_HINT.to_owned()],
     }
 }
 
@@ -765,7 +779,7 @@ pub(super) async fn load_manual_compaction_result(
     let before_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
     let before_turns = resolve_manual_compaction_turn_count(&before_snapshot);
     let report = turn_coordinator
-        .compact_session(config, session_id, binding)
+        .compact_production_session(config, session_id, binding)
         .await?;
     let after_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
     let after_turns = resolve_manual_compaction_turn_count(&after_snapshot);
@@ -1105,7 +1119,7 @@ pub(super) fn render_turn_checkpoint_startup_health_lines_with_width(
         diagnostics,
         /*always_emit*/ false,
     )?;
-    let rendered_lines = render_tui_message_spec(&message_spec, width);
+    let rendered_lines = render_cli_chat_message_spec_with_width(&message_spec, width);
 
     Some(rendered_lines)
 }
@@ -1126,7 +1140,7 @@ pub(super) fn render_turn_checkpoint_status_health_lines_with_width(
         None => {
             let caption = format!("session={session_id}");
             let detail_line = "checkpoint diagnostics unavailable".to_owned();
-            return render_tui_message_spec(
+            return render_cli_chat_message_spec_with_width(
                 &TuiMessageSpec {
                     role: "checkpoint".to_owned(),
                     caption: Some(caption),
@@ -1135,14 +1149,16 @@ pub(super) fn render_turn_checkpoint_status_health_lines_with_width(
                         title: Some("durability status".to_owned()),
                         lines: vec![detail_line],
                     }],
-                    footer_lines: Vec::new(),
+                    footer_lines: vec![
+                        "Use /status to refresh runtime health after the next turn.".to_owned(),
+                    ],
                 },
                 width,
             );
         }
     };
 
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -1241,6 +1257,6 @@ fn build_turn_checkpoint_health_message_spec(
         role: "checkpoint".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec!["Use /turn_checkpoint_repair when recovery can run safely.".to_owned()],
     })
 }

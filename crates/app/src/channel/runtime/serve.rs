@@ -14,13 +14,6 @@ use super::state;
 use super::state::ChannelOperationRuntimeTracker;
 use crate::CliResult;
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 #[derive(Debug, Clone, Copy)]
 pub(in crate::channel) struct ChannelServeRuntimeSpec<'a> {
     pub(in crate::channel) platform: ChannelPlatform,
@@ -52,13 +45,6 @@ impl ChannelServeStopHandle {
         self.requested.load(Ordering::SeqCst)
     }
 
-    #[cfg(any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom",
-        feature = "channel-whatsapp"
-    ))]
     pub(in crate::channel) async fn wait(&self) {
         if self.is_requested() {
             return;
@@ -72,13 +58,6 @@ impl ChannelServeStopHandle {
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 pub(in crate::channel) fn channel_runtime_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -86,13 +65,6 @@ pub(in crate::channel) fn channel_runtime_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 pub(in crate::channel) fn ensure_channel_operation_runtime_slot_available_in_dir(
     runtime_dir: &std::path::Path,
     spec: ChannelServeRuntimeSpec<'_>,
@@ -132,13 +104,6 @@ pub(in crate::channel) fn ensure_channel_operation_runtime_slot_available_in_dir
     ))
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 pub(in crate::channel) async fn with_channel_serve_runtime<T, F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     run: F,
@@ -165,13 +130,6 @@ where
     merge_runtime_result(result, shutdown_result)
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 pub(in crate::channel) async fn with_channel_serve_runtime_with_stop<F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     stop: ChannelServeStopHandle,
@@ -184,7 +142,16 @@ where
     with_channel_serve_runtime(spec, move |runtime| run(runtime, stop)).await
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp"
+    )
+))]
 pub(in crate::channel) async fn with_channel_serve_runtime_with_stop_in_dir<F, Fut>(
     runtime_dir: &std::path::Path,
     process_id: u32,
@@ -202,7 +169,16 @@ where
     .await
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp"
+    )
+))]
 pub(in crate::channel) async fn with_channel_serve_runtime_in_dir<T, F, Fut>(
     runtime_dir: &std::path::Path,
     process_id: u32,

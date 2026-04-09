@@ -7,8 +7,8 @@ use super::provider_keyspace::build_provider_auth_profile_id;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProviderAuthProfile {
     pub(super) id: String,
-    pub(super) authorization_header: Option<String>,
-    pub(super) x_api_key_header: Option<String>,
+    pub(super) authorization_secret: Option<String>,
+    pub(super) api_key_secret: Option<String>,
     pub(super) auth_cache_key: Option<String>,
 }
 
@@ -31,10 +31,10 @@ pub(super) fn resolve_provider_auth_profiles(
             }
 
             for api_key in provider.api_key_candidates() {
-                push_bearer_profile(&mut profiles, &mut seen, "api_key", api_key.as_str());
+                push_bearer_api_key_profile(&mut profiles, &mut seen, api_key.as_str());
             }
         }
-        ProviderAuthScheme::XApiKey => {
+        ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => {
             for api_key in provider.api_key_candidates() {
                 push_x_api_key_profile(&mut profiles, &mut seen, api_key.as_str());
             }
@@ -48,11 +48,25 @@ pub(super) fn resolve_provider_auth_profiles(
     profiles
 }
 
+pub(super) fn auth_profile_supports_scheme(
+    profile: &ProviderAuthProfile,
+    auth_scheme: ProviderAuthScheme,
+) -> bool {
+    match auth_scheme {
+        ProviderAuthScheme::Bearer => {
+            profile.authorization_secret.is_some() || profile.api_key_secret.is_some()
+        }
+        ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => {
+            profile.api_key_secret.is_some()
+        }
+    }
+}
+
 fn anonymous_auth_profile() -> ProviderAuthProfile {
     ProviderAuthProfile {
         id: "anonymous".to_owned(),
-        authorization_header: None,
-        x_api_key_header: None,
+        authorization_secret: None,
+        api_key_secret: None,
         auth_cache_key: None,
     }
 }
@@ -63,15 +77,39 @@ fn push_bearer_profile(
     prefix: &str,
     secret: &str,
 ) {
-    let authorization_header = format!("Bearer {secret}");
-    if !seen.insert(authorization_header.clone()) {
+    let auth_cache_key = format!("bearer:{secret}");
+    if !seen.insert(auth_cache_key.clone()) {
         return;
     }
     profiles.push(ProviderAuthProfile {
         id: build_provider_auth_profile_id(prefix, secret),
-        authorization_header: Some(authorization_header.clone()),
-        x_api_key_header: None,
-        auth_cache_key: Some(authorization_header),
+        authorization_secret: Some(secret.to_owned()),
+        api_key_secret: None,
+        auth_cache_key: Some(auth_cache_key),
+    });
+}
+
+fn push_bearer_api_key_profile(
+    profiles: &mut Vec<ProviderAuthProfile>,
+    seen: &mut HashSet<String>,
+    secret: &str,
+) {
+    let auth_cache_key = format!("bearer:{secret}");
+    if !seen.insert(auth_cache_key.clone()) {
+        if let Some(profile) = profiles
+            .iter_mut()
+            .find(|profile| profile.auth_cache_key.as_deref() == Some(auth_cache_key.as_str()))
+            && profile.api_key_secret.is_none()
+        {
+            profile.api_key_secret = Some(secret.to_owned());
+        }
+        return;
+    }
+    profiles.push(ProviderAuthProfile {
+        id: build_provider_auth_profile_id("api_key", secret),
+        authorization_secret: Some(secret.to_owned()),
+        api_key_secret: Some(secret.to_owned()),
+        auth_cache_key: Some(auth_cache_key),
     });
 }
 
@@ -86,8 +124,8 @@ fn push_x_api_key_profile(
     }
     profiles.push(ProviderAuthProfile {
         id: build_provider_auth_profile_id("api_key", secret),
-        authorization_header: None,
-        x_api_key_header: Some(secret.to_owned()),
+        authorization_secret: None,
+        api_key_secret: Some(secret.to_owned()),
         auth_cache_key: Some(cache_key),
     });
 }
@@ -115,10 +153,10 @@ mod tests {
         let profiles = resolve_provider_auth_profiles(&provider);
         assert_eq!(profiles.len(), 1);
         assert_eq!(
-            profiles[0].authorization_header.as_deref(),
-            Some("Bearer same-secret")
+            profiles[0].authorization_secret.as_deref(),
+            Some("same-secret")
         );
-        assert_eq!(profiles[0].x_api_key_header, None);
+        assert_eq!(profiles[0].api_key_secret.as_deref(), Some("same-secret"));
     }
 
     #[test]
@@ -138,15 +176,38 @@ mod tests {
 
         let profiles = resolve_provider_auth_profiles(&provider);
         assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].authorization_header, None);
+        assert_eq!(profiles[0].authorization_secret, None);
         assert_eq!(
-            profiles[0].x_api_key_header.as_deref(),
+            profiles[0].api_key_secret.as_deref(),
             Some("anthropic-secret")
         );
         assert_eq!(
             profiles[0].auth_cache_key.as_deref(),
             Some("x-api-key:anthropic-secret")
         );
+    }
+
+    #[test]
+    fn auth_profile_supports_scheme_requires_api_key_for_x_api_key_routes() {
+        let oauth_only_profile = ProviderAuthProfile {
+            id: "oauth:test".to_owned(),
+            authorization_secret: Some("oauth-only".to_owned()),
+            api_key_secret: None,
+            auth_cache_key: Some("bearer:oauth-only".to_owned()),
+        };
+
+        assert!(auth_profile_supports_scheme(
+            &oauth_only_profile,
+            ProviderAuthScheme::Bearer
+        ));
+        assert!(!auth_profile_supports_scheme(
+            &oauth_only_profile,
+            ProviderAuthScheme::XApiKey
+        ));
+        assert!(!auth_profile_supports_scheme(
+            &oauth_only_profile,
+            ProviderAuthScheme::XGoogApiKey
+        ));
     }
 
     #[test]
@@ -163,8 +224,8 @@ mod tests {
         let profiles = resolve_provider_auth_profiles(&provider);
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].id, "anonymous");
-        assert_eq!(profiles[0].authorization_header, None);
-        assert_eq!(profiles[0].x_api_key_header, None);
+        assert_eq!(profiles[0].authorization_secret, None);
+        assert_eq!(profiles[0].api_key_secret, None);
         assert_eq!(profiles[0].auth_cache_key, None);
     }
 
@@ -192,8 +253,8 @@ mod tests {
         let profiles = resolve_provider_auth_profiles(&provider);
         assert_eq!(profiles.len(), 1);
         assert_eq!(
-            profiles[0].authorization_header.as_deref(),
-            Some("Bearer test-copilot-api-key")
+            profiles[0].authorization_secret.as_deref(),
+            Some("test-copilot-api-key")
         );
 
         super::super::copilot_auth::clear_cache_for_test();
@@ -224,7 +285,8 @@ mod tests {
 
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].id, "anonymous");
-        assert_eq!(profiles[0].authorization_header, None);
+        assert_eq!(profiles[0].authorization_secret, None);
+        assert_eq!(profiles[0].api_key_secret, None);
 
         super::super::copilot_auth::clear_cache_for_test();
     }
@@ -245,11 +307,11 @@ mod tests {
         let profiles = resolve_provider_auth_profiles(&provider);
         assert_eq!(profiles.len(), 2);
         assert_eq!(
-            profiles[0].authorization_header.as_deref(),
-            Some("Bearer bedrock-bearer-token")
+            profiles[0].authorization_secret.as_deref(),
+            Some("bedrock-bearer-token")
         );
         assert_eq!(profiles[1].id, "anonymous");
-        assert_eq!(profiles[1].authorization_header, None);
-        assert_eq!(profiles[1].x_api_key_header, None);
+        assert_eq!(profiles[1].authorization_secret, None);
+        assert_eq!(profiles[1].api_key_secret, None);
     }
 }

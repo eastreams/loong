@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
+default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-http", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
 channel-cli = []
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "dep:prost", "dep:rustls", "dep:tokio-tungstenite", "feishu-integration"]
@@ -43,6 +43,7 @@ feishu-integration = ["dep:rusqlite"]
 tool-shell = []
 tool-file = []
 tool-browser = ["dep:scraper"]
+tool-http = []
 tool-webfetch = []
 tool-websearch = []
 test-support = []

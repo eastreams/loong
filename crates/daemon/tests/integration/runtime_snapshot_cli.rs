@@ -99,6 +99,12 @@ impl Drop for RuntimeSnapshotPolicyResetGuard {
 
 fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongClawConfig) {
     fs::create_dir_all(root).expect("create fixture root");
+    let workspace_root = root.join("workspace");
+    fs::create_dir_all(&workspace_root).expect("create workspace fixture root");
+    let mcp_command = std::env::current_exe()
+        .expect("current executable path for MCP fixture")
+        .display()
+        .to_string();
 
     let mut config = mvp::config::LoongClawConfig::default();
     config.tools.file_root = Some(root.display().to_string());
@@ -123,13 +129,13 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCla
         "docs".to_owned(),
         mvp::mcp::McpServerConfig {
             transport: mvp::mcp::McpServerTransportConfig::Stdio {
-                command: "uvx".to_owned(),
+                command: mcp_command,
                 args: vec!["context7-mcp".to_owned()],
                 env: std::collections::BTreeMap::from([(
                     "API_TOKEN".to_owned(),
                     "secret".to_owned(),
                 )]),
-                cwd: Some(root.join("workspace")),
+                cwd: Some(workspace_root),
             },
             enabled: true,
             required: false,

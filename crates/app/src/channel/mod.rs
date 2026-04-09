@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::config::LoongClawConfig;
 
 mod catalog;
@@ -106,7 +107,6 @@ pub use registry::{
     resolve_channel_runtime_command_descriptor, validate_plugin_channel_bridge_manifest,
 };
 pub use runtime::state::ChannelOperationRuntime;
-use runtime::state::ChannelOperationRuntimeTracker;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -132,7 +132,16 @@ pub use types::{
 };
 
 pub use runtime::serve::ChannelServeStopHandle;
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp"
+    )
+))]
 use runtime::serve::{
     with_channel_serve_runtime_in_dir, with_channel_serve_runtime_with_stop_in_dir,
 };
@@ -152,6 +161,8 @@ use commands::context::render_channel_route_notice;
     feature = "channel-whatsapp",
 ))]
 pub(crate) use dispatch::process_inbound_with_provider;
+#[cfg(all(test, feature = "config-toml"))]
+use dispatch::reload_channel_turn_config;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -171,14 +182,23 @@ pub use dispatch::run_wecom_channel_with_stop;
 #[cfg(feature = "channel-whatsapp")]
 pub use dispatch::run_whatsapp_channel_with_stop;
 pub(crate) use dispatch::send_text_to_known_session;
-use dispatch::{ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command};
-#[cfg(test)]
-use dispatch::{
-    build_feishu_command_context, build_telegram_command_context, channel_message_ingress_context,
-    process_inbound_with_runtime_and_feedback, reload_channel_turn_config,
-    validate_feishu_security_config, validate_matrix_security_config,
-    validate_telegram_security_config,
-};
+#[cfg(all(test, feature = "channel-matrix"))]
+use dispatch::validate_matrix_security_config;
+#[cfg(all(test, feature = "channel-feishu"))]
+use dispatch::{build_feishu_command_context, validate_feishu_security_config};
+#[cfg(all(test, feature = "channel-telegram"))]
+use dispatch::{build_telegram_command_context, validate_telegram_security_config};
+#[cfg(all(
+    test,
+    any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp"
+    )
+))]
+use dispatch::{channel_message_ingress_context, process_inbound_with_runtime_and_feedback};
 pub use dispatch::{
     load_channel_operation_runtime_for_account_from_dir_for_test, run_background_channel_with_stop,
     run_dingtalk_send, run_discord_send, run_email_send, run_feishu_channel, run_feishu_send,
@@ -188,12 +208,38 @@ pub use dispatch::{
     run_telegram_send, run_webhook_send, run_wecom_channel, run_wecom_send, run_whatsapp_channel,
     run_whatsapp_send,
 };
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp"
+    )
+))]
 use runtime::serve::ChannelServeRuntimeSpec;
-#[cfg(test)]
-use types::{
-    KnownChannelSessionSendTarget, parse_known_channel_session_send_target, process_channel_batch,
-};
+#[cfg(all(
+    test,
+    any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp"
+    )
+))]
+use types::process_channel_batch;
+#[cfg(all(
+    test,
+    any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom"
+    )
+))]
+use types::{KnownChannelSessionSendTarget, parse_known_channel_session_send_target};
 
 #[cfg(test)]
 mod tests {

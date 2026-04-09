@@ -9,6 +9,8 @@ use crate::{CliResult, KernelContext};
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
 use std::collections::BTreeSet;
+#[cfg(feature = "memory-sqlite")]
+use std::path::Path;
 
 #[cfg(feature = "memory-sqlite")]
 use super::compaction::{CompactPolicy, compact_window};
@@ -595,13 +597,11 @@ async fn load_stage_envelope(
     if let Some(ctx) = binding.kernel_context() {
         let runtime_config =
             memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        let workspace_root = config
-            .tools
-            .file_root
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|_| config.tools.resolved_file_root());
+        let tool_runtime_config =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+        let workspace_root = tool_runtime_config
+            .effective_workspace_root()
+            .map(Path::to_path_buf);
         let request = memory::build_read_stage_envelope_request_with_workspace_root(
             session_id,
             workspace_root.as_deref(),

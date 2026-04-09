@@ -3,7 +3,7 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Notify, broadcast};
 use tokio::time::{Duration, Instant, timeout};
@@ -32,6 +32,9 @@ const CONTROL_PLANE_CONNECTION_TTL_MS: u64 = 15 * 60 * 1000;
 const CONTROL_PLANE_CHALLENGE_TTL_MS: u64 = 60 * 1000;
 const CONTROL_PLANE_MAX_WAIT_TIMEOUT_MS: u64 = 30_000;
 const CONTROL_PLANE_EVENT_CHANNEL_CAPACITY: usize = 256;
+const CONTROL_PLANE_TURN_EVENT_CHANNEL_CAPACITY: usize = 256;
+const CONTROL_PLANE_TURN_RECENT_EVENT_LIMIT: usize = 256;
+const CONTROL_PLANE_TURN_TERMINAL_RETENTION_LIMIT: usize = 256;
 #[cfg(feature = "memory-sqlite")]
 const DEFAULT_CONTROL_PLANE_SESSION_ID: &str = "default";
 #[cfg(feature = "memory-sqlite")]
@@ -108,6 +111,315 @@ pub struct ControlPlaneEventRecord {
     pub state_version: ControlPlaneStateVersion,
     pub payload: Value,
     pub targeted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlPlaneTurnStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl ControlPlaneTurnStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlPlaneTurnEventRecord {
+    pub turn_id: String,
+    pub session_id: String,
+    pub seq: u64,
+    pub terminal: bool,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlPlaneTurnSnapshot {
+    pub turn_id: String,
+    pub session_id: String,
+    pub status: ControlPlaneTurnStatus,
+    pub submitted_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub event_count: usize,
+    pub output_text: Option<String>,
+    pub stop_reason: Option<String>,
+    pub usage: Option<Value>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ControlPlaneTurnStateRecord {
+    snapshot: ControlPlaneTurnSnapshot,
+    recent_events: VecDeque<ControlPlaneTurnEventRecord>,
+    next_seq: u64,
+}
+
+#[derive(Debug)]
+pub struct ControlPlaneTurnRegistry {
+    nonce: AtomicU64,
+    turns: RwLock<BTreeMap<String, ControlPlaneTurnStateRecord>>,
+    sender: broadcast::Sender<ControlPlaneTurnEventRecord>,
+}
+
+impl Default for ControlPlaneTurnRegistry {
+    fn default() -> Self {
+        let channel = broadcast::channel(CONTROL_PLANE_TURN_EVENT_CHANNEL_CAPACITY);
+        let sender = channel.0;
+        Self {
+            nonce: AtomicU64::new(0),
+            turns: RwLock::new(BTreeMap::new()),
+            sender,
+        }
+    }
+}
+
+impl ControlPlaneTurnRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn issue_turn(&self, session_id: &str) -> ControlPlaneTurnSnapshot {
+        let issued_at_ms = current_time_ms();
+        let sequence = self.nonce.fetch_add(1, Ordering::Relaxed) + 1;
+        let random_component = rand::random::<u64>();
+        let turn_id = format!("cpt-turn-{sequence:016x}-{random_component:016x}");
+        let snapshot = ControlPlaneTurnSnapshot {
+            turn_id: turn_id.clone(),
+            session_id: session_id.to_owned(),
+            status: ControlPlaneTurnStatus::Running,
+            submitted_at_ms: issued_at_ms,
+            completed_at_ms: None,
+            event_count: 0,
+            output_text: None,
+            stop_reason: None,
+            usage: None,
+            error: None,
+        };
+        let record = ControlPlaneTurnStateRecord {
+            snapshot: snapshot.clone(),
+            recent_events: VecDeque::new(),
+            next_seq: 1,
+        };
+        let mut turns = self
+            .turns
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        turns.insert(turn_id, record);
+        snapshot
+    }
+
+    pub fn read_turn(&self, turn_id: &str) -> Result<Option<ControlPlaneTurnSnapshot>, String> {
+        let turns = self.turns.read().unwrap_or_else(|error| error.into_inner());
+        let snapshot = turns.get(turn_id).map(|record| record.snapshot.clone());
+        Ok(snapshot)
+    }
+
+    pub fn recent_events_after(
+        &self,
+        turn_id: &str,
+        after_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<ControlPlaneTurnEventRecord>, String> {
+        let bounded_limit = limit.clamp(1, CONTROL_PLANE_TURN_RECENT_EVENT_LIMIT);
+        let turns = self.turns.read().unwrap_or_else(|error| error.into_inner());
+        let Some(record) = turns.get(turn_id) else {
+            return Err(format!("control_plane_turn_not_found: `{turn_id}`"));
+        };
+        let events = record
+            .recent_events
+            .iter()
+            .filter(|event| event.seq > after_seq)
+            .take(bounded_limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(events)
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ControlPlaneTurnEventRecord> {
+        self.sender.subscribe()
+    }
+
+    pub fn record_runtime_event(
+        &self,
+        turn_id: &str,
+        payload: Value,
+    ) -> Result<ControlPlaneTurnEventRecord, String> {
+        self.push_event(turn_id, false, payload)
+    }
+
+    pub fn complete_success(
+        &self,
+        turn_id: &str,
+        output_text: &str,
+        stop_reason: Option<&str>,
+        usage: Option<Value>,
+    ) -> Result<ControlPlaneTurnEventRecord, String> {
+        let completed_at_ms = current_time_ms();
+        let terminal_status = match stop_reason {
+            Some("cancelled") => ControlPlaneTurnStatus::Cancelled,
+            _ => ControlPlaneTurnStatus::Completed,
+        };
+        let usage_payload = usage.clone();
+        let payload = json!({
+            "event_type": "turn.completed",
+            "output_text": output_text,
+            "stop_reason": stop_reason,
+            "usage": usage_payload,
+        });
+        let event = {
+            let mut turns = self
+                .turns
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(record) = turns.get_mut(turn_id) else {
+                return Err(format!("control_plane_turn_not_found: `{turn_id}`"));
+            };
+            Self::ensure_turn_mutable(record, turn_id)?;
+            record.snapshot.status = terminal_status;
+            record.snapshot.completed_at_ms = Some(completed_at_ms);
+            record.snapshot.output_text = Some(output_text.to_owned());
+            record.snapshot.stop_reason = stop_reason.map(ToOwned::to_owned);
+            record.snapshot.usage = usage;
+            record.snapshot.error = None;
+            let event = Self::push_event_locked(record, true, payload);
+            Self::prune_terminal_turns_locked(&mut turns);
+            event
+        };
+        let send_result = self.sender.send(event.clone());
+        let _ = send_result;
+        Ok(event)
+    }
+
+    pub fn complete_failure(
+        &self,
+        turn_id: &str,
+        error: &str,
+    ) -> Result<ControlPlaneTurnEventRecord, String> {
+        let completed_at_ms = current_time_ms();
+        let payload = json!({
+            "event_type": "turn.failed",
+            "error": error,
+        });
+        let event = {
+            let mut turns = self
+                .turns
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(record) = turns.get_mut(turn_id) else {
+                return Err(format!("control_plane_turn_not_found: `{turn_id}`"));
+            };
+            Self::ensure_turn_mutable(record, turn_id)?;
+            record.snapshot.status = ControlPlaneTurnStatus::Failed;
+            record.snapshot.completed_at_ms = Some(completed_at_ms);
+            record.snapshot.error = Some(error.to_owned());
+            record.snapshot.output_text = None;
+            record.snapshot.stop_reason = None;
+            record.snapshot.usage = None;
+            let event = Self::push_event_locked(record, true, payload);
+            Self::prune_terminal_turns_locked(&mut turns);
+            event
+        };
+        let send_result = self.sender.send(event.clone());
+        let _ = send_result;
+        Ok(event)
+    }
+
+    fn push_event(
+        &self,
+        turn_id: &str,
+        terminal: bool,
+        payload: Value,
+    ) -> Result<ControlPlaneTurnEventRecord, String> {
+        let event = {
+            let mut turns = self
+                .turns
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(record) = turns.get_mut(turn_id) else {
+                return Err(format!("control_plane_turn_not_found: `{turn_id}`"));
+            };
+            Self::ensure_turn_mutable(record, turn_id)?;
+            Self::push_event_locked(record, terminal, payload)
+        };
+        let send_result = self.sender.send(event.clone());
+        let _ = send_result;
+        Ok(event)
+    }
+
+    fn push_event_locked(
+        record: &mut ControlPlaneTurnStateRecord,
+        terminal: bool,
+        payload: Value,
+    ) -> ControlPlaneTurnEventRecord {
+        let event = ControlPlaneTurnEventRecord {
+            turn_id: record.snapshot.turn_id.clone(),
+            session_id: record.snapshot.session_id.clone(),
+            seq: record.next_seq,
+            terminal,
+            payload,
+        };
+        record.next_seq += 1;
+        record.snapshot.event_count += 1;
+        record.recent_events.push_back(event.clone());
+        while record.recent_events.len() > CONTROL_PLANE_TURN_RECENT_EVENT_LIMIT {
+            record.recent_events.pop_front();
+        }
+        event
+    }
+
+    fn prune_terminal_turns_locked(turns: &mut BTreeMap<String, ControlPlaneTurnStateRecord>) {
+        let terminal_count = turns
+            .values()
+            .filter(|record| record.snapshot.status.is_terminal())
+            .count();
+        if terminal_count <= CONTROL_PLANE_TURN_TERMINAL_RETENTION_LIMIT {
+            return;
+        }
+        let overflow_count = terminal_count - CONTROL_PLANE_TURN_TERMINAL_RETENTION_LIMIT;
+        let mut removal_candidates = turns
+            .iter()
+            .filter(|(_, record)| record.snapshot.status.is_terminal())
+            .map(|(turn_id, record)| {
+                let completed_at_ms = record
+                    .snapshot
+                    .completed_at_ms
+                    .unwrap_or(record.snapshot.submitted_at_ms);
+                let submitted_at_ms = record.snapshot.submitted_at_ms;
+                (completed_at_ms, submitted_at_ms, turn_id.clone())
+            })
+            .collect::<Vec<_>>();
+        removal_candidates.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        for (_, _, turn_id) in removal_candidates.into_iter().take(overflow_count) {
+            turns.remove(turn_id.as_str());
+        }
+    }
+
+    fn ensure_turn_mutable(
+        record: &ControlPlaneTurnStateRecord,
+        turn_id: &str,
+    ) -> Result<(), String> {
+        if !record.snapshot.status.is_terminal() {
+            return Ok(());
+        }
+        Err(format!("control_plane_turn_already_terminal: `{turn_id}`"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1276,6 +1588,15 @@ impl ControlPlaneRepositoryView {
         )
     }
 
+    pub fn ensure_visible_session_id(&self, target_session_id: &str) -> Result<(), String> {
+        let target_session_id = target_session_id.trim();
+        if target_session_id.is_empty() {
+            return Err("control_plane_session_id_missing".to_owned());
+        }
+        let repo = self.open_repo()?;
+        self.ensure_visible_session(&repo, target_session_id)
+    }
+
     pub fn list_approvals(
         &self,
         session_id: Option<&str>,
@@ -1465,7 +1786,8 @@ impl ControlPlaneAcpView {
         if self.current_session_id == DEFAULT_CONTROL_PLANE_SESSION_ID {
             return Ok(None);
         }
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+        let memory_config =
+            MemoryRuntimeConfig::from_memory_config_without_env_overrides(&self.config.memory);
         SessionRepository::new(&memory_config).map(Some)
     }
 
@@ -1622,6 +1944,75 @@ mod tests {
         assert!(event.targeted);
         assert_eq!(event.state_version.sessions, 1);
         assert_eq!(manager.snapshot().session_count, 5);
+    }
+
+    #[test]
+    fn turn_registry_prunes_oldest_terminal_turns() {
+        let registry = ControlPlaneTurnRegistry::new();
+        let first_turn = registry.issue_turn("session-0");
+        let first_output = "output-0".to_owned();
+        registry
+            .complete_success(
+                first_turn.turn_id.as_str(),
+                first_output.as_str(),
+                Some("completed"),
+                None,
+            )
+            .expect("complete first turn");
+        let mut newest_turn_id = first_turn.turn_id.clone();
+        for index in 1..=CONTROL_PLANE_TURN_TERMINAL_RETENTION_LIMIT {
+            let session_id = format!("session-{index}");
+            let output_text = format!("output-{index}");
+            let turn = registry.issue_turn(session_id.as_str());
+            registry
+                .complete_success(
+                    turn.turn_id.as_str(),
+                    output_text.as_str(),
+                    Some("completed"),
+                    None,
+                )
+                .expect("complete retained turn");
+            newest_turn_id = turn.turn_id;
+        }
+        let removed_turn = registry
+            .read_turn(first_turn.turn_id.as_str())
+            .expect("read pruned turn");
+        let retained_turn = registry
+            .read_turn(newest_turn_id.as_str())
+            .expect("read retained turn");
+        let retained_terminal_count = {
+            let turns = registry
+                .turns
+                .read()
+                .unwrap_or_else(|error| error.into_inner());
+            turns
+                .values()
+                .filter(|record| record.snapshot.status.is_terminal())
+                .count()
+        };
+        assert!(removed_turn.is_none());
+        assert!(retained_turn.is_some());
+        assert_eq!(
+            retained_terminal_count,
+            CONTROL_PLANE_TURN_TERMINAL_RETENTION_LIMIT
+        );
+    }
+
+    #[test]
+    fn turn_registry_rejects_mutation_after_terminal_completion() {
+        let registry = ControlPlaneTurnRegistry::new();
+        let turn = registry.issue_turn("session-1");
+        registry
+            .complete_success(turn.turn_id.as_str(), "done", Some("completed"), None)
+            .expect("complete turn");
+        let runtime_event_error = registry
+            .record_runtime_event(turn.turn_id.as_str(), json!({ "type": "late" }))
+            .expect_err("late runtime event should be rejected");
+        let completion_error = registry
+            .complete_failure(turn.turn_id.as_str(), "late failure")
+            .expect_err("late completion should be rejected");
+        assert!(runtime_event_error.contains("control_plane_turn_already_terminal"));
+        assert!(completion_error.contains("control_plane_turn_already_terminal"));
     }
 
     #[test]

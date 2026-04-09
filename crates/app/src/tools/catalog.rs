@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(feature = "tool-file"))]
 use std::path::Path;
@@ -6,6 +7,7 @@ use std::sync::OnceLock;
 use loongclaw_kernel::ToolConcurrencyClass;
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::Digest;
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ToolConfig;
@@ -306,11 +308,15 @@ impl ToolDescriptor {
     }
 
     pub fn requires_kernel_binding(&self) -> bool {
+        let execution_kind = self.execution_kind;
+        if execution_kind != ToolExecutionKind::App {
+            return false;
+        }
+
         let governance_profile = self.governance_profile();
         let approval_mode = governance_profile.approval_mode;
-        let execution_kind = self.execution_kind;
 
-        execution_kind == ToolExecutionKind::App && approval_mode == ToolApprovalMode::PolicyDriven
+        approval_mode == ToolApprovalMode::PolicyDriven
     }
 }
 
@@ -393,6 +399,18 @@ impl ToolView {
 #[derive(Debug, Clone)]
 pub struct ToolCatalog {
     descriptors: Vec<ToolDescriptor>,
+    descriptor_indices: BTreeMap<&'static str, usize>,
+    resolved_name_indices: BTreeMap<&'static str, usize>,
+    all_entries: Box<[ToolCatalogEntry]>,
+    provider_core_entries: Box<[ToolCatalogEntry]>,
+    discoverable_entries: Box<[ToolCatalogEntry]>,
+    catalog_digest: String,
+}
+
+struct ToolCatalogEntryCaches {
+    all_entries: Box<[ToolCatalogEntry]>,
+    provider_core_entries: Box<[ToolCatalogEntry]>,
+    discoverable_entries: Box<[ToolCatalogEntry]>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -431,19 +449,33 @@ const fn runtime_messaging_tool_availability() -> ToolAvailability {
 
 impl ToolCatalog {
     pub fn descriptor(&self, tool_name: &str) -> Option<&ToolDescriptor> {
-        self.descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == tool_name)
+        let index = self.descriptor_indices.get(tool_name)?;
+        self.descriptors.get(*index)
     }
 
     pub fn resolve(&self, raw_tool_name: &str) -> Option<&ToolDescriptor> {
-        self.descriptors
-            .iter()
-            .find(|descriptor| descriptor.matches_name(raw_tool_name))
+        let index = self.resolved_name_indices.get(raw_tool_name)?;
+        self.descriptors.get(*index)
     }
 
     pub fn descriptors(&self) -> &[ToolDescriptor] {
         &self.descriptors
+    }
+
+    fn all_entries(&self) -> &[ToolCatalogEntry] {
+        &self.all_entries
+    }
+
+    fn provider_core_entries(&self) -> &[ToolCatalogEntry] {
+        &self.provider_core_entries
+    }
+
+    fn discoverable_entries(&self) -> &[ToolCatalogEntry] {
+        &self.discoverable_entries
+    }
+
+    fn catalog_digest(&self) -> &str {
+        self.catalog_digest.as_str()
     }
 }
 
@@ -497,6 +529,8 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "sessions_history"
         | "sessions_list"
         | "file.read"
+        | "glob.search"
+        | "content.search"
         | "memory_search"
         | "memory_get"
         | "browser.companion.snapshot"
@@ -520,6 +554,7 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "session_tool_policy_clear"
         | "session_recover"
         | "sessions_send"
+        | "http.request"
         | "file.write"
         | "file.edit"
         | "shell.exec"
@@ -1312,6 +1347,34 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: file_read_definition,
         });
         descriptors.push(ToolDescriptor {
+            name: "glob.search",
+            provider_name: "glob_search",
+            aliases: &[],
+            description: "Search the workspace for files matching a glob pattern",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: glob_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "content.search",
+            provider_name: "content_search",
+            aliases: &[],
+            description: "Search workspace file contents for a text match with bounded results",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: content_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
             name: "memory_search",
             provider_name: "memory_search",
             aliases: &[],
@@ -1550,6 +1613,25 @@ fn build_tool_catalog() -> ToolCatalog {
         });
     }
 
+    #[cfg(feature = "tool-http")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "http.request",
+            provider_name: "http_request",
+            aliases: &["http_request"],
+            description:
+                "Send a bounded HTTP request with status, headers, and text or binary body output",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::WebFetch,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: http_request_definition,
+        });
+    }
+
     #[cfg(feature = "tool-webfetch")]
     {
         descriptors.push(ToolDescriptor {
@@ -1589,7 +1671,89 @@ fn build_tool_catalog() -> ToolCatalog {
 
     annotate_tool_concurrency_classes(&mut descriptors);
     descriptors.sort_by(|left, right| left.name.cmp(right.name));
-    ToolCatalog { descriptors }
+
+    let descriptor_indices = build_descriptor_indices(descriptors.as_slice());
+    let resolved_name_indices = build_resolved_name_indices(descriptors.as_slice());
+    let entry_caches = build_tool_catalog_entry_caches(descriptors.as_slice());
+    let all_entries = entry_caches.all_entries;
+    let provider_core_entries = entry_caches.provider_core_entries;
+    let discoverable_entries = entry_caches.discoverable_entries;
+    let catalog_digest = build_tool_catalog_digest(all_entries.as_ref());
+
+    ToolCatalog {
+        descriptors,
+        descriptor_indices,
+        resolved_name_indices,
+        all_entries,
+        provider_core_entries,
+        discoverable_entries,
+        catalog_digest,
+    }
+}
+
+fn build_descriptor_indices(descriptors: &[ToolDescriptor]) -> BTreeMap<&'static str, usize> {
+    let mut descriptor_indices = BTreeMap::new();
+
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        descriptor_indices.insert(descriptor.name, index);
+    }
+
+    descriptor_indices
+}
+
+fn build_resolved_name_indices(descriptors: &[ToolDescriptor]) -> BTreeMap<&'static str, usize> {
+    let mut resolved_name_indices = BTreeMap::new();
+
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        resolved_name_indices
+            .entry(descriptor.name)
+            .or_insert(index);
+        resolved_name_indices
+            .entry(descriptor.provider_name)
+            .or_insert(index);
+
+        for alias in descriptor.aliases {
+            resolved_name_indices.entry(*alias).or_insert(index);
+        }
+    }
+
+    resolved_name_indices
+}
+
+fn build_tool_catalog_entry_caches(descriptors: &[ToolDescriptor]) -> ToolCatalogEntryCaches {
+    let mut all_entries = Vec::new();
+    let mut provider_core_entries = Vec::new();
+    let mut discoverable_entries = Vec::new();
+
+    for descriptor in descriptors {
+        let entry = descriptor_to_entry(descriptor);
+
+        if descriptor.is_provider_core() {
+            provider_core_entries.push(entry);
+        }
+
+        if descriptor.is_discoverable() {
+            discoverable_entries.push(entry);
+        }
+
+        all_entries.push(entry);
+    }
+
+    ToolCatalogEntryCaches {
+        all_entries: all_entries.into_boxed_slice(),
+        provider_core_entries: provider_core_entries.into_boxed_slice(),
+        discoverable_entries: discoverable_entries.into_boxed_slice(),
+    }
+}
+
+fn build_tool_catalog_digest(entries: &[ToolCatalogEntry]) -> String {
+    let payload = serde_json::to_vec(entries).unwrap_or_default();
+    let digest = sha2::Sha256::digest(payload);
+    hex::encode(digest)
+}
+
+pub(crate) fn stable_tool_catalog_digest() -> &'static str {
+    tool_catalog().catalog_digest()
 }
 
 pub fn tool_catalog() -> &'static ToolCatalog {
@@ -1816,33 +1980,24 @@ fn tool_visibility_gate_enabled_for_delegate_child(
 }
 
 pub fn provider_core_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .filter(|descriptor| descriptor.is_provider_core())
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().provider_core_entries().to_vec()
 }
 
 pub fn discoverable_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .filter(|descriptor| descriptor.is_discoverable())
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().discoverable_entries().to_vec()
 }
 
 pub fn all_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().all_entries().to_vec()
 }
 
 pub fn find_tool_catalog_entry(name: &str) -> Option<ToolCatalogEntry> {
-    tool_catalog().resolve(name).map(descriptor_to_entry)
+    let catalog = tool_catalog();
+    let descriptor = catalog.resolve(name)?;
+    let index = catalog.descriptor_indices.get(descriptor.name)?;
+    let entry = catalog.all_entries().get(*index)?;
+
+    Some(*entry)
 }
 
 fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
@@ -2764,6 +2919,86 @@ fn file_write_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn glob_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern to match against workspace-relative paths."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path. Defaults to the configured file root."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Optional maximum number of matches to return. Defaults to 50."
+                    },
+                    "include_directories": {
+                        "type": "boolean",
+                        "description": "Include matching directories in addition to files. Defaults to false."
+                    }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn content_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Text to search for inside workspace files."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path. Defaults to the configured file root."
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional glob filter applied to workspace-relative file paths before content scanning."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Optional maximum number of matches to return. Defaults to 20."
+                    },
+                    "max_bytes_per_file": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1_048_576,
+                        "description": "Optional per-file scan budget in bytes. Defaults to 262144."
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Use case-sensitive matching. Defaults to false."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn memory_search_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2859,7 +3094,52 @@ fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
-#[cfg(feature = "tool-webfetch")]
+fn http_request_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS URL to request."
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method to send. Defaults to GET."
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "description": "Optional request headers."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional request body."
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Optional Content-Type header for the request body."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
+                        "description": "Optional maximum response bytes to return. Cannot exceed the configured runtime max."
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn web_fetch_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -3848,7 +4128,16 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "browser.companion.session.stop" => "session_id:string",
         "browser.companion.click" => "session_id:string,selector:string",
         "browser.companion.type" => "session_id:string,selector:string,text:string",
+        "http.request" => {
+            "url:string,method?:string,headers?:object,body?:string,content_type?:string,max_bytes?:integer"
+        }
         "file.read" => "path:string,max_bytes?:integer",
+        "glob.search" => {
+            "pattern:string,root?:string,max_results?:integer,include_directories?:boolean"
+        }
+        "content.search" => {
+            "query:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean"
+        }
         "memory_search" => "query:string,max_results?:integer",
         "memory_get" => "path:string,from?:integer,lines?:integer",
         "file.write" => "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
@@ -3875,7 +4164,16 @@ fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
             "discover a non-core tool for the task or refresh a known tool card by exact tool id"
         }
         "tool.invoke" => "invoke a discovered non-core tool with a valid short-lived lease",
+        "http.request" => {
+            "send a bounded http request, inspect status and headers, fetch text or binary responses"
+        }
         "file.read" => "read a workspace file, inspect file contents, open a repo text file",
+        "glob.search" => {
+            "find workspace files by glob pattern, list files in a directory, browse folder contents, search repo paths, match files under a root"
+        }
+        "content.search" => {
+            "search workspace file contents, find text in repo files, grep text in the project"
+        }
         "file.write" => {
             "write a workspace file, save file content, create or overwrite a repo file"
         }
@@ -4241,6 +4539,14 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("selector", "string"),
             ("text", "string"),
         ],
+        "http.request" => &[
+            ("url", "string"),
+            ("method", "string"),
+            ("headers", "object"),
+            ("body", "string"),
+            ("content_type", "string"),
+            ("max_bytes", "integer"),
+        ],
         "external_skills.policy" => &[
             ("action", "string"),
             ("enabled", "boolean"),
@@ -4248,6 +4554,20 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("blocked_domains", "array"),
         ],
         "file.read" => &[("path", "string"), ("max_bytes", "integer")],
+        "glob.search" => &[
+            ("pattern", "string"),
+            ("root", "string"),
+            ("max_results", "integer"),
+            ("include_directories", "boolean"),
+        ],
+        "content.search" => &[
+            ("query", "string"),
+            ("root", "string"),
+            ("glob", "string"),
+            ("max_results", "integer"),
+            ("max_bytes_per_file", "integer"),
+            ("case_sensitive", "boolean"),
+        ],
         "memory_search" => &[("query", "string"), ("max_results", "integer")],
         "memory_get" => &[
             ("path", "string"),
@@ -4374,7 +4694,10 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         | "browser.companion.session.stop" => &["session_id"],
         "browser.companion.click" => &["session_id", "selector"],
         "browser.companion.type" => &["session_id", "selector", "text"],
+        "http.request" => &["url"],
         "file.read" => &["path"],
+        "glob.search" => &["pattern"],
+        "content.search" => &["query"],
         "memory_search" => &["query"],
         "memory_get" => &["path"],
         "file.write" => &["path", "content"],
@@ -4454,7 +4777,20 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "browser.companion.click" | "browser.companion.type" => {
             &["browser", "companion", "write", "approval"]
         }
+        "http.request" => &["http", "request", "web", "network", "external"],
         "file.read" => &["file", "read", "filesystem", "repo"],
+        "glob.search" => &[
+            "file",
+            "search",
+            "glob",
+            "filesystem",
+            "repo",
+            "directory",
+            "folder",
+            "list",
+            "browse",
+        ],
+        "content.search" => &["file", "search", "content", "filesystem", "repo"],
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
         "file.write" => &["file", "write", "filesystem"],
@@ -4949,6 +5285,20 @@ mod tests {
             ToolConcurrencyClass::Mutating
         );
 
+        #[cfg(feature = "tool-http")]
+        {
+            let http_request =
+                find_tool_catalog_entry("http.request").expect("http.request catalog entry");
+            assert_eq!(
+                http_request.scheduling_class,
+                ToolSchedulingClass::SerialOnly
+            );
+            assert_eq!(
+                http_request.concurrency_class,
+                ToolConcurrencyClass::Mutating
+            );
+        }
+
         let file_write = find_tool_catalog_entry("file.write").expect("file.write catalog entry");
         assert_eq!(file_write.scheduling_class, ToolSchedulingClass::SerialOnly);
         assert_eq!(file_write.concurrency_class, ToolConcurrencyClass::Mutating);
@@ -4956,6 +5306,80 @@ mod tests {
         let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
         assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
         assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
+    }
+
+    #[test]
+    fn tool_catalog_resolve_preserves_canonical_provider_and_alias_lookup() {
+        let catalog = tool_catalog();
+
+        let canonical = catalog.resolve("tool.search").expect("canonical lookup");
+        let provider_name = catalog.resolve("tool_search").expect("provider lookup");
+        let alias = catalog.resolve("shell").expect("alias lookup");
+
+        assert_eq!(canonical.name, "tool.search");
+        assert_eq!(provider_name.name, "tool.search");
+        assert_eq!(alias.name, "shell.exec");
+    }
+
+    #[test]
+    fn cached_catalog_entry_partitions_match_descriptor_filters() {
+        let catalog = tool_catalog();
+
+        let expected_all_entries = descriptor_identity_list(catalog.descriptors().iter());
+        let expected_provider_core_entries = descriptor_identity_list(
+            catalog
+                .descriptors()
+                .iter()
+                .filter(|descriptor| descriptor.is_provider_core()),
+        );
+        let expected_discoverable_entries = descriptor_identity_list(
+            catalog
+                .descriptors()
+                .iter()
+                .filter(|descriptor| descriptor.is_discoverable()),
+        );
+
+        let actual_all_entries = entry_identity_list(all_tool_catalog().iter());
+        let actual_provider_core_entries = entry_identity_list(provider_core_tool_catalog().iter());
+        let actual_discoverable_entries = entry_identity_list(discoverable_tool_catalog().iter());
+
+        assert_eq!(actual_all_entries, expected_all_entries);
+        assert_eq!(actual_provider_core_entries, expected_provider_core_entries);
+        assert_eq!(actual_discoverable_entries, expected_discoverable_entries);
+    }
+
+    fn descriptor_identity_list<'a>(
+        descriptors: impl Iterator<Item = &'a ToolDescriptor>,
+    ) -> Vec<(&'static str, &'static str, ToolExposureClass)> {
+        let mut identities = Vec::new();
+
+        for descriptor in descriptors {
+            let identity = (
+                descriptor.name,
+                descriptor.provider_name,
+                descriptor.exposure,
+            );
+            identities.push(identity);
+        }
+
+        identities
+    }
+
+    fn entry_identity_list<'a>(
+        entries: impl Iterator<Item = &'a ToolCatalogEntry>,
+    ) -> Vec<(&'static str, &'static str, ToolExposureClass)> {
+        let mut identities = Vec::new();
+
+        for entry in entries {
+            let identity = (
+                entry.canonical_name,
+                entry.provider_function_name,
+                entry.exposure,
+            );
+            identities.push(identity);
+        }
+
+        identities
     }
 
     #[cfg(feature = "feishu-integration")]

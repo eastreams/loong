@@ -141,12 +141,19 @@ mod tests {
     #[test]
     fn debug_variant_name_keeps_only_variant_identity() {
         let welcome = debug_variant_name(&Commands::Welcome);
-        let run_task = debug_variant_name(&Commands::RunTask {
-            objective: "ship".to_owned(),
-            payload: "{\"mode\":\"safe\"}".to_owned(),
+        let turn_run = debug_variant_name(&Commands::Turn {
+            command: crate::TurnCommands::Run {
+                config: None,
+                session: None,
+                message: "ship".to_owned(),
+                acp: false,
+                acp_event_stream: false,
+                acp_bootstrap_mcp_server: Vec::new(),
+                acp_cwd: None,
+            },
         });
 
         assert_eq!(welcome, "Welcome");
-        assert_eq!(run_task, "RunTask");
+        assert_eq!(turn_run, "Turn");
     }
 }

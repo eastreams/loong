@@ -408,6 +408,7 @@ async fn evaluate_round_kernel(
                     app_dispatcher,
                     binding,
                     None,
+                    None,
                 )
                 .await
         }

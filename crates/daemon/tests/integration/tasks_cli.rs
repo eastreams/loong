@@ -47,6 +47,12 @@ pub(super) struct TasksCliEnvironmentGuard {
 }
 
 const TASKS_RUNTIME_ENV_KEYS: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GEMINI_API_KEY",
     "LOONGCLAW_BROWSER_COMPANION_COMMAND",
     "LOONGCLAW_BROWSER_COMPANION_ENABLED",
     "LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION",
@@ -83,6 +89,8 @@ const TASKS_RUNTIME_ENV_KEYS: &[&str] = &[
     "LOONGCLAW_WEB_FETCH_MAX_BYTES",
     "LOONGCLAW_WEB_FETCH_MAX_REDIRECTS",
     "LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
 ];
 
 impl TasksCliEnvironmentGuard {
@@ -148,6 +156,20 @@ impl Drop for TasksCliEnvironmentGuard {
             }
         }
     }
+}
+
+fn tasks_cli_create_environment_guard() -> TasksCliEnvironmentGuard {
+    let current_executable = std::env::current_exe().expect("current test executable");
+    let deps_directory = current_executable.parent().expect("deps directory");
+    let target_directory = deps_directory.parent().expect("target directory");
+    let detached_delegate_binary = target_directory.join("loong");
+    let detached_delegate_binary = detached_delegate_binary
+        .to_str()
+        .expect("detached delegate binary path should be utf-8")
+        .to_owned();
+    let seeded_pairs = [("CARGO_BIN_EXE_loong", detached_delegate_binary.as_str())];
+
+    TasksCliEnvironmentGuard::set_with_seeded_env(&seeded_pairs, &[])
 }
 
 pub(super) fn write_tasks_config_with(
@@ -530,7 +552,7 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
 #[tokio::test]
 async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow_up_recipes() {
     let root = TempDirGuard::new("loongclaw-tasks-cli-create");
-    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let _env = tasks_cli_create_environment_guard();
     let config_path = write_tasks_config(root.path());
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
@@ -605,7 +627,7 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
 #[tokio::test]
 async fn execute_tasks_command_create_returns_queued_outcome_when_task_hydration_fails() {
     let root = TempDirGuard::new("loongclaw-tasks-cli-create-best-effort");
-    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let _env = tasks_cli_create_environment_guard();
     let config_path = write_tasks_config_with(root.path(), |config| {
         config.tools.sessions.enabled = false;
     });
@@ -651,7 +673,7 @@ async fn execute_tasks_command_create_returns_queued_outcome_when_task_hydration
 #[tokio::test]
 async fn execute_tasks_command_create_latest_session_selector_resolves_newest_resumable_root() {
     let root = TempDirGuard::new("loongclaw-tasks-cli-create-latest");
-    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let _env = tasks_cli_create_environment_guard();
     let config_path = write_tasks_config(root.path());
     let repo = load_session_repository(&config_path);
 

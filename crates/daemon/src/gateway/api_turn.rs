@@ -11,11 +11,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::mvp::acp::{AcpConversationTurnOptions, AcpTurnResult, AcpTurnStopReason};
-
 use super::control::{GatewayControlAppState, authorize_request_from_state};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct GatewayTurnRequest {
     pub session_id: String,
     pub input: String,
@@ -43,39 +41,21 @@ pub(crate) struct GatewayTurnResponse {
 }
 
 impl GatewayTurnResponse {
-    fn from_acp_result(result: &AcpTurnResult) -> Self {
-        let state = crate::acp_session_state_label(result.state).to_owned();
+    fn from_agent_turn_result(result: &crate::mvp::agent_runtime::AgentTurnResult) -> Self {
         Self {
             output_text: result.output_text.clone(),
-            state,
-            stop_reason: result.stop_reason.as_ref().map(|r| match r {
-                AcpTurnStopReason::Completed => "completed".to_string(),
-                AcpTurnStopReason::Cancelled => "cancelled".to_string(),
-            }),
+            state: result
+                .state
+                .clone()
+                .unwrap_or_else(|| "completed".to_owned()),
+            stop_reason: result.stop_reason.clone(),
             usage: result.usage.clone(),
-            event_count: result.events.len(),
+            event_count: result.event_count,
         }
     }
 }
 
 type TurnJsonResponse = (StatusCode, Json<Value>);
-
-fn extend_turn_metadata(target: &mut BTreeMap<String, String>, extra: &BTreeMap<String, String>) {
-    for (key, value) in extra {
-        let normalized_key = key.trim();
-        let normalized_value = value.trim();
-        if normalized_key.is_empty() {
-            continue;
-        }
-        if normalized_value.is_empty() {
-            continue;
-        }
-
-        let normalized_key = normalized_key.to_owned();
-        let normalized_value = normalized_value.to_owned();
-        target.entry(normalized_key).or_insert(normalized_value);
-    }
-}
 
 pub(crate) async fn handle_turn(
     headers: HeaderMap,
@@ -96,29 +76,25 @@ pub(crate) async fn handle_turn(
         }
     };
 
-    if turn_request.input.is_empty() {
+    if turn_request.input.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "input must not be empty"})),
         );
     }
 
-    let turn_address = match crate::build_acp_dispatch_address(
+    if let Err(error) = crate::build_acp_dispatch_address(
         turn_request.session_id.as_str(),
         turn_request.channel_id.as_deref(),
         turn_request.conversation_id.as_deref(),
         turn_request.account_id.as_deref(),
         turn_request.thread_id.as_deref(),
     ) {
-        Ok(turn_address) => turn_address,
-        Err(error) => {
-            let error_message = format!("invalid turn target: {error}");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": error_message})),
-            );
-        }
-    };
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("invalid turn target: {error}")})),
+        );
+    }
 
     let (Some(acp_manager), Some(config)) = (&app_state.acp_manager, &app_state.config) else {
         return (
@@ -133,51 +109,49 @@ pub(crate) async fn handle_turn(
         );
     }
 
-    let working_directory = turn_request.working_directory.as_deref().map(PathBuf::from);
-    let turn_options = AcpConversationTurnOptions::explicit();
-    let turn_options = turn_options.with_working_directory(working_directory.as_deref());
-    let prepared_turn = crate::mvp::acp::prepare_acp_conversation_turn_for_address(
-        config,
-        &turn_address,
-        turn_request.input.as_str(),
-        &turn_options,
-    );
-    let prepared_turn = match prepared_turn {
-        Ok(prepared_turn) => prepared_turn,
-        Err(error) => {
-            let error_message = format!("unable to prepare turn target: {error}");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": error_message})),
-            );
-        }
-    };
-    let mut bootstrap = prepared_turn.bootstrap;
-    let mut acp_request = prepared_turn.request;
-    extend_turn_metadata(&mut bootstrap.metadata, &turn_request.metadata);
-    extend_turn_metadata(&mut acp_request.metadata, &turn_request.metadata);
+    let working_directory = turn_request
+        .working_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
 
     let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
-    let sink_ref = event_sink
-        .as_ref()
-        .map(|s| s as &dyn crate::mvp::acp::AcpTurnEventSink);
-
-    let result = acp_manager
-        .run_turn_with_sink(config, &bootstrap, &acp_request, sink_ref)
+    let result = crate::mvp::agent_runtime::AgentRuntime::new()
+        .run_turn_with_loaded_config_and_acp_manager(
+            PathBuf::from(app_state.config_path.clone()),
+            config.clone(),
+            Some(turn_request.session_id.as_str()),
+            &crate::mvp::agent_runtime::AgentTurnRequest {
+                message: turn_request.input.clone(),
+                turn_mode: crate::mvp::agent_runtime::AgentTurnMode::Acp,
+                channel_id: turn_request.channel_id.clone(),
+                account_id: turn_request.account_id.clone(),
+                conversation_id: turn_request.conversation_id.clone(),
+                thread_id: turn_request.thread_id.clone(),
+                metadata: turn_request.metadata.clone(),
+                acp: true,
+                acp_event_stream: event_sink.is_some(),
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_cwd: working_directory,
+                live_surface_enabled: false,
+            },
+            event_sink
+                .as_ref()
+                .map(|sink| sink as &dyn crate::mvp::acp::AcpTurnEventSink),
+            acp_manager.clone(),
+        )
         .await;
 
     match result {
         Ok(turn_result) => {
-            let response = GatewayTurnResponse::from_acp_result(&turn_result);
+            let response = GatewayTurnResponse::from_agent_turn_result(&turn_result);
             match serde_json::to_value(response) {
                 Ok(value) => (StatusCode::OK, Json(value)),
-                Err(error) => {
-                    let error_message = format!("response serialization failed: {error}");
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": error_message})),
-                    )
-                }
+                Err(error) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("response serialization failed: {error}")})),
+                ),
             }
         }
         Err(error) => (
@@ -187,11 +161,56 @@ pub(crate) async fn handle_turn(
     }
 }
 
-/// Test-only router with no ACP backend (returns 503 for valid turn requests).
 #[doc(hidden)]
 pub fn build_turn_test_router_no_backend(bearer_token: String) -> Router {
     let app_state = Arc::new(GatewayControlAppState::test_minimal(bearer_token));
     Router::new()
         .route("/v1/turn", post(handle_turn))
         .with_state(app_state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{Body, to_bytes};
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn gateway_turn_returns_service_unavailable_without_acp_backend() {
+        let token = "gateway-test-token";
+        let router = build_turn_test_router_no_backend(token.to_owned());
+        let request = GatewayTurnRequest {
+            session_id: "session-1".to_owned(),
+            input: "hello".to_owned(),
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            working_directory: None,
+            metadata: BTreeMap::new(),
+        };
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/turn")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode gateway turn request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("gateway turn response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("gateway turn response body");
+        let payload: Value = serde_json::from_slice(&body).expect("gateway turn error payload");
+        assert_eq!(payload["error"], "ACP session manager not available");
+    }
 }

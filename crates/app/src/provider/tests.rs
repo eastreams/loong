@@ -82,6 +82,48 @@ fn next_model_cooldown_test_namespace() -> String {
     format!("model-cooldown-test-{seed}")
 }
 
+#[test]
+fn provider_tool_schema_readiness_reports_default_structured_mode() {
+    let config = LoongClawConfig::default();
+
+    let readiness = provider_tool_schema_readiness(&config);
+
+    assert_eq!(readiness.active_model, config.provider.model);
+    assert!(readiness.structured_tool_schema_enabled);
+    assert_eq!(
+        readiness.effective_tool_schema_mode,
+        "enabled_with_downgrade"
+    );
+}
+
+#[test]
+fn provider_tool_schema_readiness_honors_disabled_mode_and_model_hints() {
+    let disabled_config = LoongClawConfig {
+        provider: ProviderConfig {
+            tool_schema_mode: crate::config::ProviderToolSchemaModeConfig::Disabled,
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+    let disabled_readiness = provider_tool_schema_readiness(&disabled_config);
+
+    assert!(!disabled_readiness.structured_tool_schema_enabled);
+    assert_eq!(disabled_readiness.effective_tool_schema_mode, "disabled");
+
+    let hinted_config = LoongClawConfig {
+        provider: ProviderConfig {
+            model: "gpt-no-tools-preview".to_owned(),
+            tool_schema_disabled_model_hints: vec!["no-tools".to_owned()],
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+    let hinted_readiness = provider_tool_schema_readiness(&hinted_config);
+
+    assert!(!hinted_readiness.structured_tool_schema_enabled);
+    assert_eq!(hinted_readiness.effective_tool_schema_mode, "disabled");
+}
+
 fn next_temp_path(prefix: &str, extension: &str) -> PathBuf {
     static NEXT_TEMP_PATH_SEED: AtomicUsize = AtomicUsize::new(1);
     let seed = NEXT_TEMP_PATH_SEED.fetch_add(1, Ordering::Relaxed);
@@ -682,16 +724,13 @@ fn resolve_provider_auth_profiles_prefers_oauth_then_api_key() {
     assert_eq!(profiles.len(), 2);
     assert!(profiles[0].id.starts_with("oauth:"));
     assert_eq!(
-        profiles[0].authorization_header.as_deref(),
-        Some("Bearer oauth-token")
+        profiles[0].authorization_secret.as_deref(),
+        Some("oauth-token")
     );
     assert!(profiles[1].id.starts_with("api_key:"));
-    assert_eq!(
-        profiles[1].authorization_header.as_deref(),
-        Some("Bearer api-key")
-    );
-    assert_eq!(profiles[0].x_api_key_header, None);
-    assert_eq!(profiles[1].x_api_key_header, None);
+    assert_eq!(profiles[1].authorization_secret.as_deref(), Some("api-key"));
+    assert_eq!(profiles[0].api_key_secret, None);
+    assert_eq!(profiles[1].api_key_secret.as_deref(), Some("api-key"));
 }
 
 #[test]
@@ -710,12 +749,12 @@ fn resolve_provider_auth_profiles_expands_delimited_api_key_pool() {
     assert_eq!(
         profiles
             .iter()
-            .map(|profile| profile.authorization_header.clone())
+            .map(|profile| profile.authorization_secret.clone())
             .collect::<Vec<_>>(),
         vec![
-            Some("Bearer api-key-a".to_owned()),
-            Some("Bearer api-key-b".to_owned()),
-            Some("Bearer api-key-c".to_owned())
+            Some("api-key-a".to_owned()),
+            Some("api-key-b".to_owned()),
+            Some("api-key-c".to_owned())
         ]
     );
 }
@@ -725,15 +764,15 @@ fn provider_profile_health_prioritizes_available_profile() {
     let policy = build_profile_state_policy_for_test(next_profile_test_namespace());
     let first = ProviderAuthProfile {
         id: "profile-a".to_owned(),
-        authorization_header: Some("Bearer a".to_owned()),
-        x_api_key_header: None,
-        auth_cache_key: Some("Bearer a".to_owned()),
+        authorization_secret: Some("a".to_owned()),
+        api_key_secret: Some("a".to_owned()),
+        auth_cache_key: Some("bearer:a".to_owned()),
     };
     let second = ProviderAuthProfile {
         id: "profile-b".to_owned(),
-        authorization_header: Some("Bearer b".to_owned()),
-        x_api_key_header: None,
-        auth_cache_key: Some("Bearer b".to_owned()),
+        authorization_secret: Some("b".to_owned()),
+        api_key_secret: Some("b".to_owned()),
+        auth_cache_key: Some("bearer:b".to_owned()),
     };
 
     mark_provider_profile_failure(&policy, &first, ProviderFailoverReason::RateLimited);
@@ -816,9 +855,9 @@ fn provider_profile_health_observe_only_mode_bypasses_cooldown_windows() {
     policy.health_mode = ProviderProfileHealthMode::ObserveOnly;
     let profile = ProviderAuthProfile {
         id: "profile-observe".to_owned(),
-        authorization_header: Some("Bearer observe".to_owned()),
-        x_api_key_header: None,
-        auth_cache_key: Some("Bearer observe".to_owned()),
+        authorization_secret: Some("observe".to_owned()),
+        api_key_secret: Some("observe".to_owned()),
+        auth_cache_key: Some("bearer:observe".to_owned()),
     };
 
     mark_provider_profile_failure(&policy, &profile, ProviderFailoverReason::RateLimited);
@@ -1447,6 +1486,96 @@ fn kimi_coding_keeps_explicit_compatible_user_agent() {
     assert_eq!(user_agent, "KimiCLI/custom");
 }
 
+#[test]
+fn opencode_zen_claude_route_builds_anthropic_auth_headers() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::OpencodeZen,
+        api_key: Some(SecretRef::Inline("opencode-secret".to_owned())),
+        ..ProviderConfig::default()
+    };
+    let profile = transport_profile_runtime::resolve_provider_request_transport_profile(
+        &provider,
+        "claude-sonnet-4-6",
+    )
+    .expect("transport profile");
+    let auth_profiles = resolve_provider_auth_profiles(&provider);
+    let auth_profile = auth_profiles.first().expect("auth profile");
+    let mut headers = transport::build_request_headers_without_provider_auth_for_transport(
+        &provider,
+        profile.default_user_agent,
+        profile.default_headers,
+    )
+    .expect("headers");
+
+    transport::apply_auth_profile_headers(&mut headers, Some(auth_profile), profile.auth_scheme)
+        .expect("apply auth headers");
+
+    assert_eq!(
+        headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok()),
+        Some("opencode-secret")
+    );
+    assert_eq!(
+        headers
+            .get("anthropic-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("2023-06-01")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_dispatch() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider listener");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept local provider request");
+        let mut request_buf = [0_u8; 8192];
+        let len = stream.read(&mut request_buf).expect("read request");
+        let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+
+        let body = r#"{"content":[{"type":"text","text":"claude route ok"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write response");
+
+        request
+    });
+
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::OpencodeZen,
+        base_url: format!("http://{addr}"),
+        model: "claude-sonnet-4-6".to_owned(),
+        api_key: Some(SecretRef::Inline("opencode-api-key".to_owned())),
+        oauth_access_token: Some(SecretRef::Inline("oauth-token".to_owned())),
+        ..ProviderConfig::default()
+    });
+
+    let completion = request_completion(
+        &config,
+        &[json!({
+            "role": "user",
+            "content": "ping"
+        })],
+        ProviderRuntimeBinding::direct(),
+    )
+    .await
+    .expect("opencode claude route should succeed with api key profile");
+
+    assert_eq!(completion, "claude route ok");
+
+    let request = server.join().expect("join local provider server");
+    assert!(request.starts_with("POST /messages "));
+    assert!(request.contains("x-api-key: opencode-api-key"));
+    assert!(request.contains("anthropic-version: 2023-06-01"));
+    assert!(!request.contains("authorization: Bearer oauth-token"));
+}
+
 #[cfg(any(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn turn_body_includes_tool_schema_and_auto_choice() {
@@ -1637,6 +1766,254 @@ fn anthropic_turn_body_preserves_native_tool_use_and_tool_result_blocks() {
 
 #[cfg(any(feature = "tool-file", feature = "tool-shell"))]
 #[test]
+fn opencode_zen_gemini_turn_body_uses_google_generate_content_shape() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::OpencodeZen,
+            api_key: Some(SecretRef::Inline("opencode-secret".to_owned())),
+            max_tokens: Some(2048),
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": "follow the system"
+        }),
+        json!({
+            "role": "user",
+            "content": "inspect README"
+        }),
+    ];
+    let transport_profile = transport_profile_runtime::resolve_provider_request_transport_profile(
+        &config.provider,
+        "gemini-3.1-pro",
+    )
+    .expect("transport profile");
+    let runtime_contract = contracts::provider_runtime_contract_for_route(
+        &config.provider,
+        transport_profile.transport_mode,
+        transport_profile.feature_family,
+    );
+    let capability_profile = capability_profile_runtime::ProviderCapabilityProfile::from_provider(
+        &config.provider,
+        runtime_contract,
+    );
+    let capability = capability_profile.resolve_for_model("gemini-3.1-pro");
+
+    let body = request_payload_runtime::build_turn_request_body_with_capability(
+        &config,
+        &messages,
+        "gemini-3.1-pro",
+        CompletionPayloadMode::default_for_contract(&config.provider, runtime_contract),
+        runtime_contract,
+        capability,
+        true,
+        &crate::tools::provider_tool_definitions(),
+        false,
+    );
+
+    assert_eq!(
+        body["systemInstruction"]["parts"][0]["text"],
+        "follow the system"
+    );
+    assert_eq!(body["contents"][0]["role"], "user");
+    assert_eq!(body["contents"][0]["parts"][0]["text"], "inspect README");
+    assert_eq!(body["generationConfig"]["maxOutputTokens"], 2048);
+    assert!(body["tools"][0]["functionDeclarations"].is_array());
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn opencode_zen_gemini_turn_body_preserves_native_tool_result_blocks() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::OpencodeZen,
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+    let messages = vec![
+        json!({
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "checking"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "file_read",
+                    "input": {
+                        "path": "README.md"
+                    }
+                }
+            ]
+        }),
+        json!({
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "result": {
+                        "path": "README.md",
+                        "ok": true
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "use the tool result above to answer"
+                }
+            ]
+        }),
+    ];
+    let transport_profile = transport_profile_runtime::resolve_provider_request_transport_profile(
+        &config.provider,
+        "gemini-3.1-pro",
+    )
+    .expect("transport profile");
+    let runtime_contract = contracts::provider_runtime_contract_for_route(
+        &config.provider,
+        transport_profile.transport_mode,
+        transport_profile.feature_family,
+    );
+    let capability_profile = capability_profile_runtime::ProviderCapabilityProfile::from_provider(
+        &config.provider,
+        runtime_contract,
+    );
+    let capability = capability_profile.resolve_for_model("gemini-3.1-pro");
+
+    let body = request_payload_runtime::build_turn_request_body_with_capability(
+        &config,
+        &messages,
+        "gemini-3.1-pro",
+        CompletionPayloadMode::default_for_contract(&config.provider, runtime_contract),
+        runtime_contract,
+        capability,
+        true,
+        &crate::tools::provider_tool_definitions(),
+        false,
+    );
+
+    assert_eq!(body["contents"][0]["role"], "model");
+    assert_eq!(
+        body["contents"][0]["parts"][1]["functionCall"]["name"],
+        "file_read"
+    );
+    assert_eq!(body["contents"][1]["role"], "user");
+    assert_eq!(
+        body["contents"][1]["parts"][0]["functionResponse"]["name"],
+        "file_read"
+    );
+    assert_eq!(
+        body["contents"][1]["parts"][0]["functionResponse"]["response"]["path"],
+        "README.md"
+    );
+    assert_eq!(
+        body["contents"][1]["parts"][0]["functionResponse"]["response"]["ok"],
+        true
+    );
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn opencode_zen_gemini_turn_body_preserves_native_tool_results() {
+    let config = LoongClawConfig {
+        provider: ProviderConfig {
+            kind: ProviderKind::OpencodeZen,
+            api_key: Some(SecretRef::Inline("opencode-secret".to_owned())),
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+    let messages = vec![
+        json!({
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "checking"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "file_read",
+                    "input": {
+                        "path": "README.md"
+                    }
+                }
+            ]
+        }),
+        json!({
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": {
+                        "result": "[ok] README contents"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "use the tool result above to answer"
+                }
+            ]
+        }),
+    ];
+    let transport_profile = transport_profile_runtime::resolve_provider_request_transport_profile(
+        &config.provider,
+        "gemini-3.1-pro",
+    )
+    .expect("transport profile");
+    let runtime_contract = contracts::provider_runtime_contract_for_route(
+        &config.provider,
+        transport_profile.transport_mode,
+        transport_profile.feature_family,
+    );
+    let capability_profile = capability_profile_runtime::ProviderCapabilityProfile::from_provider(
+        &config.provider,
+        runtime_contract,
+    );
+    let capability = capability_profile.resolve_for_model("gemini-3.1-pro");
+
+    let body = request_payload_runtime::build_turn_request_body_with_capability(
+        &config,
+        &messages,
+        "gemini-3.1-pro",
+        CompletionPayloadMode::default_for_contract(&config.provider, runtime_contract),
+        runtime_contract,
+        capability,
+        false,
+        &[],
+        false,
+    );
+
+    assert_eq!(body["contents"][0]["role"], "model");
+    assert_eq!(
+        body["contents"][0]["parts"][1]["functionCall"]["name"],
+        "file_read"
+    );
+    assert_eq!(body["contents"][1]["role"], "user");
+    assert_eq!(
+        body["contents"][1]["parts"][0]["functionResponse"]["name"],
+        "file_read"
+    );
+    assert_eq!(
+        body["contents"][1]["parts"][0]["functionResponse"]["response"]["result"],
+        "[ok] README contents"
+    );
+    assert_eq!(
+        body["contents"][1]["parts"][1]["text"],
+        "use the tool result above to answer"
+    );
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
 fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
     let config = LoongClawConfig {
         provider: ProviderConfig {
@@ -1727,6 +2104,39 @@ fn bedrock_request_endpoint_encodes_model_id_in_path() {
         endpoint,
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-7-sonnet-20250219-v1%3A0/converse"
     );
+}
+
+#[test]
+fn extract_provider_turn_supports_google_generate_content_tool_calls() {
+    let body = json!({
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "checking"
+                        },
+                        {
+                            "functionCall": {
+                                "name": "file_read",
+                                "args": {
+                                    "path": "README.md"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    });
+
+    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &[])
+        .expect("provider turn");
+
+    assert_eq!(turn.assistant_text, "checking");
+    assert_eq!(turn.tool_intents.len(), 1);
+    assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+    assert_eq!(turn.tool_intents[0].args_json["path"], "README.md");
 }
 
 #[cfg(any(feature = "tool-file", feature = "tool-shell"))]
@@ -2006,6 +2416,24 @@ fn provider_runtime_contract_defaults_are_stable() {
         anthropic_contract.default_reasoning_field,
         ReasoningField::Omit
     );
+    assert_eq!(
+        contracts::provider_runtime_contract_for_route(
+            &ProviderConfig {
+                kind: ProviderKind::OpencodeZen,
+                ..ProviderConfig::default()
+            },
+            ProviderTransportMode::GoogleGenerateContent,
+            ProviderFeatureFamily::Google,
+        )
+        .payload_adaptation
+        .token_field_progression,
+        [
+            TokenLimitField::MaxOutputTokens,
+            TokenLimitField::Omit,
+            TokenLimitField::Omit,
+            TokenLimitField::Omit,
+        ]
+    );
 
     let responses_contract = provider_runtime_contract(&ProviderConfig {
         kind: ProviderKind::Openai,
@@ -2166,6 +2594,56 @@ async fn request_turn_streaming_rejects_unsupported_transport_modes() {
         error.contains("does not support live turn streaming events"),
         "the provider error should explain the unsupported transport: {error}"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sibling_provider_tests_can_inject_mock_transport_into_dispatch_layer() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::Openai,
+        api_key: Some(SecretRef::Inline("dispatch-test-secret".to_owned())),
+        api_key_env: None,
+        oauth_access_token: None,
+        oauth_access_token_env: None,
+        ..ProviderConfig::default()
+    };
+    let config = test_config(provider.clone());
+    let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+    let auth_context = transport::RequestAuthContext::default();
+    let auth_profiles = resolve_provider_auth_profiles(&provider);
+    let auth_profile = auth_profiles.first().expect("auth profile");
+    let transport = mock_transport::MockTransport::with_execute_responses([Ok(
+        transport_trait::TransportResponse {
+            status: reqwest::StatusCode::OK,
+            headers: reqwest::header::HeaderMap::new(),
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "content": "sibling dispatch mock"
+                    }
+                }]
+            }),
+        },
+    )]);
+
+    let result = request_dispatch_runtime::request_completion_with_provider_transport(
+        &config,
+        &provider,
+        &[json!({
+            "role": "user",
+            "content": "ping"
+        })],
+        "gpt-5.4",
+        false,
+        auth_profile,
+        &auth_context,
+        &request_policy,
+        &transport,
+    )
+    .await
+    .expect("dispatch helper should accept mock transport from sibling tests");
+
+    assert_eq!(result, "sibling dispatch mock");
+    assert_eq!(transport.requests().len(), 1);
 }
 
 #[test]
@@ -2335,6 +2813,48 @@ fn payload_mode_adaptation_progression_is_monotonic_without_cycles() {
             &provider,
             runtime_contract,
             &unsupported_reasoning_effort,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn google_payload_mode_drops_max_output_tokens_after_unsupported_parameter_error() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::OpencodeZen,
+        max_tokens: Some(2048),
+        ..ProviderConfig::default()
+    };
+    let runtime_contract = contracts::provider_runtime_contract_for_route(
+        &provider,
+        ProviderTransportMode::GoogleGenerateContent,
+        ProviderFeatureFamily::Google,
+    );
+    let unsupported_max_output_tokens = parse_provider_api_error(&json!({
+        "error": {
+            "param": "generationConfig.maxOutputTokens",
+            "message": "Unsupported parameter: 'generationConfig.maxOutputTokens'."
+        }
+    }));
+    let mode = CompletionPayloadMode::default_for_contract(&provider, runtime_contract);
+
+    assert_eq!(mode.token_field, TokenLimitField::MaxOutputTokens);
+
+    let downgraded_mode = adapt_payload_mode_for_error(
+        mode,
+        &provider,
+        runtime_contract,
+        &unsupported_max_output_tokens,
+    )
+    .expect("google token fallback should omit the unsupported field");
+
+    assert_eq!(downgraded_mode.token_field, TokenLimitField::Omit);
+    assert!(
+        adapt_payload_mode_for_error(
+            downgraded_mode,
+            &provider,
+            runtime_contract,
+            &unsupported_max_output_tokens,
         )
         .is_none()
     );
@@ -2608,6 +3128,58 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
         !requests.is_empty(),
         "the test server should observe at least the initial responses request"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn routed_google_requests_do_not_retry_responses_fallback_logic() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider listener");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        let (mut stream, _) = listener.accept().expect("accept local provider request");
+        let mut request_buf = [0_u8; 8192];
+        let len = stream.read(&mut request_buf).expect("read request");
+        let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+        requests.push(request);
+
+        let body = r#"{"error":{"message":"unsupported google route request"}}"#;
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write response");
+
+        requests
+    });
+
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::OpencodeZen,
+        base_url: format!("http://{addr}"),
+        model: "gemini-3.1-pro".to_owned(),
+        wire_api: crate::config::ProviderWireApi::Responses,
+        api_key: Some(SecretRef::Inline("opencode-test-key".to_owned())),
+        ..ProviderConfig::default()
+    });
+
+    let error = request_completion(
+        &config,
+        &[json!({
+            "role": "user",
+            "content": "ping"
+        })],
+        ProviderRuntimeBinding::direct(),
+    )
+    .await
+    .expect_err("google routed request should fail without a duplicate fallback retry");
+
+    assert!(error.contains("status 400"));
+
+    let requests = server.join().expect("join local provider server");
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("POST /models/gemini-3.1-pro "));
 }
 
 #[test]

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::sync::Mutex;
@@ -18,7 +20,9 @@ type ContextEngineFactory = Arc<dyn Fn() -> Box<dyn ConversationContextEngine> +
 static CONTEXT_ENGINE_REGISTRY: OnceLock<RwLock<BTreeMap<String, ContextEngineFactory>>> =
     OnceLock::new();
 #[cfg(test)]
-static CONTEXT_ENGINE_ENV_OVERRIDE: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+std::thread_local! {
+    static CONTEXT_ENGINE_ENV_OVERRIDE: RefCell<Option<Option<String>>> = const { RefCell::new(None) };
+}
 
 fn registry() -> &'static RwLock<BTreeMap<String, ContextEngineFactory>> {
     CONTEXT_ENGINE_REGISTRY.get_or_init(|| {
@@ -40,8 +44,8 @@ fn normalize_engine_id(raw: &str) -> String {
 }
 
 #[cfg(test)]
-fn env_override() -> &'static Mutex<Option<Option<String>>> {
-    CONTEXT_ENGINE_ENV_OVERRIDE.get_or_init(|| Mutex::new(None))
+fn env_override() -> Option<Option<String>> {
+    CONTEXT_ENGINE_ENV_OVERRIDE.with(|override_cell| override_cell.borrow().clone())
 }
 
 #[cfg(test)]
@@ -110,7 +114,7 @@ pub fn describe_context_engine(id: Option<&str>) -> CliResult<ContextEngineMetad
 pub fn context_engine_id_from_env() -> Option<String> {
     #[cfg(test)]
     {
-        if let Some(override_value) = env_override().lock().ok().and_then(|guard| guard.clone()) {
+        if let Some(override_value) = env_override() {
             return override_value;
         }
     }
@@ -126,16 +130,16 @@ pub(crate) fn set_context_engine_env_override(value: Option<&str>) {
     let normalized = value
         .map(normalize_engine_id)
         .filter(|entry| !entry.is_empty());
-    if let Ok(mut guard) = env_override().lock() {
-        *guard = Some(normalized);
-    }
+    CONTEXT_ENGINE_ENV_OVERRIDE.with(|override_cell| {
+        *override_cell.borrow_mut() = Some(normalized);
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn clear_context_engine_env_override() {
-    if let Ok(mut guard) = env_override().lock() {
-        *guard = None;
-    }
+    CONTEXT_ENGINE_ENV_OVERRIDE.with(|override_cell| {
+        *override_cell.borrow_mut() = None;
+    });
 }
 
 #[cfg(test)]

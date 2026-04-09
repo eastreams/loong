@@ -22,6 +22,7 @@ mod session_address;
 mod session_history;
 mod subagent;
 mod tool_discovery_state;
+mod tool_input_contract;
 mod tool_result_compaction;
 mod trust_projection;
 mod turn_budget;
@@ -81,7 +82,8 @@ pub use runtime::{
     ContextEngineRuntimeSnapshot, ContextEngineSelection, ContextEngineSelectionSource,
     ConversationRuntime, DefaultConversationRuntime, SessionContext, TurnMiddlewareRuntimeSnapshot,
     TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
-    collect_context_engine_runtime_snapshot, resolve_context_engine_selection,
+    async_delegate_spawn_request_from_serialized_parts, collect_context_engine_runtime_snapshot,
+    execute_async_delegate_spawn_request, resolve_context_engine_selection,
     resolve_turn_middleware_selection,
 };
 pub use runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
@@ -140,6 +142,7 @@ pub use turn_middleware_registry::{
     list_turn_middleware_ids, list_turn_middleware_metadata, register_turn_middleware,
     resolve_turn_middleware, resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
+pub(crate) use turn_observer::ConversationTurnRuntimeEvent;
 pub use turn_observer::{
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
     ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,

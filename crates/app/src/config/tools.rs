@@ -51,6 +51,8 @@ pub(crate) const RUNTIME_PLUGIN_SUPPORTED_BRIDGE_LABELS: &[&str] = &[
 pub struct ToolConfig {
     #[serde(default)]
     pub file_root: Option<String>,
+    #[serde(skip)]
+    pub runtime_workspace_root: Option<String>,
     /// Commands to allow. Defaults to empty — no commands are allowed unless
     /// explicitly configured.
     #[serde(default = "default_shell_allow")]
@@ -541,6 +543,7 @@ impl Default for ToolConfig {
     fn default() -> Self {
         Self {
             file_root: None,
+            runtime_workspace_root: None,
             shell_allow: default_shell_allow(),
             shell_deny: Vec::new(),
             shell_default_mode: default_shell_default_mode(),
@@ -678,12 +681,66 @@ impl Default for WebSearchToolConfig {
     }
 }
 
-impl ToolConfig {
-    pub fn resolved_file_root(&self) -> PathBuf {
-        if let Some(path) = self.file_root.as_deref() {
-            return expand_path(path);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolFileRootResolution {
+    Explicit(PathBuf),
+    CurrentWorkingDirectory(PathBuf),
+}
+
+impl ToolFileRootResolution {
+    #[must_use]
+    pub fn path(&self) -> &PathBuf {
+        match self {
+            Self::Explicit(path) => path,
+            Self::CurrentWorkingDirectory(path) => path,
         }
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+
+    #[must_use]
+    pub const fn uses_current_working_directory_fallback(&self) -> bool {
+        matches!(self, Self::CurrentWorkingDirectory(_))
+    }
+}
+
+impl ToolConfig {
+    pub fn configured_runtime_workspace_root(&self) -> Option<PathBuf> {
+        let raw_workspace_root = self.runtime_workspace_root.as_deref()?;
+        let trimmed_workspace_root = raw_workspace_root.trim();
+        if trimmed_workspace_root.is_empty() {
+            return None;
+        }
+
+        let workspace_root = PathBuf::from(trimmed_workspace_root);
+        Some(workspace_root)
+    }
+
+    pub fn configured_file_root(&self) -> Option<PathBuf> {
+        let raw_path = self.file_root.as_deref()?;
+        let trimmed_path = raw_path.trim();
+        if trimmed_path.is_empty() {
+            return None;
+        }
+
+        let expanded_path = expand_path(trimmed_path);
+        Some(expanded_path)
+    }
+
+    pub fn resolved_file_root(&self) -> PathBuf {
+        let resolution = self.file_root_resolution();
+        match resolution {
+            ToolFileRootResolution::Explicit(path) => path,
+            ToolFileRootResolution::CurrentWorkingDirectory(path) => path,
+        }
+    }
+
+    pub fn file_root_resolution(&self) -> ToolFileRootResolution {
+        let configured_root = self.configured_file_root();
+        if let Some(configured_root) = configured_root {
+            return ToolFileRootResolution::Explicit(configured_root);
+        }
+
+        let fallback_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        ToolFileRootResolution::CurrentWorkingDirectory(fallback_root)
     }
 
     pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
@@ -1468,6 +1525,7 @@ mod tests {
         assert_eq!(AUTONOMY_PROFILE_VALID_VALUES, valid_values);
     }
 
+    #[cfg(feature = "tool-websearch")]
     #[test]
     fn normalize_web_search_provider_canonicalizes_aliases() {
         assert_eq!(
@@ -2028,6 +2086,44 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 "blank rules_dir `{raw}` should fall back to the default home rules dir"
             );
         }
+    }
+
+    #[test]
+    fn configured_file_root_returns_none_when_unset_or_blank() {
+        let default_config = ToolConfig::default();
+
+        assert_eq!(default_config.configured_file_root(), None);
+
+        for raw_path in ["", "   "] {
+            let blank_config = ToolConfig {
+                file_root: Some(raw_path.to_owned()),
+                ..ToolConfig::default()
+            };
+
+            assert_eq!(
+                blank_config.configured_file_root(),
+                None,
+                "blank file_root `{raw_path}` should stay unset"
+            );
+        }
+    }
+
+    #[test]
+    fn configured_file_root_expands_explicit_paths_without_fallback() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.path());
+        env.set("USERPROFILE", home.path());
+
+        let config = ToolConfig {
+            file_root: Some("~/workspace-root".to_owned()),
+            ..ToolConfig::default()
+        };
+
+        let configured_file_root = config.configured_file_root();
+        let expected_file_root = expand_path("~/workspace-root");
+
+        assert_eq!(configured_file_root, Some(expected_file_root));
     }
 
     #[test]

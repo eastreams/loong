@@ -56,8 +56,9 @@ impl LatestSelectorCliFixture {
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.memory.sqlite_path = sqlite_path.display().to_string();
-        let memory_config =
-            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
+            &config.memory,
+        );
         let resolved_sqlite_path = config.memory.resolved_sqlite_path();
         mvp::memory::ensure_memory_db_ready(Some(resolved_sqlite_path), &memory_config)
             .expect("initialize latest selector sqlite memory");

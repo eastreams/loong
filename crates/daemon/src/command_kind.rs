@@ -6,6 +6,9 @@ impl Commands {
             Self::Welcome => "welcome",
             Self::Demo => "demo",
             Self::RunTask { .. } => "run_task",
+            Self::Turn { command } => match command {
+                crate::TurnCommands::Run { .. } => "turn_run",
+            },
             Self::InvokeConnector { .. } => "invoke_connector",
             Self::AuditDemo => "audit_demo",
             Self::InitSpec { .. } => "init_spec",
@@ -24,7 +27,9 @@ impl Commands {
             Self::Doctor { .. } => "doctor",
             Self::Audit { .. } => "audit",
             Self::Skills { .. } => "skills",
+            Self::Status { .. } => "status",
             Self::Tasks { .. } => "tasks",
+            Self::DelegateChildRun { .. } => "delegate_child_run",
             Self::Sessions { .. } => "sessions",
             Self::Plugins { .. } => "plugins",
             Self::Channels { .. } => "channels",
@@ -111,6 +116,14 @@ mod tests {
             }
             .command_kind_for_logging(),
             "validate_config"
+        );
+        assert_eq!(
+            Commands::Status {
+                config: None,
+                json: false,
+            }
+            .command_kind_for_logging(),
+            "status"
         );
         assert_eq!(
             Commands::WorkUnit {
