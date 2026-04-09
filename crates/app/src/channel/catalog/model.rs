@@ -47,6 +47,20 @@ pub const WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
         serve_bootstrap_agent_id: "channel-whatsapp",
     };
 
+pub const LINE_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "line",
+        platform: ChannelPlatform::Line,
+        serve_bootstrap_agent_id: "channel-line",
+    };
+
+pub const WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "webhook",
+        platform: ChannelPlatform::Webhook,
+        serve_bootstrap_agent_id: "channel-webhook",
+    };
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelCommandFamilyDescriptor {
     pub runtime: ChannelRuntimeCommandDescriptor,

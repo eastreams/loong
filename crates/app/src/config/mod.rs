@@ -289,8 +289,8 @@ mod tests {
         let line = channel_descriptor("line").expect("line descriptor");
         assert_eq!(line.id, "line");
         assert_eq!(line.surface_label, "line channel");
-        assert_eq!(line.runtime_kind, ChannelRuntimeKind::OutboundOnly);
-        assert_eq!(line.serve_subcommand, None);
+        assert_eq!(line.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(line.serve_subcommand, Some("line-serve"));
 
         let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
         assert_eq!(dingtalk.id, "dingtalk");
@@ -313,8 +313,8 @@ mod tests {
         let webhook = channel_descriptor("webhook").expect("webhook descriptor");
         assert_eq!(webhook.id, "webhook");
         assert_eq!(webhook.surface_label, "webhook channel");
-        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::OutboundOnly);
-        assert_eq!(webhook.serve_subcommand, None);
+        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(webhook.serve_subcommand, Some("webhook-serve"));
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.id, "google-chat");

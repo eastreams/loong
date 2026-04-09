@@ -1164,7 +1164,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("whatsapp")
     )));
     assert!(rendered.contains(
-        "LINE [line] implementation_status=config_backed selection_order=60 selection_label=\"consumer messaging bot\" capabilities=multi_account,send aliases=line-bot transport=line_messaging_api target_kinds=address configured_accounts=1 default_configured_account=default"
+        "LINE [line] implementation_status=runtime_backed selection_order=60 selection_label=\"consumer messaging bot\" capabilities=runtime_backed,multi_account,send,serve,runtime_tracking aliases=line-bot transport=line_messaging_api target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
         "DingTalk [dingtalk] implementation_status=config_backed selection_order=80 selection_label=\"group webhook bot\" capabilities=multi_account,send aliases=ding,ding-bot transport=dingtalk_custom_robot_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
@@ -1227,7 +1227,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "op serve (imessage-serve) unsupported: imessage bridge sync runtime is not implemented yet target_kinds=conversation requirements=enabled,bridge_url,bridge_token,allowed_chat_ids"
     ));
     assert!(rendered.contains(
-        "Webhook [webhook] implementation_status=config_backed selection_order=110 selection_label=\"generic http integration\" capabilities=multi_account,send aliases=http-webhook transport=generic_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+        "Webhook [webhook] implementation_status=runtime_backed selection_order=110 selection_label=\"generic http integration\" capabilities=runtime_backed,multi_account,send,serve,runtime_tracking aliases=http-webhook transport=generic_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
         "WebChat [webchat] implementation_status=stub selection_order=230 selection_label=\"embedded web inbox\""
@@ -1236,7 +1236,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "op send (webhook-send) disabled: disabled by webhook account configuration target_kinds=endpoint requirements=enabled,endpoint_url"
     ));
     assert!(rendered.contains(
-        "op serve (webhook-serve) unsupported: generic webhook serve runtime is not implemented yet target_kinds=endpoint requirements=enabled,public_base_url,signing_secret"
+        "op serve (webhook-serve) disabled: disabled by webhook account configuration target_kinds=endpoint requirements=enabled,signing_secret"
     ));
     assert!(rendered.contains(
         "onboarding strategy=manual_config status_command=\"loong doctor\" repair_command=\"loong doctor --fix\""

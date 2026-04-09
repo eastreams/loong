@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::registry::{
-    ChannelRuntimeCommandDescriptor, resolve_channel_catalog_entry,
-    resolve_channel_command_family_descriptor, resolve_channel_selection_order,
+    ChannelRuntimeCommandDescriptor, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_selection_order,
 };
 
 #[cfg(feature = "channel-feishu")]
@@ -360,13 +360,13 @@ fn build_channel_descriptors() -> Vec<ChannelDescriptor> {
 
 fn build_channel_descriptor(
     channel_id: &'static str,
-    background_runtime: Option<ChannelRuntimeCommandDescriptor>,
+    _background_runtime: Option<ChannelRuntimeCommandDescriptor>,
 ) -> ChannelDescriptor {
     let label = channel_display_label(channel_id);
     let surface_label_text = channel_surface_label_text(channel_id);
     let surface_label = leak_channel_string(surface_label_text);
     let runtime_kind = channel_runtime_kind(channel_id);
-    let serve_subcommand = channel_serve_subcommand(channel_id, background_runtime);
+    let serve_subcommand = channel_serve_subcommand(channel_id);
 
     ChannelDescriptor {
         id: channel_id,
@@ -431,21 +431,16 @@ fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
     }
 }
 
-fn channel_serve_subcommand(
-    channel_id: &str,
-    background_runtime: Option<ChannelRuntimeCommandDescriptor>,
-) -> Option<&'static str> {
-    background_runtime?;
+fn channel_serve_subcommand(channel_id: &str) -> Option<&'static str> {
+    let family_descriptor = resolve_channel_catalog_command_family_descriptor(channel_id)?;
+    let serve_operation = family_descriptor.serve;
+    if serve_operation.availability
+        != super::catalog::ChannelCatalogOperationAvailability::Implemented
+    {
+        return None;
+    }
 
-    let family_descriptor = resolve_channel_command_family_descriptor(channel_id);
-    debug_assert!(
-        family_descriptor.is_some(),
-        "missing command-family metadata for `{channel_id}`"
-    );
-    let family_descriptor = family_descriptor?;
-    let serve_operation = family_descriptor.serve();
-    let serve_command = serve_operation.command;
-    Some(serve_command)
+    Some(serve_operation.command)
 }
 
 pub fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -932,22 +927,19 @@ mod tests {
 
     fn expected_background_channel_ids() -> Vec<&'static str> {
         let mut channel_ids = Vec::new();
-        let catalog = super::super::registry::list_channel_catalog();
 
-        for catalog_entry in catalog {
-            let runtime_descriptor =
-                super::super::registry::resolve_channel_runtime_command_descriptor(
-                    catalog_entry.id,
-                );
-            if runtime_descriptor.is_none() {
+        for integration in CHANNEL_INTEGRATIONS {
+            if integration.background_runtime.is_none() {
                 continue;
             }
-            let Some(descriptor) = channel_descriptor(catalog_entry.id) else {
+
+            let Some(descriptor) = channel_descriptor(integration.channel_id) else {
                 continue;
             };
             if descriptor.runtime_kind != ChannelRuntimeKind::RuntimeBacked {
                 continue;
             }
+
             channel_ids.push(descriptor.id);
         }
 

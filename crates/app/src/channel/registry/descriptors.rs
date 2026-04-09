@@ -124,13 +124,15 @@ pub(super) const SLACK_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(super) const LINE_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "line",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: LINE_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_line_snapshots),
         selection_order: 60,
         selection_label: "consumer messaging bot",
-        blurb: "Shipped LINE Messaging API outbound surface with config-backed push sends; inbound webhook serve support remains planned.",
-        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
-        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+        blurb: "Shipped LINE Messaging API surface with push sends and signed webhook reply-loop runtime support.",
+        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: LINE_CAPABILITIES,
         label: "LINE",
         aliases: &["line-bot"],
         transport: "line_messaging_api",
@@ -242,13 +244,15 @@ const EMAIL_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegi
 
 const WEBHOOK_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegistryDescriptor {
     id: "webhook",
-    runtime: None,
+    runtime: Some(ChannelRuntimeDescriptor {
+        family: WEBHOOK_COMMAND_FAMILY_DESCRIPTOR,
+    }),
     snapshot_builder: Some(build_webhook_snapshots),
     selection_order: 110,
     selection_label: "generic http integration",
-    blurb: "Shipped generic webhook outbound surface with config-backed POST delivery; inbound callback serving remains planned.",
-    implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
-    capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+    blurb: "Shipped generic webhook surface with outbound POST delivery and signed inbound webhook serve support.",
+    implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+    capabilities: WEBHOOK_CAPABILITIES,
     label: "Webhook",
     aliases: &["http-webhook"],
     transport: "generic_webhook",

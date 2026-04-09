@@ -64,8 +64,9 @@ pub use super::catalog::{
     ChannelCatalogOperationRequirement, ChannelCommandFamilyDescriptor, ChannelDoctorCheckSpec,
     ChannelDoctorCheckTrigger, ChannelDoctorOperationSpec, ChannelOnboardingDescriptor,
     ChannelOnboardingStrategy, ChannelOperationDescriptor, ChannelRuntimeCommandDescriptor,
-    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
-    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, LINE_RUNTIME_COMMAND_DESCRIPTOR,
+    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+    WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
     WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, list_channel_catalog,
     normalize_channel_catalog_id, normalize_channel_platform,
     resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
@@ -1043,7 +1044,7 @@ const LINE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "webhook reply loop",
     command: "line-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: LINE_SERVE_REQUIREMENTS,
     default_target_kind: None,
@@ -1056,6 +1057,24 @@ pub const LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDes
         send: LINE_SEND_OPERATION,
         serve: LINE_SERVE_OPERATION,
     };
+
+pub const LINE_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: LINE_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+const LINE_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "line serve health",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "line serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+
 const LINE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
         operation: LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
@@ -1063,12 +1082,19 @@ const LINE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     },
     ChannelRegistryOperationDescriptor {
         operation: LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
-        doctor_checks: &[],
+        doctor_checks: LINE_SERVE_DOCTOR_CHECKS,
     },
+];
+const LINE_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
 ];
 const LINE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure LINE Messaging API credentials in loongclaw.toml under line or line.accounts.<account>; outbound push send is shipped, while inbound webhook serve support remains planned",
+    setup_hint: "configure LINE Messaging API credentials in loongclaw.toml under line or line.accounts.<account>; outbound push send and inbound webhook serve are shipped, and line-serve requires --bind plus an optional --path override at runtime",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1593,17 +1619,6 @@ const WEBHOOK_ENDPOINT_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
         ],
         default_env_var: Some(WEBHOOK_ENDPOINT_URL_ENV),
     };
-const WEBHOOK_PUBLIC_BASE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
-    ChannelCatalogOperationRequirement {
-        id: "public_base_url",
-        label: "public base url",
-        config_paths: &[
-            "webhook.public_base_url",
-            "webhook.accounts.<account>.public_base_url",
-        ],
-        env_pointer_paths: &[],
-        default_env_var: None,
-    };
 const WEBHOOK_SIGNING_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "signing_secret",
@@ -1624,7 +1639,6 @@ const WEBHOOK_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 ];
 const WEBHOOK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     WEBHOOK_ENABLED_REQUIREMENT,
-    WEBHOOK_PUBLIC_BASE_URL_REQUIREMENT,
     WEBHOOK_SIGNING_SECRET_REQUIREMENT,
 ];
 const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1641,7 +1655,7 @@ const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "inbound webhook service",
     command: "webhook-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WEBHOOK_SERVE_REQUIREMENTS,
     default_target_kind: None,
@@ -1656,6 +1670,23 @@ pub const WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamily
         serve: WEBHOOK_SERVE_OPERATION,
     };
 
+pub const WEBHOOK_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+const WEBHOOK_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "webhook serve health",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "webhook serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+
 const WEBHOOK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
         operation: WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
@@ -1663,12 +1694,19 @@ const WEBHOOK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     },
     ChannelRegistryOperationDescriptor {
         operation: WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
-        doctor_checks: &[],
+        doctor_checks: WEBHOOK_SERVE_DOCTOR_CHECKS,
     },
+];
+const WEBHOOK_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
 ];
 const WEBHOOK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure generic webhook delivery in loongclaw.toml under webhook or webhook.accounts.<account>; outbound endpoint send is shipped, while inbound webhook serve support remains planned",
+    setup_hint: "configure generic webhook delivery in loongclaw.toml under webhook or webhook.accounts.<account>; outbound endpoint send and inbound signed webhook serve are shipped, and webhook-serve requires --bind plus an optional --path override at runtime",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -3146,8 +3184,8 @@ fn build_slack_snapshots(
 fn build_line_snapshots(
     descriptor: &ChannelRegistryDescriptor,
     config: &LoongClawConfig,
-    _runtime_dir: &Path,
-    _now_ms: u64,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-line");
     let http_policy = super::http::outbound_http_policy_from_config(config);
@@ -3171,6 +3209,8 @@ fn build_line_snapshots(
                     is_default_account,
                     default_account_source,
                     http_policy,
+                    runtime_dir,
+                    now_ms,
                 ),
                 Err(error) => build_invalid_line_snapshot(
                     descriptor,
@@ -3179,6 +3219,8 @@ fn build_line_snapshots(
                     is_default_account,
                     default_account_source,
                     error,
+                    runtime_dir,
+                    now_ms,
                 ),
             }
         })
@@ -3314,8 +3356,8 @@ fn build_email_snapshots(
 fn build_webhook_snapshots(
     descriptor: &ChannelRegistryDescriptor,
     config: &LoongClawConfig,
-    _runtime_dir: &Path,
-    _now_ms: u64,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-webhook");
     let http_policy = super::http::outbound_http_policy_from_config(config);
@@ -3339,6 +3381,8 @@ fn build_webhook_snapshots(
                     is_default_account,
                     default_account_source,
                     http_policy,
+                    runtime_dir,
+                    now_ms,
                 ),
                 Err(error) => build_invalid_webhook_snapshot(
                     descriptor,
@@ -3347,6 +3391,8 @@ fn build_webhook_snapshots(
                     is_default_account,
                     default_account_source,
                     error,
+                    runtime_dir,
+                    now_ms,
                 ),
             }
         })
@@ -3959,6 +4005,8 @@ fn build_line_snapshot_for_account(
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
     http_policy: super::http::ChannelOutboundHttpPolicy,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.channel_access_token().is_none() {
@@ -3984,22 +4032,49 @@ fn build_line_snapshot_for_account(
             "disabled by line account configuration".to_owned(),
         )
     } else if !send_issues.is_empty() {
-        misconfigured_operation(LINE_SEND_OPERATION, send_issues)
+        misconfigured_operation(LINE_SEND_OPERATION, send_issues.clone())
     } else {
         ready_operation(LINE_SEND_OPERATION)
     };
+    let send_operation = attach_runtime(
+        ChannelPlatform::Line,
+        LINE_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+
+    let mut serve_issues = send_issues.clone();
+    if resolved.channel_secret().is_none() {
+        serve_issues.push("channel_secret is missing".to_owned());
+    }
 
     let serve_operation = if !compiled {
         unsupported_operation(
             LINE_SERVE_OPERATION,
             "binary built without feature `channel-line`".to_owned(),
         )
-    } else {
-        unsupported_operation(
+    } else if !resolved.enabled {
+        disabled_operation(
             LINE_SERVE_OPERATION,
-            "line serve runtime is not implemented yet".to_owned(),
+            "disabled by line account configuration".to_owned(),
         )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(LINE_SERVE_OPERATION, serve_issues)
+    } else {
+        ready_operation(LINE_SERVE_OPERATION)
     };
+    let serve_operation = attach_runtime(
+        ChannelPlatform::Line,
+        LINE_SERVE_OPERATION,
+        serve_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
 
     let mut notes = vec![
         format!("configured_account_id={}", resolved.configured_account_id),
@@ -4298,6 +4373,8 @@ fn build_webhook_snapshot_for_account(
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
     http_policy: super::http::ChannelOutboundHttpPolicy,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -4315,8 +4392,9 @@ fn build_webhook_snapshot_for_account(
         resolved.auth_header_name.as_str(),
         resolved.auth_token_prefix.as_str(),
     );
-    if let Err(error) = auth_validation {
-        send_issues.push(error);
+    let auth_error = auth_validation.err();
+    if let Some(error) = auth_error.as_ref() {
+        send_issues.push(error.clone());
     }
 
     let payload_text_field = resolved.payload_text_field.trim();
@@ -4339,18 +4417,48 @@ fn build_webhook_snapshot_for_account(
     } else {
         ready_operation(WEBHOOK_SEND_OPERATION)
     };
+    let send_operation = attach_runtime(
+        ChannelPlatform::Webhook,
+        WEBHOOK_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+
+    let mut serve_issues = Vec::new();
+    if let Some(error) = auth_error {
+        serve_issues.push(error);
+    }
+    if resolved.signing_secret().is_none() {
+        serve_issues.push("signing_secret is missing".to_owned());
+    }
 
     let serve_operation = if !compiled {
         unsupported_operation(
             WEBHOOK_SERVE_OPERATION,
             "binary built without feature `channel-webhook`".to_owned(),
         )
-    } else {
-        unsupported_operation(
+    } else if !resolved.enabled {
+        disabled_operation(
             WEBHOOK_SERVE_OPERATION,
-            "generic webhook serve runtime is not implemented yet".to_owned(),
+            "disabled by webhook account configuration".to_owned(),
         )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(WEBHOOK_SERVE_OPERATION, serve_issues)
+    } else {
+        ready_operation(WEBHOOK_SERVE_OPERATION)
     };
+    let serve_operation = attach_runtime(
+        ChannelPlatform::Webhook,
+        WEBHOOK_SERVE_OPERATION,
+        serve_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
 
     let mut notes = vec![
         format!("configured_account_id={}", resolved.configured_account_id),
@@ -4371,10 +4479,10 @@ fn build_webhook_snapshot_for_account(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if public_base_url.is_some() {
-        notes.push("future_serve_public_base_url_configured=true".to_owned());
+        notes.push("public_base_url_configured=true".to_owned());
     }
     if resolved.signing_secret().is_some() {
-        notes.push("future_serve_signing_secret_configured=true".to_owned());
+        notes.push("signing_secret_configured=true".to_owned());
     }
     if is_default_account {
         notes.push("default_account=true".to_owned());
@@ -5921,6 +6029,8 @@ fn build_invalid_line_snapshot(
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
     error: String,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let send_operation = if !compiled {
         unsupported_operation(
@@ -5930,17 +6040,32 @@ fn build_invalid_line_snapshot(
     } else {
         misconfigured_operation(LINE_SEND_OPERATION, vec![error.clone()])
     };
+    let send_operation = attach_runtime(
+        ChannelPlatform::Line,
+        LINE_SEND_OPERATION,
+        send_operation,
+        configured_account_id,
+        configured_account_id,
+        runtime_dir,
+        now_ms,
+    );
     let serve_operation = if !compiled {
         unsupported_operation(
             LINE_SERVE_OPERATION,
             "binary built without feature `channel-line`".to_owned(),
         )
     } else {
-        unsupported_operation(
-            LINE_SERVE_OPERATION,
-            "line serve runtime is not implemented yet".to_owned(),
-        )
+        misconfigured_operation(LINE_SERVE_OPERATION, vec![error.clone()])
     };
+    let serve_operation = attach_runtime(
+        ChannelPlatform::Line,
+        LINE_SERVE_OPERATION,
+        serve_operation,
+        configured_account_id,
+        configured_account_id,
+        runtime_dir,
+        now_ms,
+    );
 
     let mut notes = vec![
         format!("configured_account_id={configured_account_id}"),
@@ -6150,6 +6275,8 @@ fn build_invalid_webhook_snapshot(
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
     error: String,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let send_operation = if !compiled {
         unsupported_operation(
@@ -6159,17 +6286,32 @@ fn build_invalid_webhook_snapshot(
     } else {
         misconfigured_operation(WEBHOOK_SEND_OPERATION, vec![error.clone()])
     };
+    let send_operation = attach_runtime(
+        ChannelPlatform::Webhook,
+        WEBHOOK_SEND_OPERATION,
+        send_operation,
+        configured_account_id,
+        configured_account_id,
+        runtime_dir,
+        now_ms,
+    );
     let serve_operation = if !compiled {
         unsupported_operation(
             WEBHOOK_SERVE_OPERATION,
             "binary built without feature `channel-webhook`".to_owned(),
         )
     } else {
-        unsupported_operation(
-            WEBHOOK_SERVE_OPERATION,
-            "generic webhook serve runtime is not implemented yet".to_owned(),
-        )
+        misconfigured_operation(WEBHOOK_SERVE_OPERATION, vec![error.clone()])
     };
+    let serve_operation = attach_runtime(
+        ChannelPlatform::Webhook,
+        WEBHOOK_SERVE_OPERATION,
+        serve_operation,
+        configured_account_id,
+        configured_account_id,
+        runtime_dir,
+        now_ms,
+    );
 
     let mut notes = vec![
         format!("configured_account_id={configured_account_id}"),
@@ -6836,7 +6978,9 @@ mod tests {
                 .iter()
                 .map(|descriptor| descriptor.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+            vec![
+                "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook"
+            ]
         );
         assert!(
             runtime_backed
@@ -6851,8 +6995,12 @@ mod tests {
             .expect("telegram runtime command descriptor");
         let lark =
             resolve_channel_runtime_command_descriptor("lark").expect("lark runtime descriptor");
+        let line =
+            resolve_channel_runtime_command_descriptor("line").expect("line runtime descriptor");
         let wecom =
             resolve_channel_runtime_command_descriptor("wecom").expect("wecom runtime descriptor");
+        let webhook = resolve_channel_runtime_command_descriptor("webhook")
+            .expect("webhook runtime descriptor");
 
         assert_eq!(telegram.channel_id, "telegram");
         assert_eq!(telegram.platform, ChannelPlatform::Telegram);
@@ -6862,9 +7010,17 @@ mod tests {
         assert_eq!(lark.platform, ChannelPlatform::Feishu);
         assert_eq!(lark.serve_bootstrap_agent_id, "channel-feishu");
 
+        assert_eq!(line.channel_id, "line");
+        assert_eq!(line.platform, ChannelPlatform::Line);
+        assert_eq!(line.serve_bootstrap_agent_id, "channel-line");
+
         assert_eq!(wecom.channel_id, "wecom");
         assert_eq!(wecom.platform, ChannelPlatform::Wecom);
         assert_eq!(wecom.serve_bootstrap_agent_id, "channel-wecom");
+
+        assert_eq!(webhook.channel_id, "webhook");
+        assert_eq!(webhook.platform, ChannelPlatform::Webhook);
+        assert_eq!(webhook.serve_bootstrap_agent_id, "channel-webhook");
     }
 
     #[test]
@@ -8529,6 +8685,35 @@ mod tests {
                 .any(|issue| issue.contains("auth header value is invalid")),
             "unexpected issues: {:?}",
             send.issues
+        );
+    }
+
+    #[test]
+    fn webhook_status_snapshot_requires_signing_secret_for_serve() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "webhook": {
+                "enabled": true,
+                "endpoint_url": "https://hooks.example.test/send"
+            }
+        }))
+        .expect("deserialize generic webhook config");
+
+        let webhook = channel_status_snapshots(&config)
+            .into_iter()
+            .find(|snapshot| snapshot.id == "webhook")
+            .expect("generic webhook snapshot");
+        let serve = webhook
+            .operation(CHANNEL_OPERATION_SERVE_ID)
+            .expect("webhook serve operation");
+
+        assert_eq!(serve.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue.contains("signing_secret")),
+            "unexpected serve issues: {:?}",
+            serve.issues
         );
     }
 

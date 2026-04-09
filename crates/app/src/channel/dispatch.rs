@@ -18,7 +18,6 @@ use crate::CliResult;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
-    feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -43,7 +42,6 @@ use crate::acp::AcpConversationTurnOptions;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
-    feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -67,7 +65,6 @@ use crate::config::LoongClawConfig;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
-    feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -91,7 +88,6 @@ use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
-    feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-irc",
@@ -145,9 +141,11 @@ use crate::config::ResolvedWhatsappChannelConfig;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
+    feature = "channel-webhook",
 ))]
 use crate::conversation::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
@@ -157,9 +155,11 @@ use crate::conversation::{
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
+    feature = "channel-webhook",
 ))]
 #[cfg(test)]
 use crate::conversation::{ConversationRuntime, ConversationRuntimeBinding};
@@ -186,9 +186,11 @@ pub(super) use super::commands::{
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 pub(super) use super::commands::{ChannelServeCommandSpec, run_channel_serve_command_with_stop};
 #[cfg(feature = "channel-dingtalk")]
@@ -226,17 +228,22 @@ use super::runtime::state;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-nextcloud-talk",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
+    feature = "channel-webhook",
 ))]
 use super::runtime::turn_feedback::ChannelTurnFeedbackCapture;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
+    feature = "channel-webhook",
 ))]
 use super::runtime::turn_feedback::ChannelTurnFeedbackPolicy;
 #[cfg(feature = "channel-signal")]
@@ -1360,6 +1367,57 @@ pub async fn run_line_send(
     }
 }
 
+#[allow(clippy::print_stdout)] // CLI startup banner
+pub async fn run_line_channel(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-line") {
+        return Err("line channel is disabled (enable feature `channel-line`)".to_owned());
+    }
+    #[cfg(not(feature = "channel-line"))]
+    {
+        let _ = (config_path, account_id, bind_override, path_override);
+        return Err("line channel is disabled (enable feature `channel-line`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-line")]
+    {
+        let context = load_line_command_context(config_path, account_id)?;
+        line::run_line_channel_with_context(
+            context,
+            bind_override,
+            path_override,
+            ChannelServeStopHandle::new(),
+            true,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "channel-line")]
+pub async fn run_line_channel_with_stop(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    let context = build_line_command_context(resolved_path, config, account_id)?;
+    line::run_line_channel_with_context(
+        context,
+        bind_override,
+        path_override,
+        stop,
+        initialize_runtime_environment,
+    )
+    .await
+}
+
 #[allow(clippy::print_stdout)] // CLI output
 pub async fn run_dingtalk_send(
     config_path: Option<&str>,
@@ -1646,6 +1704,37 @@ pub async fn run_webhook_send(
                     target_source
                 )
             },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI startup banner
+pub async fn run_webhook_channel(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-webhook") {
+        return Err("webhook channel is disabled (enable feature `channel-webhook`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-webhook"))]
+    {
+        let _ = (config_path, account_id, bind_override, path_override);
+        return Err("webhook channel is disabled (enable feature `channel-webhook`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-webhook")]
+    {
+        let context = load_webhook_command_context(config_path, account_id)?;
+        webhook::run_webhook_channel_with_context(
+            context,
+            bind_override,
+            path_override,
+            ChannelServeStopHandle::new(),
+            true,
         )
         .await
     }
@@ -2319,9 +2408,12 @@ pub async fn run_feishu_channel_with_stop(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-nextcloud-talk",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 pub async fn run_channel_serve_runtime_probe_for_test(
     platform: ChannelPlatform,
@@ -2815,8 +2907,12 @@ pub async fn run_background_channel_with_stop(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-nextcloud-talk",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 pub(crate) async fn send_text_to_known_session(
     config: &LoongClawConfig,
@@ -2941,6 +3037,43 @@ pub(crate) async fn send_text_to_known_session(
                 })
             }
         }
+        KnownChannelSessionSendTarget::Line {
+            account_id,
+            address,
+        } => {
+            #[cfg(not(feature = "channel-line"))]
+            {
+                let _ = (config, account_id, address, text);
+                Err("line channel is disabled (enable feature `channel-line`)".to_owned())
+            }
+
+            #[cfg(feature = "channel-line")]
+            {
+                let resolved = config
+                    .line
+                    .resolve_account_for_session_account_id(account_id.as_deref())?;
+                if !resolved.enabled {
+                    return Err(
+                        "sessions_send_channel_disabled: line channel is disabled by config"
+                            .to_owned(),
+                    );
+                }
+
+                line::run_line_send(
+                    &resolved,
+                    ChannelOutboundTargetKind::Address,
+                    address.as_str(),
+                    text,
+                    super::http::outbound_http_policy_from_config(config),
+                )
+                .await?;
+
+                Ok(ChannelSendReceipt {
+                    channel: "line",
+                    target: address,
+                })
+            }
+        }
         KnownChannelSessionSendTarget::Matrix {
             account_id,
             room_id,
@@ -3027,14 +3160,54 @@ pub(crate) async fn send_text_to_known_session(
                 })
             }
         }
+        KnownChannelSessionSendTarget::WhatsApp {
+            account_id,
+            address,
+        } => {
+            #[cfg(not(feature = "channel-whatsapp"))]
+            {
+                let _ = (config, account_id, address, text);
+                Err("whatsapp channel is disabled (enable feature `channel-whatsapp`)".to_owned())
+            }
+
+            #[cfg(feature = "channel-whatsapp")]
+            {
+                let resolved = config
+                    .whatsapp
+                    .resolve_account_for_session_account_id(account_id.as_deref())?;
+                if !resolved.enabled {
+                    return Err(
+                        "sessions_send_channel_disabled: whatsapp channel is disabled by config"
+                            .to_owned(),
+                    );
+                }
+
+                whatsapp::run_whatsapp_send(
+                    &resolved,
+                    ChannelOutboundTargetKind::Address,
+                    address.as_str(),
+                    text,
+                    super::http::outbound_http_policy_from_config(config),
+                )
+                .await?;
+
+                Ok(ChannelSendReceipt {
+                    channel: "whatsapp",
+                    target: address,
+                })
+            }
+        }
     }
 }
 
 #[cfg(not(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 )))]
 pub(crate) async fn send_text_to_known_session(
     _config: &crate::config::LoongClawConfig,
@@ -3047,9 +3220,12 @@ pub(crate) async fn send_text_to_known_session(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-nextcloud-talk",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 #[cfg(test)]
 pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
@@ -3089,7 +3265,8 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 /// Bridge an inbound channel message into the shared chat/provider turn
 /// runtime.
@@ -3246,6 +3423,15 @@ pub(crate) async fn process_inbound_with_provider(
 /// This intentionally does not re-resolve channel serve account selection or
 /// mutate the long-lived channel loop state; it only refreshes the provider
 /// data that turn execution depends on.
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 pub(super) fn reload_channel_turn_config(
     config: &LoongClawConfig,
     resolved_path: Option<&std::path::Path>,
@@ -3261,7 +3447,8 @@ pub(super) fn reload_channel_turn_config(
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 fn resolve_channel_acp_turn_hints(
     config: &LoongClawConfig,
@@ -3290,6 +3477,7 @@ fn resolve_channel_acp_turn_hints(
                 working_directory,
             })
         }
+        ChannelPlatform::Line => Ok(ChannelResolvedAcpTurnHints::default()),
         ChannelPlatform::Matrix => {
             let resolved = config
                 .matrix
@@ -3312,6 +3500,7 @@ fn resolve_channel_acp_turn_hints(
                 working_directory,
             })
         }
+        ChannelPlatform::Webhook => Ok(ChannelResolvedAcpTurnHints::default()),
         ChannelPlatform::WhatsApp => Ok(ChannelResolvedAcpTurnHints::default()),
         ChannelPlatform::Irc => Ok(ChannelResolvedAcpTurnHints::default()),
     }
@@ -3320,9 +3509,12 @@ fn resolve_channel_acp_turn_hints(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-nextcloud-talk",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTurnProvenance<'_> {
     AcpTurnProvenance {
@@ -3335,9 +3527,12 @@ fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTu
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-nextcloud-talk",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 pub(super) fn channel_message_ingress_context(
     message: &ChannelInboundMessage,
@@ -3392,9 +3587,11 @@ pub(super) fn channel_message_ingress_context(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
     value
@@ -3406,9 +3603,11 @@ fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 fn normalized_channel_delivery_resource(
     resource: &ChannelDeliveryResource,
@@ -3431,7 +3630,8 @@ fn normalized_channel_delivery_resource(
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 fn normalized_feishu_callback_context(
     callback: Option<&ChannelDeliveryFeishuCallback>,
