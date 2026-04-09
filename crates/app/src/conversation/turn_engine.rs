@@ -2077,11 +2077,6 @@ fn turn_result_from_tool_execution_failure(failure: TurnFailure) -> TurnResult {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn format_tool_result_line(intent: &ToolIntent, outcome: &ToolCoreOutcome) -> String {
-    format_tool_result_line_with_limit(intent, outcome, TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS)
-}
-
 pub(crate) fn format_tool_result_line_with_limit(
     intent: &ToolIntent,
     outcome: &ToolCoreOutcome,

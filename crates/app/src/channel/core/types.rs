@@ -1,62 +1,9 @@
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-discord",
-    feature = "channel-dingtalk",
-    feature = "channel-email",
-    feature = "channel-feishu",
-    feature = "channel-google-chat",
-    feature = "channel-webhook",
-    feature = "channel-nostr",
-    feature = "channel-line",
-    feature = "channel-matrix",
-    feature = "channel-mattermost",
-    feature = "channel-nextcloud-talk",
-    feature = "channel-signal",
-    feature = "channel-slack",
-    feature = "channel-synology-chat",
-    feature = "channel-irc",
-    feature = "channel-twitch",
-    feature = "channel-teams",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp",
-    feature = "channel-imessage"
-))]
 use std::future::Future;
 use std::path::PathBuf;
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-discord",
-    feature = "channel-dingtalk",
-    feature = "channel-email",
-    feature = "channel-feishu",
-    feature = "channel-google-chat",
-    feature = "channel-webhook",
-    feature = "channel-nostr",
-    feature = "channel-line",
-    feature = "channel-matrix",
-    feature = "channel-mattermost",
-    feature = "channel-nextcloud-talk",
-    feature = "channel-signal",
-    feature = "channel-slack",
-    feature = "channel-synology-chat",
-    feature = "channel-irc",
-    feature = "channel-twitch",
-    feature = "channel-teams",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp",
-    feature = "channel-imessage"
-))]
 use std::pin::Pin;
 use std::{fmt, str::FromStr};
 
 use serde::Serialize;
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 use serde_json::Value;
 
 use crate::CliResult;
@@ -424,13 +371,6 @@ impl ChannelOutboundTarget {
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 #[derive(Debug, Clone)]
 pub struct ChannelInboundMessage {
     pub session: ChannelSession,
@@ -452,13 +392,6 @@ pub(in crate::channel) struct ChannelResolvedAcpTurnHints {
     pub(in crate::channel) working_directory: Option<PathBuf>,
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChannelOutboundMessage {
     Text(String),
@@ -469,13 +402,6 @@ pub enum ChannelOutboundMessage {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 pub enum ChannelStreamingMode {
     #[default]
     Off,
@@ -497,38 +423,8 @@ pub struct FeishuChannelSendRequest {
     pub uuid: Option<String>,
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 pub(in crate::channel) type ChannelProcessFuture =
     Pin<Box<dyn Future<Output = CliResult<String>> + Send>>;
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-discord",
-    feature = "channel-dingtalk",
-    feature = "channel-email",
-    feature = "channel-feishu",
-    feature = "channel-google-chat",
-    feature = "channel-webhook",
-    feature = "channel-nostr",
-    feature = "channel-line",
-    feature = "channel-matrix",
-    feature = "channel-mattermost",
-    feature = "channel-nextcloud-talk",
-    feature = "channel-signal",
-    feature = "channel-slack",
-    feature = "channel-synology-chat",
-    feature = "channel-irc",
-    feature = "channel-twitch",
-    feature = "channel-teams",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp",
-    feature = "channel-imessage"
-))]
 pub(in crate::channel) type ChannelCommandFuture<'a> =
     Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
