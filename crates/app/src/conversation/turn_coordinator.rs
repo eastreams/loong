@@ -4710,13 +4710,19 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     );
     let allow_tool_result_provider_followup =
         config.conversation.turn_loop.max_discovery_followup_rounds > 2;
+    let has_discovery_recovery_followup = matches!(
+        tool_driven_followup_payload(had_tool_intents, &turn_result),
+        Some(ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
+    );
     let has_tool_result_followup = allow_tool_result_provider_followup
         && matches!(
             tool_driven_followup_payload(had_tool_intents, &turn_result),
             Some(ToolDrivenFollowupPayload::ToolResult { .. })
         );
-    let supports_provider_turn_followup =
-        followup_chain_active || discovery_search_turn || has_tool_result_followup;
+    let supports_provider_turn_followup = followup_chain_active
+        || discovery_search_turn
+        || has_discovery_recovery_followup
+        || has_tool_result_followup;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
