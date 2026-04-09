@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, env, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+    path::PathBuf,
+};
 
 use loongclaw_contracts::SecretRef;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -80,6 +84,107 @@ impl ProviderProfile {
         "Volcengine"
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ProviderUrlFingerprint {
+    ArkCoding,
+    ArkCodingAnthropic,
+    ArkCodingPlan,
+    ArkModelArkV3,
+}
+
+impl ProviderUrlFingerprint {
+    fn all() -> &'static [Self] {
+        &[
+            Self::ArkCoding,
+            Self::ArkCodingAnthropic,
+            Self::ArkCodingPlan,
+            Self::ArkModelArkV3,
+        ]
+    }
+
+    fn matches(self, value: &str) -> bool {
+        let normalized = value.trim().to_ascii_lowercase();
+
+        match self {
+            Self::ArkCoding => normalized.contains("/api/coding"),
+            Self::ArkCodingAnthropic => {
+                normalized.contains("/api/coding") && !normalized.contains("/api/coding/v3")
+            }
+            Self::ArkCodingPlan => normalized.contains("/api/coding/v3"),
+            Self::ArkModelArkV3 => {
+                normalized.contains("/api/v3") && !normalized.contains("/api/coding/v3")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderUrlValidationRule {
+    required_fingerprints: &'static [ProviderUrlFingerprint],
+    forbidden_fingerprints: &'static [ProviderUrlFingerprint],
+    hint: &'static str,
+}
+
+impl ProviderUrlValidationRule {
+    fn matches(self, matched_fingerprints: &BTreeSet<ProviderUrlFingerprint>) -> bool {
+        let has_forbidden_fingerprint = self
+            .forbidden_fingerprints
+            .iter()
+            .any(|fingerprint| matched_fingerprints.contains(fingerprint));
+
+        if has_forbidden_fingerprint {
+            return true;
+        }
+
+        if self.required_fingerprints.is_empty() {
+            return false;
+        }
+
+        let has_required_fingerprint = self
+            .required_fingerprints
+            .iter()
+            .any(|fingerprint| matched_fingerprints.contains(fingerprint));
+
+        !has_required_fingerprint
+    }
+}
+
+const BYTEPLUS_URL_VALIDATION_RULES: &[ProviderUrlValidationRule] = &[ProviderUrlValidationRule {
+    required_fingerprints: &[],
+    forbidden_fingerprints: &[ProviderUrlFingerprint::ArkCoding],
+    hint: "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint",
+}];
+
+const VOLCENGINE_URL_VALIDATION_RULES: &[ProviderUrlValidationRule] = &[
+    ProviderUrlValidationRule {
+        required_fingerprints: &[],
+        forbidden_fingerprints: &[ProviderUrlFingerprint::ArkCoding],
+        hint: "volcengine uses the standard Ark API path under `/api/v3` and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"volcengine_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint",
+    },
+];
+
+const BYTEPLUS_CODING_URL_VALIDATION_RULES: &[ProviderUrlValidationRule] = &[
+    ProviderUrlValidationRule {
+        required_fingerprints: &[ProviderUrlFingerprint::ArkCodingPlan],
+        forbidden_fingerprints: &[
+            ProviderUrlFingerprint::ArkCodingAnthropic,
+            ProviderUrlFingerprint::ArkModelArkV3,
+        ],
+        hint: "byteplus_coding must use the dedicated BytePlus Coding path under `/api/coding/v3`; do not point it at the unsupported Anthropic-compatible `/api/coding` or generic `/api/v3` ModelArk endpoints because that bypasses Coding Plan quota and can incur standard model charges",
+    },
+];
+
+const VOLCENGINE_CODING_URL_VALIDATION_RULES: &[ProviderUrlValidationRule] = &[
+    ProviderUrlValidationRule {
+        required_fingerprints: &[ProviderUrlFingerprint::ArkCodingPlan],
+        forbidden_fingerprints: &[
+            ProviderUrlFingerprint::ArkCodingAnthropic,
+            ProviderUrlFingerprint::ArkModelArkV3,
+        ],
+        hint: "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges",
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderProtocolFamily {
@@ -2008,35 +2113,9 @@ impl ProviderConfig {
     }
 
     pub fn configuration_hint(&self) -> Option<String> {
-        if self.kind == ProviderKind::Byteplus && self.uses_byteplus_coding_plan_path() {
-            return Some(
-                "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
-                    .to_owned(),
-            );
-        }
-        if self.kind == ProviderKind::Volcengine && self.uses_volcengine_coding_plan_path() {
-            return Some(
-                "volcengine uses the standard Ark API path under `/api/v3` and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"volcengine_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
-                    .to_owned(),
-            );
-        }
-        if self.kind == ProviderKind::ByteplusCoding
-            && (self.uses_generic_byteplus_modelark_v3_path()
-                || self.uses_ark_coding_anthropic_path())
-        {
-            return Some(
-                "byteplus_coding must use the dedicated BytePlus Coding path under `/api/coding/v3`; do not point it at the unsupported Anthropic-compatible `/api/coding` or generic `/api/v3` ModelArk endpoints because that bypasses Coding Plan quota and can incur standard model charges"
-                    .to_owned(),
-            );
-        }
-        if self.kind == ProviderKind::VolcengineCoding
-            && (self.uses_generic_volcengine_modelark_v3_path()
-                || self.uses_ark_coding_anthropic_path())
-        {
-            return Some(
-                "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges"
-                    .to_owned(),
-            );
+        let provider_url_hint = self.provider_url_validation_hint();
+        if let Some(hint) = provider_url_hint {
+            return Some(hint);
         }
         if self.has_unresolved_custom_base_url() {
             let template = self.kind.profile().base_url;
@@ -2049,6 +2128,53 @@ impl ProviderConfig {
             ));
         }
         None
+    }
+
+    fn provider_url_validation_hint(&self) -> Option<String> {
+        let rules = self.kind.url_validation_rules();
+        if rules.is_empty() {
+            return None;
+        }
+
+        let matched_fingerprints = self.matched_provider_url_fingerprints();
+
+        for rule in rules {
+            let matches_rule = rule.matches(&matched_fingerprints);
+            if !matches_rule {
+                continue;
+            }
+
+            let hint = rule.hint.to_owned();
+            return Some(hint);
+        }
+
+        None
+    }
+
+    fn matched_provider_url_fingerprints(&self) -> BTreeSet<ProviderUrlFingerprint> {
+        let effective_urls = self.effective_provider_urls();
+        let mut matched_fingerprints = BTreeSet::new();
+
+        for effective_url in effective_urls {
+            for fingerprint in ProviderUrlFingerprint::all() {
+                let matches_fingerprint = fingerprint.matches(effective_url.as_str());
+                if !matches_fingerprint {
+                    continue;
+                }
+
+                matched_fingerprints.insert(*fingerprint);
+            }
+        }
+
+        matched_fingerprints
+    }
+
+    fn effective_provider_urls(&self) -> [String; 3] {
+        let resolved_base_url = self.resolved_base_url();
+        let endpoint = self.endpoint();
+        let models_endpoint = self.models_endpoint();
+
+        [resolved_base_url, endpoint, models_endpoint]
     }
 
     fn build_region_endpoint_support_facts(&self) -> ProviderRegionEndpointSupportFacts {
@@ -2099,94 +2225,6 @@ impl ProviderConfig {
     pub fn request_region_endpoint_failure_hint(&self) -> Option<String> {
         let support_facts = self.support_facts();
         support_facts.region_endpoint.request_failure_hint
-    }
-
-    fn uses_byteplus_coding_plan_path(&self) -> bool {
-        if self.kind != ProviderKind::Byteplus {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_plan_path)
-    }
-
-    fn uses_generic_byteplus_modelark_v3_path(&self) -> bool {
-        if self.kind != ProviderKind::ByteplusCoding {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_generic_ark_modelark_v3_path)
-    }
-
-    fn uses_volcengine_coding_plan_path(&self) -> bool {
-        if self.kind != ProviderKind::Volcengine {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_plan_path)
-    }
-
-    fn uses_generic_volcengine_modelark_v3_path(&self) -> bool {
-        if self.kind != ProviderKind::VolcengineCoding {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_generic_ark_modelark_v3_path)
-    }
-
-    fn uses_ark_coding_anthropic_path(&self) -> bool {
-        if !matches!(
-            self.kind,
-            ProviderKind::ByteplusCoding | ProviderKind::VolcengineCoding
-        ) {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_anthropic_path)
     }
 
     pub fn model_selection_fallback_hint(&self) -> Option<String> {
@@ -2520,20 +2558,6 @@ fn maybe_normalize_custom_chat_path(kind: ProviderKind, base_url: &str, path: &s
     normalized
 }
 
-fn is_ark_coding_plan_path(value: &str) -> bool {
-    value.trim().to_ascii_lowercase().contains("/api/coding")
-}
-
-fn is_ark_coding_anthropic_path(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized.contains("/api/coding") && !normalized.contains("/api/coding/v3")
-}
-
-fn is_generic_ark_modelark_v3_path(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized.contains("/api/v3") && !normalized.contains("/api/coding/v3")
-}
-
 impl ProviderKind {
     pub fn all_sorted() -> &'static [ProviderKind] {
         &PROVIDER_KIND_ORDER
@@ -2791,6 +2815,26 @@ impl ProviderKind {
         } else {
             None
         }
+    }
+
+    fn url_validation_rules(self) -> &'static [ProviderUrlValidationRule] {
+        if self == ProviderKind::Byteplus {
+            return BYTEPLUS_URL_VALIDATION_RULES;
+        }
+
+        if self == ProviderKind::ByteplusCoding {
+            return BYTEPLUS_CODING_URL_VALIDATION_RULES;
+        }
+
+        if self == ProviderKind::Volcengine {
+            return VOLCENGINE_URL_VALIDATION_RULES;
+        }
+
+        if self == ProviderKind::VolcengineCoding {
+            return VOLCENGINE_CODING_URL_VALIDATION_RULES;
+        }
+
+        &[]
     }
 
     fn region_endpoint_guide(self) -> Option<ProviderRegionEndpointGuide> {
@@ -4403,6 +4447,80 @@ mod tests {
                 .missing_configuration_message
                 .contains("BytePlus")
         );
+    }
+
+    #[test]
+    fn byteplus_warns_when_endpoint_targets_coding_plan_path() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Byteplus,
+            endpoint: Some(
+                "https://ark.ap-southeast.bytepluses.com/api/coding/v3/chat/completions".to_owned(),
+            ),
+            endpoint_explicit: true,
+            ..ProviderConfig::default()
+        };
+
+        let hint = provider
+            .configuration_hint()
+            .expect("byteplus should warn when endpoint targets the coding plan path");
+
+        assert!(hint.contains("byteplus"));
+        assert!(hint.contains("byteplus_coding"));
+    }
+
+    #[test]
+    fn volcengine_warns_when_models_endpoint_targets_coding_plan_path() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Volcengine,
+            models_endpoint: Some(
+                "https://ark.cn-beijing.volces.com/api/coding/v3/models".to_owned(),
+            ),
+            models_endpoint_explicit: true,
+            ..ProviderConfig::default()
+        };
+
+        let hint = provider
+            .configuration_hint()
+            .expect("volcengine should warn when models endpoint targets the coding plan path");
+
+        assert!(hint.contains("volcengine"));
+        assert!(hint.contains("volcengine_coding"));
+    }
+
+    #[test]
+    fn byteplus_coding_warns_when_models_endpoint_targets_generic_modelark_path() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::ByteplusCoding,
+            models_endpoint: Some(
+                "https://ark.ap-southeast.bytepluses.com/api/v3/models".to_owned(),
+            ),
+            models_endpoint_explicit: true,
+            ..ProviderConfig::default()
+        };
+
+        let hint = provider
+            .configuration_hint()
+            .expect("byteplus_coding should require the dedicated coding plan path");
+
+        assert!(hint.contains("byteplus_coding"));
+        assert!(hint.contains("/api/coding/v3"));
+    }
+
+    #[test]
+    fn volcengine_coding_warns_when_effective_urls_miss_coding_plan_path() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::VolcengineCoding,
+            base_url: "https://example.com/v1".to_owned(),
+            base_url_explicit: true,
+            ..ProviderConfig::default()
+        };
+
+        let hint = provider
+            .configuration_hint()
+            .expect("volcengine_coding should require the dedicated coding plan path");
+
+        assert!(hint.contains("volcengine_coding"));
+        assert!(hint.contains("/api/coding/v3"));
     }
 
     #[test]
