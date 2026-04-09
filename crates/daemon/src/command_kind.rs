@@ -25,6 +25,7 @@ impl Commands {
             Self::Audit { .. } => "audit",
             Self::Skills { .. } => "skills",
             Self::Tasks { .. } => "tasks",
+            Self::DelegateChildRun { .. } => "delegate_child_run",
             Self::Sessions { .. } => "sessions",
             Self::Plugins { .. } => "plugins",
             Self::Channels { .. } => "channels",

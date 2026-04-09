@@ -46,7 +46,9 @@ use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
 use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
-    finalize_and_announce_delegate_child_terminal, format_delegate_child_panic,
+    enqueue_delegate_result_announce_with_memory_config,
+    finalize_and_announce_delegate_child_terminal,
+    finalize_async_delegate_spawn_failure_with_recovery, format_delegate_child_panic,
     next_delegate_child_depth_for_delegate, spawn_async_delegate_detached,
 };
 use super::ingress::ConversationIngressContext;
@@ -4079,6 +4081,111 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     let spawner = runtime
         .async_delegate_spawner(config)
         .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
+    let delegate_request = build_delegate_async_enqueue_request(
+        config,
+        runtime,
+        session_context,
+        delegate_request,
+        binding,
+    )
+    .await?;
+    let detached_config = std::sync::Arc::new(config.clone());
+    spawn_async_delegate_detached(
+        runtime_handle,
+        detached_config,
+        delegate_request.memory_config,
+        spawner,
+        delegate_request.request,
+        config.tools.delegate.max_frozen_bytes,
+        DelegateAnnounceSettings::from_config(config),
+    );
+
+    Ok(delegate_request.outcome)
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    delegate_request: crate::tools::delegate::DelegateRequest,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    if !config.tools.delegate.enabled {
+        return Err("app_tool_disabled: delegate is disabled by config".to_owned());
+    }
+
+    let spawner = runtime
+        .background_task_spawner(config)
+        .ok_or_else(|| {
+            "background_task_host_unavailable: current runtime does not provide a durable async background-task host"
+                .to_owned()
+        })?;
+    let delegate_request = build_delegate_async_enqueue_request(
+        config,
+        runtime,
+        session_context,
+        delegate_request,
+        binding,
+    )
+    .await?;
+    let spawn_result = spawner.spawn(delegate_request.request.clone()).await;
+
+    if let Err(error) = spawn_result {
+        finalize_async_delegate_spawn_failure_with_recovery(
+            &delegate_request.memory_config,
+            &delegate_request.request.child_session_id,
+            &delegate_request.request.parent_session_id,
+            delegate_request.request.label.clone(),
+            delegate_request.request.profile,
+            &delegate_request.request.execution,
+            config.tools.delegate.max_frozen_bytes,
+            error.clone(),
+        )?;
+        enqueue_delegate_result_announce_with_memory_config(
+            delegate_request.memory_config.clone(),
+            delegate_request.request.parent_session_id.clone(),
+            delegate_request.request.child_session_id.clone(),
+            DelegateAnnounceSettings::from_config(config),
+        );
+        emit_async_delegate_child_terminal_event(
+            runtime,
+            &delegate_request.request.parent_session_id,
+            &delegate_request.request.child_session_id,
+            delegate_request.request.label.as_deref(),
+            delegate_request.request.profile,
+            "failed",
+            delegate_request.request.execution.isolation,
+            0,
+            None,
+            Some(error.as_str()),
+            None,
+            delegate_request.request.execution.workspace_root.as_deref(),
+            None,
+            binding,
+        )
+        .await;
+        return Err(error);
+    }
+
+    Ok(delegate_request.outcome)
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct PreparedAsyncDelegateEnqueue {
+    memory_config: MemoryRuntimeConfig,
+    request: AsyncDelegateSpawnRequest,
+    outcome: loongclaw_contracts::ToolCoreOutcome,
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    delegate_request: crate::tools::delegate::DelegateRequest,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
@@ -4147,26 +4254,17 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         binding,
     )
     .await;
-    let detached_config = std::sync::Arc::new(config.clone());
-    spawn_async_delegate_detached(
-        runtime_handle,
-        detached_config,
-        memory_config,
-        spawner,
-        AsyncDelegateSpawnRequest {
-            child_session_id: child_session_id.clone(),
-            parent_session_id: session_context.session_id.clone(),
-            task: delegate_request.task,
-            label: child_label,
-            profile: delegate_policy.profile,
-            execution: queued_execution,
-            runtime_self_continuity,
-            timeout_seconds: delegate_policy.timeout_seconds,
-            binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
-        },
-        config.tools.delegate.max_frozen_bytes,
-        DelegateAnnounceSettings::from_config(config),
-    );
+    let request = AsyncDelegateSpawnRequest {
+        child_session_id: child_session_id.clone(),
+        parent_session_id: session_context.session_id.clone(),
+        task: delegate_request.task,
+        label: child_label,
+        profile: delegate_policy.profile,
+        execution: queued_execution,
+        runtime_self_continuity,
+        timeout_seconds: delegate_policy.timeout_seconds,
+        binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
+    };
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
@@ -4176,7 +4274,12 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         delegate_policy.timeout_seconds,
     );
     inject_delegate_workspace_metadata(&mut outcome, &execution, None, None);
-    Ok(outcome)
+
+    Ok(PreparedAsyncDelegateEnqueue {
+        memory_config,
+        request,
+        outcome,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4211,7 +4314,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     }
     let delegate_request =
         crate::tools::delegate::parse_delegate_request_with_default_timeout(&delegate_payload)?;
-    enqueue_delegate_async_with_runtime(
+    enqueue_background_task_with_runtime(
         config,
         runtime,
         &session_context,

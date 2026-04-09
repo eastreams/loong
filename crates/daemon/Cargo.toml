@@ -58,6 +58,7 @@ libc = "0.2"
 
 
 [dependencies]
+async-trait.workspace = true
 axum = { workspace = true, features = ["query"] }
 clap.workspace = true
 clap_complete = "4.5"

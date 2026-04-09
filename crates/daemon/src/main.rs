@@ -348,6 +348,10 @@ async fn main() {
             })
             .await
         }
+        Commands::DelegateChildRun {
+            config_path,
+            payload_file,
+        } => run_detached_delegate_child_cli(&config_path, &payload_file).await,
         Commands::Sessions {
             config,
             json,

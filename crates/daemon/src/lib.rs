@@ -37,6 +37,7 @@ pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
+pub use self::delegate_child_cli::run_detached_delegate_child_cli;
 pub use self::env_compat::make_env_compatible;
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
@@ -98,6 +99,7 @@ mod command_kind;
 pub mod completions_cli;
 mod control_plane_server;
 mod copilot_onboarding;
+mod delegate_child_cli;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
 mod env_compat;
@@ -681,6 +683,13 @@ pub enum Commands {
         session: String,
         #[command(subcommand)]
         command: tasks_cli::TasksCommands,
+    },
+    #[command(hide = true)]
+    DelegateChildRun {
+        #[arg(long)]
+        config_path: String,
+        #[arg(long)]
+        payload_file: String,
     },
     #[command(
         about = "Inspect and manage persisted runtime sessions through an operator-facing session shell",

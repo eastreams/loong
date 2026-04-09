@@ -1487,6 +1487,14 @@ impl ConversationRuntime for FakeRuntime {
         self.async_delegate_spawner_override.clone()
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    fn background_task_spawner(
+        &self,
+        _config: &LoongClawConfig,
+    ) -> Option<Arc<dyn crate::conversation::AsyncDelegateSpawner>> {
+        self.async_delegate_spawner_override.clone()
+    }
+
     async fn bootstrap(
         &self,
         _config: &LoongClawConfig,
