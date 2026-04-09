@@ -1113,8 +1113,15 @@ pub(crate) fn capability_snapshot_for_view_with_config(
         lines.push(capability_tag_line);
     }
 
+    let discovery_workflow_lines = [
+        "Discovery workflow: if a task may need a hidden capability, call tool.search before concluding the capability is unavailable.".to_owned(),
+        "A hidden tool stays unavailable until tool.search returns a lease-bearing tool card.".to_owned(),
+        "After discovery, call tool.invoke with the returned lease and the arguments for the selected tool.".to_owned(),
+    ];
+    lines.extend(discovery_workflow_lines);
+
     let tool_search_guidance_line =
-        "If no visible tool fits, call tool.search with a capability description. tool.search accepts multilingual queries and an empty payload can act as a coarse capability listing fallback.".to_owned();
+        "If no visible tool fits, call tool.search with the capability you need. tool.search accepts multilingual queries and an empty payload can still act as a coarse capability listing fallback.".to_owned();
     lines.push(tool_search_guidance_line);
     lines.join("\n")
 }
@@ -2131,6 +2138,7 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("Discovery workflow:"));
         assert!(snapshot.contains("tool.search accepts multilingual queries"));
         assert!(!snapshot.contains("shell.exec"));
         assert!(!snapshot.contains("file.read"));
@@ -2205,6 +2213,7 @@ mod tests {
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Non-core tools are intentionally hidden"));
         assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("Discovery workflow:"));
         assert!(snapshot.contains("tool.search accepts multilingual queries"));
         assert!(!snapshot.contains("claw.migrate"));
         assert!(!snapshot.contains("external_skills.fetch"));
@@ -2212,7 +2221,7 @@ mod tests {
         assert!(!snapshot.contains("shell.exec"));
 
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.len(), 8);
         assert!(lines[0].starts_with("- tool.invoke"));
         assert!(lines[1].starts_with("- tool.search"));
     }
@@ -3512,6 +3521,41 @@ mod tests {
 
         assert_eq!(query, Some("write file"));
         assert_eq!(first_tool_id, Some("file.write"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_prefers_glob_search_for_directory_listing_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-directory-listing");
+        let nested_root = root.join("notes");
+        let nested_file = nested_root.join("todo.md");
+
+        std::fs::create_dir_all(&nested_root).expect("create nested fixture root");
+        std::fs::write(&nested_file, "remember the release checklist\n")
+            .expect("write nested fixture file");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "看看我当前目录里有什么文件",
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let first_tool_id = results
+            .first()
+            .and_then(|entry| entry.get("tool_id"))
+            .and_then(Value::as_str);
+
+        assert_eq!(first_tool_id, Some("glob.search"));
 
         std::fs::remove_dir_all(&root).ok();
     }

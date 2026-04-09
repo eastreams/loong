@@ -4062,7 +4062,7 @@ fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
         }
         "file.read" => "read a workspace file, inspect file contents, open a repo text file",
         "glob.search" => {
-            "find workspace files by glob pattern, search repo paths, match files under a root"
+            "find workspace files by glob pattern, list files in a directory, browse folder contents, search repo paths, match files under a root"
         }
         "content.search" => {
             "search workspace file contents, find text in repo files, grep text in the project"
@@ -4672,7 +4672,17 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         }
         "http.request" => &["http", "request", "web", "network", "external"],
         "file.read" => &["file", "read", "filesystem", "repo"],
-        "glob.search" => &["file", "search", "glob", "filesystem", "repo"],
+        "glob.search" => &[
+            "file",
+            "search",
+            "glob",
+            "filesystem",
+            "repo",
+            "directory",
+            "folder",
+            "list",
+            "browse",
+        ],
         "content.search" => &["file", "search", "content", "filesystem", "repo"],
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
