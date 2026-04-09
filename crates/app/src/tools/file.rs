@@ -1,10 +1,13 @@
 use std::{
+    collections::VecDeque,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
 };
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+#[cfg(feature = "tool-file")]
+use regex::Regex;
 #[cfg(feature = "tool-file")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-file")]
@@ -277,6 +280,419 @@ pub(super) fn execute_file_edit_tool_with_config(
     }
 }
 
+pub(super) fn execute_glob_search_tool_with_config(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    #[cfg(not(feature = "tool-file"))]
+    {
+        let _ = (request, config);
+        return Err("file tool is disabled in this build (enable feature `tool-file`)".to_owned());
+    }
+
+    #[cfg(feature = "tool-file")]
+    {
+        let payload = request
+            .payload
+            .as_object()
+            .ok_or_else(|| "glob.search payload must be an object".to_owned())?;
+        let root = resolve_search_root(payload, config, "glob.search")?;
+        let pattern = required_string_field(payload, "pattern", "glob.search")?;
+        let max_results = optional_u64_field(payload, "max_results", 50, 1, 200, "glob.search")?;
+        let include_directories = payload
+            .get("include_directories")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let matcher = GlobMatcher::new(pattern)?;
+        let mut matches = Vec::new();
+        let mut queue = VecDeque::from([root.clone()]);
+
+        while let Some(directory) = queue.pop_front() {
+            let mut children = read_sorted_directory_entries(&directory)?;
+
+            while let Some(child) = children.pop() {
+                let child_path = child.path();
+                let relative_path = relative_path_text(&root, &child_path)?;
+                let is_directory = child
+                    .file_type()
+                    .map_err(|error| {
+                        format!("failed to inspect {}: {error}", child_path.display())
+                    })?
+                    .is_dir();
+
+                if matcher.is_match(relative_path.as_str())
+                    && (!is_directory || include_directories)
+                {
+                    matches.push(json!({
+                        "path": relative_path,
+                        "kind": if is_directory { "directory" } else { "file" },
+                    }));
+                }
+
+                if matches.len() >= max_results {
+                    return Ok(search_outcome(
+                        request.tool_name,
+                        root,
+                        pattern,
+                        max_results,
+                        true,
+                        matches,
+                    ));
+                }
+
+                if is_directory {
+                    queue.push_back(child_path);
+                }
+            }
+        }
+
+        Ok(search_outcome(
+            request.tool_name,
+            root,
+            pattern,
+            max_results,
+            false,
+            matches,
+        ))
+    }
+}
+
+pub(super) fn execute_content_search_tool_with_config(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    #[cfg(not(feature = "tool-file"))]
+    {
+        let _ = (request, config);
+        return Err("file tool is disabled in this build (enable feature `tool-file`)".to_owned());
+    }
+
+    #[cfg(feature = "tool-file")]
+    {
+        let payload = request
+            .payload
+            .as_object()
+            .ok_or_else(|| "content.search payload must be an object".to_owned())?;
+        let root = resolve_search_root(payload, config, "content.search")?;
+        let query = required_string_field(payload, "query", "content.search")?;
+        let glob = optional_trimmed_string_field(payload.get("glob"));
+        let max_results = optional_u64_field(payload, "max_results", 20, 1, 100, "content.search")?;
+        let max_bytes_per_file = optional_u64_field(
+            payload,
+            "max_bytes_per_file",
+            262_144,
+            1,
+            1_048_576,
+            "content.search",
+        )?;
+        let case_sensitive = payload
+            .get("case_sensitive")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let matcher = match glob {
+            Some(pattern) => Some(GlobMatcher::new(pattern)?),
+            None => None,
+        };
+        let mut matches = Vec::new();
+        let mut queue = VecDeque::from([root.clone()]);
+
+        while let Some(directory) = queue.pop_front() {
+            let mut children = read_sorted_directory_entries(&directory)?;
+
+            while let Some(child) = children.pop() {
+                let child_path = child.path();
+                let file_type = child.file_type().map_err(|error| {
+                    format!("failed to inspect {}: {error}", child_path.display())
+                })?;
+
+                if file_type.is_dir() {
+                    queue.push_back(child_path);
+                    continue;
+                }
+                if !file_type.is_file() {
+                    continue;
+                }
+
+                let relative_path = relative_path_text(&root, &child_path)?;
+                if let Some(glob_matcher) = matcher.as_ref()
+                    && !glob_matcher.is_match(relative_path.as_str())
+                {
+                    continue;
+                }
+
+                let file_bytes = fs::read(&child_path)
+                    .map_err(|error| format!("failed to read {}: {error}", child_path.display()))?;
+                let limited_bytes = if file_bytes.len() > max_bytes_per_file {
+                    file_bytes
+                        .get(..max_bytes_per_file)
+                        .unwrap_or(file_bytes.as_slice())
+                        .to_vec()
+                } else {
+                    file_bytes
+                };
+                let file_text = String::from_utf8_lossy(&limited_bytes).to_string();
+                let query_match = find_content_match(file_text.as_str(), query, case_sensitive);
+
+                let Some((byte_start, byte_end)) = query_match else {
+                    continue;
+                };
+
+                let line_info = compute_line_info(file_text.as_str(), byte_start);
+                let snippet = build_snippet(file_text.as_str(), byte_start, byte_end);
+                matches.push(json!({
+                    "path": relative_path,
+                    "line": line_info.line,
+                    "column": line_info.column,
+                    "match_text": &file_text[byte_start..byte_end],
+                    "snippet": snippet,
+                    "truncated_file": limited_bytes.len() == max_bytes_per_file,
+                }));
+
+                if matches.len() >= max_results {
+                    return Ok(search_outcome(
+                        request.tool_name,
+                        root,
+                        query,
+                        max_results,
+                        true,
+                        matches,
+                    ));
+                }
+            }
+        }
+
+        Ok(search_outcome(
+            request.tool_name,
+            root,
+            query,
+            max_results,
+            false,
+            matches,
+        ))
+    }
+}
+
+#[cfg(feature = "tool-file")]
+fn search_outcome(
+    tool_name: String,
+    root: PathBuf,
+    needle: &str,
+    max_results: usize,
+    truncated: bool,
+    matches: Vec<Value>,
+) -> ToolCoreOutcome {
+    ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "core-tools",
+            "tool_name": tool_name,
+            "root": root.display().to_string(),
+            "query": needle,
+            "max_results": max_results,
+            "truncated": truncated,
+            "match_count": matches.len(),
+            "matches": matches,
+        }),
+    }
+}
+
+#[cfg(feature = "tool-file")]
+fn resolve_search_root(
+    payload: &serde_json::Map<String, Value>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+    tool_name: &str,
+) -> Result<PathBuf, String> {
+    let root = optional_trimmed_string_field(payload.get("root"));
+
+    match root {
+        Some(path) => resolve_safe_file_path_with_config(path, config),
+        None => config
+            .file_root
+            .clone()
+            .map(canonicalize_or_fallback)
+            .transpose()?
+            .or_else(|| std::env::current_dir().ok())
+            .map(|path| canonicalize_or_fallback(path).unwrap_or_else(|_| PathBuf::from(".")))
+            .ok_or_else(|| format!("{tool_name} could not determine a workspace root")),
+    }
+}
+
+#[cfg(feature = "tool-file")]
+fn required_string_field<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    field: &str,
+    tool_name: &str,
+) -> Result<&'a str, String> {
+    optional_trimmed_string_field(payload.get(field))
+        .ok_or_else(|| format!("{tool_name} requires payload.{field}"))
+}
+
+#[cfg(feature = "tool-file")]
+fn optional_trimmed_string_field(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(feature = "tool-file")]
+fn optional_u64_field(
+    payload: &serde_json::Map<String, Value>,
+    field: &str,
+    default_value: usize,
+    minimum: usize,
+    maximum: usize,
+    tool_name: &str,
+) -> Result<usize, String> {
+    let Some(value) = payload.get(field) else {
+        return Ok(default_value);
+    };
+
+    let parsed_value = value
+        .as_u64()
+        .ok_or_else(|| format!("{tool_name} payload.{field} must be an integer"))?
+        as usize;
+
+    if parsed_value < minimum || parsed_value > maximum {
+        return Err(format!(
+            "{tool_name} payload.{field} must be between {minimum} and {maximum}"
+        ));
+    }
+
+    Ok(parsed_value)
+}
+
+#[cfg(feature = "tool-file")]
+fn read_sorted_directory_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, String> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|error| format!("failed to read directory {}: {error}", directory.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read directory {}: {error}", directory.display()))?;
+
+    entries.sort_by_key(|left| left.path());
+    entries.reverse();
+    Ok(entries)
+}
+
+#[cfg(feature = "tool-file")]
+fn relative_path_text(root: &Path, path: &Path) -> Result<String, String> {
+    let relative_path = path.strip_prefix(root).map_err(|error| {
+        format!(
+            "failed to render relative path for {} from {}: {error}",
+            path.display(),
+            root.display()
+        )
+    })?;
+    let relative_text = relative_path.to_string_lossy().replace('\\', "/");
+    Ok(relative_text)
+}
+
+#[cfg(feature = "tool-file")]
+fn find_content_match(content: &str, query: &str, case_sensitive: bool) -> Option<(usize, usize)> {
+    if case_sensitive {
+        let byte_start = content.find(query)?;
+        let byte_end = byte_start + query.len();
+        return Some((byte_start, byte_end));
+    }
+
+    let lowercase_content = content.to_lowercase();
+    let lowercase_query = query.to_lowercase();
+    let byte_start = lowercase_content.find(lowercase_query.as_str())?;
+    let byte_end = byte_start + lowercase_query.len();
+    Some((byte_start, byte_end))
+}
+
+#[cfg(feature = "tool-file")]
+fn build_snippet(content: &str, byte_start: usize, byte_end: usize) -> String {
+    let snippet_start = content[..byte_start]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let snippet_end = content[byte_end..]
+        .find('\n')
+        .map(|index| byte_end + index)
+        .unwrap_or(content.len());
+    content[snippet_start..snippet_end].trim().to_owned()
+}
+
+#[cfg(feature = "tool-file")]
+fn compute_line_info(content: &str, byte_start: usize) -> LineInfo {
+    let prefix = &content[..byte_start];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit('\n')
+        .next()
+        .map(|segment| segment.chars().count() + 1)
+        .unwrap_or(1);
+    LineInfo { line, column }
+}
+
+#[cfg(feature = "tool-file")]
+struct LineInfo {
+    line: usize,
+    column: usize,
+}
+
+#[cfg(feature = "tool-file")]
+struct GlobMatcher {
+    regex: Regex,
+}
+
+#[cfg(feature = "tool-file")]
+impl GlobMatcher {
+    fn new(pattern: &str) -> Result<Self, String> {
+        let regex_pattern = glob_pattern_to_regex(pattern);
+        let regex = Regex::new(regex_pattern.as_str())
+            .map_err(|error| format!("invalid glob pattern `{pattern}`: {error}"))?;
+        Ok(Self { regex })
+    }
+
+    fn is_match(&self, relative_path: &str) -> bool {
+        self.regex.is_match(relative_path)
+    }
+}
+
+#[cfg(feature = "tool-file")]
+fn glob_pattern_to_regex(pattern: &str) -> String {
+    let mut regex_pattern = String::from("^");
+    let mut chars = pattern.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if character == '*' {
+            let next_is_star = chars.peek() == Some(&'*');
+            if next_is_star {
+                chars.next();
+                if chars.peek() == Some(&'/') {
+                    chars.next();
+                    regex_pattern.push_str("(?:.*/)?");
+                    continue;
+                }
+                regex_pattern.push_str(".*");
+                continue;
+            }
+            regex_pattern.push_str("[^/]*");
+            continue;
+        }
+
+        if character == '?' {
+            regex_pattern.push_str("[^/]");
+            continue;
+        }
+
+        if ".+()^$|{}[]\\".contains(character) {
+            regex_pattern.push('\\');
+        }
+        if character == '\\' {
+            regex_pattern.push('/');
+            continue;
+        }
+        regex_pattern.push(character);
+    }
+
+    regex_pattern.push('$');
+    regex_pattern
+}
+
 pub(super) fn resolve_safe_file_path_with_config(
     raw: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -464,7 +880,7 @@ mod tests {
         assert!(create_symlink(&outside_file, &link).is_ok());
 
         let config = ToolRuntimeConfig {
-            file_root: Some(root),
+            file_root: Some(root.clone()),
             ..ToolRuntimeConfig::default()
         };
         let error =
@@ -488,7 +904,7 @@ mod tests {
         assert!(create_symlink(&outside_dir, &link).is_ok());
 
         let config = ToolRuntimeConfig {
-            file_root: Some(root),
+            file_root: Some(root.clone()),
             ..ToolRuntimeConfig::default()
         };
         let request = ToolCoreRequest {
@@ -782,6 +1198,112 @@ mod tests {
 
         assert!(err.starts_with("policy_denied: "));
         assert!(err.contains("escapes configured file root"));
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn glob_search_returns_workspace_relative_matches() {
+        let base = unique_temp_dir("loongclaw-glob-search");
+        let root = base.join("root");
+        let nested = root.join("src/nested");
+        fs::create_dir_all(&nested).expect("create nested root");
+        fs::write(root.join("src/lib.rs"), "pub fn alpha() {}").expect("write lib");
+        fs::write(nested.join("mod.rs"), "pub fn beta() {}").expect("write mod");
+        fs::write(root.join("README.md"), "hello").expect("write readme");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "glob.search".to_owned(),
+            payload: json!({
+                "pattern": "src/**/*.rs",
+                "max_results": 10
+            }),
+        };
+        let outcome =
+            execute_glob_search_tool_with_config(request, &config).expect("glob search succeeds");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
+
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0]["path"], "src/lib.rs");
+        assert_eq!(matches[1]["path"], "src/nested/mod.rs");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn content_search_returns_line_column_and_snippet() {
+        let base = unique_temp_dir("loongclaw-content-search");
+        let root = base.join("root");
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).expect("create nested root");
+        fs::write(
+            nested.join("main.rs"),
+            "fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .expect("write main");
+        fs::write(root.join("notes.txt"), "hello from notes").expect("write notes");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "content.search".to_owned(),
+            payload: json!({
+                "query": "hello world",
+                "glob": "src/**/*.rs",
+                "max_results": 5
+            }),
+        };
+        let outcome = execute_content_search_tool_with_config(request, &config)
+            .expect("content search succeeds");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
+        let first = matches.first().expect("first match");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(first["path"], "src/main.rs");
+        assert_eq!(first["line"], 2);
+        assert_eq!(first["column"], 15);
+        assert_eq!(first["snippet"], "println!(\"hello world\");");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn content_search_honors_explicit_root() {
+        let base = unique_temp_dir("loongclaw-content-search-root");
+        let root = base.join("root");
+        let include = root.join("include");
+        let exclude = root.join("exclude");
+        fs::create_dir_all(&include).expect("create include");
+        fs::create_dir_all(&exclude).expect("create exclude");
+        fs::write(include.join("a.txt"), "needle here").expect("write include");
+        fs::write(exclude.join("b.txt"), "needle here too").expect("write exclude");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root.clone()),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "content.search".to_owned(),
+            payload: json!({
+                "root": "include",
+                "query": "needle"
+            }),
+        };
+        let outcome = execute_content_search_tool_with_config(request, &config)
+            .expect("content search succeeds");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["path"], "a.txt");
         let _ = fs::remove_dir_all(base);
     }
 }
