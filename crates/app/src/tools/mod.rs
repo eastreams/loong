@@ -49,6 +49,8 @@ mod external_skills_sources;
 mod feishu;
 mod file;
 pub mod file_policy_ext;
+#[cfg(feature = "tool-http")]
+mod http_request;
 mod kernel_adapter;
 #[cfg(feature = "tool-file")]
 mod memory_tools;
@@ -68,7 +70,11 @@ mod shell_request_prep;
 mod tool_search;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
-#[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
+#[cfg(any(
+    feature = "tool-http",
+    feature = "tool-webfetch",
+    feature = "tool-browser"
+))]
 mod web_fetch;
 pub(crate) mod web_http;
 mod web_search;
@@ -97,7 +103,11 @@ pub(crate) use shell_request_prep::{
     normalize_shell_payload_for_request, normalize_shell_request_for_execution,
     prepare_kernel_tool_request,
 };
-#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
+#[cfg(any(
+    feature = "tool-http",
+    feature = "tool-webfetch",
+    feature = "tool-websearch"
+))]
 pub use web_http::build_ssrf_safe_client;
 
 pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loongclaw_browser_scope";
@@ -115,6 +125,7 @@ const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
 const DELEGATE_TOOL_NAME: &str = "delegate";
 pub(crate) const SHELL_EXEC_TOOL_NAME: &str = "shell.exec";
 const BASH_EXEC_TOOL_NAME: &str = "bash.exec";
+const HTTP_REQUEST_TOOL_NAME: &str = "http.request";
 const WEB_FETCH_TOOL_NAME: &str = "web.fetch";
 const WEB_SEARCH_TOOL_NAME: &str = "web.search";
 
@@ -516,7 +527,7 @@ fn required_capabilities_for_tool_name_and_payload(
                 invoked_payload,
             );
         }
-        "file.read" => {
+        "file.read" | "glob.search" | "content.search" => {
             caps.insert(Capability::FilesystemRead);
         }
         "memory_search" | "memory_get" => {
@@ -573,7 +584,8 @@ fn invoked_discoverable_tool_request(payload: &Value) -> Option<(&str, &Value)> 
 fn tool_requires_network_egress(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "web.fetch"
+        "http.request"
+            | "web.fetch"
             | "web.search"
             | "browser.open"
             | "browser.click"
@@ -887,6 +899,9 @@ fn tool_uses_dedicated_timeout(tool_name: &str) -> bool {
     if tool_name == BASH_EXEC_TOOL_NAME {
         return true;
     }
+    if tool_name == HTTP_REQUEST_TOOL_NAME {
+        return true;
+    }
     if tool_name == WEB_FETCH_TOOL_NAME {
         return true;
     }
@@ -959,9 +974,13 @@ fn dispatch_tool_request(
         other if feishu::is_known_feishu_tool_name(other) => {
             feishu::execute_feishu_tool_with_config(request, config)
         }
+        #[cfg(feature = "tool-http")]
+        "http.request" => http_request::execute_http_request_tool_with_config(request, config),
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "bash.exec" => bash::execute_bash_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
+        "glob.search" => file::execute_glob_search_tool_with_config(request, config),
+        "content.search" => file::execute_content_search_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
         "memory_search" => memory_tools::execute_memory_search_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
@@ -2223,9 +2242,12 @@ mod tests {
             "delegate",
             "delegate_async",
             "external_skills.policy",
+            "content.search",
             "file.edit",
             "file.read",
             "file.write",
+            "glob.search",
+            "http.request",
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
@@ -2596,6 +2618,23 @@ mod tests {
         assert!(is_provider_exposed_tool_name("tool.invoke"));
         assert!(!is_provider_exposed_tool_name("file.read"));
         assert!(!is_provider_exposed_tool_name("shell.exec"));
+    }
+
+    #[test]
+    fn provider_tool_definitions_include_http_request_when_enabled() {
+        let catalog = tool_catalog();
+        let http_request_descriptor = catalog
+            .descriptor("http.request")
+            .expect("http.request should be in the catalog");
+        let definition = http_request_descriptor.provider_definition();
+        let properties = definition["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("http.request properties");
+        assert!(properties.contains_key("url"));
+        assert!(properties.contains_key("method"));
+        assert!(properties.contains_key("headers"));
+        assert!(properties.contains_key("content_type"));
+        assert!(properties.contains_key("max_bytes"));
     }
 
     #[test]
@@ -4511,6 +4550,8 @@ mod tests {
         assert!(is_known_tool_name("shell.exec"));
         assert!(is_known_tool_name("shell_exec"));
         assert!(is_known_tool_name("shell"));
+        assert!(is_known_tool_name("http.request"));
+        assert!(is_known_tool_name("http_request"));
         assert!(is_known_tool_name("web.fetch"));
         assert!(is_known_tool_name("web_fetch"));
         assert!(is_known_tool_name("feishu.whoami"));

@@ -16,6 +16,24 @@ fn required_capabilities_follow_effective_tool_request() {
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
+    let direct_glob_search = ToolCoreRequest {
+        tool_name: "glob.search".to_owned(),
+        payload: json!({"pattern": "**/*.rs"}),
+    };
+    assert_eq!(
+        required_capabilities_for_request(&direct_glob_search),
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+    );
+
+    let direct_content_search = ToolCoreRequest {
+        tool_name: "content.search".to_owned(),
+        payload: json!({"query": "LoongClaw"}),
+    };
+    assert_eq!(
+        required_capabilities_for_request(&direct_content_search),
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+    );
+
     let direct_file_write = ToolCoreRequest {
         tool_name: "file.write".to_owned(),
         payload: json!({"path": "notes.txt", "content": "hello"}),
@@ -82,6 +100,15 @@ fn required_capabilities_follow_effective_tool_request() {
     };
     assert_eq!(
         required_capabilities_for_request(&direct_web_fetch),
+        BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
+    );
+
+    let direct_http_request = ToolCoreRequest {
+        tool_name: "http.request".to_owned(),
+        payload: json!({"url": "https://example.com"}),
+    };
+    assert_eq!(
+        required_capabilities_for_request(&direct_http_request),
         BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
     );
 
