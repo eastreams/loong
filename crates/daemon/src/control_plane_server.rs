@@ -1081,15 +1081,11 @@ async fn next_turn_sse_item(
     loop {
         let pending_event = state.pending_events.pop_front();
         if let Some(record) = pending_event {
-            let terminal = record.terminal;
             state.last_seq = record.seq;
             let event = match sse_event_from_turn_record(record) {
                 Ok(event) => event,
                 Err(error) => fallback_turn_sse_error_event(error.as_str()),
             };
-            if terminal {
-                return Some((Ok(event), state));
-            }
             return Some((Ok(event), state));
         }
 
@@ -1110,15 +1106,11 @@ async fn next_turn_sse_item(
                 if record.seq <= state.last_seq {
                     continue;
                 }
-                let terminal = record.terminal;
                 state.last_seq = record.seq;
                 let event = match sse_event_from_turn_record(record) {
                     Ok(event) => event,
                     Err(error) => fallback_turn_sse_error_event(error.as_str()),
                 };
-                if terminal {
-                    return Some((Ok(event), state));
-                }
                 return Some((Ok(event), state));
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
