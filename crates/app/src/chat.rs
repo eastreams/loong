@@ -332,7 +332,7 @@ pub async fn run_cli_chat(
     session_hint: Option<&str>,
     options: &CliChatOptions,
 ) -> CliResult<()> {
-    if session_surface::terminal_surface_supported() {
+    if session_surface::interactive_terminal_surface_supported() {
         return session_surface::run_cli_chat_surface(config_path, session_hint, options).await;
     }
 
@@ -467,7 +467,7 @@ pub async fn run_cli_ask(
 }
 
 pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<()> {
-    if session_surface::terminal_surface_supported() {
+    if session_surface::interactive_terminal_surface_supported() {
         return session_surface::run_concurrent_cli_host_surface(options);
     }
 
@@ -841,15 +841,24 @@ async fn process_cli_chat_input(
         .await?;
         return Ok(CliChatLoopControl::Continue);
     }
-    if is_turn_checkpoint_repair_command(input)? {
-        print_turn_checkpoint_repair(
-            &runtime.turn_coordinator,
-            &runtime.config,
-            &runtime.session_id,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(is_turn_checkpoint_repair_command(input))? {
+        ChatCommandMatchResult::Matched => {
+            print_turn_checkpoint_repair(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let render_width = detect_cli_chat_render_width();
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(&usage, render_width);
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
 
     Ok(CliChatLoopControl::AssistantText(
