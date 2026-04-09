@@ -521,6 +521,9 @@ async fn handle_gateway_acp_status(
     );
     let resolved_session_key = match resolved_session_key {
         Ok(resolved_session_key) => resolved_session_key,
+        Err(error) if is_gateway_acp_not_found_error(error.as_str()) => {
+            return json_error(StatusCode::NOT_FOUND, "not_found", error.as_str());
+        }
         Err(error) => {
             return json_error(StatusCode::BAD_REQUEST, "invalid_selector", error.as_str());
         }
@@ -531,7 +534,7 @@ async fn handle_gateway_acp_status(
         .await;
     let status = match status_result {
         Ok(status) => status,
-        Err(error) if error.contains("is not registered") => {
+        Err(error) if is_gateway_acp_not_found_error(error.as_str()) => {
             return json_error(StatusCode::NOT_FOUND, "not_found", error.as_str());
         }
         Err(error) => {
@@ -648,6 +651,15 @@ async fn handle_gateway_stop(
         "message": response_message,
     });
     json_response(response_status, payload)
+}
+
+fn is_gateway_acp_not_found_error(error: &str) -> bool {
+    let is_session_error = error.starts_with("ACP session `");
+    let is_conversation_error = error.starts_with("ACP conversation `");
+    let is_route_error = error.starts_with("ACP route session `");
+    let has_registration_marker = error.contains(" is not registered");
+    let is_lookup_error = is_session_error || is_conversation_error || is_route_error;
+    is_lookup_error && has_registration_marker
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
