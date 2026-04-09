@@ -511,7 +511,10 @@ This contract should be treated as an upstream architecture layer for:
 - `#426` Plugin SDK Crate
 
 Those RFCs define execution and authoring surfaces. This document defines the
-package metadata and ownership contract they should target.
+package metadata and ownership contract they should target. The complementary
+[Plugin SDK And Ecosystem Strategy](plugin-sdk-and-ecosystem-strategy.md)
+document defines how SDK layering, marketplace packaging, and migration tooling
+should build on this contract instead of inventing a parallel metadata model.
 
 It also supports the broader goals in `#292` without forcing the current
 registry-first design to regress into a plugin-owned runtime model.
