@@ -1458,7 +1458,10 @@ fn quote_byte_is_escaped(bytes: &[u8], index: usize) -> bool {
 
     while cursor > 0 {
         let previous_index = cursor - 1;
-        let previous_byte = bytes.get(previous_index).copied().unwrap_or_default();
+        let previous_byte = bytes.get(previous_index).copied();
+        let Some(previous_byte) = previous_byte else {
+            break;
+        };
         if previous_byte != b'\\' {
             break;
         }

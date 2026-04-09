@@ -2848,7 +2848,6 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         Followup {
             raw_reply: String,
             payload: ToolDrivenFollowupPayload,
-            provider_followup_requested: bool,
             requires_completion_pass: bool,
             loop_warning_reason: Option<String>,
         },
@@ -2863,37 +2862,6 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     let mut current_continue_phase = continue_phase.clone();
     let mut remaining_provider_rounds = remaining_provider_rounds.max(1);
     let mut provider_round_index = 0usize;
-
-    fn user_requests_sequential_tool_followup(user_input: &str) -> bool {
-        let normalized = user_input.to_ascii_lowercase();
-        let ascii_signals = [" then ", " after ", " before ", " and then "];
-        let cjk_signals = ["然后", "接着", "再", "并将", "并把"];
-
-        let has_ascii_signal = ascii_signals
-            .iter()
-            .any(|signal| normalized.contains(signal));
-        let has_cjk_signal = cjk_signals.iter().any(|signal| user_input.contains(signal));
-
-        has_ascii_signal || has_cjk_signal
-    }
-
-    fn followup_payload_requests_provider_turn(
-        payload: &ToolDrivenFollowupPayload,
-        continue_phase: &ProviderTurnContinuePhase,
-        user_input: &str,
-    ) -> bool {
-        match payload {
-            ToolDrivenFollowupPayload::DiscoveryRecovery { .. } => true,
-            ToolDrivenFollowupPayload::ToolResult { .. } => {
-                continue_phase.lane_execution.discovery_search_turn
-                    || continue_phase
-                        .lane_execution
-                        .supports_provider_turn_followup
-                    || user_requests_sequential_tool_followup(user_input)
-            }
-            ToolDrivenFollowupPayload::ToolFailure { .. } => false,
-        }
-    }
 
     loop {
         let current_provider_round = provider_round_index.saturating_add(1);
@@ -2932,33 +2900,28 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         reason: reason.to_owned(),
                         latest_tool_payload,
                     }
-                } else if let Some(payload) = latest_tool_payload {
-                    let provider_followup_requested = followup_payload_requests_provider_turn(
-                        &payload,
-                        &current_continue_phase,
-                        user_input,
-                    );
-                    let raw_tool_output_requested = current_continue_phase
+                } else if current_continue_phase
+                    .lane_execution
+                    .supports_provider_turn_followup
+                    && (!current_continue_phase
                         .lane_execution
-                        .raw_tool_output_requested;
-                    let allow_raw_followup = current_continue_phase
-                        .lane_execution
-                        .discovery_search_turn
-                        || matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. });
-                    if (raw_tool_output_requested && !allow_raw_followup)
-                        || !provider_followup_requested
-                    {
-                        ReplyLoopDecision::FinalizeDirect(reply.clone())
-                    } else {
-                        ReplyLoopDecision::Followup {
-                            raw_reply: reply.clone(),
-                            payload,
-                            provider_followup_requested,
-                            requires_completion_pass: false,
-                            loop_warning_reason: current_continue_phase
-                                .loop_warning_reason()
-                                .map(ToOwned::to_owned),
-                        }
+                        .raw_tool_output_requested
+                        || current_continue_phase.lane_execution.discovery_search_turn
+                        || assistant_preface_signals_provider_turn_followup(
+                            current_continue_phase
+                                .lane_execution
+                                .assistant_preface
+                                .as_str(),
+                        ))
+                    && let Some(payload) = latest_tool_payload
+                {
+                    ReplyLoopDecision::Followup {
+                        raw_reply: reply.clone(),
+                        payload,
+                        requires_completion_pass: false,
+                        loop_warning_reason: current_continue_phase
+                            .loop_warning_reason()
+                            .map(ToOwned::to_owned),
                     }
                 } else {
                     ReplyLoopDecision::FinalizeDirect(reply.clone())
@@ -2968,11 +2931,6 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 raw_reply,
                 payload: followup,
             } => {
-                let provider_followup_requested = followup_payload_requests_provider_turn(
-                    followup,
-                    &current_continue_phase,
-                    user_input,
-                );
                 if let Some(reason) = current_continue_phase.hard_stop_reason() {
                     ReplyLoopDecision::GuardFollowup {
                         raw_reply: raw_reply.clone(),
@@ -2983,7 +2941,6 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     ReplyLoopDecision::Followup {
                         raw_reply: raw_reply.clone(),
                         payload: followup.clone(),
-                        provider_followup_requested,
                         requires_completion_pass: true,
                         loop_warning_reason: current_continue_phase
                             .loop_warning_reason()
@@ -3001,7 +2958,6 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             ReplyLoopDecision::Followup {
                 raw_reply,
                 payload: followup,
-                provider_followup_requested,
                 requires_completion_pass,
                 loop_warning_reason,
             } => {
@@ -3019,7 +2975,11 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     user_input,
                     loop_warning_reason.as_deref(),
                 );
-                if provider_followup_requested && remaining_provider_rounds > 1 {
+                if current_continue_phase
+                    .lane_execution
+                    .supports_provider_turn_followup
+                    && remaining_provider_rounds > 1
+                {
                     let next_provider_round = current_provider_round.saturating_add(1);
                     remaining_provider_rounds -= 1;
                     let initial_estimated_tokens = estimate_tokens_for_messages(
@@ -3149,7 +3109,9 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 ingress,
                                 observer,
                                 next_provider_round,
-                                provider_followup_requested,
+                                current_continue_phase
+                                    .lane_execution
+                                    .supports_provider_turn_followup,
                             )
                             .await;
                             current_preparation = followup_preparation;
@@ -4745,12 +4707,16 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         &turn_result,
         fast_lane_tool_batch_trace.as_ref(),
     );
-    let has_discovery_recovery_followup = matches!(
-        tool_driven_followup_payload(had_tool_intents, &turn_result),
-        Some(ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
-    );
-    let supports_provider_turn_followup =
-        followup_chain_active || discovery_search_turn || has_discovery_recovery_followup;
+    let recovery_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
+        .is_some_and(|payload| {
+            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
+        });
+    let preface_signals_provider_turn_followup =
+        assistant_preface_signals_provider_turn_followup(assistant_preface.as_str());
+    let supports_provider_turn_followup = followup_chain_active
+        || discovery_search_turn
+        || recovery_followup_turn
+        || preface_signals_provider_turn_followup;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
@@ -4764,6 +4730,17 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         safe_lane_terminal_route,
         tool_events,
     }
+}
+
+fn assistant_preface_signals_provider_turn_followup(assistant_preface: &str) -> bool {
+    let normalized_preface = assistant_preface.to_ascii_lowercase();
+    let contains_first = normalized_preface.contains("first");
+    let contains_then = normalized_preface.contains("then");
+    let contains_next = normalized_preface.contains("next");
+    let contains_after_that = normalized_preface.contains("after that");
+    let contains_afterwards = normalized_preface.contains("afterwards");
+
+    contains_first || contains_then || contains_next || contains_after_that || contains_afterwards
 }
 async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
