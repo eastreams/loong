@@ -16,6 +16,23 @@ fn decode_quoted_command_part(value: &str) -> String {
     unescaped_backslashes.replace("\\\"", "\"")
 }
 
+fn decode_script_path_from_proxy_command(command: &str) -> String {
+    let payload_marker = " --payload-file ";
+    let payload_index = command.find(payload_marker).expect("payload marker");
+    let prefix = &command[..payload_index];
+    let mut prefix_parts = prefix.splitn(2, ' ');
+    let _node_command = prefix_parts.next().expect("node command");
+    let script_part = prefix_parts.next().expect("script path");
+    decode_quoted_command_part(script_part)
+}
+
+fn decode_payload_path_from_proxy_command(command: &str) -> String {
+    let payload_marker = "--payload-file ";
+    let payload_index = command.find(payload_marker).expect("payload marker");
+    let payload_path = &command[payload_index + payload_marker.len()..];
+    decode_quoted_command_part(payload_path)
+}
+
 #[cfg(unix)]
 #[test]
 fn fake_acpx_script_helpers_work_with_empty_path() {
@@ -85,17 +102,47 @@ fn build_mcp_proxy_agent_command_preserves_server_cwd() {
 
     let command = build_mcp_proxy_agent_command("npx @zed-industries/codex-acp", &[server])
         .expect("proxy command");
-    let payload_marker = "--payload-file ";
-    let payload_index = command.find(payload_marker).expect("payload marker");
-    let payload_path = &command[payload_index + payload_marker.len()..];
-    let payload_path = decode_quoted_command_part(payload_path);
+    let script_path = decode_script_path_from_proxy_command(command.as_str());
+    let payload_path = decode_payload_path_from_proxy_command(command.as_str());
     let payload_bytes = std::fs::read(&payload_path).expect("read payload file");
     let payload: Value = serde_json::from_slice(payload_bytes.as_slice()).expect("parse payload");
 
+    assert!(
+        script_path.contains("loongclaw-acpx-mcp-proxy-"),
+        "expected versioned script path, got: {script_path}"
+    );
+    let script_file_name = std::path::Path::new(script_path.as_str())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("script file name");
+    assert!(
+        script_file_name != "loongclaw-acpx-mcp-proxy.mjs",
+        "expected hashed script file name, got: {script_file_name}"
+    );
+    assert!(
+        std::path::Path::new(script_path.as_str()).exists(),
+        "expected materialized script path to exist: {script_path}"
+    );
     assert_eq!(
         payload["mcpServers"][0]["cwd"],
         Value::String("/workspace/docs".to_owned())
     );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let payload_metadata = std::fs::metadata(payload_path.as_str()).expect("payload metadata");
+        let payload_mode = payload_metadata.permissions().mode() & 0o777;
+        let payload_parent = std::path::Path::new(payload_path.as_str())
+            .parent()
+            .expect("payload parent");
+        let parent_metadata = std::fs::metadata(payload_parent).expect("payload parent metadata");
+        let parent_mode = parent_metadata.permissions().mode() & 0o777;
+
+        assert_eq!(payload_mode, 0o600);
+        assert_eq!(parent_mode, 0o700);
+    }
 
     std::fs::remove_file(payload_path).ok();
 }
@@ -145,5 +192,68 @@ fn probe_mcp_proxy_support_invokes_script_runtime() {
     assert!(
         logged_args.contains("--version"),
         "probe should pass --version to the embedded proxy script, got: {logged_args}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn probe_mcp_proxy_support_kills_timed_out_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("create test runtime");
+    let _guard = runtime.block_on(lock_acpx_runtime_tests());
+    let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-probe-timeout");
+    let pid_path = temp_dir.join("node.pid");
+    let node_script_path = temp_dir.join("fake-node-timeout.sh");
+    let node_script = format!(
+        "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
+        pid_path.display()
+    );
+    write_executable_script_atomically(&node_script_path, node_script.as_str())
+        .expect("write fake node timeout script");
+
+    let embedded_script_path = temp_dir.join("embedded-proxy.mjs");
+    write_executable_script_atomically(&embedded_script_path, "#!/bin/sh\nexit 0\n")
+        .expect("write embedded proxy script");
+
+    let error = runtime
+        .block_on(probe_mcp_proxy_support_with_runtime(
+            node_script_path.to_string_lossy().as_ref(),
+            embedded_script_path.to_string_lossy().as_ref(),
+            Some(temp_dir.to_string_lossy().as_ref()),
+            Duration::from_secs(5),
+        ))
+        .expect_err("probe should time out");
+
+    assert_eq!(error, "embedded ACPX MCP proxy runtime probe timed out");
+
+    for _ in 0..100 {
+        let pid_file_exists = pid_path.exists();
+
+        if pid_file_exists {
+            break;
+        }
+
+        runtime.block_on(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        });
+    }
+
+    runtime.block_on(async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    });
+
+    let pid_text = std::fs::read_to_string(&pid_path).expect("read timed out probe pid");
+    let pid = pid_text.trim().to_owned();
+    let status = std::process::Command::new("kill")
+        .args(["-0", pid.as_str()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("check fake node liveness");
+
+    assert!(
+        !status.success(),
+        "timed out probe process should be terminated: pid={pid}"
     );
 }

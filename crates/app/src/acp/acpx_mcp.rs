@@ -1,17 +1,26 @@
 use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use tempfile::NamedTempFile;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::CliResult;
 
 const ACPX_MCP_PROXY_NODE_COMMAND: &str = "node";
-const ACPX_MCP_PROXY_SCRIPT_NAME: &str = "loongclaw-acpx-mcp-proxy.mjs";
+const ACPX_MCP_PROXY_SCRIPT_STEM: &str = "loongclaw-acpx-mcp-proxy";
+const ACPX_MCP_PROXY_SCRIPT_EXTENSION: &str = "mjs";
+const ACPX_MCP_PROXY_SCRIPT_HASH_PREFIX_LENGTH: usize = 12;
 const ACPX_MCP_PROXY_SCRIPT_SOURCE: &str = include_str!("assets/acpx-mcp-proxy.mjs");
+const LOONGCLAW_TEMP_DIR_NAME: &str = "loongclaw";
+const ACPX_MCP_PAYLOAD_DIR_NAME: &str = "acpx-mcp-payloads";
 static ACPX_MCP_PROXY_SCRIPT_PATH: OnceLock<Result<String, String>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,29 +83,59 @@ pub(crate) async fn probe_mcp_proxy_support_with_runtime(
     let mut probe = Command::new(node_command);
     probe.arg(script_path);
     probe.arg("--version");
+    probe.kill_on_drop(true);
+    probe.stdout(Stdio::piped());
+    probe.stderr(Stdio::piped());
 
     if let Some(cwd) = cwd {
         probe.current_dir(cwd);
     }
 
-    let timed_output = timeout(timeout_duration, probe.output())
-        .await
-        .map_err(|_timeout_error| "embedded ACPX MCP proxy runtime probe timed out".to_owned())?;
-    let output = timed_output.map_err(|error| {
+    let mut child = probe.spawn().map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             format!("embedded ACPX MCP proxy requires `{node_command}` on PATH")
         } else {
             format!("probe embedded ACPX MCP proxy runtime failed: {error}")
         }
     })?;
+    let stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| "capture embedded ACPX MCP proxy stdout failed".to_owned())?;
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| "capture embedded ACPX MCP proxy stderr failed".to_owned())?;
+    let stdout_task = tokio::spawn(read_probe_pipe(stdout_pipe, "stdout"));
+    let stderr_task = tokio::spawn(read_probe_pipe(stderr_pipe, "stderr"));
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let output_status = timeout(timeout_duration, child.wait())
+        .await
+        .map_err(|_timeout_error| "embedded ACPX MCP proxy runtime probe timed out".to_owned());
+
+    let output_status = match output_status {
+        Ok(wait_result) => wait_result
+            .map_err(|error| format!("wait for embedded ACPX MCP proxy runtime failed: {error}"))?,
+        Err(timeout_message) => {
+            terminate_probe_child_process(&mut child).await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err(timeout_message);
+        }
+    };
+    let stdout_bytes = await_probe_pipe(stdout_task, "stdout").await?;
+    let stderr_bytes = await_probe_pipe(stderr_task, "stderr").await?;
+
+    let stdout = String::from_utf8_lossy(stdout_bytes.as_slice())
+        .trim()
+        .to_owned();
+    let stderr = String::from_utf8_lossy(stderr_bytes.as_slice())
+        .trim()
+        .to_owned();
     let observed = observed_command_output(stdout.as_str(), stderr.as_str());
 
-    if !output.status.success() {
-        let exit_code = output
-            .status
+    if !output_status.success() {
+        let exit_code = output_status
             .code()
             .map_or_else(|| "unknown".to_owned(), |code| code.to_string());
         let message = format!(
@@ -135,70 +174,159 @@ fn ensure_mcp_proxy_script_path() -> CliResult<String> {
 }
 
 fn materialize_mcp_proxy_script() -> Result<String, String> {
-    let temp_dir = std::env::temp_dir();
-    let loongclaw_dir = temp_dir.join("loongclaw");
-    let path = loongclaw_dir.join(ACPX_MCP_PROXY_SCRIPT_NAME);
+    let loongclaw_dir = loongclaw_temp_dir();
+    ensure_private_directory(loongclaw_dir.as_path(), "ACPX MCP proxy directory")?;
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("create ACPX MCP proxy directory failed: {error}"))?;
+    let script_file_name = versioned_mcp_proxy_script_file_name();
+    let path = loongclaw_dir.join(script_file_name);
+    let path_exists = path.exists();
+
+    if !path_exists {
+        persist_named_file(
+            path.as_path(),
+            ACPX_MCP_PROXY_SCRIPT_SOURCE.as_bytes(),
+            0o755,
+            "ACPX MCP proxy script",
+        )?;
     }
-
-    std::fs::write(&path, ACPX_MCP_PROXY_SCRIPT_SOURCE)
-        .map_err(|error| format!("write ACPX MCP proxy script failed: {error}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let metadata = std::fs::metadata(&path)
-            .map_err(|error| format!("stat ACPX MCP proxy script failed: {error}"))?;
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&path, permissions)
-            .map_err(|error| format!("chmod ACPX MCP proxy script failed: {error}"))?;
-    }
+    set_path_permissions(path.as_path(), 0o755, "ACPX MCP proxy script")?;
 
     let script_path = path.display().to_string();
     Ok(script_path)
 }
 
 fn materialize_mcp_proxy_payload_path(payload: &[u8]) -> CliResult<String> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("read system time for ACPX MCP payload failed: {error}"))?;
-    let process_id = std::process::id();
-    let payload_file_name = format!(
-        "acpx-mcp-payload-{process_id}-{}.json",
-        timestamp.as_nanos()
-    );
-    let temp_dir = std::env::temp_dir();
-    let loongclaw_dir = temp_dir.join("loongclaw");
-    let payload_dir = loongclaw_dir.join("acpx-mcp-payloads");
-    let payload_path = payload_dir.join(payload_file_name);
+    let loongclaw_dir = loongclaw_temp_dir();
+    ensure_private_directory(loongclaw_dir.as_path(), "ACPX MCP payload root directory")?;
+    let payload_dir = loongclaw_dir.join(ACPX_MCP_PAYLOAD_DIR_NAME);
+    ensure_private_directory(payload_dir.as_path(), "ACPX MCP payload directory")?;
 
-    if let Some(parent) = payload_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("create ACPX MCP payload directory failed: {error}"))?;
-    }
+    let mut payload_file = tempfile::Builder::new()
+        .prefix("acpx-mcp-payload-")
+        .suffix(".json")
+        .tempfile_in(payload_dir.as_path())
+        .map_err(|error| format!("create ACPX MCP payload temp file failed: {error}"))?;
+    write_temp_file_bytes(&mut payload_file, payload, "ACPX MCP payload")?;
+    set_path_permissions(payload_file.path(), 0o600, "ACPX MCP payload")?;
 
-    std::fs::write(&payload_path, payload)
-        .map_err(|error| format!("write ACPX MCP payload failed: {error}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let metadata = std::fs::metadata(&payload_path)
-            .map_err(|error| format!("stat ACPX MCP payload failed: {error}"))?;
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o600);
-        std::fs::set_permissions(&payload_path, permissions)
-            .map_err(|error| format!("chmod ACPX MCP payload failed: {error}"))?;
-    }
-
+    let keep_result = payload_file.keep();
+    let (_file, payload_path) =
+        keep_result.map_err(|error| format!("persist ACPX MCP payload failed: {}", error.error))?;
     let payload_path = payload_path.display().to_string();
     Ok(payload_path)
+}
+
+fn loongclaw_temp_dir() -> PathBuf {
+    let temp_dir = std::env::temp_dir();
+    temp_dir.join(LOONGCLAW_TEMP_DIR_NAME)
+}
+
+fn versioned_mcp_proxy_script_file_name() -> String {
+    let digest = Sha256::digest(ACPX_MCP_PROXY_SCRIPT_SOURCE.as_bytes());
+    let digest_hex = hex::encode(digest);
+    let digest_prefix = digest_hex
+        .chars()
+        .take(ACPX_MCP_PROXY_SCRIPT_HASH_PREFIX_LENGTH)
+        .collect::<String>();
+    let file_name =
+        format!("{ACPX_MCP_PROXY_SCRIPT_STEM}-{digest_prefix}.{ACPX_MCP_PROXY_SCRIPT_EXTENSION}");
+    file_name
+}
+
+fn ensure_private_directory(path: &Path, subject: &str) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|error| format!("create {subject} failed: {error}"))?;
+    set_path_permissions(path, 0o700, subject)?;
+    Ok(())
+}
+
+fn persist_named_file(
+    target_path: &Path,
+    contents: &[u8],
+    mode: u32,
+    subject: &str,
+) -> Result<(), String> {
+    let parent_dir = target_path.parent().ok_or_else(|| {
+        format!(
+            "{subject} path `{}` has no parent directory",
+            target_path.display()
+        )
+    })?;
+    let mut staged_file = NamedTempFile::new_in(parent_dir)
+        .map_err(|error| format!("create staged {subject} failed: {error}"))?;
+
+    write_temp_file_bytes(&mut staged_file, contents, subject)?;
+    set_path_permissions(staged_file.path(), mode, subject)?;
+
+    let persist_result = staged_file.persist_noclobber(target_path);
+
+    match persist_result {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(format!("persist {subject} failed: {}", error.error)),
+    }
+}
+
+fn write_temp_file_bytes(
+    temp_file: &mut NamedTempFile,
+    contents: &[u8],
+    subject: &str,
+) -> Result<(), String> {
+    use std::io::Write;
+
+    temp_file
+        .write_all(contents)
+        .map_err(|error| format!("write {subject} failed: {error}"))?;
+    temp_file
+        .flush()
+        .map_err(|error| format!("flush {subject} failed: {error}"))?;
+    temp_file
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("sync {subject} failed: {error}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_path_permissions(path: &Path, mode: u32, subject: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata =
+        std::fs::metadata(path).map_err(|error| format!("stat {subject} failed: {error}"))?;
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(mode);
+    std::fs::set_permissions(path, permissions)
+        .map_err(|error| format!("chmod {subject} failed: {error}"))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_path_permissions(_path: &Path, _mode: u32, _subject: &str) -> Result<(), String> {
+    Ok(())
+}
+
+async fn read_probe_pipe<T>(mut pipe: T, stream_name: &str) -> Result<Vec<u8>, String>
+where
+    T: tokio::io::AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    pipe.read_to_end(&mut bytes)
+        .await
+        .map_err(|error| format!("read embedded ACPX MCP proxy {stream_name} failed: {error}"))?;
+    Ok(bytes)
+}
+
+async fn await_probe_pipe(
+    task: tokio::task::JoinHandle<Result<Vec<u8>, String>>,
+    stream_name: &str,
+) -> Result<Vec<u8>, String> {
+    task.await.map_err(|error| {
+        format!("join embedded ACPX MCP proxy {stream_name} reader failed: {error}")
+    })?
+}
+
+async fn terminate_probe_child_process(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 fn join_command_line(parts: &[String]) -> String {
