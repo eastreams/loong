@@ -219,6 +219,7 @@ fn build_prompt_fragments_from_runtime_self_model(
     let system_text = system_prompt.trim().to_owned();
     let capability_snapshot =
         tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
+    let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
     let runtime_self_section = runtime_self_model
         .as_ref()
         .and_then(runtime_self::render_runtime_self_section);
@@ -297,7 +298,71 @@ fn build_prompt_fragments_from_runtime_self_model(
 
     prompt_fragments.push(capability_fragment);
 
+    if let Some(section) = deferred_tool_text_workflow {
+        let deferred_tool_text_fragment = PromptFragment::new(
+            "deferred-tool-text-workflow",
+            PromptLane::CapabilitySnapshot,
+            "deferred-tool-text-workflow",
+            section,
+            ContextArtifactKind::RuntimeContract,
+        )
+        .with_cacheable(true);
+
+        prompt_fragments.push(deferred_tool_text_fragment);
+    }
+
     prompt_fragments
+}
+
+fn render_deferred_tool_text_workflow_section_if_needed(
+    config: &LoongClawConfig,
+) -> Option<String> {
+    let tool_schema_mode = config.provider.resolved_tool_schema_mode_config();
+    let tool_schema_disabled =
+        tool_schema_mode == crate::config::ProviderToolSchemaModeConfig::Disabled;
+    if !tool_schema_disabled {
+        return None;
+    }
+
+    Some(render_deferred_tool_text_workflow_section())
+}
+
+fn render_deferred_tool_text_workflow_section() -> String {
+    let discovery_call_example_lines = [
+        "{",
+        "  \"name\": \"tool_search\",",
+        "  \"arguments\": {",
+        "    \"query\": \"<natural-language capability description>\",",
+        "    \"limit\": 5",
+        "  }",
+        "}",
+    ];
+    let discovery_call_example = discovery_call_example_lines.join("\n");
+    let invoke_call_example_lines = [
+        "{",
+        "  \"name\": \"tool_invoke\",",
+        "  \"arguments\": {",
+        "    \"tool_id\": \"<tool_id from tool_search>\",",
+        "    \"lease\": \"<lease from tool_search>\",",
+        "    \"arguments\": {",
+        "      \"...\": \"...\"",
+        "    }",
+        "  }",
+        "}",
+    ];
+    let invoke_call_example = invoke_call_example_lines.join("\n");
+    let lines = [
+        "## Deferred Tool Text Workflow".to_owned(),
+        "Structured provider tool schemas are disabled for this profile.".to_owned(),
+        "In raw JSON tool calls, use the provider tool names `tool_search` and `tool_invoke`.".to_owned(),
+        "When you need a tool, emit a raw JSON tool call instead of only describing the missing capability.".to_owned(),
+        "Discovery example:".to_owned(),
+        discovery_call_example,
+        "Invocation example:".to_owned(),
+        invoke_call_example,
+    ];
+
+    lines.join("\n")
 }
 
 fn render_governed_runtime_binding_section(binding: ProviderRuntimeBinding<'_>) -> String {
@@ -381,8 +446,7 @@ async fn read_runtime_self_source_via_kernel(
     path: &Path,
     kernel_ctx: &KernelContext,
 ) -> Option<String> {
-    let request_path = path.strip_prefix(workspace_root).ok()?;
-    let request_path = request_path.to_string_lossy().to_string();
+    let request_path = runtime_self::runtime_self_source_request_path(workspace_root, path)?;
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
         payload: json!({
@@ -963,6 +1027,31 @@ mod tests {
             !has_tool_plane_event,
             "disabled system prompts should not trigger runtime-self tool reads"
         );
+    }
+
+    #[test]
+    fn build_system_message_includes_deferred_tool_text_workflow_when_tool_schema_disabled() {
+        let mut config = LoongClawConfig::default();
+        config.provider.tool_schema_mode = crate::config::ProviderToolSchemaModeConfig::Disabled;
+
+        let system_message =
+            build_system_message(&config, true).expect("system message when enabled");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(system_content.contains("## Deferred Tool Text Workflow"));
+        assert!(system_content.contains("\"name\": \"tool_search\""));
+        assert!(system_content.contains("\"name\": \"tool_invoke\""));
+    }
+
+    #[test]
+    fn build_system_message_omits_deferred_tool_text_workflow_when_tool_schema_enabled() {
+        let config = LoongClawConfig::default();
+
+        let system_message =
+            build_system_message(&config, true).expect("system message when enabled");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(!system_content.contains("## Deferred Tool Text Workflow"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
