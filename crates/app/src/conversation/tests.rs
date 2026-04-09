@@ -7048,9 +7048,7 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
     let initial_prompt_frame = prompt_frame_payloads
         .first()
         .expect("initial prompt-frame snapshot should be persisted");
-    let followup_prompt_frame = prompt_frame_payloads
-        .last()
-        .expect("final followup prompt-frame snapshot should be persisted");
+    let followup_prompt_frames = &prompt_frame_payloads[1..];
 
     assert!(
         latest_discovery_payload["turn_id"]
@@ -7074,15 +7072,27 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
         "persisted discovery state must not retain executable leases: {latest_discovery_payload:?}"
     );
     assert_eq!(initial_prompt_frame["phase"], json!("initial"));
-    assert_eq!(followup_prompt_frame["phase"], json!("followup"));
-    assert_eq!(
-        initial_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"],
-        followup_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"]
+    assert!(
+        followup_prompt_frames
+            .iter()
+            .all(|payload| payload["phase"] == json!("followup"))
     );
-    assert_ne!(
-        initial_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"],
-        followup_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"]
-    );
+
+    let stable_prefix_hash =
+        initial_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"].clone();
+    let initial_ephemeral_hash =
+        initial_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"].clone();
+
+    for followup_prompt_frame in followup_prompt_frames {
+        assert_eq!(
+            followup_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"],
+            stable_prefix_hash
+        );
+        assert_ne!(
+            followup_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"],
+            initial_ephemeral_hash
+        );
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
