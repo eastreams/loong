@@ -643,17 +643,19 @@ mod tests {
         session_id: &str,
         kernel_ctx: &crate::KernelContext,
     ) -> Vec<Value> {
-        let envelope = load_stage_envelope(
-            config,
-            session_id,
-            ConversationRuntimeBinding::kernel(kernel_ctx),
+        let runtime = crate::conversation::DefaultConversationRuntime::default();
+        let binding = ConversationRuntimeBinding::kernel(kernel_ctx);
+        let tool_view = crate::conversation::ConversationRuntime::tool_view(
+            &runtime, config, session_id, binding,
         )
-        .await
-        .expect("load staged memory envelope");
+        .expect("resolve kernel-bound tool view");
+        let envelope = load_stage_envelope(config, session_id, binding)
+            .await
+            .expect("load staged memory envelope");
         crate::provider::project_hydrated_memory_context_for_view_with_binding(
             config,
             true,
-            &crate::tools::runtime_tool_view(),
+            &tool_view,
             crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
             &envelope.hydrated,
         )
