@@ -105,7 +105,7 @@ function Install-Binary([string]$SourceBinary) {
 }
 
 function Install-FromSource {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $scriptDir = $PSScriptRoot
     $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
     $cargoToml = Join-Path $repoRoot "Cargo.toml"
     if (-not (Test-Path $cargoToml)) {
