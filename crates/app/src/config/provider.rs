@@ -2635,13 +2635,9 @@ impl ProviderKind {
     }
 
     fn url_validation_profile(self) -> Option<&'static ProviderUrlValidationProfile> {
-        for profile in &PROVIDER_URL_VALIDATION_PROFILES {
-            if profile.kind == self {
-                return Some(profile);
-            }
-        }
-
-        None
+        PROVIDER_URL_VALIDATION_PROFILES
+            .iter()
+            .find(|profile| profile.kind == self)
     }
 
     pub fn as_str(self) -> &'static str {
@@ -4647,6 +4643,31 @@ mod tests {
             assert!(
                 hint.contains("/api/coding/v3"),
                 "expected coding-path guidance for {kind:?}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_rejects_non_coding_profiles_on_coding_proxy_paths() {
+        let cases = [
+            (ProviderKind::Byteplus, "kind = \"byteplus_coding\""),
+            (ProviderKind::Volcengine, "kind = \"volcengine_coding\""),
+        ];
+
+        for (kind, expected_kind_hint) in cases {
+            let provider = ProviderConfig {
+                kind,
+                base_url: "https://proxy.example.com/api/coding/v3".to_owned(),
+                base_url_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("non-coding profiles should reject coding proxy paths");
+
+            assert!(
+                hint.contains(expected_kind_hint),
+                "expected non-coding guidance for {kind:?}: {hint}"
             );
         }
     }
