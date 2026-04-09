@@ -128,6 +128,21 @@ pub fn extract_provider_turn_with_scope_and_messages(
         });
     }
 
+    if let Some(message) = google_message(body) {
+        let assistant_text = google_message_content(message).unwrap_or_default();
+        let tool_intents =
+            extract_google_tool_intents(message, session_id, turn_id, &bridge_context);
+        if assistant_text.is_empty() && tool_intents.is_empty() {
+            return None;
+        }
+
+        return Some(ProviderTurn {
+            assistant_text,
+            tool_intents,
+            raw_meta: body.clone(),
+        });
+    }
+
     let assistant_text = extract_body_content_text(body).unwrap_or_default();
     let tool_intents = extract_anthropic_tool_intents(body, session_id, turn_id, &bridge_context);
     if assistant_text.is_empty() && tool_intents.is_empty() {
@@ -223,6 +238,10 @@ pub(super) fn extract_message_content(body: &Value) -> Option<String> {
         return Some(content);
     }
 
+    if let Some(content) = extract_google_message_content(body) {
+        return Some(content);
+    }
+
     openai_message(body)
         .or_else(|| bedrock_message(body))
         .and_then(message_content_value)
@@ -251,6 +270,21 @@ fn openai_message(body: &Value) -> Option<&Value> {
 
 fn bedrock_message(body: &Value) -> Option<&Value> {
     body.get("output").and_then(|output| output.get("message"))
+}
+
+fn google_message(body: &Value) -> Option<&Value> {
+    body.get("candidates")
+        .and_then(Value::as_array)
+        .and_then(|candidates| candidates.first())
+        .and_then(|candidate| candidate.get("content"))
+}
+
+fn extract_google_message_content(body: &Value) -> Option<String> {
+    google_message(body).and_then(google_message_content)
+}
+
+fn google_message_content(message: &Value) -> Option<String> {
+    message.get("parts").and_then(extract_content_text)
 }
 
 fn extract_body_content_text(body: &Value) -> Option<String> {
@@ -408,6 +442,42 @@ fn extract_bedrock_tool_intents(
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_owned(),
+                        bridge_context,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_google_tool_intents(
+    message: &Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+) -> Vec<ToolIntent> {
+    message
+        .get("parts")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .enumerate()
+                .filter_map(|(index, part)| {
+                    let function_call = part.get("functionCall")?;
+                    let raw_tool_name = function_call.get("name").and_then(Value::as_str)?;
+                    let args_json = function_call
+                        .get("args")
+                        .cloned()
+                        .unwrap_or_else(|| json!({}));
+                    let tool_call_id = format!("google-call-{index}");
+                    Some(build_provider_tool_intent(
+                        raw_tool_name,
+                        args_json,
+                        "provider_tool_call",
+                        session_id,
+                        turn_id,
+                        tool_call_id,
                         bridge_context,
                     ))
                 })

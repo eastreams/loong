@@ -38,12 +38,13 @@ pub(super) enum ProviderTransportMode {
     OpenAiChatCompletions,
     AnthropicMessages,
     BedrockConverse,
+    GoogleGenerateContent,
     Responses,
     KimiApi,
 }
 
 impl ProviderTransportMode {
-    fn for_provider(provider: &ProviderConfig) -> Self {
+    pub(super) fn for_provider(provider: &ProviderConfig) -> Self {
         match provider.kind.protocol_family() {
             ProviderProtocolFamily::AnthropicMessages => Self::AnthropicMessages,
             ProviderProtocolFamily::BedrockConverse => Self::BedrockConverse,
@@ -70,6 +71,7 @@ pub(super) enum ProviderFeatureFamily {
     OpenAiCompatible,
     Anthropic,
     Bedrock,
+    Google,
     VolcengineCompatible,
 }
 
@@ -163,18 +165,6 @@ impl ProviderRuntimeContract {
 
 pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRuntimeContract {
     let transport_mode = ProviderTransportMode::for_provider(provider);
-    let default_token_field = match transport_mode {
-        ProviderTransportMode::Responses => TokenLimitField::MaxOutputTokens,
-        ProviderTransportMode::OpenAiChatCompletions
-            if matches!(provider.kind, ProviderKind::Openai) =>
-        {
-            TokenLimitField::MaxCompletionTokens
-        }
-        ProviderTransportMode::OpenAiChatCompletions
-        | ProviderTransportMode::AnthropicMessages
-        | ProviderTransportMode::BedrockConverse
-        | ProviderTransportMode::KimiApi => TokenLimitField::MaxTokens,
-    };
     let feature_family = match provider.kind.feature_family() {
         crate::config::ProviderFeatureFamily::OpenAiCompatible => {
             ProviderFeatureFamily::OpenAiCompatible
@@ -184,6 +174,36 @@ pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRu
         crate::config::ProviderFeatureFamily::Volcengine => {
             ProviderFeatureFamily::VolcengineCompatible
         }
+    };
+    build_provider_runtime_contract(provider, transport_mode, feature_family)
+}
+
+pub(super) fn provider_runtime_contract_for_route(
+    provider: &ProviderConfig,
+    transport_mode: ProviderTransportMode,
+    feature_family: ProviderFeatureFamily,
+) -> ProviderRuntimeContract {
+    build_provider_runtime_contract(provider, transport_mode, feature_family)
+}
+
+fn build_provider_runtime_contract(
+    provider: &ProviderConfig,
+    transport_mode: ProviderTransportMode,
+    feature_family: ProviderFeatureFamily,
+) -> ProviderRuntimeContract {
+    let default_token_field = match transport_mode {
+        ProviderTransportMode::Responses | ProviderTransportMode::GoogleGenerateContent => {
+            TokenLimitField::MaxOutputTokens
+        }
+        ProviderTransportMode::OpenAiChatCompletions
+            if matches!(provider.kind, ProviderKind::Openai) =>
+        {
+            TokenLimitField::MaxCompletionTokens
+        }
+        ProviderTransportMode::OpenAiChatCompletions
+        | ProviderTransportMode::AnthropicMessages
+        | ProviderTransportMode::BedrockConverse
+        | ProviderTransportMode::KimiApi => TokenLimitField::MaxTokens,
     };
     let validation = if matches!(provider.kind, ProviderKind::Kimi) {
         ProviderValidationContract {
@@ -219,9 +239,9 @@ pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRu
         ProviderTransportMode::OpenAiChatCompletions | ProviderTransportMode::KimiApi => {
             ReasoningField::ReasoningEffort
         }
-        ProviderTransportMode::AnthropicMessages | ProviderTransportMode::BedrockConverse => {
-            ReasoningField::Omit
-        }
+        ProviderTransportMode::AnthropicMessages
+        | ProviderTransportMode::BedrockConverse
+        | ProviderTransportMode::GoogleGenerateContent => ReasoningField::Omit,
     };
     let default_temperature_field = TemperatureField::Include;
     let payload_adaptation = provider_payload_adaptation_contract(
@@ -300,6 +320,17 @@ fn provider_payload_adaptation_contract(
                 temperature_default_only_fragments: &["only the default"],
             }
         }
+        ProviderFeatureFamily::Google => ProviderPayloadAdaptationContract {
+            token_field_progression: token_field_progression(default_token_field),
+            reasoning_field_progression: reasoning_field_progression(default_reasoning_field),
+            temperature_field_progression: temperature_field_progression(default_temperature_field),
+            unsupported_parameter_message_fragments:
+                DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
+            token_error_parameters: &["maxOutputTokens", "generationConfig.maxOutputTokens"],
+            reasoning_error_parameters: &["reasoning_effort", "reasoning"],
+            temperature_error_parameters: &["temperature", "generationConfig.temperature"],
+            temperature_default_only_fragments: &["only the default"],
+        },
     }
 }
 
@@ -310,6 +341,7 @@ fn provider_error_classification_contract(
         ProviderFeatureFamily::OpenAiCompatible
         | ProviderFeatureFamily::Anthropic
         | ProviderFeatureFamily::Bedrock
+        | ProviderFeatureFamily::Google
         | ProviderFeatureFamily::VolcengineCompatible => ProviderErrorClassificationContract {
             unsupported_parameter_message_fragments:
                 DEFAULT_UNSUPPORTED_PARAMETER_MESSAGE_FRAGMENTS,
@@ -330,6 +362,7 @@ fn provider_capability_contract(
         ProviderFeatureFamily::OpenAiCompatible
         | ProviderFeatureFamily::Anthropic
         | ProviderFeatureFamily::Bedrock
+        | ProviderFeatureFamily::Google
         | ProviderFeatureFamily::VolcengineCompatible => ProviderCapabilityContract {
             tool_schema_mode: ProviderToolSchemaMode::EnabledWithDowngradeOnUnsupported,
             reasoning_extra_body_mode: ProviderReasoningExtraBodyMode::Omit,

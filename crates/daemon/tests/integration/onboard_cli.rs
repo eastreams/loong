@@ -747,6 +747,18 @@ fn provider_default_env_mapping_is_stable() {
     );
     assert_eq!(
         loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+            mvp::config::ProviderKind::OpencodeZen
+        ),
+        Some("OPENCODE_API_KEY")
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+            mvp::config::ProviderKind::OpencodeGo
+        ),
+        Some("OPENCODE_API_KEY")
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::KimiCoding
         ),
         Some("KIMI_CODING_API_KEY")
@@ -776,6 +788,14 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
     assert_eq!(
         loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Bedrock),
         "bedrock"
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeZen),
+        "opencode_zen"
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeGo),
+        "opencode_go"
     );
     assert_eq!(
         loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Custom),
