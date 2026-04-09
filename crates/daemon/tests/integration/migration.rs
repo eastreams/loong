@@ -925,7 +925,9 @@ fn migration_recommended_plan_supplements_cli_prompt_metadata_and_memory_profile
 fn channel_registry_lists_registered_channel_ids() {
     assert_eq!(
         loongclaw_daemon::migration::channels::registered_channel_ids(),
-        vec!["telegram", "feishu", "matrix", "wecom"]
+        vec![
+            "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook"
+        ]
     );
 }
 
@@ -984,6 +986,13 @@ fn channel_registry_collects_ready_channel_candidates() {
     config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
         "feishu-secret".to_owned(),
     ));
+    config.line.enabled = true;
+    config.line.channel_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "line-access-token".to_owned(),
+    ));
+    config.line.channel_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "line-channel-secret".to_owned(),
+    ));
     config.wecom.enabled = true;
     config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
         "wecom-bot".to_owned(),
@@ -992,6 +1001,24 @@ fn channel_registry_collects_ready_channel_candidates() {
         "wecom-secret".to_owned(),
     ));
     config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
+    config.whatsapp.enabled = true;
+    config.whatsapp.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "whatsapp-access-token".to_owned(),
+    ));
+    config.whatsapp.phone_number_id = Some("123456789".to_owned());
+    config.whatsapp.verify_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "whatsapp-verify-token".to_owned(),
+    ));
+    config.whatsapp.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "whatsapp-app-secret".to_owned(),
+    ));
+    config.webhook.enabled = true;
+    config.webhook.endpoint_url = Some(loongclaw_contracts::SecretRef::Inline(
+        "https://hooks.example.test/inbound".to_owned(),
+    ));
+    config.webhook.signing_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "webhook-signing-secret".to_owned(),
+    ));
 
     let previews = loongclaw_daemon::migration::channels::collect_channel_previews(
         &config,
@@ -1005,7 +1032,10 @@ fn channel_registry_collects_ready_channel_candidates() {
         .map(|preview| preview.candidate.id)
         .collect::<Vec<_>>();
 
-    assert_eq!(ids, vec!["telegram", "feishu", "wecom"]);
+    assert_eq!(
+        ids,
+        vec!["telegram", "feishu", "wecom", "line", "whatsapp", "webhook"]
+    );
     assert!(
         previews.iter().all(|preview| {
             preview.candidate.status == loongclaw_daemon::migration::types::PreviewStatus::Ready

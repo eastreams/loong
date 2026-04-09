@@ -89,6 +89,7 @@ pub use registry::{
     FEISHU_COMMAND_FAMILY_DESCRIPTOR, FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
     GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR, LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    LINE_COMMAND_FAMILY_DESCRIPTOR, LINE_RUNTIME_COMMAND_DESCRIPTOR,
     MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_RUNTIME_COMMAND_DESCRIPTOR, MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
@@ -97,6 +98,7 @@ pub use registry::{
     TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
     TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WEBHOOK_COMMAND_FAMILY_DESCRIPTOR, WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR,
     WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WHATSAPP_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
@@ -112,16 +114,20 @@ pub use runtime::state::ChannelOperationRuntime;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
 pub use sdk::{
@@ -185,6 +191,8 @@ use dispatch::reload_channel_turn_config;
 pub use dispatch::run_channel_serve_runtime_probe_for_test;
 #[cfg(feature = "channel-feishu")]
 pub use dispatch::run_feishu_channel_with_stop;
+#[cfg(feature = "channel-line")]
+pub use dispatch::run_line_channel_with_stop;
 #[cfg(feature = "channel-matrix")]
 pub use dispatch::run_matrix_channel_with_stop;
 #[cfg(feature = "channel-telegram")]
@@ -214,11 +222,11 @@ use dispatch::{channel_message_ingress_context, process_inbound_with_runtime_and
 pub use dispatch::{
     load_channel_operation_runtime_for_account_from_dir_for_test, run_background_channel_with_stop,
     run_dingtalk_send, run_discord_send, run_email_send, run_feishu_channel, run_feishu_send,
-    run_google_chat_send, run_imessage_send, run_irc_send, run_line_send, run_matrix_channel,
-    run_matrix_send, run_mattermost_send, run_nextcloud_talk_send, run_nostr_send, run_signal_send,
-    run_slack_send, run_synology_chat_send, run_teams_send, run_telegram_channel,
-    run_telegram_send, run_webhook_send, run_wecom_channel, run_wecom_send, run_whatsapp_channel,
-    run_whatsapp_send,
+    run_google_chat_send, run_imessage_send, run_irc_send, run_line_channel, run_line_send,
+    run_matrix_channel, run_matrix_send, run_mattermost_send, run_nextcloud_talk_send,
+    run_nostr_send, run_signal_send, run_slack_send, run_synology_chat_send, run_teams_send,
+    run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
+    run_wecom_channel, run_wecom_send, run_whatsapp_channel, run_whatsapp_send,
 };
 #[cfg(all(
     test,
@@ -1822,10 +1830,7 @@ mod tests {
         assert_eq!(resolved.channel_id, "telegram");
         assert_eq!(resolved.account_id.as_deref(), Some("ops-bot"));
         assert_eq!(resolved.session_shape, "telegram_thread");
-        assert_eq!(
-            resolved.target_kind,
-            ChannelOutboundTargetKind::Conversation
-        );
+        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::Conversation);
         assert_eq!(resolved.target_id, "123:42");
         assert_eq!(resolved.conversation_id.as_deref(), Some("123"));
         assert_eq!(resolved.thread_id.as_deref(), Some("42"));
@@ -1908,6 +1913,48 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "channel-whatsapp")]
+    #[test]
+    fn parse_known_channel_session_send_target_decodes_whatsapp_route_segments() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "whatsapp": {
+                "enabled": true,
+                "accounts": {
+                    "business": {
+                        "account_id": "wa-business",
+                        "access_token": "whatsapp-access-token",
+                        "phone_number_id": "123456789",
+                        "verify_token": "whatsapp-verify-token",
+                        "app_secret": "whatsapp-app-secret"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize whatsapp config");
+        let resolved = config
+            .whatsapp
+            .resolve_account(None)
+            .expect("resolve default whatsapp account");
+        let account_id = resolved.account.id;
+        let session_id = ChannelSession::with_account(
+            ChannelPlatform::WhatsApp,
+            account_id.as_str(),
+            "+15551234567",
+        )
+        .session_key();
+
+        let parsed = parse_known_channel_session_send_target(&config, session_id.as_str())
+            .expect("parse whatsapp session send target");
+
+        assert_eq!(
+            parsed,
+            KnownChannelSessionSendTarget::WhatsApp {
+                account_id: Some(account_id),
+                address: "+15551234567".to_owned(),
+            }
+        );
+    }
+
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn resolve_known_channel_session_target_describes_feishu_participant_scope() {
@@ -1966,6 +2013,46 @@ mod tests {
         assert!(resolved.participant_id.is_none());
         assert_eq!(resolved.thread_id.as_deref(), Some("om_thread_1"));
         assert!(resolved.reply_message_id.is_none());
+    }
+
+    #[cfg(feature = "channel-line")]
+    #[test]
+    fn parse_known_channel_session_send_target_decodes_line_route_segments() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "line": {
+                "enabled": true,
+                "accounts": {
+                    "marketing": {
+                        "account_id": "line-marketing",
+                        "channel_access_token": "line-access-token",
+                        "channel_secret": "line-channel-secret"
+                    }
+                }
+            }
+        }))
+        .expect("deserialize line config");
+        let resolved = config
+            .line
+            .resolve_account(None)
+            .expect("resolve default line account");
+        let account_id = resolved.account.id;
+        let session_id = ChannelSession::with_account(
+            ChannelPlatform::Line,
+            account_id.as_str(),
+            "U0123456789abcdef",
+        )
+        .session_key();
+
+        let parsed = parse_known_channel_session_send_target(&config, session_id.as_str())
+            .expect("parse line session send target");
+
+        assert_eq!(
+            parsed,
+            KnownChannelSessionSendTarget::Line {
+                account_id: Some(account_id),
+                address: "U0123456789abcdef".to_owned(),
+            }
+        );
     }
 
     #[cfg(feature = "channel-matrix")]

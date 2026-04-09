@@ -1,6 +1,7 @@
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
@@ -11,24 +12,36 @@ use async_trait::async_trait;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use serde::Serialize;
 
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
 use super::state::ChannelOperationRuntimeTracker;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 use super::turn_feedback::ChannelTurnFeedbackPolicy;
 use crate::CliResult;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
@@ -37,6 +50,7 @@ use crate::config::LoongClawConfig;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
@@ -51,6 +65,14 @@ pub use super::super::core::types::*;
 // ChannelAdapter trait (runtime-coupled due to ChannelTurnFeedbackPolicy)
 // ============================================================================
 
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 #[allow(dead_code)]
 #[async_trait]
 pub trait ChannelAdapter {
@@ -94,8 +116,10 @@ pub trait ChannelAdapter {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::channel) enum KnownChannelSessionSendTarget {
@@ -109,6 +133,10 @@ pub(in crate::channel) enum KnownChannelSessionSendTarget {
         conversation_id: String,
         reply_message_id: Option<String>,
     },
+    Line {
+        account_id: Option<String>,
+        address: String,
+    },
     Matrix {
         account_id: Option<String>,
         room_id: String,
@@ -118,13 +146,19 @@ pub(in crate::channel) enum KnownChannelSessionSendTarget {
         conversation_id: String,
         chat_type: Option<u8>,
     },
+    WhatsApp {
+        account_id: Option<String>,
+        address: String,
+    },
 }
 
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedKnownChannelSessionTarget {
@@ -145,8 +179,10 @@ pub struct ResolvedKnownChannelSessionTarget {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(in crate::channel) fn parse_known_channel_session_send_target(
     config: &LoongClawConfig,
@@ -158,10 +194,12 @@ pub(in crate::channel) fn parse_known_channel_session_send_target(
     match channel.as_str() {
         "telegram" => parse_telegram_session_send_target(config, session_id, scope.as_slice()),
         "feishu" | "lark" => parse_feishu_session_send_target(config, session_id, scope.as_slice()),
+        "line" => parse_line_session_send_target(config, session_id, scope.as_slice()),
         "matrix" => parse_matrix_session_send_target(config, session_id, scope.as_slice()),
         "wecom" | "wechat-work" | "qywx" => {
             parse_wecom_session_send_target(config, session_id, scope.as_slice())
         }
+        "whatsapp" => parse_whatsapp_session_send_target(config, session_id, scope.as_slice()),
         _ => Err(format!("sessions_send_channel_unsupported: `{session_id}`")),
     }
 }
@@ -169,8 +207,10 @@ pub(in crate::channel) fn parse_known_channel_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub fn resolve_known_channel_session_target(
     config: &LoongClawConfig,
@@ -240,8 +280,10 @@ fn parse_telegram_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn resolve_telegram_known_session_target(
     config: &LoongClawConfig,
@@ -348,8 +390,52 @@ fn parse_feishu_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+fn parse_line_session_send_target(
+    config: &LoongClawConfig,
+    session_id: &str,
+    scope: &[String],
+) -> CliResult<KnownChannelSessionSendTarget> {
+    let configured_account_ids = config.line.configured_account_ids();
+    let runtime_account_ids = configured_runtime_account_ids(
+        configured_account_ids.as_slice(),
+        |configured_account_id| {
+            config
+                .line
+                .resolve_account(Some(configured_account_id))
+                .map(|resolved| resolved.account.id)
+        },
+    );
+    let split_scope = split_known_channel_account_and_scope(
+        scope,
+        configured_account_ids.as_slice(),
+        runtime_account_ids.as_slice(),
+    );
+    let account_id = split_scope.0;
+    let scoped_path = split_scope.1;
+    let address = scoped_path
+        .first()
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("sessions_send_channel_unsupported: `{session_id}`"))?;
+
+    Ok(KnownChannelSessionSendTarget::Line {
+        account_id,
+        address: address.to_owned(),
+    })
+}
+
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn resolve_feishu_known_session_target(
     config: &LoongClawConfig,
@@ -475,8 +561,10 @@ fn parse_matrix_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn resolve_matrix_known_session_target(
     config: &LoongClawConfig,
@@ -577,8 +665,52 @@ fn parse_wecom_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+fn parse_whatsapp_session_send_target(
+    config: &LoongClawConfig,
+    session_id: &str,
+    scope: &[String],
+) -> CliResult<KnownChannelSessionSendTarget> {
+    let configured_account_ids = config.whatsapp.configured_account_ids();
+    let runtime_account_ids = configured_runtime_account_ids(
+        configured_account_ids.as_slice(),
+        |configured_account_id| {
+            config
+                .whatsapp
+                .resolve_account(Some(configured_account_id))
+                .map(|resolved| resolved.account.id)
+        },
+    );
+    let split_scope = split_known_channel_account_and_scope(
+        scope,
+        configured_account_ids.as_slice(),
+        runtime_account_ids.as_slice(),
+    );
+    let account_id = split_scope.0;
+    let scoped_path = split_scope.1;
+    let maybe_address = scoped_path.first();
+    let address = maybe_address
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("sessions_send_channel_unsupported: `{session_id}`"))?;
+
+    Ok(KnownChannelSessionSendTarget::WhatsApp {
+        account_id,
+        address: address.to_owned(),
+    })
+}
+
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn resolve_wecom_known_session_target(
     config: &LoongClawConfig,
@@ -667,8 +799,10 @@ fn configured_runtime_account_ids(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn split_known_channel_account_and_scope<'a>(
     scope: &'a [String],
@@ -707,8 +841,10 @@ fn split_known_channel_account_and_scope<'a>(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn parse_feishu_session_reply_message_id(scope: &[String]) -> Option<String> {
     if scope.len() <= 3 {
@@ -741,6 +877,7 @@ fn looks_like_feishu_message_id(value: &str) -> bool {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp"

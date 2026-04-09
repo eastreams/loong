@@ -55,6 +55,8 @@ pub enum ChannelPlatform {
     Feishu,
     Matrix,
     Wecom,
+    Line,
+    Webhook,
     WhatsApp,
     Irc,
 }
@@ -66,6 +68,8 @@ impl ChannelPlatform {
             Self::Feishu => "feishu",
             Self::Matrix => "matrix",
             Self::Wecom => "wecom",
+            Self::Line => "line",
+            Self::Webhook => "webhook",
             Self::WhatsApp => "whatsapp",
             Self::Irc => "irc",
         }

@@ -9140,7 +9140,7 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
             && line.contains("strategy=manual_config")
             && line.contains("repair_command=\"loong doctor --fix\"")
             && line.contains("status_command=\"loong doctor\"")
-            && line.contains("blurb=\"Shipped LINE Messaging API outbound surface")
+            && line.contains("blurb=\"Shipped LINE Messaging API surface")
     }));
     assert!(lines.iter().any(|line| {
         line.contains("Webhook [webhook]")

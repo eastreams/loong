@@ -1217,6 +1217,17 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Run LINE webhook callback server and auto-reply via provider
+    LineServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        bind: String,
+        #[arg(long)]
+        path: Option<String>,
+    },
     /// Send one WhatsApp business message
     WhatsappSend {
         #[arg(long)]
@@ -1267,6 +1278,17 @@ pub enum Commands {
         target_kind: mvp::channel::ChannelOutboundTargetKind,
         #[arg(long)]
         text: String,
+    },
+    /// Run a generic inbound webhook server and auto-reply via provider
+    WebhookServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        bind: String,
+        #[arg(long)]
+        path: Option<String>,
     },
     /// Send one Google Chat incoming webhook message
     GoogleChatSend {
@@ -4709,6 +4731,11 @@ pub const LINE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_line_send_cli_impl,
 };
 
+pub const LINE_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::LINE_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_line_serve_cli_impl,
+};
+
 pub const WHATSAPP_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_whatsapp_send_cli_impl,
@@ -4797,6 +4824,11 @@ pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
 pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
     run: run_whatsapp_serve_cli_impl,
+};
+
+pub const WEBHOOK_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::WEBHOOK_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_webhook_serve_cli_impl,
 };
 
 pub async fn run_channel_send_cli(
@@ -4948,6 +4980,21 @@ pub fn run_line_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommand
             args.target_kind,
             args.text,
         )
+        .await
+    })
+}
+
+pub fn run_line_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        if args.once {
+            return Err("`--once` is not supported for line callback serve commands".to_owned());
+        }
+        with_graceful_shutdown(mvp::channel::run_line_channel(
+            args.config_path,
+            args.account,
+            args.bind_override,
+            args.path_override,
+        ))
         .await
     })
 }
@@ -5430,6 +5477,21 @@ pub fn run_whatsapp_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliC
     Box::pin(async move {
         let _ = args.once;
         with_graceful_shutdown(mvp::channel::run_whatsapp_channel(
+            args.config_path,
+            args.account,
+            args.bind_override,
+            args.path_override,
+        ))
+        .await
+    })
+}
+
+pub fn run_webhook_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        if args.once {
+            return Err("`--once` is not supported for webhook callback serve commands".to_owned());
+        }
+        with_graceful_shutdown(mvp::channel::run_webhook_channel(
             args.config_path,
             args.account,
             args.bind_override,
