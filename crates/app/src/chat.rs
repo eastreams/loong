@@ -18,6 +18,7 @@ mod cli_input;
 #[allow(clippy::expect_used)]
 mod latest_session_selector_tests;
 mod operator_surfaces;
+mod session_surface;
 
 use self::cli_input::ConcurrentCliInputReader;
 #[cfg(test)]
@@ -115,6 +116,7 @@ const CLI_CHAT_STATUS_COMMAND: &str = "/status";
 const CLI_CHAT_HISTORY_COMMAND: &str = "/history";
 const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND: &str = "/turn_checkpoint_repair";
 const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS: &str = "/turn-checkpoint-repair";
+const CLI_CHAT_COMPOSER_PROMPT: &str = "╰─ you · compose › ";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CliChatOptions {
@@ -330,6 +332,19 @@ pub async fn run_cli_chat(
     session_hint: Option<&str>,
     options: &CliChatOptions,
 ) -> CliResult<()> {
+    if session_surface::terminal_surface_supported() {
+        return session_surface::run_cli_chat_surface(config_path, session_hint, options).await;
+    }
+
+    run_cli_chat_repl(config_path, session_hint, options).await
+}
+
+#[allow(clippy::print_stdout)] // CLI REPL output
+async fn run_cli_chat_repl(
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    options: &CliChatOptions,
+) -> CliResult<()> {
     let resolved_config_path = config_path
         .map(config::expand_path)
         .unwrap_or_else(config::default_config_path);
@@ -385,7 +400,7 @@ pub async fn run_cli_chat(
         .then(|| JsonlAcpTurnEventSink::stderr_with_prefix("acp-event> "));
 
     loop {
-        print!("you> ");
+        print!("{CLI_CHAT_COMPOSER_PROMPT}");
         io::stdout()
             .flush()
             .map_err(|error| format!("flush stdout failed: {error}"))?;
@@ -452,6 +467,14 @@ pub async fn run_cli_ask(
 }
 
 pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<()> {
+    if session_surface::terminal_surface_supported() {
+        return session_surface::run_concurrent_cli_host_surface(options);
+    }
+
+    run_concurrent_cli_host_repl(options)
+}
+
+fn run_concurrent_cli_host_repl(options: &ConcurrentCliHostOptions) -> CliResult<()> {
     let chat_options = CliChatOptions::default();
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         options.resolved_path.clone(),
@@ -623,7 +646,7 @@ async fn run_concurrent_cli_host_loop(
             break;
         }
 
-        print!("you> ");
+        print!("{CLI_CHAT_COMPOSER_PROMPT}");
         io::stdout()
             .flush()
             .map_err(|error| format!("flush stdout failed: {error}"))?;
@@ -682,7 +705,10 @@ async fn process_cli_chat_input(
             return Ok(CliChatLoopControl::Continue);
         }
         ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = vec![usage];
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
             print_rendered_cli_chat_lines(&usage_lines);
             return Ok(CliChatLoopControl::Continue);
         }
@@ -694,7 +720,10 @@ async fn process_cli_chat_input(
             return Ok(CliChatLoopControl::Continue);
         }
         ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = vec![usage];
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
             print_rendered_cli_chat_lines(&usage_lines);
             return Ok(CliChatLoopControl::Continue);
         }
@@ -706,7 +735,10 @@ async fn process_cli_chat_input(
             return Ok(CliChatLoopControl::Continue);
         }
         ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = vec![usage];
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
             print_rendered_cli_chat_lines(&usage_lines);
             return Ok(CliChatLoopControl::Continue);
         }
@@ -736,7 +768,10 @@ async fn process_cli_chat_input(
             return Ok(CliChatLoopControl::Continue);
         }
         ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = vec![usage];
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
             print_rendered_cli_chat_lines(&usage_lines);
             return Ok(CliChatLoopControl::Continue);
         }
@@ -856,7 +891,22 @@ fn render_cli_chat_assistant_lines_with_width(assistant_text: &str, width: usize
         return render_tui_screen_spec(&screen_spec, width, false);
     }
     let message_spec = build_cli_chat_assistant_message_spec(assistant_text);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+fn render_cli_chat_command_usage_lines_with_width(usage: &str, width: usize) -> Vec<String> {
+    let message_spec = TuiMessageSpec {
+        role: "chat".to_owned(),
+        caption: Some("command".to_owned()),
+        sections: vec![TuiSectionSpec::Callout {
+            tone: TuiCalloutTone::Warning,
+            title: Some("usage".to_owned()),
+            lines: vec![usage.to_owned()],
+        }],
+        footer_lines: vec!["Use /help to inspect the available command surface.".to_owned()],
+    };
+
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec {
@@ -866,11 +916,11 @@ fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec
         role: config::CLI_COMMAND_NAME.to_owned(),
         caption: Some("reply".to_owned()),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec!["/help commands · /status runtime · /history transcript".to_owned()],
     }
 }
 
-fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreenSpec> {
+pub(super) fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreenSpec> {
     let parsed = parse_approval_prompt_view(assistant_text)?;
     let mut intro_lines = Vec::new();
     if let Some(preface) = parsed
@@ -947,6 +997,71 @@ fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreen
         choices,
         footer_lines,
     })
+}
+
+fn cli_chat_card_inner_width(width: usize) -> usize {
+    width.saturating_sub(2).max(24)
+}
+
+fn build_cli_chat_message_card_title(role: &str, caption: Option<&str>) -> String {
+    let trimmed_role = role.trim();
+    let trimmed_caption = caption.map(str::trim).unwrap_or("");
+    let role_label = if trimmed_role.is_empty() {
+        "message"
+    } else {
+        trimmed_role
+    };
+
+    if trimmed_caption.is_empty() {
+        return role_label.to_owned();
+    }
+
+    format!("{role_label} · {trimmed_caption}")
+}
+
+fn render_cli_chat_message_card_lines(
+    role: &str,
+    caption: Option<&str>,
+    rendered_message_lines: &[String],
+    width: usize,
+) -> Vec<String> {
+    let title = build_cli_chat_message_card_title(role, caption);
+    render_cli_chat_card_lines(title.as_str(), rendered_message_lines, width)
+}
+
+fn render_cli_chat_message_spec_with_width(spec: &TuiMessageSpec, width: usize) -> Vec<String> {
+    let body_lines = render_tui_message_spec(spec, cli_chat_card_inner_width(width));
+    render_cli_chat_message_card_lines(
+        spec.role.as_str(),
+        spec.caption.as_deref(),
+        &body_lines,
+        width,
+    )
+}
+
+fn render_cli_chat_card_lines(title: &str, body_lines: &[String], width: usize) -> Vec<String> {
+    let inner_width = cli_chat_card_inner_width(width);
+    let mut lines = vec![format!("╭─ {title}")];
+    let content_lines = body_lines.get(1..).unwrap_or(&[]);
+
+    if content_lines.is_empty() {
+        lines.push("│".to_owned());
+    } else {
+        for line in content_lines {
+            if line.is_empty() {
+                lines.push("│".to_owned());
+            } else {
+                for wrapped_line in
+                    crate::presentation::render_wrapped_display_line(line.as_str(), inner_width)
+                {
+                    lines.push(format!("│ {wrapped_line}"));
+                }
+            }
+        }
+    }
+
+    lines.push("╰─".to_owned());
+    lines
 }
 
 fn build_cli_chat_live_surface_observer(render_width: usize) -> ConversationTurnObserverHandle {
@@ -1406,7 +1521,9 @@ fn render_cli_chat_live_surface_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_cli_chat_live_surface_message_spec(snapshot);
-    render_tui_message_spec(&message_spec, width)
+    let body_lines = render_tui_message_spec(&message_spec, cli_chat_card_inner_width(width));
+    let title = build_cli_chat_live_surface_card_title(snapshot);
+    render_cli_chat_card_lines(title.as_str(), &body_lines, width)
 }
 
 fn build_cli_chat_live_surface_message_spec(
@@ -1448,8 +1565,31 @@ fn build_cli_chat_live_surface_message_spec(
         role: config::CLI_COMMAND_NAME.to_owned(),
         caption: Some("live".to_owned()),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Streaming turn state · /status runtime · /compact checkpoint".to_owned(),
+        ],
     }
+}
+
+fn build_cli_chat_live_surface_card_title(snapshot: &CliChatLiveSurfaceSnapshot) -> String {
+    let mut segments = vec![build_cli_chat_message_card_title(
+        config::CLI_COMMAND_NAME,
+        Some("live"),
+    )];
+
+    if let Some(provider_round) = snapshot.provider_round {
+        segments.push(format!("round {provider_round}"));
+    }
+
+    if let Some(message_count) = snapshot.message_count {
+        segments.push(format!("{message_count} msgs"));
+    }
+
+    if let Some(estimated_tokens) = snapshot.estimated_tokens {
+        segments.push(format!("~{estimated_tokens} tok"));
+    }
+
+    segments.join(" · ")
 }
 
 fn cli_chat_live_surface_tone(phase: ConversationTurnPhase) -> TuiCalloutTone {
@@ -1875,7 +2015,72 @@ fn parse_cli_chat_markdown_sections(text: &str) -> Vec<TuiSectionSpec> {
         });
     }
 
+    refine_cli_chat_sections(sections)
+}
+
+fn refine_cli_chat_sections(sections: Vec<TuiSectionSpec>) -> Vec<TuiSectionSpec> {
     sections
+        .into_iter()
+        .map(|section| match section {
+            TuiSectionSpec::Narrative {
+                title: Some(title),
+                lines,
+            } if is_reasoning_section_title(title.as_str()) && !lines.is_empty() => {
+                TuiSectionSpec::Callout {
+                    tone: TuiCalloutTone::Info,
+                    title: Some("reasoning".to_owned()),
+                    lines,
+                }
+            }
+            TuiSectionSpec::Preformatted {
+                title,
+                language: Some(language),
+                lines,
+            } if is_diff_language(language.as_str()) => TuiSectionSpec::Preformatted {
+                title: Some(title.unwrap_or_else(|| "diff".to_owned())),
+                language: Some(language),
+                lines,
+            },
+            TuiSectionSpec::Narrative {
+                title: Some(title),
+                lines,
+            } if is_tool_activity_section_title(title.as_str()) && !lines.is_empty() => {
+                TuiSectionSpec::Callout {
+                    tone: TuiCalloutTone::Info,
+                    title: Some("tool activity".to_owned()),
+                    lines,
+                }
+            }
+            other @ TuiSectionSpec::Narrative { .. }
+            | other @ TuiSectionSpec::KeyValues { .. }
+            | other @ TuiSectionSpec::ActionGroup { .. }
+            | other @ TuiSectionSpec::Checklist { .. }
+            | other @ TuiSectionSpec::Callout { .. }
+            | other @ TuiSectionSpec::Preformatted { .. } => other,
+        })
+        .collect()
+}
+
+fn is_reasoning_section_title(title: &str) -> bool {
+    let normalized = title.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "reasoning" | "analysis" | "thinking" | "thought process"
+    )
+}
+
+fn is_diff_language(language: &str) -> bool {
+    matches!(
+        language.trim().to_ascii_lowercase().as_str(),
+        "diff" | "patch"
+    )
+}
+
+fn is_tool_activity_section_title(title: &str) -> bool {
+    matches!(
+        title.trim().to_ascii_lowercase().as_str(),
+        "tool activity" | "tools" | "tool calls"
+    )
 }
 
 fn push_narrative_section(
@@ -2261,7 +2466,7 @@ fn render_cli_chat_feature_unavailable_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_cli_chat_feature_unavailable_message_spec(role, detail);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -2276,7 +2481,9 @@ fn build_cli_chat_feature_unavailable_message_spec(role: &str, detail: &str) -> 
         role: role.to_owned(),
         caption: Some("unavailable".to_owned()),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Feature gated in this build; /help shows the available chat surface.".to_owned(),
+        ],
     }
 }
 
@@ -2342,7 +2549,7 @@ fn render_turn_checkpoint_health_error_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_turn_checkpoint_health_error_message_spec(session_id, error);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -2370,7 +2577,10 @@ fn build_turn_checkpoint_health_error_message_spec(
         role: "checkpoint".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Durability state is unavailable until the next successful checkpoint sample."
+                .to_owned(),
+        ],
     }
 }
 
@@ -2396,7 +2606,7 @@ fn render_fast_lane_summary_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_fast_lane_summary_message_spec(session_id, limit, summary);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -2581,7 +2791,10 @@ fn build_fast_lane_summary_message_spec(
         role: "fast-lane".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Use /fast_lane_summary after tool-heavy turns to inspect concurrency behavior."
+                .to_owned(),
+        ],
     }
 }
 
@@ -2635,7 +2848,7 @@ fn render_safe_lane_summary_lines_with_width(
 ) -> Vec<String> {
     let message_spec =
         build_safe_lane_summary_message_spec(session_id, limit, conversation_config, summary);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -2942,7 +3155,9 @@ fn build_safe_lane_summary_message_spec(
         role: "safe-lane".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Use /safe_lane_summary when verify/replan behavior needs inspection.".to_owned(),
+        ],
     }
 }
 
@@ -2972,7 +3187,7 @@ fn render_turn_checkpoint_summary_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_turn_checkpoint_summary_message_spec(session_id, limit, diagnostics);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -3092,7 +3307,9 @@ fn build_turn_checkpoint_summary_message_spec(
         role: "checkpoint".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Use /turn_checkpoint_repair when the latest durable state needs repair.".to_owned(),
+        ],
     }
 }
 
@@ -3122,7 +3339,7 @@ fn render_turn_checkpoint_repair_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_turn_checkpoint_repair_message_spec(session_id, outcome);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -3183,7 +3400,9 @@ fn build_turn_checkpoint_repair_message_spec(
         role: "repair".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Re-run /status after repair to confirm the checkpoint state.".to_owned(),
+        ],
     }
 }
 
@@ -4912,23 +5131,25 @@ mod tests {
             "chat startup should keep the usage hint, but under the assistant-first opening block: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "session details"),
+            lines.iter().any(|line| line.contains("session details")),
             "chat startup should keep session/config facts in a structured key-value section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "runtime details"),
+            lines.iter().any(|line| line.contains("runtime details")),
             "chat startup should still preserve runtime context in a compact secondary section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "continuity maintenance"),
+            lines
+                .iter()
+                .any(|line| line.contains("continuity maintenance")),
             "chat startup should show compaction maintenance settings in a dedicated section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "- session: default"),
+            lines.iter().any(|line| line.contains("- session: default")),
             "chat startup should continue to show session identity after the handoff block: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "- compaction: true"),
+            lines.iter().any(|line| line.contains("- compaction: true")),
             "chat startup should show whether automatic compaction is enabled: {lines:#?}"
         );
     }
@@ -4962,19 +5183,21 @@ mod tests {
         );
 
         assert!(
-            lines.iter().any(|line| { line == "note: acp overrides" }),
+            lines
+                .iter()
+                .any(|line| line.contains("note: acp overrides")),
             "chat startup should group ACP overrides under a dedicated callout heading: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- bootstrap MCP servers: filesystem"),
+                .any(|line| line.contains("- bootstrap MCP servers: filesystem")),
             "chat startup should still surface the bootstrap MCP override details: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- working directory: /workspace/project"),
+                .any(|line| line.contains("- working directory: /workspace/project")),
             "chat startup should still surface the working directory override: {lines:#?}"
         );
     }
@@ -5007,21 +5230,25 @@ mod tests {
             80,
         );
 
-        assert_eq!(lines[0], "status: session=default");
+        assert_eq!(lines[0], "╭─ status · session=default");
         assert!(
-            lines.iter().any(|line| line == "session details"),
+            lines.iter().any(|line| line.contains("session details")),
             "status output should keep session facts grouped under a section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "runtime details"),
+            lines.iter().any(|line| line.contains("runtime details")),
             "status output should keep runtime facts grouped under a section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "continuity maintenance"),
+            lines
+                .iter()
+                .any(|line| line.contains("continuity maintenance")),
             "status output should surface compaction maintenance settings: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: operator controls"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: operator controls")),
             "status output should include the operator control callout: {lines:#?}"
         );
         assert!(
@@ -5108,23 +5335,27 @@ mod tests {
         )
         .expect("startup health surface");
 
-        assert_eq!(lines[0], "checkpoint: session=session-health");
+        assert_eq!(lines[0], "╭─ checkpoint · session=session-health");
         assert!(
-            lines.iter().any(|line| line == "durability status"),
+            lines.iter().any(|line| line.contains("durability status")),
             "startup health should group durability facts under a shared key-value section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "attention: recovery"),
+            lines
+                .iter()
+                .any(|line| line.contains("attention: recovery")),
             "startup health should surface pending recovery as a warning callout: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- action: inspect_manually"),
+                .any(|line| line.contains("- action: inspect_manually")),
             "startup health should preserve the concrete recovery action in the callout: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: runtime probe"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: runtime probe")),
             "startup health should surface runtime probe context as a secondary structured callout: {lines:#?}"
         );
     }
@@ -5192,7 +5423,7 @@ mod tests {
             80,
         );
 
-        assert_eq!(lines[0], "checkpoint: session=session-health");
+        assert_eq!(lines[0], "╭─ checkpoint · session=session-health");
         assert!(
             lines.iter().any(|line| line.contains("state: not_durable")),
             "status health should surface non-durable sessions explicitly: {lines:#?}"
@@ -5249,18 +5480,20 @@ mod tests {
 
         let lines = render_fast_lane_summary_lines_with_width("session-fast", 64, &summary, 80);
 
-        assert_eq!(lines[0], "fast-lane: session=session-fast limit=64");
+        assert_eq!(lines[0], "╭─ fast-lane · session=session-fast limit=64");
         assert!(
-            lines.iter().any(|line| line == "intent mix"),
+            lines.iter().any(|line| line.contains("intent mix")),
             "fast-lane summary should promote aggregate intent counters into a titled section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "latest segments"),
+            lines.iter().any(|line| line.contains("latest segments")),
             "fast-lane summary should keep the latest segment narrative visible: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| {
-                line == "- segment 0: class=parallel_safe mode=parallel intents=2 peak=3 wall_ms=120"
+                line.contains(
+                    "- segment 0: class=parallel_safe mode=parallel intents=2 peak=3 wall_ms=120",
+                )
             }),
             "fast-lane summary should render latest segment details as readable surface lines: {lines:#?}"
         );
@@ -5309,17 +5542,19 @@ mod tests {
         let lines =
             render_safe_lane_summary_lines_with_width("session-safe", 32, &config, &summary, 80);
 
-        assert_eq!(lines[0], "safe-lane: session=session-safe limit=32");
+        assert_eq!(lines[0], "╭─ safe-lane · session=session-safe limit=32");
         assert!(
-            lines.iter().any(|line| line == "attention: health"),
+            lines.iter().any(|line| line.contains("attention: health")),
             "safe-lane summary should surface warning health as a structured callout: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "- severity: critical"),
+            lines
+                .iter()
+                .any(|line| line.contains("- severity: critical")),
             "safe-lane health callout should preserve the derived severity: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "rollups"),
+            lines.iter().any(|line| line.contains("rollups")),
             "safe-lane summary should keep the route and failure rollups in a dedicated section: {lines:#?}"
         );
     }
@@ -5356,13 +5591,15 @@ mod tests {
             80,
         );
 
-        assert_eq!(lines[0], "checkpoint: session=session-summary limit=64");
+        assert_eq!(lines[0], "╭─ checkpoint · session=session-summary limit=64");
         assert!(
-            lines.iter().any(|line| line == "summary"),
+            lines.iter().any(|line| line.contains("summary")),
             "turn checkpoint summary should group the latest durability state in a titled section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: runtime probe"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: runtime probe")),
             "turn checkpoint summary should append runtime probe context as a structured callout: {lines:#?}"
         );
     }
@@ -5387,13 +5624,15 @@ mod tests {
         );
         let lines = render_turn_checkpoint_repair_lines_with_width("session-repair", &outcome, 80);
 
-        assert_eq!(lines[0], "repair: session=session-repair");
+        assert_eq!(lines[0], "╭─ repair · session=session-repair");
         assert!(
-            lines.iter().any(|line| line == "repair status"),
+            lines.iter().any(|line| line.contains("repair status")),
             "turn checkpoint repair should group repair facts in a structured key-value section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "attention: repair result"),
+            lines
+                .iter()
+                .any(|line| line.contains("attention: repair result")),
             "manual repair outcomes should surface a warning callout: {lines:#?}"
         );
     }
@@ -5402,9 +5641,9 @@ mod tests {
     fn render_cli_chat_help_lines_promotes_commands_to_surface() {
         let lines = render_cli_chat_help_lines_with_width(72);
 
-        assert_eq!(lines[0], "chat: commands");
+        assert_eq!(lines[0], "╭─ chat · commands");
         assert!(
-            lines.iter().any(|line| line == "slash commands"),
+            lines.iter().any(|line| line.contains("slash commands")),
             "help output should keep a dedicated slash-command section: {lines:#?}"
         );
         assert!(
@@ -5424,8 +5663,23 @@ mod tests {
             "help output should surface the manual compaction command: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: usage notes"),
+            lines.iter().any(|line| line.contains("note: usage notes")),
             "help output should preserve operator guidance as a callout: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_command_usage_lines_wrap_usage_in_warning_card() {
+        let lines = render_cli_chat_command_usage_lines_with_width("usage: /history", 72);
+
+        assert_eq!(lines[0], "╭─ chat · command");
+        assert!(
+            lines.iter().any(|line| line.contains("attention: usage")),
+            "usage errors should render inside a warning pane: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("usage: /history")),
+            "usage pane should preserve the concrete command usage: {lines:#?}"
         );
     }
 
@@ -5456,9 +5710,11 @@ mod tests {
 
         let lines = render_cli_chat_status_lines_with_width(&summary, 80);
 
-        assert_eq!(lines[0], "status: session=session-status");
+        assert_eq!(lines[0], "╭─ status · session=session-status");
         assert!(
-            lines.iter().any(|line| line == "continuity maintenance"),
+            lines
+                .iter()
+                .any(|line| line.contains("continuity maintenance")),
             "status output should expose compaction settings as a dedicated section: {lines:#?}"
         );
         assert!(
@@ -5472,7 +5728,9 @@ mod tests {
             "status output should surface the compaction token trigger: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: operator controls"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: operator controls")),
             "status output should append the operator controls callout: {lines:#?}"
         );
         assert!(
@@ -5497,9 +5755,9 @@ mod tests {
 
         let lines = render_manual_compaction_lines_with_width("session-compact", &result, 80);
 
-        assert_eq!(lines[0], "compact: session=session-compact");
+        assert_eq!(lines[0], "╭─ compact · session=session-compact");
         assert!(
-            lines.iter().any(|line| line == "compaction result"),
+            lines.iter().any(|line| line.contains("compaction result")),
             "manual compaction should render a dedicated result section: {lines:#?}"
         );
         assert!(
@@ -5526,15 +5784,15 @@ mod tests {
         ];
         let lines = render_cli_chat_history_lines_with_width("session-7", 24, &history_lines, 72);
 
-        assert_eq!(lines[0], "history: session=session-7 limit=24");
+        assert_eq!(lines[0], "╭─ history · session=session-7 limit=24");
         assert!(
-            lines.iter().any(|line| line == "sliding window"),
+            lines.iter().any(|line| line.contains("sliding window")),
             "history output should keep a dedicated window section: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "user: summarize the current repo"),
+                .any(|line| line.contains("user: summarize the current repo")),
             "history output should still surface the original transcript entries: {lines:#?}"
         );
     }
@@ -5554,33 +5812,37 @@ println!(\"{value}\");
 ```";
         let lines = render_cli_chat_assistant_lines_with_width(assistant_text, 72);
 
-        assert_eq!(lines[0], "loong: reply");
+        assert_eq!(lines[0], "╭─ loong · reply");
         assert!(
-            lines.iter().any(|line| line == "Plan"),
+            lines.iter().any(|line| line.contains("Plan")),
             "markdown headings should become section titles: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- inspect the active config"),
+                .any(|line| line.contains("- inspect the active config")),
             "markdown list items should remain visible in the narrative block: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "- compare runtime state"),
+            lines
+                .iter()
+                .any(|line| line.contains("- compare runtime state")),
             "markdown star bullets should normalize into wrapped display bullets: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: quoted context"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: quoted context")),
             "markdown blockquotes should render as structured callouts: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "code [rust]"),
+            lines.iter().any(|line| line.contains("code [rust]")),
             "markdown fences should render as preformatted sections: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "    let value = input.trim();"),
+                .any(|line| line.contains("let value = input.trim();")),
             "preformatted sections should keep code indentation intact: {lines:#?}"
         );
     }
@@ -5595,19 +5857,41 @@ println!(\"{value}\");
         let lines = render_cli_chat_assistant_lines_with_width(assistant_text, 72);
 
         assert!(
-            lines.iter().any(|line| line == "note: Risks"),
+            lines.iter().any(|line| line.contains("note: Risks")),
             "headings should stay attached to quoted sections instead of falling back to a generic title: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- keep credentials in env vars"),
+                .any(|line| line.contains("- keep credentials in env vars")),
             "quoted content should stay visible after preserving the heading: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "Next"),
+            lines.iter().any(|line| line.contains("Next")),
             "a trailing heading should still render even when it has no body lines yet: {lines:#?}"
         );
+    }
+
+    #[test]
+    fn parse_cli_chat_markdown_sections_promotes_reasoning_heading_to_callout() {
+        let sections = parse_cli_chat_markdown_sections(
+            "## Reasoning\nThe provider compared two options before choosing one.",
+        );
+        assert!(matches!(
+            sections.first(),
+            Some(TuiSectionSpec::Callout { title, .. }) if title.as_deref() == Some("reasoning")
+        ));
+    }
+
+    #[test]
+    fn parse_cli_chat_markdown_sections_promotes_tool_activity_heading_to_callout() {
+        let sections = parse_cli_chat_markdown_sections(
+            "## Tool Activity\nfile.read completed with 1 result line.",
+        );
+        assert!(matches!(
+            sections.first(),
+            Some(TuiSectionSpec::Callout { title, .. }) if title.as_deref() == Some("tool activity")
+        ));
     }
 
     #[test]
@@ -5657,19 +5941,20 @@ allowed_decisions: yes / auto / full / esc";
         };
         let lines = render_cli_chat_live_surface_lines_with_width(&snapshot, 72);
 
-        assert_eq!(lines[0], "loong: live");
+        assert_eq!(lines[0], "╭─ loong · live · round 1 · 4 msgs · ~128 tok");
         assert!(
-            lines.iter().any(|line| line == "note: querying model"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: querying model")),
             "live surface should explain the active phase through a callout: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "turn pipeline"),
+            lines.iter().any(|line| line.contains("turn pipeline")),
             "live surface should keep the pipeline checklist visible: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| {
-                line.starts_with("[WARN] call model")
-                    && line.contains("provider round 1 in progress")
+                line.contains("[WARN] call model") && line.contains("provider round 1 in progress")
             }),
             "live surface should keep the model step actively highlighted: {lines:#?}"
         );
@@ -5680,13 +5965,13 @@ allowed_decisions: yes / auto / full / esc";
             "live surface should avoid claiming streaming when the snapshot does not encode that capability: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "draft preview"),
+            lines.iter().any(|line| line.contains("draft preview")),
             "live surface should surface partial text as a dedicated preview block: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "Inspecting the repo layout..."),
+                .any(|line| line.contains("Inspecting the repo layout...")),
             "live surface should preserve the partial preview text: {lines:#?}"
         );
     }
@@ -5730,10 +6015,12 @@ allowed_decisions: yes / auto / full / esc";
 
         let preview_batch = batches
             .iter()
-            .find(|lines| lines.iter().any(|line| line == "draft preview"))
+            .find(|lines| lines.iter().any(|line| line.contains("draft preview")))
             .expect("preview batch");
         assert!(
-            preview_batch.iter().any(|line| line == "Draft response"),
+            preview_batch
+                .iter()
+                .any(|line| line.contains("Draft response")),
             "preview batch should include the streamed text: {preview_batch:#?}"
         );
     }
@@ -5792,7 +6079,7 @@ allowed_decisions: yes / auto / full / esc";
             .expect("captured batches lock should not be poisoned");
         let running_batch = batches
             .iter()
-            .find(|lines| lines.iter().any(|line| line == "tool activity"))
+            .find(|lines| lines.iter().any(|line| line.contains("tool activity")))
             .expect("running tool batch");
         let completed_batch = batches
             .iter()
@@ -5800,27 +6087,27 @@ allowed_decisions: yes / auto / full / esc";
             .find(|lines| {
                 lines
                     .iter()
-                    .any(|line| line == "[completed] file.read (id=call-tool-1) - ok")
+                    .any(|line| line.contains("[completed] file.read (id=call-tool-1) - ok"))
             })
             .expect("completed tool batch");
 
         assert!(
             running_batch
                 .iter()
-                .any(|line| line == "[running] file.read (id=call-tool-1)"),
+                .any(|line| line.contains("[running] file.read (id=call-tool-1)")),
             "tool batch should surface the running tool state: {running_batch:#?}"
         );
 
         assert!(
             completed_batch
                 .iter()
-                .any(|line| line == "[completed] file.read (id=call-tool-1) - ok"),
+                .any(|line| line.contains("[completed] file.read (id=call-tool-1) - ok")),
             "tool batch should surface the completed tool state: {completed_batch:#?}"
         );
         assert!(
             completed_batch
                 .iter()
-                .any(|line| line == "args: {\"path\":\"README.md\"}"),
+                .any(|line| line.contains("args: {\"path\":\"README.md\"}")),
             "tool batch should preserve streamed tool args: {completed_batch:#?}"
         );
     }
@@ -5888,15 +6175,17 @@ allowed_decisions: yes / auto / full / esc";
         let last_batch = batches.last().expect("follow-up request batch");
 
         assert!(
-            !last_batch.iter().any(|line| line == "draft preview"),
+            !last_batch.iter().any(|line| line.contains("draft preview")),
             "follow-up provider requests should reset the previous draft preview: {last_batch:#?}"
         );
         assert!(
-            !last_batch.iter().any(|line| line == "tool activity"),
+            !last_batch.iter().any(|line| line.contains("tool activity")),
             "follow-up provider requests should not reuse prior tool activity lines: {last_batch:#?}"
         );
         assert!(
-            !last_batch.iter().any(|line| line == "Draft response"),
+            !last_batch
+                .iter()
+                .any(|line| line.contains("Draft response")),
             "follow-up provider requests should not carry the previous request preview text: {last_batch:#?}"
         );
     }
@@ -5960,13 +6249,13 @@ allowed_decisions: yes / auto / full / esc";
         let last_batch = batches.last().expect("running-tools batch");
 
         assert!(
-            last_batch.iter().any(|line| line == "tool activity"),
+            last_batch.iter().any(|line| line.contains("tool activity")),
             "the tools phase should render the accumulated tool activity: {last_batch:#?}"
         );
         assert!(
             last_batch
                 .iter()
-                .any(|line| line == "[running] search (id=call_123)"),
+                .any(|line| line.contains("[running] search (id=call_123)")),
             "the tools phase should surface the streamed tool metadata: {last_batch:#?}"
         );
     }
