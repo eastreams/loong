@@ -3423,26 +3423,10 @@ fn resolve_effective_tool_target(
     }
 }
 
-fn resolve_effective_tool_descriptor(
-    effective_tool_name: &str,
-    effective_request: &ToolCoreRequest,
-) -> Option<ToolDescriptor> {
+fn resolve_effective_tool_descriptor(effective_tool_name: &str) -> Option<ToolDescriptor> {
     let catalog = crate::tools::tool_catalog();
     let direct_descriptor = catalog.resolve(effective_tool_name);
-
-    if let Some(direct_descriptor) = direct_descriptor {
-        return Some(*direct_descriptor);
-    }
-
-    let request_tool_name = effective_request.tool_name.as_str();
-
-    if request_tool_name == effective_tool_name {
-        return None;
-    }
-
-    let fallback_descriptor = catalog.resolve(request_tool_name);
-
-    fallback_descriptor.copied()
+    direct_descriptor.copied()
 }
 
 fn resolve_effective_tool_metadata(
@@ -3453,10 +3437,7 @@ fn resolve_effective_tool_metadata(
 ) -> Result<EffectiveToolMetadata, Box<EffectiveToolMetadataError>> {
     let effective_target =
         resolve_effective_tool_target(resolved_tool, request, normalized_intent, original_intent);
-    let descriptor = resolve_effective_tool_descriptor(
-        effective_target.tool_name.as_str(),
-        &effective_target.request,
-    );
+    let descriptor = resolve_effective_tool_descriptor(effective_target.tool_name.as_str());
     let Some(descriptor) = descriptor else {
         let error = EffectiveToolMetadataError { effective_target };
 
@@ -4026,7 +4007,23 @@ mod tests {
                 .expect("tool.invoke file.read request should prepare successfully")
         });
 
+        let request_payload = &prepared_intent.request.payload;
+        let observed_tool_id = request_payload
+            .get("tool_id")
+            .cloned()
+            .expect("tool.invoke request should preserve tool_id");
+        let observed_arguments = request_payload
+            .get("arguments")
+            .cloned()
+            .expect("tool.invoke request should preserve nested arguments");
+        let expected_tool_id = Value::String("file.read".to_owned());
+        let expected_arguments = json!({
+            "path": "README.md",
+        });
+
         assert_eq!(prepared_intent.request.tool_name, "tool.invoke");
+        assert_eq!(observed_tool_id, expected_tool_id);
+        assert_eq!(observed_arguments, expected_arguments);
         assert_eq!(prepared_intent.intent.tool_name, "file.read");
         assert_eq!(
             prepared_intent.capability_action_class,
