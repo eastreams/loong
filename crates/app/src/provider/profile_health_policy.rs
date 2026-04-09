@@ -129,20 +129,20 @@ mod tests {
         let now = Instant::now();
         let alpha = ProviderAuthProfile {
             id: "alpha".to_owned(),
-            authorization_header: None,
-            x_api_key_header: None,
+            authorization_secret: None,
+            api_key_secret: None,
             auth_cache_key: None,
         };
         let beta = ProviderAuthProfile {
             id: "beta".to_owned(),
-            authorization_header: None,
-            x_api_key_header: None,
+            authorization_secret: None,
+            api_key_secret: None,
             auth_cache_key: None,
         };
         let gamma = ProviderAuthProfile {
             id: "gamma".to_owned(),
-            authorization_header: None,
-            x_api_key_header: None,
+            authorization_secret: None,
+            api_key_secret: None,
             auth_cache_key: None,
         };
         let profiles = [alpha, beta, gamma];
@@ -179,14 +179,14 @@ mod tests {
         let now = Instant::now();
         let alpha = ProviderAuthProfile {
             id: "alpha".to_owned(),
-            authorization_header: None,
-            x_api_key_header: None,
+            authorization_secret: None,
+            api_key_secret: None,
             auth_cache_key: None,
         };
         let beta = ProviderAuthProfile {
             id: "beta".to_owned(),
-            authorization_header: None,
-            x_api_key_header: None,
+            authorization_secret: None,
+            api_key_secret: None,
             auth_cache_key: None,
         };
         let profiles = [alpha, beta];

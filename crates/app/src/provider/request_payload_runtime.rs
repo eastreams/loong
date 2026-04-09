@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::config::{LoongClawConfig, ProviderProtocolFamily, ReasoningEffort};
+use crate::config::{LoongClawConfig, ReasoningEffort};
 
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
@@ -50,6 +50,9 @@ pub(super) fn build_completion_request_body_with_capability(
         ProviderTransportMode::BedrockConverse => {
             build_bedrock_request_body(config, messages, payload_mode, false, &[])
         }
+        ProviderTransportMode::GoogleGenerateContent => {
+            build_google_generate_content_request_body(config, messages, payload_mode, false, &[])
+        }
         ProviderTransportMode::OpenAiChatCompletions | ProviderTransportMode::KimiApi => {
             build_chat_completions_request_body(
                 config,
@@ -71,28 +74,14 @@ fn build_chat_completions_request_body(
     capability: ProviderCapabilityContract,
     streaming: bool,
 ) -> Value {
-    match config.provider.kind.protocol_family() {
-        ProviderProtocolFamily::AnthropicMessages => build_anthropic_request_body(
-            config,
-            messages,
-            model,
-            payload_mode,
-            false,
-            &[],
-            streaming,
-        ),
-        ProviderProtocolFamily::BedrockConverse => {
-            build_bedrock_request_body(config, messages, payload_mode, false, &[])
-        }
-        ProviderProtocolFamily::OpenAiChatCompletions => build_openai_compatible_request_body(
-            config,
-            messages,
-            model,
-            payload_mode,
-            capability,
-            streaming,
-        ),
-    }
+    build_openai_compatible_request_body(
+        config,
+        messages,
+        model,
+        payload_mode,
+        capability,
+        streaming,
+    )
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -152,6 +141,13 @@ pub(super) fn build_turn_request_body_with_capability(
             streaming,
         ),
         ProviderTransportMode::BedrockConverse => build_bedrock_request_body(
+            config,
+            messages,
+            payload_mode,
+            include_tool_schema,
+            tool_definitions,
+        ),
+        ProviderTransportMode::GoogleGenerateContent => build_google_generate_content_request_body(
             config,
             messages,
             payload_mode,
@@ -283,6 +279,63 @@ fn build_bedrock_request_body(
     Value::Object(body)
 }
 
+fn build_google_generate_content_request_body(
+    config: &LoongClawConfig,
+    messages: &[Value],
+    payload_mode: CompletionPayloadMode,
+    include_tool_schema: bool,
+    tool_definitions: &[Value],
+) -> Value {
+    let mut body = serde_json::Map::new();
+    let (system_instruction, contents) = adapt_messages_for_google(messages);
+    body.insert("contents".to_owned(), Value::Array(contents));
+
+    if let Some(system_instruction) = system_instruction {
+        body.insert(
+            "systemInstruction".to_owned(),
+            json!({
+                "parts": [
+                    {
+                        "text": system_instruction
+                    }
+                ]
+            }),
+        );
+    }
+
+    let mut generation_config = serde_json::Map::new();
+    if payload_mode.temperature_field == TemperatureField::Include {
+        generation_config.insert("temperature".to_owned(), json!(config.provider.temperature));
+    }
+    if let Some(limit) = config.provider.max_tokens
+        && payload_mode.token_field != TokenLimitField::Omit
+    {
+        generation_config.insert("maxOutputTokens".to_owned(), json!(limit));
+    }
+    if !generation_config.is_empty() {
+        body.insert(
+            "generationConfig".to_owned(),
+            Value::Object(generation_config),
+        );
+    }
+
+    if include_tool_schema {
+        let function_declarations = google_tool_declarations(tool_definitions);
+        if !function_declarations.is_empty() {
+            body.insert(
+                "tools".to_owned(),
+                json!([
+                    {
+                        "functionDeclarations": function_declarations
+                    }
+                ]),
+            );
+        }
+    }
+
+    Value::Object(body)
+}
+
 fn adapt_messages_for_anthropic(messages: &[Value]) -> (Option<String>, Vec<Value>) {
     let mut system_parts = Vec::new();
     let mut adapted = Vec::new();
@@ -358,6 +411,60 @@ fn adapt_messages_for_bedrock(messages: &[Value]) -> (Vec<Value>, Vec<Value>) {
     (system, adapted)
 }
 
+fn adapt_messages_for_google(messages: &[Value]) -> (Option<String>, Vec<Value>) {
+    let mut system_parts = Vec::new();
+    let mut adapted = Vec::new();
+
+    for message in messages {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let content = message.get("content").unwrap_or(&Value::Null);
+        match role {
+            "system" => {
+                if let Some(text) = content_as_text(content) {
+                    system_parts.push(text);
+                }
+            }
+            "user" => {
+                append_google_message(&mut adapted, "user", google_message_parts(message));
+            }
+            "assistant" => {
+                append_google_message(&mut adapted, "model", google_message_parts(message));
+            }
+            "tool" => {
+                let tool_call_id = message
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let tool_name =
+                    resolve_google_tool_name_for_result(messages, tool_call_id).unwrap_or("tool");
+                let response = google_tool_response_payload(content);
+                append_google_message(
+                    &mut adapted,
+                    "user",
+                    vec![json!({
+                        "functionResponse": {
+                            "name": tool_name,
+                            "response": response,
+                        }
+                    })],
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let system_instruction = if system_parts.is_empty() {
+        None
+    } else {
+        Some(system_parts.join("\n\n"))
+    };
+
+    (system_instruction, adapted)
+}
+
 fn append_native_message(adapted: &mut Vec<Value>, role: &str, mut blocks: Vec<Value>) {
     if blocks.is_empty() {
         return;
@@ -373,6 +480,173 @@ fn append_native_message(adapted: &mut Vec<Value>, role: &str, mut blocks: Vec<V
         "role": role,
         "content": Value::Array(blocks),
     }));
+}
+
+fn append_google_message(adapted: &mut Vec<Value>, role: &str, mut parts: Vec<Value>) {
+    if parts.is_empty() {
+        return;
+    }
+    if let Some(last) = adapted.last_mut()
+        && last.get("role").and_then(Value::as_str) == Some(role)
+        && let Some(existing_parts) = last.get_mut("parts").and_then(Value::as_array_mut)
+    {
+        existing_parts.append(&mut parts);
+        return;
+    }
+    adapted.push(json!({
+        "role": role,
+        "parts": Value::Array(parts),
+    }));
+}
+
+fn google_message_parts(message: &Value) -> Vec<Value> {
+    let content = message.get("content").unwrap_or(&Value::Null);
+    let mut parts = google_content_parts(content);
+
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for tool_call in tool_calls {
+            if let Some(function_call) = google_function_call_part_from_openai(tool_call) {
+                parts.push(function_call);
+            }
+        }
+    }
+
+    parts
+}
+
+fn google_content_parts(content: &Value) -> Vec<Value> {
+    if let Some(text) = content.as_str().and_then(normalize_text) {
+        return vec![google_text_part(text)];
+    }
+
+    if let Some(items) = content.as_array() {
+        let mut parts = Vec::new();
+        for item in items {
+            if let Some(part) = google_content_part(item) {
+                parts.push(part);
+            }
+        }
+        return parts;
+    }
+
+    if content.is_null() {
+        return Vec::new();
+    }
+
+    normalize_text(content.to_string().as_str())
+        .map(|text| vec![google_text_part(text)])
+        .unwrap_or_default()
+}
+
+fn google_content_part(value: &Value) -> Option<Value> {
+    if let Some(text) = value.as_str().and_then(normalize_text) {
+        return Some(google_text_part(text));
+    }
+
+    if let Some(function_call) = value.get("functionCall").cloned() {
+        return Some(json!({ "functionCall": function_call }));
+    }
+    if let Some(function_response) = value.get("functionResponse").cloned() {
+        return Some(json!({ "functionResponse": function_response }));
+    }
+
+    if let Some(kind) = value.get("type").and_then(Value::as_str) {
+        if kind == "text"
+            && let Some(text) = value.get("text").and_then(content_text_value)
+        {
+            return Some(google_text_part(text));
+        }
+        if kind == "tool_use" {
+            return google_function_call_part_from_native(value);
+        }
+    }
+
+    if let Some(text) = value.get("text").and_then(content_text_value) {
+        return Some(google_text_part(text));
+    }
+
+    None
+}
+
+fn google_text_part(text: String) -> Value {
+    json!({
+        "text": text
+    })
+}
+
+fn google_function_call_part_from_openai(tool_call: &Value) -> Option<Value> {
+    let function = tool_call.get("function")?;
+    let name = function.get("name")?.as_str()?;
+    let arguments = function
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
+    let args = serde_json::from_str::<Value>(arguments)
+        .ok()
+        .unwrap_or_else(|| json!({}));
+    Some(json!({
+        "functionCall": {
+            "name": name,
+            "args": args,
+        }
+    }))
+}
+
+fn google_function_call_part_from_native(value: &Value) -> Option<Value> {
+    let name = value.get("name").and_then(Value::as_str)?;
+    let args = value.get("input").cloned().unwrap_or_else(|| json!({}));
+    Some(json!({
+        "functionCall": {
+            "name": name,
+            "args": args,
+        }
+    }))
+}
+
+fn google_tool_response_payload(content: &Value) -> Value {
+    let Some(text) = content_as_text(content) else {
+        return json!({
+            "result": ""
+        });
+    };
+    serde_json::from_str::<Value>(text.as_str())
+        .ok()
+        .unwrap_or_else(|| json!({ "result": text }))
+}
+
+fn resolve_google_tool_name_for_result<'a>(
+    messages: &'a [Value],
+    tool_call_id: &str,
+) -> Option<&'a str> {
+    if tool_call_id.is_empty() {
+        return None;
+    }
+
+    for message in messages.iter().rev() {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if role != "assistant" {
+            continue;
+        }
+        if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+            for tool_call in tool_calls {
+                let current_id = tool_call
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if current_id != tool_call_id {
+                    continue;
+                }
+                let function = tool_call.get("function")?;
+                let name = function.get("name").and_then(Value::as_str)?;
+                return Some(name);
+            }
+        }
+    }
+
+    None
 }
 
 fn anthropic_content_blocks(content: &Value) -> Vec<Value> {
@@ -579,6 +853,13 @@ fn bedrock_tool_definitions(tool_definitions: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+fn google_tool_declarations(tool_definitions: &[Value]) -> Vec<Value> {
+    tool_definitions
+        .iter()
+        .filter_map(openai_tool_definition_to_google)
+        .collect()
+}
+
 fn openai_tool_definition_to_anthropic(tool_definition: &Value) -> Option<Value> {
     let function = tool_definition.get("function")?;
     let name = function.get("name")?.as_str()?;
@@ -620,6 +901,26 @@ fn openai_tool_definition_to_bedrock(tool_definition: &Value) -> Option<Value> {
                 "json": input_schema
             }
         }
+    }))
+}
+
+fn openai_tool_definition_to_google(tool_definition: &Value) -> Option<Value> {
+    let function = tool_definition.get("function")?;
+    let name = function.get("name")?.as_str()?;
+    let description = function
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let parameters = function.get("parameters").cloned().unwrap_or_else(|| {
+        json!({
+            "type": "object",
+            "properties": {},
+        })
+    });
+    Some(json!({
+        "name": name,
+        "description": description,
+        "parameters": parameters,
     }))
 }
 

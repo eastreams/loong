@@ -42,6 +42,7 @@ mod request_session_runtime;
 mod runtime_binding;
 mod shape;
 mod transport;
+mod transport_profile_runtime;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
 pub(crate) use failover::parse_provider_failover_snapshot_payload;

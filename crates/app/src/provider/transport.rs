@@ -296,6 +296,14 @@ pub(super) fn build_request_headers_without_provider_auth(
     build_request_headers_internal(provider, false)
 }
 
+pub(super) fn build_request_headers_without_provider_auth_for_transport(
+    provider: &ProviderConfig,
+    default_user_agent: Option<&str>,
+    default_headers: &[(&str, &str)],
+) -> CliResult<HeaderMap> {
+    build_request_headers_with_defaults(provider, default_user_agent, default_headers, false)
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_request_headers(provider: &ProviderConfig) -> CliResult<HeaderMap> {
     build_request_headers_internal(provider, true)
@@ -303,6 +311,20 @@ pub(super) fn build_request_headers(provider: &ProviderConfig) -> CliResult<Head
 
 fn build_request_headers_internal(
     provider: &ProviderConfig,
+    include_provider_auth: bool,
+) -> CliResult<HeaderMap> {
+    build_request_headers_with_defaults(
+        provider,
+        provider.kind.default_user_agent(),
+        provider.kind.default_headers(),
+        include_provider_auth,
+    )
+}
+
+fn build_request_headers_with_defaults(
+    provider: &ProviderConfig,
+    default_user_agent: Option<&str>,
+    default_headers: &[(&str, &str)],
     include_provider_auth: bool,
 ) -> CliResult<HeaderMap> {
     let mut headers = HeaderMap::new();
@@ -314,18 +336,19 @@ fn build_request_headers_internal(
         headers.insert(name, header_value);
     }
     if !headers.contains_key(USER_AGENT)
-        && let Some(default_user_agent) = provider.kind.default_user_agent()
+        && let Some(default_user_agent) = default_user_agent
     {
         let header_value = HeaderValue::from_str(default_user_agent).map_err(|error| {
             format!("invalid default provider user-agent `{default_user_agent}`: {error}")
         })?;
         headers.insert(USER_AGENT, header_value);
     }
-    for (key, value) in provider.kind.default_headers() {
+    for (key, value) in default_headers {
         if headers.contains_key(*key) {
             continue;
         }
-        let name = HeaderName::from_static(key);
+        let name = HeaderName::from_bytes(key.as_bytes())
+            .map_err(|error| format!("invalid default provider header name `{key}`: {error}"))?;
         let header_value = HeaderValue::from_str(value)
             .map_err(|error| format!("invalid default provider header `{key}`: {error}"))?;
         headers.insert(name, header_value);
@@ -339,23 +362,58 @@ fn build_request_headers_internal(
 pub(super) fn apply_auth_profile_headers(
     headers: &mut HeaderMap,
     profile: Option<&ProviderAuthProfile>,
+    auth_scheme: ProviderAuthScheme,
 ) -> CliResult<()> {
     let Some(profile) = profile else {
         return Ok(());
     };
-    if let Some(value) = profile.authorization_header.as_deref()
-        && !headers.contains_key(AUTHORIZATION)
-    {
-        let header_value = HeaderValue::from_str(value)
-            .map_err(|error| format!("invalid provider authorization header: {error}"))?;
-        headers.insert(AUTHORIZATION, header_value);
-    }
-    if let Some(value) = profile.x_api_key_header.as_deref()
-        && !headers.contains_key("x-api-key")
-    {
-        let header_value = HeaderValue::from_str(value)
-            .map_err(|error| format!("invalid provider x-api-key header: {error}"))?;
-        headers.insert(HeaderName::from_static("x-api-key"), header_value);
+    apply_profile_secret_headers(headers, profile, auth_scheme)?;
+    Ok(())
+}
+
+fn apply_profile_secret_headers(
+    headers: &mut HeaderMap,
+    profile: &ProviderAuthProfile,
+    auth_scheme: ProviderAuthScheme,
+) -> CliResult<()> {
+    match auth_scheme {
+        ProviderAuthScheme::Bearer => {
+            if headers.contains_key(AUTHORIZATION) {
+                return Ok(());
+            }
+            let Some(secret) = profile
+                .authorization_secret
+                .as_deref()
+                .or(profile.api_key_secret.as_deref())
+            else {
+                return Ok(());
+            };
+            let header_value = HeaderValue::from_str(format!("Bearer {secret}").as_str())
+                .map_err(|error| format!("invalid provider authorization header: {error}"))?;
+            headers.insert(AUTHORIZATION, header_value);
+        }
+        ProviderAuthScheme::XApiKey => {
+            if headers.contains_key("x-api-key") {
+                return Ok(());
+            }
+            let Some(secret) = profile.api_key_secret.as_deref() else {
+                return Ok(());
+            };
+            let header_value = HeaderValue::from_str(secret)
+                .map_err(|error| format!("invalid provider x-api-key header: {error}"))?;
+            headers.insert(HeaderName::from_static("x-api-key"), header_value);
+        }
+        ProviderAuthScheme::XGoogApiKey => {
+            if headers.contains_key("x-goog-api-key") {
+                return Ok(());
+            }
+            let Some(secret) = profile.api_key_secret.as_deref() else {
+                return Ok(());
+            };
+            let header_value = HeaderValue::from_str(secret)
+                .map_err(|error| format!("invalid provider x-goog-api-key header: {error}"))?;
+            headers.insert(HeaderName::from_static("x-goog-api-key"), header_value);
+        }
     }
     Ok(())
 }
@@ -381,6 +439,14 @@ fn apply_raw_auth_secret(
             let header_value = HeaderValue::from_str(secret)
                 .map_err(|error| format!("invalid provider x-api-key header: {error}"))?;
             headers.insert(HeaderName::from_static("x-api-key"), header_value);
+        }
+        ProviderAuthScheme::XGoogApiKey => {
+            if headers.contains_key("x-goog-api-key") {
+                return Ok(());
+            }
+            let header_value = HeaderValue::from_str(secret)
+                .map_err(|error| format!("invalid provider x-goog-api-key header: {error}"))?;
+            headers.insert(HeaderName::from_static("x-goog-api-key"), header_value);
         }
     }
     Ok(())

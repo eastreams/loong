@@ -495,6 +495,43 @@ chat_completions_path = "/api/v3/chat/completions"
 
 Both `volcengine` and `volcengine_coding` use `api_key = { env = "ARK_API_KEY" }`. LoongClaw resolves that environment variable and sends it as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
 
+OpenCode Zen / Go example:
+
+```bash
+export OPENCODE_API_KEY=your-opencode-api-key
+```
+
+```toml
+active_provider = "opencode_zen"
+
+[providers.opencode_zen]
+kind = "opencode_zen"
+model = "gpt-5.4"
+api_key = { env = "OPENCODE_API_KEY" }
+```
+
+```toml
+active_provider = "opencode_go"
+
+[providers.opencode_go]
+kind = "opencode_go"
+model = "glm-5.1"
+api_key = { env = "OPENCODE_API_KEY" }
+```
+
+LoongClaw treats these as native providers and routes models by OpenCode product semantics:
+
+- `opencode_zen`
+  - `gpt-*` → OpenAI Responses
+  - `claude-*` → Anthropic Messages
+  - `gemini-*` → Google Generate Content
+  - everything else → OpenAI Chat Completions
+- `opencode_go`
+  - `minimax-*` → Anthropic Messages
+  - everything else → OpenAI Chat Completions
+
+Use bare model ids in LoongClaw (`gpt-5.4`, `claude-sonnet-4.6`, `glm-5.1`). If you paste copied OpenCode ids such as `opencode/gpt-5.4` or `opencode-go/glm-5.1`, LoongClaw strips the prefix automatically.
+
 Feishu channel example (webhook mode):
 
 ```bash

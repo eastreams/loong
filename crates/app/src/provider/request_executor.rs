@@ -11,6 +11,7 @@ use futures_util::Stream;
 use serde_json::Value;
 use tokio::time::sleep;
 
+use crate::config::ProviderAuthScheme;
 use crate::config::ProviderConfig;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
 
@@ -38,6 +39,7 @@ pub(super) struct ModelRequestRuntime<'a> {
     pub(super) capability: ProviderCapabilityContract,
     pub(super) auto_model_mode: bool,
     pub(super) auth_profile: &'a ProviderAuthProfile,
+    pub(super) request_auth_scheme: ProviderAuthScheme,
     pub(super) endpoint: &'a str,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a policy::ProviderRequestPolicy,
@@ -52,6 +54,7 @@ pub(super) struct StreamingModelRequestRuntime<'a> {
     pub(super) capability: ProviderCapabilityContract,
     pub(super) auto_model_mode: bool,
     pub(super) auth_profile: &'a ProviderAuthProfile,
+    pub(super) request_auth_scheme: ProviderAuthScheme,
     pub(super) endpoint: &'a str,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a policy::ProviderRequestPolicy,
@@ -212,7 +215,12 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
+        transport::apply_auth_profile_headers(
+            &mut headers,
+            Some(runtime.auth_profile),
+            runtime.request_auth_scheme,
+        )
+        .map_err(
             |error| {
                 build_model_request_error(
                     format!(
@@ -517,7 +525,12 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
+        transport::apply_auth_profile_headers(
+            &mut headers,
+            Some(runtime.auth_profile),
+            runtime.request_auth_scheme,
+        )
+        .map_err(
             |error| {
                 build_model_request_error(
                     format!(
