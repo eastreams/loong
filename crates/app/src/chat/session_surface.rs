@@ -1,4 +1,8 @@
 use std::cmp::min;
+use std::io::IsTerminal;
+use std::ops::Range;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use console::{Key, Term};
@@ -18,6 +22,29 @@ const COMMAND_OVERLAY_WIDTH: usize = 52;
 
 pub(super) fn terminal_surface_supported() -> bool {
     Term::stdout().is_term()
+}
+
+pub(super) fn stdin_is_tty() -> bool {
+    std::io::stdin().is_terminal()
+}
+
+fn terminal_surface_allowed(stdout_is_tty: bool, stdin_is_tty: bool) -> bool {
+    if !stdout_is_tty {
+        return false;
+    }
+
+    if !stdin_is_tty {
+        return false;
+    }
+
+    true
+}
+
+pub(super) fn interactive_terminal_surface_supported() -> bool {
+    let stdout_is_tty = terminal_surface_supported();
+    let stdin_is_tty = stdin_is_tty();
+
+    terminal_surface_allowed(stdout_is_tty, stdin_is_tty)
 }
 
 pub(super) async fn run_cli_chat_surface(
@@ -684,32 +711,9 @@ impl ChatSessionSurface {
                     if matches!(state.overlay, Some(SurfaceOverlay::ApprovalPrompt { .. })) {
                         let response = state.composer.trim().to_owned();
                         if !response.is_empty() {
-                            state.transcript.push(SurfaceEntry {
-                                lines: render_cli_chat_message_spec_with_width(
-                                    &TuiMessageSpec {
-                                        role: "you".to_owned(),
-                                        caption: Some("approval response".to_owned()),
-                                        sections: vec![TuiSectionSpec::Narrative {
-                                            title: None,
-                                            lines: vec![response],
-                                        }],
-                                        footer_lines: vec![
-                                            "Approval response captured in surface history."
-                                                .to_owned(),
-                                        ],
-                                    },
-                                    self.content_width(),
-                                ),
-                            });
                             state.overlay = None;
-                            state.composer.clear();
-                            state.composer_cursor = 0;
-                            state.selected_entry = Some(state.transcript.len().saturating_sub(1));
-                            state.focus = SurfaceFocus::Transcript;
-                            state.sticky_bottom = true;
-                            drop(state);
-                            self.render()?;
-                            return Ok(SurfaceLoopAction::Continue);
+                            state.focus = SurfaceFocus::Composer;
+                            return Ok(SurfaceLoopAction::Submit);
                         }
                     }
                 }
@@ -717,7 +721,10 @@ impl ChatSessionSurface {
                     let mut state = self.lock_state();
                     if state.command_palette.is_none()
                         && state.focus == SurfaceFocus::Composer
-                        && should_continue_multiline(&state.composer)
+                        && should_continue_multiline_at_cursor(
+                            &state.composer,
+                            state.composer_cursor,
+                        )
                     {
                         let mut cursor = state.composer_cursor;
                         remove_char_before_cursor(&mut state.composer, &mut cursor);
@@ -804,38 +811,77 @@ impl ChatSessionSurface {
                 {
                     state.overlay = Some(SurfaceOverlay::Timeline);
                     state.focus = SurfaceFocus::Transcript;
-                } else if matches!(state.overlay, Some(SurfaceOverlay::ApprovalPrompt { .. }))
-                    && matches!(character, '1'..='9' | 'y' | 'n')
-                {
-                    state.overlay = None;
-                    state.focus = SurfaceFocus::Composer;
+                } else if matches!(state.overlay, Some(SurfaceOverlay::ApprovalPrompt { .. })) {
+                    let quick_response = character.to_string();
+                    let quick_response_action =
+                        crate::conversation::parse_approval_prompt_action_input(
+                            quick_response.as_str(),
+                        );
+
+                    if quick_response_action.is_some() {
+                        let mut cursor = state.composer_cursor;
+                        insert_char_at_cursor(&mut state.composer, &mut cursor, character);
+                        state.composer_cursor = cursor;
+                        state.overlay = None;
+                        state.focus = SurfaceFocus::Composer;
+                        drop(state);
+                        self.render()?;
+                        return Ok(SurfaceLoopAction::Submit);
+                    }
                 } else if (character == 'j' || character == 'k')
                     && state.focus == SurfaceFocus::Transcript
                     && state.command_palette.is_none()
                 {
-                    let current = state
-                        .selected_entry
-                        .unwrap_or_else(|| state.transcript.len().saturating_sub(1));
-                    if character == 'j' {
-                        state.selected_entry = Some(min(
-                            current.saturating_add(1),
-                            state.transcript.len().saturating_sub(1),
-                        ));
-                        state.scroll_offset = state.scroll_offset.saturating_sub(1);
-                        if state.scroll_offset == 0 {
-                            state.sticky_bottom = true;
-                        }
+                    if state.transcript.is_empty() {
+                        state.selected_entry = None;
+                        state.scroll_offset = 0;
+                        state.sticky_bottom = true;
                     } else {
-                        state.selected_entry = Some(current.saturating_sub(1));
-                        state.scroll_offset = state.scroll_offset.saturating_add(1);
-                        state.sticky_bottom = false;
+                        let transcript_height = self.transcript_viewport_height_for_state(&state);
+                        let current = state
+                            .selected_entry
+                            .unwrap_or_else(|| state.transcript.len().saturating_sub(1));
+                        if character == 'j' {
+                            let next_selected = min(
+                                current.saturating_add(1),
+                                state.transcript.len().saturating_sub(1),
+                            );
+                            state.selected_entry = Some(next_selected);
+                        } else {
+                            let next_selected = current.saturating_sub(1);
+                            state.selected_entry = Some(next_selected);
+                        }
+                        if let Some(selected_entry) = state.selected_entry {
+                            let aligned_offset = align_scroll_offset_to_selected_entry(
+                                &state.transcript,
+                                selected_entry,
+                                transcript_height,
+                                state.scroll_offset,
+                            );
+                            state.scroll_offset = aligned_offset;
+                        }
+                        state.sticky_bottom = state.scroll_offset == 0;
                     }
                 } else if character == 'g'
                     && state.focus == SurfaceFocus::Transcript
                     && state.command_palette.is_none()
                 {
-                    state.selected_entry = Some(0);
-                    state.sticky_bottom = false;
+                    if state.transcript.is_empty() {
+                        state.selected_entry = None;
+                        state.scroll_offset = 0;
+                        state.sticky_bottom = true;
+                    } else {
+                        state.selected_entry = Some(0);
+                        state.sticky_bottom = false;
+                        let transcript_height = self.transcript_viewport_height_for_state(&state);
+                        let aligned_offset = align_scroll_offset_to_selected_entry(
+                            &state.transcript,
+                            0,
+                            transcript_height,
+                            state.scroll_offset,
+                        );
+                        state.scroll_offset = aligned_offset;
+                    }
                 } else if character == 'G'
                     && state.focus == SurfaceFocus::Transcript
                     && state.command_palette.is_none()
@@ -927,15 +973,25 @@ impl ChatSessionSurface {
                 }
                 state.focus = SurfaceFocus::Transcript;
             }
-            CommandPaletteAction::ToggleSidebar => state.sidebar_visible = !state.sidebar_visible,
-            CommandPaletteAction::CycleSidebarTab => state.sidebar_tab = state.sidebar_tab.next(),
+            CommandPaletteAction::ToggleSidebar => {
+                state.sidebar_visible = !state.sidebar_visible;
+                state.focus = if state.sidebar_visible {
+                    SurfaceFocus::Sidebar
+                } else {
+                    SurfaceFocus::Composer
+                };
+            }
+            CommandPaletteAction::CycleSidebarTab => {
+                state.sidebar_tab = state.sidebar_tab.next();
+                state.focus = SurfaceFocus::Sidebar;
+            }
             CommandPaletteAction::ClearComposer => {
                 state.composer.clear();
                 state.composer_cursor = 0;
+                state.focus = SurfaceFocus::Composer;
             }
             CommandPaletteAction::Exit => return Ok(SurfaceLoopAction::Exit),
         }
-        state.focus = SurfaceFocus::Composer;
         drop(state);
         self.render()?;
         Ok(SurfaceLoopAction::Continue)
@@ -1042,75 +1098,141 @@ impl ChatSessionSurface {
 
     async fn handle_command(&self, input: &str) -> CliResult<()> {
         let width = self.content_width();
-        let lines = if input == CLI_CHAT_HELP_COMMAND {
-            operator_surfaces::render_cli_chat_help_lines_with_width(width)
-        } else if operator_surfaces::is_cli_chat_status_command(input)? {
-            operator_surfaces::render_cli_chat_status_lines_with_width(
-                &operator_surfaces::build_cli_chat_startup_summary(&self.runtime, &self.options)?,
-                width,
-            )
-        } else if operator_surfaces::is_manual_compaction_command(input)? {
-            #[cfg(feature = "memory-sqlite")]
-            {
-                let binding = ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx);
-                let result = operator_surfaces::load_manual_compaction_result(
-                    &self.runtime.config,
-                    &self.runtime.session_id,
-                    &self.runtime.turn_coordinator,
-                    binding,
-                )
-                .await?;
-                operator_surfaces::render_manual_compaction_lines_with_width(
-                    &self.runtime.session_id,
-                    &result,
-                    width,
-                )
+        let help_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_HELP_COMMAND],
+            "usage: /help",
+        ))?;
+
+        let status_match = classify_chat_command_match_result(
+            operator_surfaces::is_cli_chat_status_command(input),
+        )?;
+
+        let compact_match = classify_chat_command_match_result(
+            operator_surfaces::is_manual_compaction_command(input),
+        )?;
+
+        let history_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_HISTORY_COMMAND],
+            "usage: /history",
+        ))?;
+
+        let turn_checkpoint_repair_match = classify_chat_command_match_result(
+            operator_surfaces::is_turn_checkpoint_repair_command(input),
+        )?;
+
+        let lines = match help_match {
+            ChatCommandMatchResult::Matched => {
+                operator_surfaces::render_cli_chat_help_lines_with_width(width)
             }
-            #[cfg(not(feature = "memory-sqlite"))]
-            {
-                render_cli_chat_feature_unavailable_lines_with_width(
-                    "compact",
-                    "manual compaction unavailable: memory-sqlite feature disabled",
-                    width,
-                )
+            ChatCommandMatchResult::UsageError(usage) => {
+                render_cli_chat_command_usage_lines_with_width(&usage, width)
             }
-        } else if matches!(
-            classify_chat_command_match_result(parse_exact_chat_command(
-                input,
-                &[CLI_CHAT_HISTORY_COMMAND],
-                "usage: /history",
-            ))?,
-            ChatCommandMatchResult::Matched
-        ) {
-            #[cfg(feature = "memory-sqlite")]
-            {
-                let history_lines = operator_surfaces::load_history_lines(
-                    &self.runtime.session_id,
-                    self.runtime.config.memory.sliding_window,
-                    ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx),
-                    &self.runtime.memory_config,
-                )
-                .await?;
-                operator_surfaces::render_cli_chat_history_lines_with_width(
-                    &self.runtime.session_id,
-                    self.runtime.config.memory.sliding_window,
-                    &history_lines,
-                    width,
-                )
-            }
-            #[cfg(not(feature = "memory-sqlite"))]
-            {
-                render_cli_chat_feature_unavailable_lines_with_width(
-                    "history",
-                    "history unavailable: memory-sqlite feature disabled",
-                    width,
-                )
-            }
-        } else {
-            render_cli_chat_command_usage_lines_with_width(
-                "usage: /help | /status | /history | /compact | /exit",
-                width,
-            )
+            ChatCommandMatchResult::NotMatched => match status_match {
+                ChatCommandMatchResult::Matched => {
+                    let summary = operator_surfaces::build_cli_chat_startup_summary(
+                        &self.runtime,
+                        &self.options,
+                    )?;
+                    operator_surfaces::render_cli_chat_status_lines_with_width(&summary, width)
+                }
+                ChatCommandMatchResult::UsageError(usage) => {
+                    render_cli_chat_command_usage_lines_with_width(&usage, width)
+                }
+                ChatCommandMatchResult::NotMatched => match compact_match {
+                    ChatCommandMatchResult::Matched => {
+                        #[cfg(feature = "memory-sqlite")]
+                        {
+                            let binding =
+                                ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx);
+                            let result = operator_surfaces::load_manual_compaction_result(
+                                &self.runtime.config,
+                                &self.runtime.session_id,
+                                &self.runtime.turn_coordinator,
+                                binding,
+                            )
+                            .await?;
+                            operator_surfaces::render_manual_compaction_lines_with_width(
+                                &self.runtime.session_id,
+                                &result,
+                                width,
+                            )
+                        }
+                        #[cfg(not(feature = "memory-sqlite"))]
+                        {
+                            render_cli_chat_feature_unavailable_lines_with_width(
+                                "compact",
+                                "manual compaction unavailable: memory-sqlite feature disabled",
+                                width,
+                            )
+                        }
+                    }
+                    ChatCommandMatchResult::UsageError(usage) => {
+                        render_cli_chat_command_usage_lines_with_width(&usage, width)
+                    }
+                    ChatCommandMatchResult::NotMatched => match history_match {
+                        ChatCommandMatchResult::Matched => {
+                            #[cfg(feature = "memory-sqlite")]
+                            {
+                                let history_lines = operator_surfaces::load_history_lines(
+                                    &self.runtime.session_id,
+                                    self.runtime.config.memory.sliding_window,
+                                    ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx),
+                                    &self.runtime.memory_config,
+                                )
+                                .await?;
+                                operator_surfaces::render_cli_chat_history_lines_with_width(
+                                    &self.runtime.session_id,
+                                    self.runtime.config.memory.sliding_window,
+                                    &history_lines,
+                                    width,
+                                )
+                            }
+                            #[cfg(not(feature = "memory-sqlite"))]
+                            {
+                                render_cli_chat_feature_unavailable_lines_with_width(
+                                    "history",
+                                    "history unavailable: memory-sqlite feature disabled",
+                                    width,
+                                )
+                            }
+                        }
+                        ChatCommandMatchResult::UsageError(usage) => {
+                            render_cli_chat_command_usage_lines_with_width(&usage, width)
+                        }
+                        ChatCommandMatchResult::NotMatched => match turn_checkpoint_repair_match {
+                            ChatCommandMatchResult::Matched => {
+                                let outcome = self
+                                    .runtime
+                                    .turn_coordinator
+                                    .repair_turn_checkpoint_tail(
+                                        &self.runtime.config,
+                                        &self.runtime.session_id,
+                                        ConversationRuntimeBinding::kernel(
+                                            &self.runtime.kernel_ctx,
+                                        ),
+                                    )
+                                    .await?;
+                                render_turn_checkpoint_repair_lines_with_width(
+                                    &self.runtime.session_id,
+                                    &outcome,
+                                    width,
+                                )
+                            }
+                            ChatCommandMatchResult::UsageError(usage) => {
+                                render_cli_chat_command_usage_lines_with_width(&usage, width)
+                            }
+                            ChatCommandMatchResult::NotMatched => {
+                                render_cli_chat_command_usage_lines_with_width(
+                                    "usage: /help | /status | /history | /compact | /turn_checkpoint_repair | /exit",
+                                    width,
+                                )
+                            }
+                        },
+                    },
+                },
+            },
         };
 
         let mut state = self.lock_state();
@@ -1156,10 +1278,14 @@ impl ChatSessionSurface {
                     state.focus = SurfaceFocus::Composer;
                     return Ok(());
                 }
+                let export_path = PathBuf::from(trimmed);
+                ensure_parent_directory_exists(export_path.as_path())?;
                 let export_text = format_transcript_export(&state.transcript);
-                std::fs::write(trimmed, export_text).map_err(|error| {
-                    format!("failed to export transcript to `{trimmed}`: {error}")
+                std::fs::write(export_path.as_path(), export_text).map_err(|error| {
+                    let display_path = export_path.display();
+                    format!("failed to export transcript to `{display_path}`: {error}")
                 })?;
+                let exported_path = export_path.display().to_string();
                 state.transcript.push(SurfaceEntry {
                     lines: render_cli_chat_message_spec_with_width(
                         &TuiMessageSpec {
@@ -1168,7 +1294,7 @@ impl ChatSessionSurface {
                             sections: vec![TuiSectionSpec::Callout {
                                 tone: TuiCalloutTone::Success,
                                 title: Some("transcript exported".to_owned()),
-                                lines: vec![format!("Saved transcript to `{trimmed}`.")],
+                                lines: vec![format!("Saved transcript to `{exported_path}`.")],
                             }],
                             footer_lines: vec![
                                 "Use the exported text file for external review or sharing."
@@ -1842,6 +1968,21 @@ impl ChatSessionSurface {
             })
             .max(24)
     }
+
+    fn transcript_viewport_height_for_state(&self, state: &SurfaceState) -> usize {
+        let (height, width) = self.term.size();
+        let total_height = usize::from(height);
+        let total_width = usize::from(width);
+        let header_lines = crate::presentation::render_compact_brand_header(
+            total_width.saturating_sub(2),
+            &crate::presentation::BuildVersionInfo::current(),
+            Some(session_surface_subtitle(state)),
+        );
+        let header_height = header_lines.len();
+        let reserved_height = header_height + HEADER_GAP + COMPOSER_HEIGHT + STATUS_BAR_HEIGHT + 1;
+
+        total_height.saturating_sub(reserved_height).max(5)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2147,17 +2288,47 @@ fn session_surface_subtitle(state: &SurfaceState) -> &str {
 }
 
 fn default_export_path(session_id: &str) -> String {
-    let sanitized = session_id
+    let sanitized_session_id = sanitize_session_id_for_export(session_id);
+    let file_name = format!("loongclaw-{sanitized_session_id}-transcript.txt");
+    let exports_dir = loongclaw_exports_dir();
+    let export_path = exports_dir.join(file_name);
+
+    export_path.display().to_string()
+}
+
+fn sanitize_session_id_for_export(session_id: &str) -> String {
+    session_id
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
+                return character;
             }
+
+            '_'
         })
-        .collect::<String>();
-    format!("/tmp/loongclaw-{sanitized}-transcript.txt")
+        .collect()
+}
+
+fn loongclaw_exports_dir() -> PathBuf {
+    let loongclaw_home = crate::config::default_loongclaw_home();
+    let exports_dir = loongclaw_home.join("exports");
+
+    exports_dir
+}
+
+fn ensure_parent_directory_exists(path: &Path) -> CliResult<()> {
+    let Some(parent_dir) = path.parent() else {
+        return Ok(());
+    };
+
+    if parent_dir.as_os_str().is_empty() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(parent_dir).map_err(|error| {
+        let display_path = parent_dir.display();
+        format!("failed to create transcript export directory `{display_path}`: {error}")
+    })
 }
 
 fn format_transcript_export(entries: &[SurfaceEntry]) -> String {
@@ -2325,6 +2496,108 @@ fn should_continue_multiline(value: &str) -> bool {
     value.ends_with('\\')
 }
 
+fn should_continue_multiline_at_cursor(value: &str, cursor: usize) -> bool {
+    let total_chars = value.chars().count();
+    if cursor != total_chars {
+        return false;
+    }
+
+    should_continue_multiline(value)
+}
+
+fn flattened_entry_line_ranges(entries: &[SurfaceEntry]) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut next_line_index: usize = 0;
+
+    for (entry_index, entry) in entries.iter().enumerate() {
+        if entry_index > 0 {
+            next_line_index = next_line_index.saturating_add(1);
+        }
+
+        let line_count = entry.lines.len().max(1);
+        let start_line_index = next_line_index;
+        let end_line_index = start_line_index.saturating_add(line_count);
+        let entry_range = start_line_index..end_line_index;
+
+        ranges.push(entry_range);
+        next_line_index = end_line_index;
+    }
+
+    ranges
+}
+
+fn viewport_start_for_scroll_offset(
+    total_lines: usize,
+    viewport_height: usize,
+    scroll_offset: usize,
+) -> usize {
+    if total_lines <= viewport_height {
+        return 0;
+    }
+
+    let max_scroll_offset = total_lines.saturating_sub(viewport_height);
+    let clamped_scroll_offset = min(scroll_offset, max_scroll_offset);
+    let viewport_start =
+        total_lines.saturating_sub(viewport_height.saturating_add(clamped_scroll_offset));
+
+    viewport_start
+}
+
+fn scroll_offset_for_viewport_start(
+    total_lines: usize,
+    viewport_height: usize,
+    viewport_start: usize,
+) -> usize {
+    if total_lines <= viewport_height {
+        return 0;
+    }
+
+    let max_viewport_start = total_lines.saturating_sub(viewport_height);
+    let clamped_viewport_start = min(viewport_start, max_viewport_start);
+    let scroll_offset =
+        total_lines.saturating_sub(viewport_height.saturating_add(clamped_viewport_start));
+
+    scroll_offset
+}
+
+fn align_scroll_offset_to_selected_entry(
+    entries: &[SurfaceEntry],
+    selected_entry: usize,
+    viewport_height: usize,
+    scroll_offset: usize,
+) -> usize {
+    let entry_ranges = flattened_entry_line_ranges(entries);
+    let Some(selected_range) = entry_ranges.get(selected_entry) else {
+        return scroll_offset;
+    };
+
+    let total_lines = entry_ranges.last().map(|range| range.end).unwrap_or(0);
+
+    if total_lines <= viewport_height {
+        return 0;
+    }
+
+    let viewport_start =
+        viewport_start_for_scroll_offset(total_lines, viewport_height, scroll_offset);
+    let viewport_end = viewport_start.saturating_add(viewport_height);
+
+    if selected_range.start < viewport_start {
+        return scroll_offset_for_viewport_start(
+            total_lines,
+            viewport_height,
+            selected_range.start,
+        );
+    }
+
+    if selected_range.end > viewport_end {
+        let next_viewport_start = selected_range.end.saturating_sub(viewport_height);
+
+        return scroll_offset_for_viewport_start(total_lines, viewport_height, next_viewport_start);
+    }
+
+    scroll_offset
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2388,6 +2661,21 @@ mod tests {
     fn should_continue_multiline_detects_trailing_backslash() {
         assert!(should_continue_multiline("hello\\"));
         assert!(!should_continue_multiline("hello"));
+    }
+
+    #[test]
+    fn should_continue_multiline_at_cursor_requires_cursor_at_end() {
+        assert!(should_continue_multiline_at_cursor("hello\\", 6));
+        assert!(!should_continue_multiline_at_cursor("hello\\", 3));
+        assert!(!should_continue_multiline_at_cursor("hello", 5));
+    }
+
+    #[test]
+    fn terminal_surface_allowed_requires_interactive_stdin_and_stdout() {
+        assert!(terminal_surface_allowed(true, true));
+        assert!(!terminal_surface_allowed(true, false));
+        assert!(!terminal_surface_allowed(false, true));
+        assert!(!terminal_surface_allowed(false, false));
     }
 
     #[test]
@@ -2459,5 +2747,55 @@ mod tests {
         assert_eq!(current_overlay_label(&state), "none");
         state.overlay = Some(SurfaceOverlay::Timeline);
         assert_eq!(current_overlay_label(&state), "timeline");
+    }
+
+    #[test]
+    fn align_scroll_offset_to_selected_entry_keeps_entry_visible() {
+        let entries = vec![
+            SurfaceEntry {
+                lines: vec!["entry 1".to_owned()],
+            },
+            SurfaceEntry {
+                lines: vec!["entry 2".to_owned(), "entry 2 detail".to_owned()],
+            },
+            SurfaceEntry {
+                lines: vec!["entry 3".to_owned()],
+            },
+        ];
+        let viewport_height = 2;
+        let current_scroll_offset = 0;
+        let aligned_offset = align_scroll_offset_to_selected_entry(
+            &entries,
+            1,
+            viewport_height,
+            current_scroll_offset,
+        );
+
+        assert_eq!(aligned_offset, 2);
+    }
+
+    #[test]
+    fn default_export_path_uses_loongclaw_exports_directory() {
+        let export_path = PathBuf::from(default_export_path("session:/bad"));
+        let file_name = export_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("export file name");
+        let parent_dir = export_path
+            .parent()
+            .and_then(|value| value.file_name())
+            .and_then(|value| value.to_str())
+            .expect("export parent directory");
+
+        assert_eq!(parent_dir, "exports");
+        assert_eq!(file_name, "loongclaw-session__bad-transcript.txt");
+    }
+
+    #[test]
+    fn ensure_parent_directory_exists_ignores_relative_files_without_parent() {
+        let path = Path::new("transcript.txt");
+        let result = ensure_parent_directory_exists(path);
+
+        assert!(result.is_ok());
     }
 }

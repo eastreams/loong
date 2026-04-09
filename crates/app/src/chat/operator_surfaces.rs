@@ -64,6 +64,14 @@ use super::render_cli_chat_message_spec_with_width;
 use super::render_turn_checkpoint_health_error_lines_with_width;
 use super::tui_plain_item;
 
+const PRIMARY_QUICK_COMMANDS_HINT: &str = "Quick commands: /help · /status · /history · /compact";
+const STATUS_QUICK_COMMANDS_HINT: &str = "Quick commands: /history · /compact · /help";
+const TRANSCRIPT_START_HINT: &str = "Type any request to start the transcript.";
+const STATUS_OR_COMPACT_HINT: &str =
+    "Use /status for runtime state or /compact before the next turn.";
+const CONTINUE_OR_STATUS_HINT: &str =
+    "Continue chatting, or run /status to inspect maintenance settings.";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CliChatStartupSummary {
     pub(super) config_path: String,
@@ -403,8 +411,8 @@ fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScr
         sections,
         choices: Vec::new(),
         footer_lines: vec![
-            "Quick commands: /help · /status · /history · /compact".to_owned(),
-            "Type any request to start the transcript.".to_owned(),
+            PRIMARY_QUICK_COMMANDS_HINT.to_owned(),
+            TRANSCRIPT_START_HINT.to_owned(),
         ],
     }
 }
@@ -425,7 +433,7 @@ fn build_cli_chat_status_message_spec(summary: &CliChatStartupSummary) -> TuiMes
         role: "status".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: vec!["Quick commands: /history · /compact · /help".to_owned()],
+        footer_lines: vec![STATUS_QUICK_COMMANDS_HINT.to_owned()],
     }
 }
 
@@ -609,9 +617,7 @@ fn build_cli_chat_history_message_spec(
         role: "history".to_owned(),
         caption: Some(caption),
         sections: vec![history_section],
-        footer_lines: vec![
-            "Use /status for runtime state or /compact before the next turn.".to_owned(),
-        ],
+        footer_lines: vec![STATUS_OR_COMPACT_HINT.to_owned()],
     }
 }
 
@@ -660,9 +666,7 @@ fn build_manual_compaction_message_spec(
         role: "compact".to_owned(),
         caption: Some(caption),
         sections: vec![result_section, detail_section],
-        footer_lines: vec![
-            "Continue chatting, or run /status to inspect maintenance settings.".to_owned(),
-        ],
+        footer_lines: vec![CONTINUE_OR_STATUS_HINT.to_owned()],
     }
 }
 
