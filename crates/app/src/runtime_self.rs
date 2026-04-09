@@ -216,15 +216,8 @@ pub(crate) fn runtime_self_source_request_path(
         return None;
     }
 
-    let canonical_workspace_root = workspace_root.canonicalize().ok();
-    let Some(canonical_workspace_root) = canonical_workspace_root else {
-        return None;
-    };
-
-    let canonical_path = path.canonicalize().ok();
-    let Some(canonical_path) = canonical_path else {
-        return None;
-    };
+    let canonical_workspace_root = workspace_root.canonicalize().ok()?;
+    let canonical_path = path.canonicalize().ok()?;
 
     let path_within_workspace = canonical_path.starts_with(canonical_workspace_root);
     if !path_within_workspace {

@@ -1029,6 +1029,48 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_base_messages_with_binding_reads_only_existing_runtime_self_sources() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let agents_path = harness.temp_dir.join("AGENTS.md");
+        let agents_text = "Only existing runtime-self files should be read.";
+        let mut config = LoongClawConfig::default();
+
+        std::fs::write(&agents_path, agents_text).expect("write AGENTS");
+
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let system_content = runtime_self_system_content(&messages);
+
+        assert!(system_content.contains(agents_text));
+
+        let audit_events = harness.audit.snapshot();
+        let tool_plane_event_count = audit_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                        plane: loongclaw_contracts::ExecutionPlane::Tool,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert_eq!(
+            tool_plane_event_count, 1,
+            "kernel-bound runtime-self loading should only read the existing AGENTS.md source"
+        );
+    }
+
     #[test]
     fn build_system_message_includes_deferred_tool_text_workflow_when_tool_schema_disabled() {
         let mut config = LoongClawConfig::default();
