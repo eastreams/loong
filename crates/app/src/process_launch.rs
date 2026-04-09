@@ -27,6 +27,11 @@ pub async fn retry_executable_file_busy_async<T, F>(
 where
     F: FnMut() -> io::Result<T>,
 {
+    if max_attempts == 0 {
+        let error = io::Error::new(io::ErrorKind::InvalidInput, "max_attempts must be > 0");
+        return Err(error);
+    }
+
     let mut attempt = 0;
 
     loop {
@@ -60,6 +65,11 @@ where
     F: FnMut() -> io::Result<T>,
     P: FnMut() -> io::Result<()>,
 {
+    if max_attempts == 0 {
+        let error = io::Error::new(io::ErrorKind::InvalidInput, "max_attempts must be > 0");
+        return Err(error);
+    }
+
     let mut attempt = 0;
 
     loop {
@@ -360,6 +370,16 @@ mod tests {
         assert_eq!(total_attempts, 3);
     }
 
+    #[tokio::test]
+    async fn retry_executable_file_busy_async_rejects_zero_attempt_budget() {
+        let result =
+            retry_executable_file_busy_async(|| Ok::<_, Error>("spawned"), 0, Duration::ZERO).await;
+
+        let error = result.expect_err("zero-attempt budget should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+
     #[test]
     fn retry_executable_file_busy_with_pause_records_retry_boundaries() {
         let attempts = AtomicUsize::new(0);
@@ -389,6 +409,16 @@ mod tests {
         assert_eq!(result, "spawned");
         assert_eq!(total_attempts, 3);
         assert_eq!(total_pauses, 2);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_with_pause_rejects_zero_attempt_budget() {
+        let result =
+            retry_executable_file_busy_with_pause(|| Ok::<_, Error>("spawned"), 0, || Ok(()));
+
+        let error = result.expect_err("zero-attempt budget should be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
     }
 
     #[test]

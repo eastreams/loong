@@ -16,21 +16,72 @@ fn decode_quoted_command_part(value: &str) -> String {
     unescaped_backslashes.replace("\\\"", "\"")
 }
 
+fn tokenize_proxy_command(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escaped = false;
+
+    for character in command.chars() {
+        if escaped {
+            current.push('\\');
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+
+        let is_escaped_character = in_quotes && character == '\\';
+        if is_escaped_character {
+            escaped = true;
+            continue;
+        }
+
+        let is_quote = character == '"';
+        if is_quote {
+            in_quotes = !in_quotes;
+            current.push(character);
+            continue;
+        }
+
+        let is_separator = character.is_whitespace() && !in_quotes;
+        if is_separator {
+            if !current.is_empty() {
+                let token = decode_quoted_command_part(current.as_str());
+                tokens.push(token);
+                current.clear();
+            }
+            continue;
+        }
+
+        current.push(character);
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+
+    if !current.is_empty() {
+        let token = decode_quoted_command_part(current.as_str());
+        tokens.push(token);
+    }
+
+    tokens
+}
+
 fn decode_script_path_from_proxy_command(command: &str) -> String {
-    let payload_marker = " --payload-file ";
-    let payload_index = command.find(payload_marker).expect("payload marker");
-    let prefix = &command[..payload_index];
-    let mut prefix_parts = prefix.splitn(2, ' ');
-    let _node_command = prefix_parts.next().expect("node command");
-    let script_part = prefix_parts.next().expect("script path");
-    decode_quoted_command_part(script_part)
+    let tokens = tokenize_proxy_command(command);
+    let script_path = tokens.get(1).expect("script path");
+    script_path.to_owned()
 }
 
 fn decode_payload_path_from_proxy_command(command: &str) -> String {
-    let payload_marker = "--payload-file ";
-    let payload_index = command.find(payload_marker).expect("payload marker");
-    let payload_path = &command[payload_index + payload_marker.len()..];
-    decode_quoted_command_part(payload_path)
+    let tokens = tokenize_proxy_command(command);
+    let payload_index = tokens
+        .iter()
+        .position(|token| token == "--payload-file")
+        .expect("payload marker");
+    let payload_path = tokens.get(payload_index + 1).expect("payload path");
+    payload_path.to_owned()
 }
 
 #[cfg(unix)]
@@ -102,6 +153,12 @@ fn build_mcp_proxy_agent_command_preserves_server_cwd() {
 
     let command = build_mcp_proxy_agent_command("npx @zed-industries/codex-acp", &[server])
         .expect("proxy command");
+    let tokens = tokenize_proxy_command(command.as_str());
+    let has_legacy_payload_flag = tokens.iter().any(|token| token == "--payload");
+    assert!(
+        !has_legacy_payload_flag,
+        "legacy inline payload flag should not be present: {command}"
+    );
     let script_path = decode_script_path_from_proxy_command(command.as_str());
     let payload_path = decode_payload_path_from_proxy_command(command.as_str());
     let payload_bytes = std::fs::read(&payload_path).expect("read payload file");
