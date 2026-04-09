@@ -82,6 +82,26 @@ impl ProviderProfile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderUrlPathFingerprint {
+    path_prefix: &'static str,
+    excluded_path_prefixes: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderUrlValidationRule {
+    target_kind: Option<ProviderKind>,
+    path_fingerprints: &'static [ProviderUrlPathFingerprint],
+    hint: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderUrlValidationProfile {
+    kind: ProviderKind,
+    url_fingerprints: &'static [ProviderUrlPathFingerprint],
+    validation_rules: &'static [ProviderUrlValidationRule],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderProtocolFamily {
     OpenAiChatCompletions,
     AnthropicMessages,
@@ -2008,35 +2028,8 @@ impl ProviderConfig {
     }
 
     pub fn configuration_hint(&self) -> Option<String> {
-        if self.kind == ProviderKind::Byteplus && self.uses_byteplus_coding_plan_path() {
-            return Some(
-                "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
-                    .to_owned(),
-            );
-        }
-        if self.kind == ProviderKind::Volcengine && self.uses_volcengine_coding_plan_path() {
-            return Some(
-                "volcengine uses the standard Ark API path under `/api/v3` and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"volcengine_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
-                    .to_owned(),
-            );
-        }
-        if self.kind == ProviderKind::ByteplusCoding
-            && (self.uses_generic_byteplus_modelark_v3_path()
-                || self.uses_ark_coding_anthropic_path())
-        {
-            return Some(
-                "byteplus_coding must use the dedicated BytePlus Coding path under `/api/coding/v3`; do not point it at the unsupported Anthropic-compatible `/api/coding` or generic `/api/v3` ModelArk endpoints because that bypasses Coding Plan quota and can incur standard model charges"
-                    .to_owned(),
-            );
-        }
-        if self.kind == ProviderKind::VolcengineCoding
-            && (self.uses_generic_volcengine_modelark_v3_path()
-                || self.uses_ark_coding_anthropic_path())
-        {
-            return Some(
-                "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges"
-                    .to_owned(),
-            );
+        if let Some(provider_url_hint) = self.provider_url_validation_hint() {
+            return Some(provider_url_hint);
         }
         if self.has_unresolved_custom_base_url() {
             let template = self.kind.profile().base_url;
@@ -2048,6 +2041,23 @@ impl ProviderConfig {
                 self.kind.as_str()
             ));
         }
+        None
+    }
+
+    fn provider_url_validation_hint(&self) -> Option<String> {
+        let Some(validation_profile) = provider_url_validation_profile(self.kind) else {
+            return None;
+        };
+
+        let validation_paths = provider_url_validation_paths(self);
+        for validation_rule in validation_profile.validation_rules {
+            let matched = provider_url_validation_rule_matches(*validation_rule, &validation_paths);
+            if matched {
+                let hint = validation_rule.hint.to_owned();
+                return Some(hint);
+            }
+        }
+
         None
     }
 
@@ -2099,94 +2109,6 @@ impl ProviderConfig {
     pub fn request_region_endpoint_failure_hint(&self) -> Option<String> {
         let support_facts = self.support_facts();
         support_facts.region_endpoint.request_failure_hint
-    }
-
-    fn uses_byteplus_coding_plan_path(&self) -> bool {
-        if self.kind != ProviderKind::Byteplus {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_plan_path)
-    }
-
-    fn uses_generic_byteplus_modelark_v3_path(&self) -> bool {
-        if self.kind != ProviderKind::ByteplusCoding {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_generic_ark_modelark_v3_path)
-    }
-
-    fn uses_volcengine_coding_plan_path(&self) -> bool {
-        if self.kind != ProviderKind::Volcengine {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_plan_path)
-    }
-
-    fn uses_generic_volcengine_modelark_v3_path(&self) -> bool {
-        if self.kind != ProviderKind::VolcengineCoding {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_generic_ark_modelark_v3_path)
-    }
-
-    fn uses_ark_coding_anthropic_path(&self) -> bool {
-        if !matches!(
-            self.kind,
-            ProviderKind::ByteplusCoding | ProviderKind::VolcengineCoding
-        ) {
-            return false;
-        }
-
-        let resolved_base_url = self.resolved_base_url();
-        let endpoint = self.endpoint();
-        let models_endpoint = self.models_endpoint();
-        [
-            resolved_base_url.as_str(),
-            endpoint.as_str(),
-            models_endpoint.as_str(),
-        ]
-        .into_iter()
-        .any(is_ark_coding_anthropic_path)
     }
 
     pub fn model_selection_fallback_hint(&self) -> Option<String> {
@@ -2520,18 +2442,254 @@ fn maybe_normalize_custom_chat_path(kind: ProviderKind, base_url: &str, path: &s
     normalized
 }
 
-fn is_ark_coding_plan_path(value: &str) -> bool {
-    value.trim().to_ascii_lowercase().contains("/api/coding")
+const ARK_STANDARD_PATH_FINGERPRINTS: [ProviderUrlPathFingerprint; 1] =
+    [ProviderUrlPathFingerprint {
+        path_prefix: "/api/v3",
+        excluded_path_prefixes: &["/api/coding/v3"],
+    }];
+
+const ARK_ANY_CODING_PATH_FINGERPRINTS: [ProviderUrlPathFingerprint; 1] =
+    [ProviderUrlPathFingerprint {
+        path_prefix: "/api/coding",
+        excluded_path_prefixes: &[],
+    }];
+
+const ARK_CODING_PLAN_PATH_FINGERPRINTS: [ProviderUrlPathFingerprint; 1] =
+    [ProviderUrlPathFingerprint {
+        path_prefix: "/api/coding/v3",
+        excluded_path_prefixes: &[],
+    }];
+
+const ARK_CODING_ANTHROPIC_PATH_FINGERPRINTS: [ProviderUrlPathFingerprint; 1] =
+    [ProviderUrlPathFingerprint {
+        path_prefix: "/api/coding",
+        excluded_path_prefixes: &["/api/coding/v3"],
+    }];
+
+const BYTEPLUS_URL_VALIDATION_RULES: [ProviderUrlValidationRule; 1] = [ProviderUrlValidationRule {
+    target_kind: None,
+    path_fingerprints: &ARK_ANY_CODING_PATH_FINGERPRINTS,
+    hint: "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint",
+}];
+
+const BYTEPLUS_CODING_URL_VALIDATION_RULES: [ProviderUrlValidationRule; 2] = [
+    ProviderUrlValidationRule {
+        target_kind: Some(ProviderKind::Byteplus),
+        path_fingerprints: &[],
+        hint: "byteplus_coding must use the dedicated BytePlus Coding path under `/api/coding/v3`; do not point it at the unsupported Anthropic-compatible `/api/coding` or generic `/api/v3` ModelArk endpoints because that bypasses Coding Plan quota and can incur standard model charges",
+    },
+    ProviderUrlValidationRule {
+        target_kind: None,
+        path_fingerprints: &ARK_CODING_ANTHROPIC_PATH_FINGERPRINTS,
+        hint: "byteplus_coding must use the dedicated BytePlus Coding path under `/api/coding/v3`; do not point it at the unsupported Anthropic-compatible `/api/coding` or generic `/api/v3` ModelArk endpoints because that bypasses Coding Plan quota and can incur standard model charges",
+    },
+];
+
+const VOLCENGINE_URL_VALIDATION_RULES: [ProviderUrlValidationRule; 1] = [
+    ProviderUrlValidationRule {
+        target_kind: None,
+        path_fingerprints: &ARK_ANY_CODING_PATH_FINGERPRINTS,
+        hint: "volcengine uses the standard Ark API path under `/api/v3` and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"volcengine_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint",
+    },
+];
+
+const VOLCENGINE_CODING_URL_VALIDATION_RULES: [ProviderUrlValidationRule; 2] = [
+    ProviderUrlValidationRule {
+        target_kind: Some(ProviderKind::Volcengine),
+        path_fingerprints: &[],
+        hint: "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges",
+    },
+    ProviderUrlValidationRule {
+        target_kind: None,
+        path_fingerprints: &ARK_CODING_ANTHROPIC_PATH_FINGERPRINTS,
+        hint: "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges",
+    },
+];
+
+const PROVIDER_URL_VALIDATION_PROFILES: [ProviderUrlValidationProfile; 4] = [
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::Byteplus,
+        url_fingerprints: &ARK_STANDARD_PATH_FINGERPRINTS,
+        validation_rules: &BYTEPLUS_URL_VALIDATION_RULES,
+    },
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::ByteplusCoding,
+        url_fingerprints: &ARK_CODING_PLAN_PATH_FINGERPRINTS,
+        validation_rules: &BYTEPLUS_CODING_URL_VALIDATION_RULES,
+    },
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::Volcengine,
+        url_fingerprints: &ARK_STANDARD_PATH_FINGERPRINTS,
+        validation_rules: &VOLCENGINE_URL_VALIDATION_RULES,
+    },
+    ProviderUrlValidationProfile {
+        kind: ProviderKind::VolcengineCoding,
+        url_fingerprints: &ARK_CODING_PLAN_PATH_FINGERPRINTS,
+        validation_rules: &VOLCENGINE_CODING_URL_VALIDATION_RULES,
+    },
+];
+
+fn provider_url_validation_profile(
+    kind: ProviderKind,
+) -> Option<&'static ProviderUrlValidationProfile> {
+    PROVIDER_URL_VALIDATION_PROFILES
+        .iter()
+        .find(|profile| profile.kind == kind)
 }
 
-fn is_ark_coding_anthropic_path(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized.contains("/api/coding") && !normalized.contains("/api/coding/v3")
+fn provider_url_validation_rule_matches(
+    validation_rule: ProviderUrlValidationRule,
+    validation_paths: &[String],
+) -> bool {
+    let rule_fingerprints = provider_url_validation_rule_fingerprints(validation_rule);
+    for validation_path in validation_paths {
+        for path_fingerprint in rule_fingerprints {
+            let matched =
+                provider_url_path_matches_fingerprint(validation_path.as_str(), *path_fingerprint);
+            if matched {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
-fn is_generic_ark_modelark_v3_path(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized.contains("/api/v3") && !normalized.contains("/api/coding/v3")
+fn provider_url_validation_rule_fingerprints(
+    validation_rule: ProviderUrlValidationRule,
+) -> &'static [ProviderUrlPathFingerprint] {
+    if !validation_rule.path_fingerprints.is_empty() {
+        return validation_rule.path_fingerprints;
+    }
+
+    let target_kind = validation_rule
+        .target_kind
+        .expect("target kind required when rule omits explicit path fingerprints");
+    let target_profile = provider_url_validation_profile(target_kind)
+        .expect("target kind should expose a provider URL validation profile");
+    target_profile.url_fingerprints
+}
+
+fn provider_url_validation_paths(provider: &ProviderConfig) -> Vec<String> {
+    let resolved_base_url = provider.resolved_base_url();
+    let endpoint = provider.endpoint();
+    let models_endpoint = provider.models_endpoint();
+    let raw_values = [resolved_base_url, endpoint, models_endpoint];
+    let mut validation_paths = Vec::new();
+
+    for raw_value in raw_values {
+        let normalized_path = normalize_provider_url_path(raw_value.as_str());
+        validation_paths.push(normalized_path);
+    }
+
+    validation_paths
+}
+
+fn provider_url_path_matches_fingerprint(
+    path: &str,
+    path_fingerprint: ProviderUrlPathFingerprint,
+) -> bool {
+    let normalized_path = normalize_provider_url_path(path);
+    let primary_match =
+        provider_url_path_has_prefix(normalized_path.as_str(), path_fingerprint.path_prefix);
+    if !primary_match {
+        return false;
+    }
+
+    for excluded_path_prefix in path_fingerprint.excluded_path_prefixes {
+        let excluded_match =
+            provider_url_path_has_prefix(normalized_path.as_str(), excluded_path_prefix);
+        if excluded_match {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn provider_url_path_has_prefix(path: &str, path_prefix: &str) -> bool {
+    let normalized_path = normalize_provider_url_path(path);
+    let normalized_path_prefix = normalize_provider_url_path(path_prefix);
+    if normalized_path == normalized_path_prefix {
+        return true;
+    }
+
+    let prefix_matches = normalized_path.match_indices(normalized_path_prefix.as_str());
+    for (match_index, _) in prefix_matches {
+        let has_suffix_boundary = provider_url_path_match_has_suffix_boundary(
+            normalized_path.as_str(),
+            normalized_path_prefix.as_str(),
+            match_index,
+        );
+        if has_suffix_boundary {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn provider_url_path_match_has_suffix_boundary(
+    path: &str,
+    path_prefix: &str,
+    match_index: usize,
+) -> bool {
+    let match_end = match_index + path_prefix.len();
+    if match_end == path.len() {
+        return true;
+    }
+
+    let suffix = &path[match_end..];
+    suffix.starts_with('/')
+}
+
+fn normalize_provider_url_path(value: &str) -> String {
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(parsed_url) = reqwest::Url::parse(trimmed_value) {
+        let parsed_path = parsed_url.path();
+        let lowercase_path = parsed_path.to_ascii_lowercase();
+        let normalized_path = normalize_api_path(lowercase_path.as_str());
+        return normalized_path;
+    }
+
+    let fallback_path = fallback_provider_url_path(trimmed_value);
+    let lowercase_path = fallback_path.to_ascii_lowercase();
+    let normalized_path = normalize_api_path(lowercase_path.as_str());
+    normalized_path
+}
+
+fn fallback_provider_url_path(value: &str) -> &str {
+    let scheme_index = value.find("://");
+    let Some(scheme_index) = scheme_index else {
+        return strip_query_and_fragment(value);
+    };
+
+    let authority_index = scheme_index + 3;
+    let authority_and_path = &value[authority_index..];
+    let path_index = authority_and_path.find('/');
+    let Some(path_index) = path_index else {
+        return "/";
+    };
+
+    let raw_path = &authority_and_path[path_index..];
+    strip_query_and_fragment(raw_path)
+}
+
+fn strip_query_and_fragment(value: &str) -> &str {
+    let query_index = value.find('?');
+    let fragment_index = value.find('#');
+    let cutoff_index = match (query_index, fragment_index) {
+        (Some(query_index), Some(fragment_index)) => query_index.min(fragment_index),
+        (Some(query_index), None) => query_index,
+        (None, Some(fragment_index)) => fragment_index,
+        (None, None) => value.len(),
+    };
+
+    &value[..cutoff_index]
 }
 
 impl ProviderKind {
@@ -4574,6 +4732,143 @@ mod tests {
         assert!(configuration_hint.contains("tenant-scoped base_url configuration"));
         assert!(configuration_hint.contains("current template"));
         assert!(configuration_hint.contains("https://<openai-compatible-host>/v1"));
+    }
+
+    #[test]
+    fn provider_url_validation_rules_cover_standard_and_coding_endpoint_misroutes() {
+        struct TestCase {
+            kind: ProviderKind,
+            base_url: &'static str,
+            base_url_explicit: bool,
+            endpoint: Option<&'static str>,
+            endpoint_explicit: bool,
+            models_endpoint: Option<&'static str>,
+            models_endpoint_explicit: bool,
+            expected_hint_fragment: &'static str,
+        }
+
+        let cases = [
+            TestCase {
+                kind: ProviderKind::Byteplus,
+                base_url: "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+                base_url_explicit: true,
+                endpoint: None,
+                endpoint_explicit: false,
+                models_endpoint: None,
+                models_endpoint_explicit: false,
+                expected_hint_fragment: "kind = \"byteplus_coding\"",
+            },
+            TestCase {
+                kind: ProviderKind::Byteplus,
+                base_url: "https://proxy.example.com/team/ark/api/v3",
+                base_url_explicit: true,
+                endpoint: Some("/tenant/api/coding/messages"),
+                endpoint_explicit: true,
+                models_endpoint: None,
+                models_endpoint_explicit: false,
+                expected_hint_fragment: "kind = \"byteplus_coding\"",
+            },
+            TestCase {
+                kind: ProviderKind::Volcengine,
+                base_url: "https://ark.cn-beijing.volces.com/api/coding/v3",
+                base_url_explicit: true,
+                endpoint: None,
+                endpoint_explicit: false,
+                models_endpoint: None,
+                models_endpoint_explicit: false,
+                expected_hint_fragment: "kind = \"volcengine_coding\"",
+            },
+            TestCase {
+                kind: ProviderKind::ByteplusCoding,
+                base_url: "https://ark.ap-southeast.bytepluses.com/api/v3",
+                base_url_explicit: true,
+                endpoint: None,
+                endpoint_explicit: false,
+                models_endpoint: Some("https://gateway.example.com/openai/api/v3/models"),
+                models_endpoint_explicit: true,
+                expected_hint_fragment: "/api/coding/v3",
+            },
+            TestCase {
+                kind: ProviderKind::VolcengineCoding,
+                base_url: "https://proxy.example.com/team/ark/api/coding/v3",
+                base_url_explicit: true,
+                endpoint: Some("https://proxy.example.com/team/ark/api/coding/messages"),
+                endpoint_explicit: true,
+                models_endpoint: None,
+                models_endpoint_explicit: false,
+                expected_hint_fragment: "/api/coding/v3",
+            },
+        ];
+
+        for case in cases {
+            let mut provider = ProviderConfig {
+                kind: case.kind,
+                base_url: case.base_url.to_owned(),
+                ..ProviderConfig::default()
+            };
+
+            provider.base_url_explicit = case.base_url_explicit;
+
+            let endpoint = case.endpoint.map(str::to_owned);
+            provider.endpoint = endpoint;
+            provider.endpoint_explicit = case.endpoint_explicit;
+
+            let models_endpoint = case.models_endpoint.map(str::to_owned);
+            provider.models_endpoint = models_endpoint;
+            provider.models_endpoint_explicit = case.models_endpoint_explicit;
+
+            let hint = provider
+                .configuration_hint()
+                .expect("misrouted provider should expose a configuration hint");
+
+            assert!(
+                hint.contains(case.expected_hint_fragment),
+                "kind={:?} hint={hint}",
+                case.kind
+            );
+        }
+    }
+
+    #[test]
+    fn provider_url_validation_rules_ignore_canonical_provider_paths() {
+        let cases = [
+            ProviderKind::Byteplus,
+            ProviderKind::ByteplusCoding,
+            ProviderKind::Volcengine,
+            ProviderKind::VolcengineCoding,
+        ];
+
+        for kind in cases {
+            let provider = ProviderConfig {
+                kind,
+                ..ProviderConfig::default()
+            };
+            let hint = provider.configuration_hint();
+            assert!(hint.is_none(), "kind={kind:?} should not surface a hint");
+        }
+    }
+
+    #[test]
+    fn provider_descriptor_document_uses_provider_url_validation_hints() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Byteplus,
+            base_url: "https://proxy.example.com/team/ark/api/v3".to_owned(),
+            endpoint: Some(
+                "https://proxy.example.com/team/ark/api/coding/v3/chat/completions".to_owned(),
+            ),
+            base_url_explicit: true,
+            endpoint_explicit: true,
+            ..ProviderConfig::default()
+        };
+
+        let descriptor = provider.descriptor_document();
+        let encoded = encode_provider_descriptor(&descriptor);
+        let configuration_hint = encoded["configuration_hint"]
+            .as_str()
+            .expect("descriptor should surface a dynamic routing hint");
+
+        assert!(configuration_hint.contains("byteplus_coding"));
+        assert!(configuration_hint.contains("/api/coding/v3"));
     }
 
     #[test]
