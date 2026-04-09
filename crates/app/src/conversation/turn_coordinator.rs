@@ -2903,18 +2903,26 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 } else if current_continue_phase
                     .lane_execution
                     .supports_provider_turn_followup
-                    && !current_continue_phase
-                        .lane_execution
-                        .raw_tool_output_requested
                     && let Some(payload) = latest_tool_payload
                 {
-                    ReplyLoopDecision::Followup {
-                        raw_reply: reply.clone(),
-                        payload,
-                        requires_completion_pass: false,
-                        loop_warning_reason: current_continue_phase
-                            .loop_warning_reason()
-                            .map(ToOwned::to_owned),
+                    let raw_tool_output_requested = current_continue_phase
+                        .lane_execution
+                        .raw_tool_output_requested;
+                    let allow_raw_followup = current_continue_phase
+                        .lane_execution
+                        .discovery_search_turn
+                        || matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. });
+                    if raw_tool_output_requested && !allow_raw_followup {
+                        ReplyLoopDecision::FinalizeDirect(reply.clone())
+                    } else {
+                        ReplyLoopDecision::Followup {
+                            raw_reply: reply.clone(),
+                            payload,
+                            requires_completion_pass: false,
+                            loop_warning_reason: current_continue_phase
+                                .loop_warning_reason()
+                                .map(ToOwned::to_owned),
+                        }
                     }
                 } else {
                     ReplyLoopDecision::FinalizeDirect(reply.clone())
@@ -4700,12 +4708,15 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         &turn_result,
         fast_lane_tool_batch_trace.as_ref(),
     );
-    let recovery_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
-        .is_some_and(|payload| {
-            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
-        });
+    let allow_tool_result_provider_followup =
+        config.conversation.turn_loop.max_discovery_followup_rounds > 2;
+    let has_tool_result_followup = allow_tool_result_provider_followup
+        && matches!(
+            tool_driven_followup_payload(had_tool_intents, &turn_result),
+            Some(ToolDrivenFollowupPayload::ToolResult { .. })
+        );
     let supports_provider_turn_followup =
-        followup_chain_active || discovery_search_turn || recovery_followup_turn;
+        followup_chain_active || discovery_search_turn || has_tool_result_followup;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,

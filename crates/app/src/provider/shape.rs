@@ -1458,7 +1458,7 @@ fn quote_byte_is_escaped(bytes: &[u8], index: usize) -> bool {
 
     while cursor > 0 {
         let previous_index = cursor - 1;
-        let previous_byte = bytes[previous_index];
+        let previous_byte = bytes.get(previous_index).copied().unwrap_or_default();
         if previous_byte != b'\\' {
             break;
         }
@@ -1583,7 +1583,12 @@ fn normalize_invoke_arguments_value(
         Value::String(query) if canonical_tool_name == "tool.search" => {
             Ok(json!({ "query": query }))
         }
-        other => Ok(other),
+        other @ Value::Null
+        | other @ Value::Bool(_)
+        | other @ Value::Number(_)
+        | other @ Value::String(_)
+        | other @ Value::Array(_)
+        | other @ Value::Object(_) => Ok(other),
     }
 }
 

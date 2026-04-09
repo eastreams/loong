@@ -2116,8 +2116,8 @@ mod tests {
         assert!(!snapshot.contains("shell.exec"));
         assert!(!snapshot.contains("file.read"));
 
-        let snapshot2 =
-            capability_snapshot_with_config(&runtime_config::ToolRuntimeConfig::default());
+        let runtime_config = runtime_config::get_tool_runtime_config().clone();
+        let snapshot2 = capability_snapshot_with_config(&runtime_config);
         assert_eq!(snapshot, snapshot2);
     }
 
