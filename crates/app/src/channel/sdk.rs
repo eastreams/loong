@@ -989,6 +989,39 @@ mod tests {
         assert_eq!(google_chat.surface_label, "google chat channel");
     }
 
+    #[test]
+    fn non_cli_integrations_resolve_catalog_entries() {
+        for integration in CHANNEL_INTEGRATIONS {
+            let channel_id = integration.channel_id;
+            if channel_id == "cli" {
+                continue;
+            }
+
+            let catalog_entry = super::super::registry::resolve_channel_catalog_entry(channel_id);
+            assert!(
+                catalog_entry.is_some(),
+                "missing catalog entry for integrated channel `{channel_id}`"
+            );
+        }
+    }
+
+    #[test]
+    fn background_runtime_integrations_resolve_command_family_descriptors() {
+        for integration in CHANNEL_INTEGRATIONS {
+            let channel_id = integration.channel_id;
+            if integration.background_runtime.is_none() {
+                continue;
+            }
+
+            let family_descriptor =
+                super::super::registry::resolve_channel_command_family_descriptor(channel_id);
+            assert!(
+                family_descriptor.is_some(),
+                "missing command family descriptor for background runtime channel `{channel_id}`"
+            );
+        }
+    }
+
     #[cfg(feature = "feishu-integration")]
     #[test]
     fn feishu_background_surface_enablement_accepts_runtime_account_aliases() {
