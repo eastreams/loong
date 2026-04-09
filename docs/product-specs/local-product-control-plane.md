@@ -33,7 +33,9 @@ The current localhost control-plane slice now includes:
 
 Turn execution still reuses the existing ACP conversation preparation path and
 the current session/runtime addressing model. The first turn-result cache stays
-runtime-local; it does not introduce a second durable session authority.
+runtime-local; it does not introduce a second durable session authority. The
+runtime-local turn registry only retains a bounded recent window of completed
+turns for replay and final-result fetch.
 
 ## Acceptance Criteria
 

@@ -791,6 +791,40 @@ fn normalize_required_text(value: &str, field_name: &str) -> Result<String, Stri
     Ok(trimmed.to_owned())
 }
 
+fn require_nonempty_text(value: &str, field_name: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field_name} is required"));
+    }
+    Ok(value.to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn ensure_turn_session_visible(
+    state: &ControlPlaneHttpState,
+    session_id: &str,
+) -> Option<Response> {
+    let repository_view = state.repository_view.as_ref()?;
+    match repository_view.ensure_visible_session_id(session_id) {
+        Ok(()) => None,
+        Err(error) if error == "control_plane_session_id_missing" => {
+            Some(error_response(StatusCode::BAD_REQUEST, error))
+        }
+        Err(error) if error.starts_with("visibility_denied:") => {
+            Some(error_response(StatusCode::FORBIDDEN, error))
+        }
+        Err(error) => Some(error_response(StatusCode::INTERNAL_SERVER_ERROR, error)),
+    }
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn ensure_turn_session_visible(
+    _state: &ControlPlaneHttpState,
+    _session_id: &str,
+) -> Option<Response> {
+    None
+}
+
 fn initial_subscribe_state(
     manager: Arc<mvp::control_plane::ControlPlaneManager>,
     after_seq: u64,
@@ -2097,7 +2131,10 @@ async fn turn_submit(
         Ok(session_id) => session_id,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
-    let input = match normalize_required_text(request.input.as_str(), "input") {
+    if let Some(response) = ensure_turn_session_visible(&state, session_id.as_str()) {
+        return response;
+    }
+    let input = match require_nonempty_text(request.input.as_str(), "input") {
         Ok(input) => input,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
@@ -2217,6 +2254,9 @@ async fn turn_result(
         }
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    if let Some(response) = ensure_turn_session_visible(&state, snapshot.session_id.as_str()) {
+        return response;
+    }
 
     Json(map_turn_result(&snapshot)).into_response()
 }
@@ -2250,6 +2290,9 @@ async fn turn_stream(
         }
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    if let Some(response) = ensure_turn_session_visible(&state, snapshot.session_id.as_str()) {
+        return response;
+    }
     if snapshot.status.is_terminal() && snapshot.event_count == 0 {
         return error_response(
             StatusCode::CONFLICT,
@@ -2511,6 +2554,26 @@ mod tests {
             manager,
             None,
             None,
+            Some(turn_runtime),
+            pairing_registry,
+            exposure_policy,
+        )
+        .expect("router")
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn build_control_plane_router_with_turn_runtime_and_views(
+        manager: Arc<mvp::control_plane::ControlPlaneManager>,
+        repository_view: Arc<mvp::control_plane::ControlPlaneRepositoryView>,
+        acp_view: Arc<mvp::control_plane::ControlPlaneAcpView>,
+        turn_runtime: Arc<ControlPlaneTurnRuntime>,
+    ) -> Router {
+        let pairing_registry = Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new());
+        let exposure_policy = default_loopback_exposure_policy();
+        super::build_control_plane_router_with_runtime(
+            manager,
+            Some(repository_view),
+            Some(acp_view),
             Some(turn_runtime),
             pairing_registry,
             exposure_policy,
@@ -4539,6 +4602,97 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn turn_submit_rejects_hidden_session_visibility() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let backend_state = Arc::new(TestTurnBackendState::default());
+        let backend_id: &'static str =
+            Box::leak(format!("control-plane-turn-hidden-{}", current_time_ms()).into_boxed_str());
+        let turn_runtime = seeded_turn_runtime(backend_id, backend_state);
+        let (repository_view, acp_view) = seeded_control_plane_views("turn-hidden-session");
+        let router = build_control_plane_router_with_turn_runtime_and_views(
+            manager,
+            repository_view,
+            acp_view,
+            turn_runtime,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorAdmin]),
+        )
+        .await;
+        let request = ControlPlaneTurnSubmitRequest {
+            session_id: "hidden-root".to_owned(),
+            input: "hello".to_owned(),
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            working_directory: None,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/turn/submit")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode turn submit request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("turn submit response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn turn_result_and_stream_reject_hidden_session_visibility() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let backend_state = Arc::new(TestTurnBackendState::default());
+        let backend_id: &'static str = Box::leak(
+            format!("control-plane-turn-hidden-result-{}", current_time_ms()).into_boxed_str(),
+        );
+        let turn_runtime = seeded_turn_runtime(backend_id, backend_state);
+        let turn_snapshot = turn_runtime.registry.issue_turn("hidden-root");
+        let turn_id = turn_snapshot.turn_id.clone();
+        let (repository_view, acp_view) = seeded_control_plane_views("turn-hidden-result");
+        let result_router = build_control_plane_router_with_turn_runtime_and_views(
+            manager,
+            repository_view,
+            acp_view,
+            turn_runtime.clone(),
+        );
+        let token = connect_token(
+            &result_router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let result_response = result_router
+            .clone()
+            .oneshot(bearer_request(
+                "GET",
+                format!("/turn/result?turn_id={turn_id}").as_str(),
+                &token,
+            ))
+            .await
+            .expect("turn result response");
+        assert_eq!(result_response.status(), StatusCode::FORBIDDEN);
+        let stream_response = result_router
+            .oneshot(bearer_request(
+                "GET",
+                format!("/turn/stream?turn_id={turn_id}").as_str(),
+                &token,
+            ))
+            .await
+            .expect("turn stream response");
+        assert_eq!(stream_response.status(), StatusCode::FORBIDDEN);
+    }
+
     #[tokio::test]
     async fn turn_submit_and_result_fetch_complete_with_streamed_backend() {
         let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
@@ -4740,6 +4894,83 @@ mod tests {
             .await
             .expect("approval list response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn turn_submit_preserves_input_whitespace() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let state = Arc::new(TestTurnBackendState::default());
+        let backend_id: &'static str = Box::leak(
+            format!("control-plane-turn-whitespace-{}", current_time_ms()).into_boxed_str(),
+        );
+        let turn_runtime = seeded_turn_runtime(backend_id, state);
+        let router = build_control_plane_router_with_turn_runtime(manager, turn_runtime);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorAdmin]),
+        )
+        .await;
+        let input = "  hello\n\n```rust\nfn main() {}\n```\n".to_owned();
+        let request = ControlPlaneTurnSubmitRequest {
+            session_id: "session-whitespace".to_owned(),
+            input: input.clone(),
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            working_directory: None,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let submit_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/turn/submit")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode turn submit request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("turn submit response");
+        assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+        let submit_body = to_bytes(submit_response.into_body(), usize::MAX)
+            .await
+            .expect("submit body");
+        let submit: ControlPlaneTurnSubmitResponse =
+            serde_json::from_slice(&submit_body).expect("submit json");
+        let turn_id = submit.turn.turn_id;
+        let mut final_result = None;
+        for _ in 0..20 {
+            let result_response = router
+                .clone()
+                .oneshot(bearer_request(
+                    "GET",
+                    format!("/turn/result?turn_id={turn_id}").as_str(),
+                    &token,
+                ))
+                .await
+                .expect("turn result response");
+            let result_body = to_bytes(result_response.into_body(), usize::MAX)
+                .await
+                .expect("result body");
+            let result: ControlPlaneTurnResultResponse =
+                serde_json::from_slice(&result_body).expect("result json");
+            if result.turn.status.is_terminal() {
+                final_result = Some(result);
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let final_result = final_result.expect("turn should reach a terminal state");
+        let expected_output = format!("streamed: {input}");
+        assert_eq!(
+            final_result.output_text.as_deref(),
+            Some(expected_output.as_str())
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
