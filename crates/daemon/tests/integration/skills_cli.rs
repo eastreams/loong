@@ -867,6 +867,7 @@ fn execute_skills_command_enable_browser_preview_rolls_back_config_on_install_fa
     fs::remove_dir_all(&root).ok();
 }
 
+#[cfg(unix)]
 #[test]
 fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_persist_failure() {
     use std::os::unix::fs::PermissionsExt;
