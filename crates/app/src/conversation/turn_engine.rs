@@ -3217,6 +3217,8 @@ impl<'a> ToolBatchHarness<'a> {
         let payload_summary_limit_chars = self.engine.tool_result_payload_summary_limit_chars;
         let in_flight = Arc::new(AtomicUsize::new(0));
         let observed_peak = Arc::new(AtomicUsize::new(0));
+        let mut indexed_intent_outcomes = Vec::with_capacity(prepared.len());
+        let mut indexed_outcome_records = Vec::with_capacity(prepared.len());
         let mut results = Vec::with_capacity(prepared.len());
         let max_in_flight = self.engine.parallel_tool_execution_max_in_flight;
         let mut executions = stream::iter(prepared.iter().cloned().enumerate().map(
@@ -3288,37 +3290,49 @@ impl<'a> ToolBatchHarness<'a> {
         ))
         .buffer_unordered(max_in_flight);
 
-        let result = async {
-            while let Some((index, result)) = executions.next().await {
-                match result {
-                    Ok((output, intent_outcome, outcome_record)) => {
-                        intent_outcomes.push(intent_outcome);
-                        outcome_records.push(outcome_record);
-                        results.push((index, output));
+        let mut batch_failure = None;
+        while let Some((index, result)) = executions.next().await {
+            match result {
+                Ok((output, intent_outcome, outcome_record)) => {
+                    indexed_intent_outcomes.push((index, intent_outcome));
+                    indexed_outcome_records.push((index, outcome_record));
+                    results.push((index, output));
+                }
+                Err((turn_result, intent_outcome, outcome_record)) => {
+                    if let Some(intent_outcome) = intent_outcome {
+                        indexed_intent_outcomes.push((index, intent_outcome));
                     }
-                    Err((turn_result, intent_outcome, outcome_record)) => {
-                        if let Some(intent_outcome) = intent_outcome {
-                            intent_outcomes.push(intent_outcome);
-                        }
 
-                        if let Some(outcome_record) = outcome_record {
-                            outcome_records.push(outcome_record);
-                        }
-
-                        return Err(turn_result);
+                    if let Some(outcome_record) = outcome_record {
+                        indexed_outcome_records.push((index, outcome_record));
                     }
+
+                    batch_failure = Some(turn_result);
+                    break;
                 }
             }
-
-            Ok(())
         }
-        .await;
 
         let observed_peak_in_flight = observed_peak.load(Ordering::Relaxed);
         let observed_wall_time_ms = elapsed_ms_u64(started_at);
         trace_segment.record_observation(observed_peak_in_flight, observed_wall_time_ms);
-        result?;
         results.sort_by_key(|(index, _)| *index);
+        indexed_intent_outcomes.sort_by_key(|(index, _)| *index);
+        indexed_outcome_records.sort_by_key(|(index, _)| *index);
+        intent_outcomes.extend(
+            indexed_intent_outcomes
+                .into_iter()
+                .map(|(_, intent_outcome)| intent_outcome),
+        );
+        outcome_records.extend(
+            indexed_outcome_records
+                .into_iter()
+                .map(|(_, outcome_record)| outcome_record),
+        );
+
+        if let Some(turn_result) = batch_failure {
+            return Err(turn_result);
+        }
 
         Ok(results.into_iter().map(|(_, output)| output).collect())
     }
@@ -4259,10 +4273,14 @@ mod tests {
             request: ToolCoreRequest,
             _binding: ConversationRuntimeBinding<'_>,
         ) -> Result<ToolCoreOutcome, String> {
-            let delay_ms = match request.tool_name.as_str() {
-                "sessions_list" => 25,
-                "session_status" => 10,
-                other => return Err(format!("app_tool_not_found: {other}")),
+            let payload_delay_ms = request.payload.get("delay_ms").and_then(Value::as_u64);
+            let delay_ms = match payload_delay_ms {
+                Some(delay_ms) => delay_ms,
+                None => match request.tool_name.as_str() {
+                    "sessions_list" => 25,
+                    "session_status" => 10,
+                    other => return Err(format!("app_tool_not_found: {other}")),
+                },
             };
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             Ok(ToolCoreOutcome {
@@ -5935,6 +5953,67 @@ mod tests {
                 .iter()
                 .all(|segment| segment.execution_mode == ToolBatchExecutionMode::Sequential)
         );
+    }
+
+    #[tokio::test]
+    async fn parallel_execution_records_trace_items_in_intent_order() {
+        let turn = ProviderTurn {
+            assistant_text: "observing ordered trace records".to_owned(),
+            tool_intents: vec![
+                provider_app_tool_intent(
+                    "sessions_list",
+                    json!({"delay_ms": 25}),
+                    "session-observed-trace-order",
+                    "turn-observed-trace-order",
+                    "call-observed-trace-order-1",
+                ),
+                provider_app_tool_intent(
+                    "sessions_list",
+                    json!({"delay_ms": 5}),
+                    "session-observed-trace-order",
+                    "turn-observed-trace-order",
+                    "call-observed-trace-order-2",
+                ),
+            ],
+            raw_meta: json!({}),
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "session-observed-trace-order",
+            runtime_tool_view(),
+        );
+        let dispatcher = DelayedObservedExecutionDispatcher;
+        let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
+
+        let (result, trace) = engine
+            .execute_turn_in_context_with_trace(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        assert!(
+            matches!(result, TurnResult::FinalText(_)),
+            "expected FinalText, got {result:?}"
+        );
+
+        let trace = trace.expect("trace should exist");
+        let intent_outcome_ids = trace
+            .intent_outcomes
+            .iter()
+            .map(|intent_outcome| intent_outcome.tool_call_id.as_str())
+            .collect::<Vec<_>>();
+        let outcome_record_ids = trace
+            .outcome_records
+            .iter()
+            .map(|outcome_record| outcome_record.tool_call_id.as_str())
+            .collect::<Vec<_>>();
+        let expected_ids = vec!["call-observed-trace-order-1", "call-observed-trace-order-2"];
+
+        assert_eq!(intent_outcome_ids, expected_ids);
+        assert_eq!(outcome_record_ids, expected_ids);
     }
 
     #[tokio::test]
