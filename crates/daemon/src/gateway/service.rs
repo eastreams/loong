@@ -114,7 +114,11 @@ async fn run_gateway_runtime_with_hooks_for_test(
         spec.surfaces.len(),
     )?);
     let owner_token = tracker.owner_token().to_owned();
-    let acp_manager = build_gateway_acp_session_manager(&loaded_config.config)?;
+    let acp_manager = acquire_gateway_acp_session_manager(
+        tracker.as_ref(),
+        &loaded_config.config,
+        build_gateway_acp_session_manager,
+    )?;
     let control_surface_result =
         start_gateway_control_surface(runtime_dir, &loaded_config, Some(acp_manager)).await;
     let control_surface = match control_surface_result {
@@ -331,6 +335,22 @@ fn build_gateway_acp_session_manager(
     Ok(manager)
 }
 
+fn acquire_gateway_acp_session_manager(
+    tracker: &GatewayOwnerTracker,
+    config: &crate::mvp::config::LoongClawConfig,
+    builder: impl FnOnce(&crate::mvp::config::LoongClawConfig) -> CliResult<Arc<AcpSessionManager>>,
+) -> CliResult<Arc<AcpSessionManager>> {
+    let manager_result = builder(config);
+    let manager = match manager_result {
+        Ok(manager) => manager,
+        Err(error) => {
+            tracker.finalize_with_error(error.as_str())?;
+            return Err(error);
+        }
+    };
+    Ok(manager)
+}
+
 fn render_gateway_status_text(status: &GatewayOwnerStatus) -> String {
     let pid = status
         .pid
@@ -387,4 +407,70 @@ fn merge_gateway_runtime_errors(primary_error: String, secondary_error: Option<S
     };
 
     format!("{primary_error}; {secondary_error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::*;
+
+    fn unique_runtime_dir(label: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let process_id = std::process::id();
+        let runtime_dir = std::env::temp_dir().join(format!(
+            "loongclaw-gateway-service-{label}-{process_id}-{timestamp}"
+        ));
+        fs::create_dir_all(runtime_dir.as_path()).expect("create runtime dir");
+        runtime_dir
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn acp_manager_init_failure_marks_gateway_owner_failed() {
+        let runtime_dir = unique_runtime_dir("acp-manager-init-failure");
+        let config_path = runtime_dir.join("gateway-config.toml");
+        let tracker = GatewayOwnerTracker::acquire(
+            runtime_dir.as_path(),
+            GatewayOwnerMode::GatewayHeadless,
+            config_path.as_path(),
+            None,
+            1,
+        )
+        .expect("acquire gateway owner tracker");
+        let config = crate::mvp::config::LoongClawConfig::default();
+        let expected_error = "simulated ACP manager init failure".to_owned();
+        let builder = |_config: &crate::mvp::config::LoongClawConfig| Err(expected_error.clone());
+
+        let manager_result = acquire_gateway_acp_session_manager(&tracker, &config, builder);
+        let error = match manager_result {
+            Ok(_) => panic!("ACP manager init should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, expected_error);
+
+        let status = load_gateway_owner_status(runtime_dir.as_path())
+            .expect("gateway owner status should be persisted");
+
+        assert_eq!(status.phase, "failed");
+        assert!(!status.running);
+        assert_eq!(
+            status.shutdown_reason.as_deref(),
+            Some(expected_error.as_str())
+        );
+        assert_eq!(status.last_error.as_deref(), Some(expected_error.as_str()));
+        assert_eq!(
+            request_gateway_stop(runtime_dir.as_path()).expect("query gateway stop outcome"),
+            GatewayStopRequestOutcome::AlreadyStopped
+        );
+
+        let _ = fs::remove_dir_all(runtime_dir.as_path());
+    }
 }
