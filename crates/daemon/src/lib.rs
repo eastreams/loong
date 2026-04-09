@@ -139,6 +139,7 @@ pub mod session_cli;
 pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
+pub mod status_cli;
 pub mod supervisor;
 mod task_execution;
 pub mod tasks_cli;
@@ -704,6 +705,13 @@ pub enum Commands {
         session: String,
         #[command(subcommand)]
         command: sessions_cli::SessionsCommands,
+    },
+    /// Print one operator-readable runtime summary over gateway, ACP, and durable work-unit health
+    Status {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
     #[command(
         visible_alias = "plugin",

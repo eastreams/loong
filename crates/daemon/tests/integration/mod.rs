@@ -159,6 +159,7 @@ mod sessions_cli;
 mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
+mod status_cli;
 mod tasks_cli;
 pub(crate) use managed_bridge_fixtures::*;
 mod trajectory_export_cli;

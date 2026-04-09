@@ -24,6 +24,7 @@ impl Commands {
             Self::Doctor { .. } => "doctor",
             Self::Audit { .. } => "audit",
             Self::Skills { .. } => "skills",
+            Self::Status { .. } => "status",
             Self::Tasks { .. } => "tasks",
             Self::DelegateChildRun { .. } => "delegate_child_run",
             Self::Sessions { .. } => "sessions",
@@ -112,6 +113,14 @@ mod tests {
             }
             .command_kind_for_logging(),
             "validate_config"
+        );
+        assert_eq!(
+            Commands::Status {
+                config: None,
+                json: false,
+            }
+            .command_kind_for_logging(),
+            "status"
         );
         assert_eq!(
             Commands::WorkUnit {

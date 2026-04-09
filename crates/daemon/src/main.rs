@@ -334,6 +334,9 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Status { config, json } => {
+            status_cli::run_status_cli(config.as_deref(), json).await
+        }
         Commands::Tasks {
             config,
             json,

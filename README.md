@@ -606,6 +606,8 @@ slot and supervise the enabled runtime-backed service-channel subset.
 
 The current gateway slice now includes:
 
+- `loongclaw status` for one operator-readable summary across the gateway
+  owner, ACP runtime, and durable work-unit health
 - `loongclaw gateway run` for the owner lifecycle
 - `loongclaw gateway status` for cross-process owner inspection
 - `loongclaw gateway stop` for cooperative shutdown
@@ -627,6 +629,10 @@ that centralizes loopback validation, bearer-token loading, and route helpers
 for `status`, `channels`, `runtime-snapshot`, `acp/sessions`, `acp/status`,
 `acp/observability`, `operator-summary`, and `stop`. That keeps dashboard,
 ACP inspection, and Web UI bootstrap logic out of ad-hoc file reads.
+
+```bash
+loongclaw status --config ~/.loongclaw/config.toml --json
+```
 
 ```bash
 loongclaw gateway run --config ~/.loongclaw/config.toml
