@@ -121,27 +121,20 @@ The important principle is:
 LoongClaw should keep this principle, but enforce it through kernel-visible
 exposure policy instead of runtime-only plugin conventions.
 
-## What Codex Teaches
+## What Marketplace-Oriented Plugin Systems Teach
 
-Codex is more useful as a marketplace and packaging reference than as a runtime
-plugin reference.
+Marketplace-oriented local plugin systems are more useful as packaging and
+catalog references than as runtime plugin references.
 
-Its local plugin model emphasizes:
-
-- `.codex-plugin/plugin.json` as the package manifest
-- `.agents/plugins/marketplace.json` as catalog and ordering truth
-- plugin bundles composed from `skills`, `mcpServers`, and `apps`
-- interface metadata for display, discovery, and installation UX
-
-The strongest lessons are structural:
+The durable lessons are structural rather than file-layout specific:
 
 ### 1. Marketplace policy should be separate from runtime contract
 
 A catalog entry should answer:
 
-- where the package comes from
+- where a package comes from
 - whether it is installable
-- when authentication is required
+- when authentication or setup is required
 - how it is categorized and presented
 
 That is a different concern from:
@@ -152,22 +145,21 @@ That is a different concern from:
 
 ### 2. Plugin bundles should compose existing product surfaces
 
-Plugins are not only runtime code.
-They may also contribute:
+A package may carry more than one kind of contribution.
+It can combine runtime bridges with operator and user-facing surfaces such as:
 
-- skills
-- MCP servers
-- app connectors
-- setup assets
-- UI metadata
+- setup flows
+- tool and service integrations
+- app-facing connectors
+- discovery and onboarding metadata
 
 LoongClaw should therefore treat marketplace packaging as a composition surface,
 not only as a bridge-execution surface.
 
 ### 3. Interface metadata deserves a stable home
 
-Display names, categories, screenshots, starter prompts, and install guidance
-belong in a stable interface contract.
+Display names, categories, install guidance, and related discovery UX belong in
+a typed interface contract.
 They should not be squeezed into kernel-only runtime metadata.
 
 ## Architectural Principle
