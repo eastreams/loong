@@ -45,6 +45,7 @@ use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_result_compaction::compact_tool_search_payload_summary;
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
+use super::tool_input_contract::detect_repairable_tool_request_issue;
 use super::turn_shared::effective_followup_tool_name;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1628,6 +1629,14 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolExecutionPreflight, String> {
+        let repairable_issue = detect_repairable_tool_request_issue(descriptor, &request);
+
+        if let Some(repairable_issue) = repairable_issue {
+            let repairable_reason = repairable_issue.reason(descriptor.name);
+            let encoded_reason = RepairableToolPreflight::encode(repairable_reason.as_str());
+            return Err(encoded_reason);
+        }
+
         #[cfg(not(feature = "memory-sqlite"))]
         {
             let _ = (session_context, intent, descriptor, binding);

@@ -22,6 +22,7 @@ mod session_address;
 mod session_history;
 mod subagent;
 mod tool_discovery_state;
+mod tool_input_contract;
 mod tool_result_compaction;
 mod trust_projection;
 mod turn_budget;
