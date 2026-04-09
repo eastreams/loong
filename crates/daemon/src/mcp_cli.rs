@@ -167,7 +167,7 @@ pub(crate) fn render_mcp_servers_snapshot_text(
                 .collect::<Vec<_>>()
                 .join(",");
             let transport = render_mcp_transport_summary(&server.transport);
-            lines.push(format!(
+            let mut line = format!(
                 "- {} status={} auth={} selected_for_acp_bootstrap={} origins={} transport={}",
                 server.name,
                 mcp_server_status_kind_str(server.status.kind),
@@ -175,7 +175,12 @@ pub(crate) fn render_mcp_servers_snapshot_text(
                 server.selected_for_acp_bootstrap,
                 origins,
                 transport
-            ));
+            );
+            if let Some(last_error) = &server.status.last_error {
+                line.push_str(" last_error=");
+                line.push_str(last_error);
+            }
+            lines.push(line);
         }
     }
     if !snapshot.missing_selected_servers.is_empty() {
@@ -243,7 +248,7 @@ pub(crate) fn append_mcp_runtime_snapshot_lines(
                 .collect::<Vec<_>>()
                 .join(",");
             let transport = render_mcp_transport_summary(&server.transport);
-            lines.push(format!(
+            let mut line = format!(
                 "  acp_mcp {} status={} auth={} selected_for_acp_bootstrap={} origins={} transport={}",
                 server.name,
                 mcp_server_status_kind_str(server.status.kind),
@@ -251,7 +256,12 @@ pub(crate) fn append_mcp_runtime_snapshot_lines(
                 server.selected_for_acp_bootstrap,
                 origins,
                 transport
-            ));
+            );
+            if let Some(last_error) = &server.status.last_error {
+                line.push_str(" last_error=");
+                line.push_str(last_error);
+            }
+            lines.push(line);
         }
     }
 
@@ -376,4 +386,74 @@ pub(crate) fn normalize_mcp_server_name(raw: &str) -> CliResult<String> {
         return Err("MCP server name must not be empty".to_owned());
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failed_stdio_server() -> mvp::mcp::McpRuntimeServerSnapshot {
+        mvp::mcp::McpRuntimeServerSnapshot {
+            name: "docs".to_owned(),
+            enabled: true,
+            required: false,
+            selected_for_acp_bootstrap: true,
+            origins: vec![mvp::mcp::McpServerOrigin {
+                kind: mvp::mcp::McpServerOriginKind::Config,
+                source_id: None,
+            }],
+            status: mvp::mcp::McpServerStatus {
+                kind: mvp::mcp::McpServerStatusKind::Failed,
+                auth: mvp::mcp::McpAuthStatus::Unsupported,
+                last_error: Some("stdio_command_not_found: /tmp/missing".to_owned()),
+            },
+            transport: mvp::mcp::McpTransportSnapshot::Stdio {
+                command: "/tmp/missing".to_owned(),
+                args: Vec::new(),
+                cwd: None,
+                env_var_names: Vec::new(),
+            },
+            enabled_tools: Vec::new(),
+            disabled_tools: Vec::new(),
+            startup_timeout_ms: None,
+            tool_timeout_ms: None,
+        }
+    }
+
+    #[test]
+    fn render_mcp_servers_snapshot_text_includes_last_error_for_failed_servers() {
+        let snapshot = mvp::mcp::McpRuntimeSnapshot {
+            servers: vec![failed_stdio_server()],
+            missing_selected_servers: Vec::new(),
+        };
+
+        let rendered = render_mcp_servers_snapshot_text("/tmp/loongclaw.toml", &snapshot);
+
+        assert!(rendered.contains("status=failed"), "rendered={rendered}");
+        assert!(
+            rendered.contains("last_error=stdio_command_not_found: /tmp/missing"),
+            "rendered={rendered}"
+        );
+    }
+
+    #[test]
+    fn append_mcp_runtime_snapshot_lines_includes_last_error_for_failed_servers() {
+        let snapshot = mvp::mcp::McpRuntimeSnapshot {
+            servers: vec![failed_stdio_server()],
+            missing_selected_servers: Vec::new(),
+        };
+        let mut lines = Vec::new();
+
+        append_mcp_runtime_snapshot_lines(&mut lines, &snapshot);
+
+        let rendered = lines.join("\n");
+        assert!(
+            rendered.contains("acp_mcp docs status=failed"),
+            "rendered={rendered}"
+        );
+        assert!(
+            rendered.contains("last_error=stdio_command_not_found: /tmp/missing"),
+            "rendered={rendered}"
+        );
+    }
 }
