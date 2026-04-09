@@ -3047,7 +3047,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
     let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
     let observer = feedback_capture.observer_handle();
     let reply = ConversationTurnCoordinator::new()
-        .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
             config,
             &address,
             &message.text,

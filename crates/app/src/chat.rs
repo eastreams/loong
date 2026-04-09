@@ -2074,7 +2074,7 @@ async fn run_cli_turn(
     };
     runtime
         .turn_coordinator
-        .handle_turn_with_address_and_acp_options_and_observer(
+        .handle_production_turn_with_address_and_acp_options_and_observer(
             &turn_config,
             &runtime.session_address,
             input,

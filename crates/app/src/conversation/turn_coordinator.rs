@@ -193,6 +193,9 @@ pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRunt
 #[derive(Default)]
 pub struct ConversationTurnCoordinator;
 
+const PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING: &str =
+    "production conversation runtime requires kernel-bound execution";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextCompactionReport {
     pub status: AnalyticsTurnCheckpointProgressStatus,
@@ -228,6 +231,21 @@ impl ContextCompactionReport {
             AnalyticsTurnCheckpointProgressStatus::FailedOpen
         )
     }
+}
+
+fn require_production_kernel_binding<'a>(
+    binding: ConversationRuntimeBinding<'a>,
+    observer: Option<&ConversationTurnObserverHandle>,
+) -> CliResult<ConversationRuntimeBinding<'a>> {
+    if binding.is_kernel_bound() {
+        return Ok(binding);
+    }
+
+    let failed_event = ConversationTurnPhaseEvent::failed();
+    observe_turn_phase(observer, failed_event);
+
+    let error = PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING.to_owned();
+    Err(error)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1430,6 +1448,31 @@ impl ConversationTurnCoordinator {
         .await
     }
 
+    pub async fn handle_production_turn_with_address_and_acp_options_and_observer(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<String> {
+        let observer_ref = observer.as_ref();
+        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
+
+        self.handle_turn_with_address_and_acp_options_and_observer(
+            config,
+            address,
+            user_input,
+            error_mode,
+            acp_options,
+            production_binding,
+            observer,
+        )
+        .await
+    }
+
     fn build_default_runtime_or_observe_failure(
         config: &LoongClawConfig,
         observer: Option<&ConversationTurnObserverHandle>,
@@ -2073,6 +2116,37 @@ impl ConversationTurnCoordinator {
         config
             .reload_provider_runtime_state_from_path(config_path.as_path())
             .unwrap_or_else(|_| config.clone())
+    }
+
+    pub async fn handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<String> {
+        let observer_ref = observer.as_ref();
+        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
+
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            production_binding,
+            ingress,
+            observer,
+        )
+        .await
     }
 
     pub async fn handle_turn_with_runtime_and_address_and_acp_event_sink<
@@ -7493,6 +7567,99 @@ mod tests {
             .iter()
             .map(|event| event.phase)
             .collect::<Vec<_>>();
+        assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
+    }
+
+    #[tokio::test]
+    async fn handle_production_turn_with_observer_rejects_direct_binding_before_runtime_bootstrap()
+    {
+        let mut config = LoongClawConfig::default();
+        config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
+
+        let coordinator = ConversationTurnCoordinator::new();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+
+        let result = coordinator
+            .handle_production_turn_with_address_and_acp_options_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                Some(observer_handle),
+            )
+            .await;
+        let error = result.expect_err("direct production binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+
+        assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
+    }
+
+    #[tokio::test]
+    async fn handle_production_turn_with_runtime_rejects_direct_binding_before_provider_request() {
+        let mut config = LoongClawConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Anthropic;
+
+        let runtime = ObserverStreamingRuntime::default();
+        let coordinator = ConversationTurnCoordinator::new();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("observer-session");
+
+        let result = coordinator
+            .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "say hello",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                Some(observer_handle),
+            )
+            .await;
+        let error = result.expect_err("direct production binding should fail");
+
+        assert_eq!(
+            error,
+            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
+        );
+
+        let streaming_calls = runtime
+            .streaming_calls
+            .lock()
+            .expect("streaming call lock should not be poisoned");
+
+        assert_eq!(*streaming_calls, 0);
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+
         assert_eq!(phase_names, vec![ConversationTurnPhase::Failed]);
     }
 

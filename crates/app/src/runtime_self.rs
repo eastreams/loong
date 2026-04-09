@@ -188,6 +188,10 @@ fn read_runtime_self_source(
     path: &Path,
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Option<String> {
+    if !should_attempt_runtime_self_source_read(workspace_root, path) {
+        return None;
+    }
+
     let request_path = request_path_from_workspace_root(workspace_root, path)?;
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
@@ -205,6 +209,23 @@ fn read_runtime_self_source(
     }
 
     Some(trimmed.to_owned())
+}
+
+pub(crate) fn should_attempt_runtime_self_source_read(workspace_root: &Path, path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    let canonical_workspace_root = match workspace_root.canonicalize() {
+        Ok(canonical_workspace_root) => canonical_workspace_root,
+        Err(_) => return false,
+    };
+    let canonical_path = match path.canonicalize() {
+        Ok(canonical_path) => canonical_path,
+        Err(_) => return false,
+    };
+
+    canonical_path.starts_with(canonical_workspace_root)
 }
 
 fn request_path_from_workspace_root(workspace_root: &Path, path: &Path) -> Option<String> {
@@ -732,6 +753,21 @@ mod tests {
 
         assert!(rendered_user_context.contains("runtime self truncated"));
         assert!(!rendered_user_context.contains(raw_user_prefix));
+    }
+
+    #[test]
+    fn should_attempt_runtime_self_source_read_skips_missing_optional_files() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let missing_tools_path = workspace_root.join("TOOLS.md");
+
+        let should_attempt =
+            should_attempt_runtime_self_source_read(workspace_root, &missing_tools_path);
+
+        assert!(
+            !should_attempt,
+            "missing optional runtime-self files should be skipped before tool execution"
+        );
     }
 
     #[cfg(unix)]
