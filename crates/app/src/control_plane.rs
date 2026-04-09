@@ -286,6 +286,7 @@ impl ControlPlaneTurnRegistry {
             let Some(record) = turns.get_mut(turn_id) else {
                 return Err(format!("control_plane_turn_not_found: `{turn_id}`"));
             };
+            Self::ensure_turn_mutable(record, turn_id)?;
             record.snapshot.status = terminal_status;
             record.snapshot.completed_at_ms = Some(completed_at_ms);
             record.snapshot.output_text = Some(output_text.to_owned());
@@ -319,6 +320,7 @@ impl ControlPlaneTurnRegistry {
             let Some(record) = turns.get_mut(turn_id) else {
                 return Err(format!("control_plane_turn_not_found: `{turn_id}`"));
             };
+            Self::ensure_turn_mutable(record, turn_id)?;
             record.snapshot.status = ControlPlaneTurnStatus::Failed;
             record.snapshot.completed_at_ms = Some(completed_at_ms);
             record.snapshot.error = Some(error.to_owned());
@@ -348,6 +350,7 @@ impl ControlPlaneTurnRegistry {
             let Some(record) = turns.get_mut(turn_id) else {
                 return Err(format!("control_plane_turn_not_found: `{turn_id}`"));
             };
+            Self::ensure_turn_mutable(record, turn_id)?;
             Self::push_event_locked(record, terminal, payload)
         };
         let send_result = self.sender.send(event.clone());
@@ -406,6 +409,16 @@ impl ControlPlaneTurnRegistry {
         for (_, _, turn_id) in removal_candidates.into_iter().take(overflow_count) {
             turns.remove(turn_id.as_str());
         }
+    }
+
+    fn ensure_turn_mutable(
+        record: &ControlPlaneTurnStateRecord,
+        turn_id: &str,
+    ) -> Result<(), String> {
+        if !record.snapshot.status.is_terminal() {
+            return Ok(());
+        }
+        Err(format!("control_plane_turn_already_terminal: `{turn_id}`"))
     }
 }
 
@@ -1982,6 +1995,23 @@ mod tests {
             retained_terminal_count,
             CONTROL_PLANE_TURN_TERMINAL_RETENTION_LIMIT
         );
+    }
+
+    #[test]
+    fn turn_registry_rejects_mutation_after_terminal_completion() {
+        let registry = ControlPlaneTurnRegistry::new();
+        let turn = registry.issue_turn("session-1");
+        registry
+            .complete_success(turn.turn_id.as_str(), "done", Some("completed"), None)
+            .expect("complete turn");
+        let runtime_event_error = registry
+            .record_runtime_event(turn.turn_id.as_str(), json!({ "type": "late" }))
+            .expect_err("late runtime event should be rejected");
+        let completion_error = registry
+            .complete_failure(turn.turn_id.as_str(), "late failure")
+            .expect_err("late completion should be rejected");
+        assert!(runtime_event_error.contains("control_plane_turn_already_terminal"));
+        assert!(completion_error.contains("control_plane_turn_already_terminal"));
     }
 
     #[test]
