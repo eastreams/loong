@@ -24916,19 +24916,29 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
         .as_str()
         .expect("workspace root should be recorded")
         .to_owned();
-    let worktree_root = std::path::PathBuf::from(&workspace_root);
-    let worktree_readme = worktree_root.join("README.md");
-    let child_readme = std::fs::read_to_string(&worktree_readme).expect("read child README");
-    let root_readme =
-        std::fs::read_to_string(repo_root.join("README.md")).expect("read root README");
-
-    assert_eq!(child_readme, "child worktree version\n");
-    assert_eq!(root_readme, "root version\n");
     assert_eq!(
         waited.payload["terminal_outcome"]["payload"]["workspace_retained"], true,
         "expected dirty worktree to be retained; payload={:?}",
         waited.payload["terminal_outcome"]["payload"]
     );
+
+    let worktree_root = std::path::PathBuf::from(&workspace_root);
+    let worktree_readme = worktree_root.join("README.md");
+    let child_readme = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&worktree_readme) {
+                break contents;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("child README should appear in retained worktree");
+    let root_readme =
+        std::fs::read_to_string(repo_root.join("README.md")).expect("read root README");
+
+    assert_eq!(child_readme, "child worktree version\n");
+    assert_eq!(root_readme, "root version\n");
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     let payloads =
