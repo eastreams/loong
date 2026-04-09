@@ -24832,7 +24832,8 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
                         "file.write",
                         json!({
                             "path": "README.md",
-                            "content": "child worktree version\n"
+                            "content": "child worktree version\n",
+                            "overwrite": true
                         }),
                         "delegate:child",
                         "turn-worktree-child",
