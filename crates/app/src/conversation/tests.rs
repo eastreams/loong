@@ -41,7 +41,7 @@ use crate::memory::{
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
-    NewSessionToolPolicyRecord, SessionKind, SessionRepository, SessionState,
+    NewSessionToolPolicyRecord, SessionEventRecord, SessionKind, SessionRepository, SessionState,
     TransitionApprovalRequestIfCurrentRequest,
 };
 #[cfg(feature = "memory-sqlite")]
@@ -49,6 +49,58 @@ use crate::test_support::unique_temp_dir;
 
 #[cfg(feature = "memory-sqlite")]
 const DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
+
+#[cfg(feature = "memory-sqlite")]
+async fn wait_for_delegate_announce_event(
+    repo: &SessionRepository,
+    parent_session_id: &str,
+    expected_child_session_id: &str,
+) -> SessionEventRecord {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+
+    loop {
+        let events = repo
+            .list_recent_events(parent_session_id, 20)
+            .expect("list parent events");
+        let announce_event = events.into_iter().find(|event| {
+            let event_kind_matches =
+                event.event_kind == super::announce::DELEGATE_RESULTS_ANNOUNCED_EVENT_KIND;
+            if !event_kind_matches {
+                return false;
+            }
+
+            let results = event.payload_json.get("results");
+            let results = results.and_then(Value::as_array);
+            let Some(results) = results else {
+                return false;
+            };
+
+            results.iter().any(|result| {
+                let child_session_id = result.get("child_session_id");
+                child_session_id == Some(&Value::String(expected_child_session_id.to_owned()))
+            })
+        });
+        if let Some(announce_event) = announce_event {
+            return announce_event;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            panic!("timed out waiting for delegate announce event");
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn make_delegate_announce_test_config(db_path: &std::path::Path) -> LoongClawConfig {
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.announce_debounce_ms = 0;
+    enable_guided_autonomy(&mut config);
+
+    config
+}
 
 #[cfg(feature = "memory-sqlite")]
 fn run_conversation_test_on_large_stack<F>(thread_name: &str, operation: F)
@@ -252,7 +304,7 @@ impl crate::conversation::AsyncDelegateSpawner for PostPrepareFailingAsyncDelega
             .get()
             .ok_or_else(|| "test_post_prepare_runtime_missing".to_owned())?;
         let binding = request.binding.as_borrowed();
-        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+        super::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime.as_ref(),
             &request.parent_session_id,
             &request.child_session_id,
@@ -297,7 +349,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
         let parent_session_id_for_spawn = parent_session_id.clone();
         let borrowed_binding = binding.as_borrowed();
         let child_binding = binding.clone();
-        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+        super::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime.as_ref(),
             &parent_session_id,
             &child_session_id,
@@ -6278,7 +6330,9 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let exported_capture = Arc::new(Mutex::new(None::<String>));
     let workspace_root_for_hook = workspace_root.clone();
+    let exported_capture_for_hook = Arc::clone(&exported_capture);
     let compact_hook: CompactHook = Arc::new(move |session_id, _messages| {
         let memory_dir = workspace_root_for_hook.join("memory");
         let exported_paths = collect_markdown_file_paths(memory_dir.as_path());
@@ -6286,6 +6340,11 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
             format!("expected durable memory export before compaction for session {session_id}")
         })?;
         let exported = std::fs::read_to_string(exported_path).map_err(|error| error.to_string())?;
+        let mut exported_slot = exported_capture_for_hook
+            .lock()
+            .expect("exported data lock");
+
+        *exported_slot = Some(exported.clone());
         let contains_intro = exported.contains("Advisory durable recall");
         if !contains_intro {
             return Err(format!(
@@ -6298,10 +6357,11 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
                 "durable export must include resolved identity before compaction for session {session_id}"
             ));
         }
-        let contains_turn_text = exported.contains("hello before compaction");
-        if !contains_turn_text {
+        let contains_session_content =
+            exported.contains("earlier ask") || exported.contains("hello before compaction");
+        if !contains_session_content {
             return Err(format!(
-                "durable export must include the pre-compaction summary before compaction for session {session_id}"
+                "durable export must include visible session content before compaction for session {session_id}"
             ));
         }
         Ok(())
@@ -6312,6 +6372,21 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     )
     .with_durable_memory_config(memory_config.clone())
     .with_compact_hook(compact_hook);
+
+    crate::memory::append_turn_direct(
+        "session-pre-compaction-flush",
+        "user",
+        "earlier ask",
+        &memory_config,
+    )
+    .expect("seed earlier user turn");
+    crate::memory::append_turn_direct(
+        "session-pre-compaction-flush",
+        "assistant",
+        "earlier reply",
+        &memory_config,
+    )
+    .expect("seed earlier assistant turn");
 
     let coordinator = ConversationTurnCoordinator::new();
     let kernel_ctx = test_kernel_context_with_memory("test-pre-compaction-flush", &memory_config);
@@ -6332,18 +6407,14 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     let compact = runtime.compact_calls.lock().expect("compact lock").clone();
     assert_eq!(compact.len(), 1);
 
-    let memory_dir = workspace_root.join("memory");
-    let exported_paths = collect_markdown_file_paths(&memory_dir);
-    assert_eq!(
-        exported_paths.len(),
-        1,
-        "expected one durable memory export"
-    );
-
-    let exported = std::fs::read_to_string(&exported_paths[0]).expect("read durable memory export");
+    let exported = exported_capture
+        .lock()
+        .expect("exported data lock")
+        .clone()
+        .expect("expected one durable memory export");
     assert!(exported.contains("Advisory durable recall"));
     assert!(exported.contains("Resolved Runtime Identity"));
-    assert!(exported.contains("hello before compaction"));
+    assert!(exported.contains("earlier ask") || exported.contains("hello before compaction"));
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -6948,6 +7019,15 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
     let entries = latest_discovery_payload["entries"]
         .as_array()
         .expect("tool discovery entries should be an array");
+    let prompt_frame_payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "provider_prompt_frame_snapshot");
+    assert_eq!(prompt_frame_payloads.len(), 2);
+    let initial_prompt_frame = prompt_frame_payloads
+        .first()
+        .expect("initial prompt-frame snapshot should be persisted");
+    let followup_prompt_frame = prompt_frame_payloads
+        .get(1)
+        .expect("followup prompt-frame snapshot should be persisted");
 
     assert!(
         latest_discovery_payload["turn_id"]
@@ -6969,6 +7049,16 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
     assert!(
         entries.iter().all(|entry| entry.get("lease").is_none()),
         "persisted discovery state must not retain executable leases: {latest_discovery_payload:?}"
+    );
+    assert_eq!(initial_prompt_frame["phase"], json!("initial"));
+    assert_eq!(followup_prompt_frame["phase"], json!("followup"));
+    assert_eq!(
+        initial_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"],
+        followup_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"]
+    );
+    assert_ne!(
+        initial_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"],
+        followup_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"]
     );
 }
 
@@ -9047,7 +9137,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disab
     let temp_home = crate::test_support::unique_temp_dir("safe-lane-runtime-events-home");
     std::fs::create_dir_all(&temp_home).expect("create safe-lane runtime-events home");
     env.set("HOME", &temp_home);
-    env.remove("LOONGCLAW_HOME");
+    env.remove("LOONG_HOME");
 
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
@@ -13619,6 +13709,46 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
     }
 }
 
+#[cfg(feature = "tool-shell")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_marks_repairable_shell_preflight_failure_retryable() {
+    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnFailureKind, TurnResult};
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let engine = TurnEngine::new(1);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![provider_tool_intent(
+            "shell.exec",
+            json!({"command": "/bin/echo", "args": ["hello"]}),
+            "s1",
+            "t1",
+            "c1",
+        )],
+        raw_meta: Value::Null,
+    };
+
+    let result = engine.execute_turn(&turn, &harness.kernel_ctx).await;
+
+    match result {
+        TurnResult::ToolError(failure) => {
+            assert_eq!(failure.kind, TurnFailureKind::Retryable);
+            assert_eq!(failure.code, "tool_preflight_denied");
+            assert!(failure.retryable);
+            assert!(failure.reason.contains("tool input needs repair"));
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolError, got {:?}", other)
+        }
+    }
+}
+
 #[test]
 fn kernel_error_classification_table_is_stable() {
     use crate::conversation::turn_engine::{KernelFailureClass, classify_kernel_error};
@@ -16993,6 +17123,121 @@ async fn load_fast_lane_tool_batch_event_summary_accepts_explicit_runtime_bindin
     let _ = std::fs::remove_file(&db_path);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn load_prompt_frame_event_summary_accepts_explicit_runtime_binding() {
+    let payloads = [json!({
+        "type": "conversation_event",
+        "event": "provider_prompt_frame_snapshot",
+        "payload": {
+            "provider_round": 1,
+            "phase": "initial",
+            "prompt_frame": {
+                "schema_version": 1,
+                "total_estimated_tokens": 42,
+                "stable_runtime_segment_count": 1,
+                "stable_runtime_estimated_tokens": 12,
+                "session_latched_segment_count": 1,
+                "session_latched_estimated_tokens": 8,
+                "advisory_profile_segment_count": 1,
+                "advisory_profile_estimated_tokens": 6,
+                "session_local_recall_segment_count": 1,
+                "session_local_recall_estimated_tokens": 5,
+                "recent_window_segment_count": 1,
+                "recent_window_estimated_tokens": 7,
+                "turn_ephemeral_segment_count": 0,
+                "turn_ephemeral_estimated_tokens": 0,
+                "stable_runtime_hash": "stable-a",
+                "session_latched_hash": "latched-a",
+                "stable_prefix_hash_sha256": "prefix-a",
+                "cached_prefix_sha256": "cached-a",
+                "advisory_profile_hash": "profile-a",
+                "session_local_recall_hash": "recall-a",
+                "recent_window_hash": "window-a",
+                "turn_ephemeral_hash": null
+            }
+        }
+    })
+    .to_string()];
+
+    let (db_path, mem_config) = prepare_discovery_first_summary_test(
+        "conversation-prompt-frame-summary",
+        "session-prompt-frame-summary-direct",
+        &payloads,
+    );
+
+    let direct_summary = load_prompt_frame_event_summary(
+        "session-prompt-frame-summary-direct",
+        40,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load prompt-frame summary via direct binding");
+    assert_eq!(direct_summary.snapshot_events, 1);
+    assert_eq!(direct_summary.initial_snapshot_events, 1);
+    assert_eq!(direct_summary.followup_snapshot_events, 0);
+    assert_eq!(direct_summary.latest_phase.as_deref(), Some("initial"));
+    assert_eq!(direct_summary.latest_total_estimated_tokens, Some(42));
+    assert_eq!(direct_summary.latest_stable_runtime_segment_count, Some(1));
+    assert_eq!(direct_summary.latest_session_latched_segment_count, Some(1));
+    assert_eq!(
+        direct_summary.latest_advisory_profile_segment_count,
+        Some(1)
+    );
+    assert_eq!(
+        direct_summary.latest_stable_prefix_hash.as_deref(),
+        Some("prefix-a")
+    );
+    assert_eq!(
+        direct_summary.latest_cached_prefix_hash.as_deref(),
+        Some("cached-a")
+    );
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, invocations) =
+        build_kernel_context_with_window_turns(audit, discovery_first_window_turns(&payloads));
+
+    let kernel_summary = load_prompt_frame_event_summary(
+        "session-prompt-frame-summary-kernel",
+        56,
+        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        &mem_config,
+    )
+    .await
+    .expect("load prompt-frame summary via kernel binding");
+    assert_eq!(kernel_summary.snapshot_events, 1);
+    assert_eq!(kernel_summary.initial_snapshot_events, 1);
+    assert_eq!(kernel_summary.followup_snapshot_events, 0);
+    assert_eq!(kernel_summary.latest_phase.as_deref(), Some("initial"));
+    assert_eq!(kernel_summary.latest_total_estimated_tokens, Some(42));
+    assert_eq!(kernel_summary.latest_stable_runtime_segment_count, Some(1));
+    assert_eq!(kernel_summary.latest_session_latched_segment_count, Some(1));
+    assert_eq!(
+        kernel_summary.latest_advisory_profile_segment_count,
+        Some(1)
+    );
+    assert_eq!(
+        kernel_summary.latest_stable_prefix_hash.as_deref(),
+        Some("prefix-a")
+    );
+    assert_eq!(
+        kernel_summary.latest_cached_prefix_hash.as_deref(),
+        Some("cached-a")
+    );
+
+    let captured = invocations.lock().expect("invocations lock");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+    assert_eq!(
+        captured[0].payload["session_id"],
+        "session-prompt-frame-summary-kernel"
+    );
+    assert_eq!(captured[0].payload["limit"], json!(56));
+    assert_eq!(captured[0].payload["allow_extended_limit"], json!(true));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
 #[cfg(not(feature = "memory-sqlite"))]
 #[tokio::test]
 async fn persist_turn_without_memory_sqlite_is_noop_with_kernel_context() {
@@ -19675,9 +19920,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -19793,9 +20036,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -19911,6 +20152,27 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
         terminal_outcome.payload_json["final_output"],
         "Child final output"
     );
+    let frozen_result = terminal_outcome.frozen_result.expect("frozen result");
+    assert!(!frozen_result.truncated);
+    assert_eq!(
+        frozen_result.content,
+        crate::session::frozen_result::FrozenContent::Text("Child final output".to_owned())
+    );
+    let announce_event =
+        wait_for_delegate_announce_event(&repo, "root-session", &child.session_id).await;
+    assert_eq!(
+        announce_event.payload_json["announce_kind"],
+        "delegate_result"
+    );
+    assert_eq!(announce_event.payload_json["result_count"], 1);
+    assert_eq!(
+        announce_event.payload_json["results"][0]["child_session_id"],
+        child.session_id
+    );
+    assert_eq!(
+        announce_event.payload_json["results"][0]["frozen_result"]["content"]["text"],
+        "Child final output"
+    );
 
     let requested = runtime
         .turn_requested_tool_views
@@ -19930,9 +20192,7 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -20058,9 +20318,7 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -20140,9 +20398,7 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -20222,6 +20478,23 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
     assert_eq!(
         terminal_outcome.payload_json["final_output"],
         "Child final output"
+    );
+    let frozen_result = terminal_outcome.frozen_result.expect("frozen result");
+    assert!(!frozen_result.truncated);
+    assert_eq!(
+        frozen_result.content,
+        crate::session::frozen_result::FrozenContent::Text("Child final output".to_owned())
+    );
+    let announce_event =
+        wait_for_delegate_announce_event(&repo, "root-session", &child.session_id).await;
+    assert_eq!(
+        announce_event.payload_json["announce_kind"],
+        "delegate_result"
+    );
+    assert_eq!(announce_event.payload_json["result_count"], 1);
+    assert_eq!(
+        announce_event.payload_json["results"][0]["child_session_id"],
+        child.session_id
     );
 
     assert_eq!(
@@ -23138,6 +23411,22 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(event_kinds.contains(&"delegate_spawn_failed"));
+
+    let announce_event =
+        wait_for_delegate_announce_event(&repo, "root-session", &child.session_id).await;
+    assert_eq!(
+        announce_event.payload_json["announce_kind"],
+        "delegate_result"
+    );
+    assert_eq!(announce_event.payload_json["result_count"], 1);
+    assert_eq!(
+        announce_event.payload_json["results"][0]["child_session_id"],
+        child.session_id
+    );
+    assert_eq!(
+        announce_event.payload_json["results"][0]["frozen_result"]["content"]["error"]["code"],
+        "spawn unavailable"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -23474,21 +23763,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(!event_kinds.contains(&"delegate_spawn_failed"));
-
-    let recovery_event = events
-        .iter()
-        .find(|event| event.event_kind == "delegate_recovery_applied")
-        .expect("delegate recovery event");
-    assert_eq!(
-        recovery_event.payload_json["recovery_kind"],
-        "async_spawn_failure_persist_failed"
-    );
-    assert_eq!(recovery_event.payload_json["recovered_state"], "failed");
-    assert_eq!(
-        recovery_event.payload_json["original_error"],
-        "spawn unavailable"
-    );
-
+    assert!(!event_kinds.contains(&"delegate_recovery_applied"));
     assert!(
         repo.load_terminal_outcome(&child.session_id)
             .expect("load terminal outcome")
@@ -23868,16 +24143,12 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     assert_eq!(payloads[0]["workspace_retained"], true);
 
     let git_executable = delegate_test_git_executable();
-    let repo_root_string = repo_root.display().to_string();
+    let cleanup_root = dunce::canonicalize(&worktree_root).unwrap_or(worktree_root);
     let cleanup_status = std::process::Command::new(git_executable)
-        .args([
-            "-C",
-            repo_root_string.as_str(),
-            "worktree",
-            "remove",
-            "--force",
-            workspace_root.as_str(),
-        ])
+        .arg("-C")
+        .arg(&repo_root)
+        .args(["worktree", "remove", "--force"])
+        .arg(&cleanup_root)
         .status()
         .expect("cleanup retained worktree status");
     assert!(
@@ -25594,7 +25865,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
 
 #[test]
 fn compact_window_preserves_recent_turns_and_summarizes_history() {
-    use super::compaction::{CompactPolicy, compact_window};
+    use super::compaction::{COMPACTED_SUMMARY_MARKER, CompactPolicy, compact_window};
 
     let turns = vec![
         crate::memory::WindowTurn {
@@ -25633,6 +25904,8 @@ fn compact_window_preserves_recent_turns_and_summarizes_history() {
 
     assert_eq!(compacted.len(), 3);
     assert_eq!(compacted[0].role, "user");
+    assert!(compacted[0].content.contains(COMPACTED_SUMMARY_MARKER));
+    assert!(compacted[0].content.contains("session-local recall only"));
     assert!(compacted[0].content.contains("Compacted 4 earlier turns"));
     assert!(
         compacted[0]
@@ -25642,6 +25915,41 @@ fn compact_window_preserves_recent_turns_and_summarizes_history() {
     assert!(compacted[0].content.contains("User context:"));
     assert_eq!(compacted[1].content, "recent ask");
     assert_eq!(compacted[2].content, "recent reply");
+}
+
+#[test]
+fn compact_window_marks_compacted_summary_as_session_local_recall() {
+    use super::compaction::{COMPACTED_SUMMARY_MARKER, CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "older ask".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "older reply".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(4),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = compacted[0].content.as_str();
+
+    assert!(summary.starts_with(COMPACTED_SUMMARY_MARKER));
+    assert!(summary.contains("Runtime Self Context"));
+    assert!(summary.contains("Resolved Runtime Identity"));
 }
 
 #[test]

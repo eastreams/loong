@@ -7,10 +7,14 @@ use rusqlite::{
 };
 use serde_json::Value;
 
+use super::frozen_result::FrozenResult;
 use crate::config::ToolConsentMode;
 use crate::memory;
+use crate::memory::ConversationTurn;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
+
+pub(crate) const SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
@@ -94,6 +98,7 @@ pub struct SessionTerminalOutcomeRecord {
     pub session_id: String,
     pub status: String,
     pub payload_json: Value,
+    pub frozen_result: Option<FrozenResult>,
     pub recorded_at: i64,
 }
 
@@ -360,6 +365,17 @@ pub struct SessionObservationRecord {
     pub tail_events: Vec<SessionEventRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionTrajectoryReadSnapshot {
+    pub summary: SessionSummaryRecord,
+    pub lineage_root_session_id: Option<String>,
+    pub lineage_depth: usize,
+    pub turns: Vec<ConversationTurn>,
+    pub events: Vec<SessionEventRecord>,
+    pub approval_requests: Vec<ApprovalRequestRecord>,
+    pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionSearchSourceKind {
     Turn,
@@ -426,6 +442,7 @@ pub struct FinalizeSessionTerminalRequest {
     pub event_payload_json: Value,
     pub outcome_status: String,
     pub outcome_payload_json: Value,
+    pub frozen_result: Option<FrozenResult>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -460,6 +477,20 @@ impl SessionRepository {
     pub fn new(config: &MemoryRuntimeConfig) -> Result<Self, String> {
         let db_path = memory::ensure_memory_db_ready(config.sqlite_path.clone(), config)?;
         Ok(Self { db_path })
+    }
+
+    pub(crate) fn with_read_snapshot<T, F>(&self, operation: F) -> Result<T, String>
+    where
+        F: FnOnce(&Connection) -> Result<T, String>,
+    {
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session read snapshot failed: {error}"))?;
+        let result = operation(&tx)?;
+        tx.commit()
+            .map_err(|error| format!("commit session read snapshot failed: {error}"))?;
+        Ok(result)
     }
 
     pub fn create_session(&self, record: NewSessionRecord) -> Result<SessionRecord, String> {
@@ -1011,9 +1042,40 @@ impl SessionRepository {
 
     pub fn session_lineage_depth(&self, session_id: &str) -> Result<usize, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::session_lineage_depth_with_conn(&conn, &session_id)
+    }
+
+    pub fn count_active_direct_children(&self, parent_session_id: &str) -> Result<usize, String> {
+        let parent_session_id = normalize_required_text(parent_session_id, "parent_session_id")?;
+        let conn = self.open_connection()?;
+        Self::count_active_direct_children_with_conn(&conn, &parent_session_id)
+    }
+
+    pub fn lineage_root_session_id(&self, session_id: &str) -> Result<Option<String>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::lineage_root_session_id_with_conn(&conn, &session_id)
+    }
+
+    pub(crate) fn list_all_events_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        page_limit: usize,
+    ) -> Result<Vec<SessionEventRecord>, String> {
+        if page_limit == 0 {
+            return Err("page_limit must be >= 1".to_owned());
+        }
+        Self::drain_events_after_with_conn(conn, session_id, 0, page_limit)
+    }
+
+    pub(crate) fn session_lineage_depth_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<usize, String> {
         let mut seen = BTreeSet::new();
+        let mut next_session_id = Some(session_id.to_owned());
         let mut depth = 0usize;
-        let mut next_session_id = Some(session_id);
 
         while let Some(current_session_id) = next_session_id {
             if !seen.insert(current_session_id.clone()) {
@@ -1021,7 +1083,7 @@ impl SessionRepository {
                     "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing lineage depth"
                 ));
             }
-            let session = match self.load_session(&current_session_id)? {
+            let session = match Self::load_session_with_conn(conn, &current_session_id)? {
                 Some(session) => session,
                 None if depth == 0 => return Ok(0),
                 None => {
@@ -1042,16 +1104,12 @@ impl SessionRepository {
         Ok(depth)
     }
 
-    pub fn count_active_direct_children(&self, parent_session_id: &str) -> Result<usize, String> {
-        let parent_session_id = normalize_required_text(parent_session_id, "parent_session_id")?;
-        let conn = self.open_connection()?;
-        Self::count_active_direct_children_with_conn(&conn, &parent_session_id)
-    }
-
-    pub fn lineage_root_session_id(&self, session_id: &str) -> Result<Option<String>, String> {
-        let session_id = normalize_required_text(session_id, "session_id")?;
+    pub(crate) fn lineage_root_session_id_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Option<String>, String> {
         let mut seen = BTreeSet::new();
-        let mut next_session_id = Some(session_id);
+        let mut next_session_id = Some(session_id.to_owned());
 
         while let Some(current_session_id) = next_session_id {
             if !seen.insert(current_session_id.clone()) {
@@ -1059,7 +1117,7 @@ impl SessionRepository {
                     "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing lineage root"
                 ));
             }
-            let session = match self.load_session(&current_session_id)? {
+            let session = match Self::load_session_with_conn(conn, &current_session_id)? {
                 Some(session) => session,
                 None if seen.len() == 1 => return Ok(None),
                 None => {
@@ -1128,6 +1186,60 @@ impl SessionRepository {
         let normalized_query = normalize_required_text(query, "query")?.to_ascii_lowercase();
         let conn = self.open_connection()?;
         Self::search_session_content_with_conn(&conn, &session_id, &normalized_query, limit)
+    }
+
+    pub fn list_all_events(
+        &self,
+        session_id: &str,
+        page_limit: usize,
+    ) -> Result<Vec<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        if page_limit == 0 {
+            return Err("page_limit must be >= 1".to_owned());
+        }
+        let conn = self.open_connection()?;
+        Self::drain_events_after_with_conn(&conn, &session_id, 0, page_limit)
+    }
+
+    pub fn load_session_trajectory_read_snapshot(
+        &self,
+        session_id: &str,
+        page_limit: usize,
+    ) -> Result<Option<SessionTrajectoryReadSnapshot>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        if page_limit == 0 {
+            return Err("page_limit must be >= 1".to_owned());
+        }
+
+        self.with_read_snapshot(|conn| {
+            let Some(summary) =
+                Self::load_session_summary_with_legacy_fallback_with_conn(conn, &session_id)?
+            else {
+                return Ok(None);
+            };
+            let lineage_root_session_id =
+                Self::lineage_root_session_id_with_conn(conn, &session_id)?;
+            let lineage_depth = Self::session_lineage_depth_with_conn(conn, &session_id)?;
+            let turns = memory::transcript_direct_paged_with_conn(
+                conn,
+                &session_id,
+                SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE,
+            )?;
+            let events = Self::list_all_events_with_conn(conn, &session_id, page_limit)?;
+            let approval_requests =
+                Self::list_approval_requests_for_session_with_conn(conn, &session_id, None)?;
+            let terminal_outcome = Self::load_terminal_outcome_with_conn(conn, &session_id)?;
+
+            Ok(Some(SessionTrajectoryReadSnapshot {
+                summary,
+                lineage_root_session_id,
+                lineage_depth,
+                turns,
+                events,
+                approval_requests,
+                terminal_outcome,
+            }))
+        })
     }
 
     pub fn load_terminal_outcome(
@@ -1271,6 +1383,14 @@ impl SessionRepository {
     ) -> Result<Vec<ApprovalRequestRecord>, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let conn = self.open_connection()?;
+        Self::list_approval_requests_for_session_with_conn(&conn, &session_id, status)
+    }
+
+    pub(crate) fn list_approval_requests_for_session_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        status: Option<ApprovalRequestStatus>,
+    ) -> Result<Vec<ApprovalRequestRecord>, String> {
         let mut requests = Vec::new();
         match status {
             Some(status) => {
@@ -2198,6 +2318,16 @@ impl SessionRepository {
         status: &str,
         payload_json: Value,
     ) -> Result<SessionTerminalOutcomeRecord, String> {
+        self.upsert_terminal_outcome_with_frozen_result(session_id, status, payload_json, None)
+    }
+
+    pub fn upsert_terminal_outcome_with_frozen_result(
+        &self,
+        session_id: &str,
+        status: &str,
+        payload_json: Value,
+        frozen_result: Option<FrozenResult>,
+    ) -> Result<SessionTerminalOutcomeRecord, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let status = normalize_required_text(status, "status")?;
         if self.load_session(&session_id)?.is_none() {
@@ -2206,25 +2336,37 @@ impl SessionRepository {
 
         let encoded_payload = serde_json::to_string(&payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
         let recorded_at = unix_ts_now();
         let conn = self.open_connection()?;
         conn.execute(
-            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO session_terminal_outcomes(
+                session_id,
+                status,
+                payload_json,
+                frozen_result_json,
+                recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
+                frozen_result_json = COALESCE(
+                    excluded.frozen_result_json,
+                    session_terminal_outcomes.frozen_result_json
+                ),
                 recorded_at = excluded.recorded_at",
-            params![session_id, status, encoded_payload, recorded_at],
+            params![
+                session_id,
+                status,
+                encoded_payload,
+                encoded_frozen_result,
+                recorded_at
+            ],
         )
         .map_err(|error| format!("upsert session terminal outcome failed: {error}"))?;
 
-        Ok(SessionTerminalOutcomeRecord {
-            session_id,
-            status,
-            payload_json,
-            recorded_at,
-        })
+        self.load_terminal_outcome(&session_id)?
+            .ok_or_else(|| format!("session `{session_id}` missing after terminal outcome upsert"))
     }
 
     pub fn finalize_session_terminal(
@@ -2239,10 +2381,12 @@ impl SessionRepository {
         let last_error = normalize_optional_text(request.last_error);
         let event_payload_json = request.event_payload_json;
         let outcome_payload_json = request.outcome_payload_json;
+        let frozen_result = request.frozen_result;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session terminal event payload failed: {error}"))?;
         let encoded_outcome_payload = serde_json::to_string(&outcome_payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
         let ts = unix_ts_now();
 
         let mut conn = self.open_connection()?;
@@ -2282,13 +2426,28 @@ impl SessionRepository {
         .map_err(|error| format!("insert session terminal event failed: {error}"))?;
         let event_id = tx.last_insert_rowid();
         tx.execute(
-            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO session_terminal_outcomes(
+                session_id,
+                status,
+                payload_json,
+                frozen_result_json,
+                recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
+                frozen_result_json = COALESCE(
+                    excluded.frozen_result_json,
+                    session_terminal_outcomes.frozen_result_json
+                ),
                 recorded_at = excluded.recorded_at",
-            params![session_id, outcome_status, encoded_outcome_payload, ts],
+            params![
+                session_id,
+                outcome_status,
+                encoded_outcome_payload,
+                encoded_frozen_result,
+                ts
+            ],
         )
         .map_err(|error| format!("upsert session terminal outcome in finalize failed: {error}"))?;
         tx.commit()
@@ -2297,23 +2456,21 @@ impl SessionRepository {
         let session = self
             .load_session(&session_id)?
             .ok_or_else(|| format!("session `{session_id}` missing after terminal finalize"))?;
+        let terminal_outcome = self.load_terminal_outcome(&session_id)?.ok_or_else(|| {
+            format!("session `{session_id}` missing terminal outcome after terminal finalize")
+        })?;
 
         Ok(FinalizeSessionTerminalResult {
             session,
             event: SessionEventRecord {
                 id: event_id,
-                session_id: session_id.clone(),
+                session_id,
                 event_kind,
                 actor_session_id,
                 payload_json: event_payload_json,
                 ts,
             },
-            terminal_outcome: SessionTerminalOutcomeRecord {
-                session_id,
-                status: outcome_status,
-                payload_json: outcome_payload_json,
-                recorded_at: ts,
-            },
+            terminal_outcome,
         })
     }
 
@@ -2330,10 +2487,12 @@ impl SessionRepository {
         let last_error = normalize_optional_text(request.last_error);
         let event_payload_json = request.event_payload_json;
         let outcome_payload_json = request.outcome_payload_json;
+        let frozen_result = request.frozen_result;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session terminal event payload failed: {error}"))?;
         let encoded_outcome_payload = serde_json::to_string(&outcome_payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
         let ts = unix_ts_now();
 
         let mut conn = self.open_connection()?;
@@ -2374,13 +2533,28 @@ impl SessionRepository {
         .map_err(|error| format!("insert conditional session terminal event failed: {error}"))?;
         let event_id = tx.last_insert_rowid();
         tx.execute(
-            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO session_terminal_outcomes(
+                session_id,
+                status,
+                payload_json,
+                frozen_result_json,
+                recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
+                frozen_result_json = COALESCE(
+                    excluded.frozen_result_json,
+                    session_terminal_outcomes.frozen_result_json
+                ),
                 recorded_at = excluded.recorded_at",
-            params![session_id, outcome_status, encoded_outcome_payload, ts],
+            params![
+                session_id,
+                outcome_status,
+                encoded_outcome_payload,
+                encoded_frozen_result,
+                ts
+            ],
         )
         .map_err(|error| {
             format!("upsert session terminal outcome in conditional finalize failed: {error}")
@@ -2392,23 +2566,23 @@ impl SessionRepository {
         let session = self.load_session(&session_id)?.ok_or_else(|| {
             format!("session `{session_id}` missing after conditional terminal finalize")
         })?;
+        let terminal_outcome = self.load_terminal_outcome(&session_id)?.ok_or_else(|| {
+            format!(
+                "session `{session_id}` missing terminal outcome after conditional terminal finalize"
+            )
+        })?;
 
         Ok(Some(FinalizeSessionTerminalResult {
             session,
             event: SessionEventRecord {
                 id: event_id,
-                session_id: session_id.clone(),
+                session_id,
                 event_kind,
                 actor_session_id,
                 payload_json: event_payload_json,
                 ts,
             },
-            terminal_outcome: SessionTerminalOutcomeRecord {
-                session_id,
-                status: outcome_status,
-                payload_json: outcome_payload_json,
-                recorded_at: ts,
-            },
+            terminal_outcome,
         }))
     }
 
@@ -2449,6 +2623,69 @@ impl SessionRepository {
             payload_json: event.payload_json,
             ts,
         })
+    }
+
+    pub fn append_event_if_session_active(
+        &self,
+        event: NewSessionEvent,
+    ) -> Result<Option<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(&event.session_id, "session_id")?;
+        let event_kind = normalize_required_text(&event.event_kind, "event_kind")?;
+        let actor_session_id = normalize_optional_text(event.actor_session_id);
+        let ts = unix_ts_now();
+        let payload_value = event.payload_json;
+        let payload_json = serde_json::to_string(&payload_value)
+            .map_err(|error| format!("encode session event payload failed: {error}"))?;
+
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("open session append transaction failed: {error}"))?;
+        let raw_state = tx
+            .query_row(
+                "SELECT state FROM sessions WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("load session state for append failed: {error}"))?;
+        let Some(raw_state) = raw_state else {
+            return Ok(None);
+        };
+        let session_state = SessionState::from_db(raw_state.as_str())?;
+        let session_is_terminal = matches!(
+            session_state,
+            SessionState::Completed | SessionState::Failed | SessionState::TimedOut
+        );
+        if session_is_terminal {
+            return Ok(None);
+        }
+
+        tx.execute(
+            "INSERT INTO session_events(
+                session_id, event_kind, actor_session_id, payload_json, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id.as_str(),
+                event_kind.as_str(),
+                actor_session_id.as_deref(),
+                payload_json.as_str(),
+                ts,
+            ],
+        )
+        .map_err(|error| format!("insert session event failed: {error}"))?;
+        let event_id = tx.last_insert_rowid();
+        tx.commit()
+            .map_err(|error| format!("commit session append transaction failed: {error}"))?;
+
+        Ok(Some(SessionEventRecord {
+            id: event_id,
+            session_id,
+            event_kind,
+            actor_session_id,
+            payload_json: payload_value,
+            ts,
+        }))
     }
 
     fn open_connection(&self) -> Result<Connection, String> {
@@ -2527,7 +2764,7 @@ impl SessionRepository {
             .map_err(|error| format!("active direct child count overflowed usize: {error}"))
     }
 
-    fn load_session_summary_with_conn(
+    pub(crate) fn load_session_summary_with_conn(
         conn: &Connection,
         session_id: &str,
     ) -> Result<Option<SessionSummaryRecord>, String> {
@@ -2586,7 +2823,7 @@ impl SessionRepository {
         raw.map(SessionSummaryRecord::try_from_raw).transpose()
     }
 
-    fn load_session_summary_with_legacy_fallback_with_conn(
+    pub(crate) fn load_session_summary_with_legacy_fallback_with_conn(
         conn: &Connection,
         session_id: &str,
     ) -> Result<Option<SessionSummaryRecord>, String> {
@@ -2900,52 +3137,60 @@ impl SessionRepository {
             return Ok(Vec::new());
         }
 
+        let turn_match_query = build_search_fts_query(normalized_query);
         let patterns = build_search_like_patterns(normalized_query);
-        if patterns.is_empty() {
+        if turn_match_query.is_none() && patterns.is_empty() {
             return Ok(Vec::new());
         }
 
         let mut hits = Vec::new();
-        hits.extend(Self::search_session_turns_with_conn(
-            conn,
-            session_id,
-            patterns.as_slice(),
-            limit,
-        )?);
-        hits.extend(Self::search_session_events_with_conn(
-            conn,
-            session_id,
-            patterns.as_slice(),
-            limit,
-        )?);
+        if let Some(turn_match_query) = turn_match_query.as_deref() {
+            let turn_hits =
+                Self::search_session_turns_with_conn(conn, session_id, turn_match_query, limit)?;
+            hits.extend(turn_hits);
+        }
+        if !patterns.is_empty() {
+            let event_hits = Self::search_session_events_with_conn(
+                conn,
+                session_id,
+                patterns.as_slice(),
+                limit,
+            )?;
+            hits.extend(event_hits);
+        }
         Ok(hits)
     }
 
     fn search_session_turns_with_conn(
         conn: &Connection,
         session_id: &str,
-        patterns: &[String],
+        match_query: &str,
         limit: usize,
     ) -> Result<Vec<SessionSearchRecord>, String> {
-        let where_clause = build_search_where_clause("lower(content)", patterns.len(), 2);
-        let sql = format!(
-            "SELECT id, session_id, role, content, ts
-             FROM turns
-             WHERE session_id = ?1
-               AND ({where_clause})
-             ORDER BY id DESC
-             LIMIT {limit}"
-        );
-
         let mut stmt = conn
-            .prepare(sql.as_str())
+            .prepare(
+                "SELECT persisted_turn.id,
+                        persisted_turn.session_id,
+                        persisted_turn.role,
+                        persisted_turn.content,
+                        persisted_turn.ts
+                 FROM memory_canonical_records_fts AS fts
+                 JOIN memory_canonical_records AS record
+                   ON record.record_id = fts.rowid
+                 JOIN turns AS persisted_turn
+                   ON persisted_turn.session_id = record.session_id
+                  AND persisted_turn.session_turn_index = record.session_turn_index
+                 WHERE memory_canonical_records_fts MATCH ?1
+                   AND persisted_turn.session_id = ?2
+                   AND record.kind IN ('user_turn', 'assistant_turn')
+                 ORDER BY bm25(memory_canonical_records_fts),
+                          persisted_turn.ts DESC,
+                          persisted_turn.id DESC
+                 LIMIT ?3",
+            )
             .map_err(|error| format!("prepare session search turns query failed: {error}"))?;
-        let mut bindings = Vec::with_capacity(patterns.len().saturating_add(1));
-        bindings.push(session_id.to_owned());
-        bindings.extend(patterns.iter().cloned());
-
         let rows = stmt
-            .query_map(params_from_iter(bindings.iter()), |row| {
+            .query_map(params![match_query, session_id, limit as i64], |row| {
                 Ok(RawSessionSearchTurnRecord {
                     id: row.get(0)?,
                     session_id: row.get(1)?,
@@ -3029,13 +3274,13 @@ impl SessionRepository {
         Ok(results)
     }
 
-    fn load_terminal_outcome_with_conn(
+    pub(crate) fn load_terminal_outcome_with_conn(
         conn: &Connection,
         session_id: &str,
     ) -> Result<Option<SessionTerminalOutcomeRecord>, String> {
         let raw = conn
             .query_row(
-                "SELECT session_id, status, payload_json, recorded_at
+                "SELECT session_id, status, payload_json, frozen_result_json, recorded_at
                  FROM session_terminal_outcomes
                  WHERE session_id = ?1",
                 params![session_id],
@@ -3044,7 +3289,8 @@ impl SessionRepository {
                         session_id: row.get(0)?,
                         status: row.get(1)?,
                         payload_json: row.get(2)?,
-                        recorded_at: row.get(3)?,
+                        frozen_result_json: row.get(3)?,
+                        recorded_at: row.get(4)?,
                     })
                 },
             )
@@ -3221,6 +3467,7 @@ struct RawSessionTerminalOutcomeRecord {
     session_id: String,
     status: String,
     payload_json: String,
+    frozen_result_json: Option<String>,
     recorded_at: i64,
 }
 
@@ -3348,15 +3595,44 @@ impl SessionEventRecord {
 
 impl SessionTerminalOutcomeRecord {
     fn try_from_raw(raw: RawSessionTerminalOutcomeRecord) -> Result<Self, String> {
+        let payload_json = serde_json::from_str(&raw.payload_json)
+            .map_err(|error| format!("decode session terminal outcome payload failed: {error}"))?;
+        let frozen_result = decode_optional_frozen_result(raw.frozen_result_json)?;
+
         Ok(Self {
             session_id: raw.session_id,
             status: raw.status,
-            payload_json: serde_json::from_str(&raw.payload_json).map_err(|error| {
-                format!("decode session terminal outcome payload failed: {error}")
-            })?,
+            payload_json,
+            frozen_result,
             recorded_at: raw.recorded_at,
         })
     }
+}
+
+fn encode_optional_frozen_result(
+    frozen_result: &Option<FrozenResult>,
+) -> Result<Option<String>, String> {
+    let Some(frozen_result) = frozen_result else {
+        return Ok(None);
+    };
+
+    let encoded_frozen_result = serde_json::to_string(frozen_result)
+        .map_err(|error| format!("encode frozen session result failed: {error}"))?;
+
+    Ok(Some(encoded_frozen_result))
+}
+
+fn decode_optional_frozen_result(
+    raw_frozen_result: Option<String>,
+) -> Result<Option<FrozenResult>, String> {
+    let Some(raw_frozen_result) = raw_frozen_result else {
+        return Ok(None);
+    };
+
+    let frozen_result = serde_json::from_str(&raw_frozen_result)
+        .map_err(|error| format!("decode frozen session result failed: {error}"))?;
+
+    Ok(Some(frozen_result))
 }
 
 impl ApprovalRequestRecord {
@@ -3589,6 +3865,36 @@ fn build_search_like_patterns(normalized_query: &str) -> Vec<String> {
     }
 
     patterns
+}
+
+fn build_search_fts_query(normalized_query: &str) -> Option<String> {
+    let trimmed_query = normalized_query.trim();
+    if trimmed_query.is_empty() {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    let mut seen_terms = BTreeSet::new();
+
+    let escaped_query = trimmed_query.replace('"', "\"\"");
+    let quoted_query = format!("\"{escaped_query}\"");
+    if seen_terms.insert(quoted_query.clone()) {
+        terms.push(quoted_query);
+    }
+
+    for token in tokenize_search_query(normalized_query).into_iter().take(6) {
+        let escaped_token = token.replace('"', "\"\"");
+        let quoted_token = format!("\"{escaped_token}\"");
+        if seen_terms.insert(quoted_token.clone()) {
+            terms.push(quoted_token);
+        }
+    }
+
+    if terms.is_empty() {
+        return None;
+    }
+
+    Some(terms.join(" OR "))
 }
 
 fn tokenize_search_query(query: &str) -> Vec<String> {
@@ -4493,7 +4799,67 @@ mod tests {
     }
 
     #[test]
-    fn session_terminal_outcome_round_trips_payload() {
+    fn search_session_content_returns_turn_and_event_hits_for_session_scope() {
+        let config = isolated_memory_config("search-session-content");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Completed,
+        })
+        .expect("create child");
+
+        append_turn_direct(
+            "child-session",
+            "assistant",
+            "Deploy freeze window is Friday and migration starts Saturday.",
+            &config,
+        )
+        .expect("append assistant turn");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_completed".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "summary": "deploy freeze checklist completed"
+            }),
+        })
+        .expect("append child event");
+
+        let hits = repo
+            .search_session_content("child-session", "deploy freeze", 8)
+            .expect("search session content");
+
+        assert!(
+            hits.iter().any(|hit| {
+                hit.source_kind == SessionSearchSourceKind::Turn
+                    && hit.content_text.contains("Deploy freeze window")
+            }),
+            "expected a turn hit, got: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|hit| {
+                hit.source_kind == SessionSearchSourceKind::Event
+                    && hit
+                        .content_text
+                        .contains("deploy freeze checklist completed")
+            }),
+            "expected an event hit, got: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn session_terminal_outcome_round_trips_payload_and_frozen_result() {
         let config = isolated_memory_config("terminal-outcome-round-trip");
         let repo = SessionRepository::new(&config).expect("repository");
         repo.create_session(NewSessionRecord {
@@ -4505,7 +4871,14 @@ mod tests {
         })
         .expect("create child");
 
-        repo.upsert_terminal_outcome(
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+
+        repo.upsert_terminal_outcome_with_frozen_result(
             "child-session",
             "ok",
             json!({
@@ -4513,6 +4886,7 @@ mod tests {
                 "final_output": "done",
                 "duration_ms": 12
             }),
+            Some(frozen_result.clone()),
         )
         .expect("upsert terminal outcome");
 
@@ -4524,6 +4898,7 @@ mod tests {
         assert_eq!(outcome.session_id, "child-session");
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload_json["final_output"], "done");
+        assert_eq!(outcome.frozen_result, Some(frozen_result));
         assert!(outcome.recorded_at > 0);
     }
 
@@ -4566,6 +4941,51 @@ mod tests {
     }
 
     #[test]
+    fn session_terminal_outcome_upsert_preserves_existing_frozen_result_when_none_is_supplied() {
+        let config = isolated_memory_config("terminal-outcome-preserve-frozen-result");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Failed,
+        })
+        .expect("create child");
+
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+
+        repo.upsert_terminal_outcome_with_frozen_result(
+            "child-session",
+            "error",
+            json!({
+                "error": "first"
+            }),
+            Some(frozen_result.clone()),
+        )
+        .expect("upsert terminal outcome with frozen result");
+
+        let outcome = repo
+            .upsert_terminal_outcome(
+                "child-session",
+                "timeout",
+                json!({
+                    "error": "delegate_timeout"
+                }),
+            )
+            .expect("upsert terminal outcome without frozen result");
+
+        assert_eq!(outcome.status, "timeout");
+        assert_eq!(outcome.payload_json["error"], "delegate_timeout");
+        assert_eq!(outcome.frozen_result, Some(frozen_result));
+    }
+
+    #[test]
     fn finalize_session_terminal_writes_state_event_and_outcome_together() {
         let config = isolated_memory_config("finalize-session-terminal");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -4597,6 +5017,7 @@ mod tests {
                         "turn_count": 2,
                         "duration_ms": 15
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize session");
@@ -4659,6 +5080,7 @@ mod tests {
                 outcome_payload_json: json!({
                     "error": "first"
                 }),
+                frozen_result: None,
             },
         )
         .expect("finalize first terminal state");
@@ -4678,6 +5100,7 @@ mod tests {
                     outcome_payload_json: json!({
                         "error": "delegate_timeout"
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize second terminal state");
@@ -4731,6 +5154,7 @@ mod tests {
                     outcome_payload_json: json!({
                         "error": "delegate_timeout"
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("conditionally finalize session")
@@ -4766,6 +5190,65 @@ mod tests {
     }
 
     #[test]
+    fn finalize_session_terminal_if_current_preserves_existing_frozen_result_when_none_is_supplied()
+    {
+        let config = isolated_memory_config("finalize-if-current-preserve-frozen-result");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+        repo.upsert_terminal_outcome_with_frozen_result(
+            "child-session",
+            "ok",
+            json!({
+                "final_output": "done"
+            }),
+            Some(frozen_result.clone()),
+        )
+        .expect("seed terminal outcome");
+
+        let finalized = repo
+            .finalize_session_terminal_if_current(
+                "child-session",
+                SessionState::Ready,
+                FinalizeSessionTerminalRequest {
+                    state: SessionState::Failed,
+                    last_error: Some("delegate_timeout".to_owned()),
+                    event_kind: "delegate_recovery_applied".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({
+                        "kind": "queued_async_overdue_marked_failed",
+                        "reference": "queued"
+                    }),
+                    outcome_status: "error".to_owned(),
+                    outcome_payload_json: json!({
+                        "error": "delegate_timeout"
+                    }),
+                    frozen_result: None,
+                },
+            )
+            .expect("conditionally finalize session")
+            .expect("conditional finalize result");
+
+        assert_eq!(
+            finalized.terminal_outcome.frozen_result,
+            Some(frozen_result)
+        );
+    }
+
+    #[test]
     fn finalize_session_terminal_if_current_writes_nothing_when_state_does_not_match() {
         let config = isolated_memory_config("finalize-session-terminal-if-current-noop");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -4795,6 +5278,7 @@ mod tests {
                     outcome_payload_json: json!({
                         "error": "delegate_timeout"
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("conditionally finalize session");
@@ -4858,6 +5342,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "final_output": "done"
                 }),
+                frozen_result: None,
             },
         )
         .expect("finalize child");

@@ -842,7 +842,11 @@ fn extract_manual_compaction_summary_headline(
         return None;
     }
 
-    let headline = content.lines().next()?.trim();
+    let headline = content
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(crate::conversation::COMPACTED_SUMMARY_PREFIX))
+        .or_else(|| content.lines().next().map(str::trim))?;
     Some(headline.to_owned())
 }
 
@@ -929,6 +933,10 @@ fn format_prompt_context_history_lines(entries: &[memory::MemoryContextEntry]) -
             }
             memory::MemoryContextKind::Summary => {
                 lines.push("[summary]".to_owned());
+                lines.push(entry.content.clone());
+            }
+            memory::MemoryContextKind::Derived => {
+                lines.push("[derived]".to_owned());
                 lines.push(entry.content.clone());
             }
             memory::MemoryContextKind::RetrievedMemory => {

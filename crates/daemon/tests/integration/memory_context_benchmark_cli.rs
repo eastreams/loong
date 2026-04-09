@@ -196,6 +196,37 @@ fn memory_context_benchmark_writes_report_with_all_scenarios() {
             .get("summary_append_saturated_rss_delta_kib")
             .is_some()
     );
+    let prompt_frame_stability = report
+        .get("prompt_frame_stability")
+        .expect("prompt frame stability section");
+    assert_eq!(
+        prompt_frame_stability.get("representative_scenario"),
+        Some(&json!("summary_steady_state"))
+    );
+    assert_eq!(
+        prompt_frame_stability.get("stable_prefix_preserved_on_followup"),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        prompt_frame_stability.get("cached_prefix_preserved_on_followup"),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        prompt_frame_stability.get("turn_ephemeral_hash_changed_on_followup"),
+        Some(&json!(true))
+    );
+    assert!(
+        prompt_frame_stability
+            .get("layer_estimated_tokens")
+            .and_then(|value| value.get("stable_prefix"))
+            .is_some()
+    );
+    assert!(
+        prompt_frame_stability
+            .get("layer_estimated_tokens")
+            .and_then(|value| value.get("followup_turn_ephemeral"))
+            .is_some()
+    );
     assert!(report.get("window_only_payload_chars").is_some());
     assert!(report.get("summary_window_cover_payload_chars").is_some());
     assert!(report.get("summary_rebuild_payload_chars").is_some());
@@ -211,6 +242,41 @@ fn memory_context_benchmark_writes_report_with_all_scenarios() {
     );
     assert!(report.get("summary_steady_state_payload_chars").is_some());
     assert!(report.get("window_shrink_catch_up_payload_chars").is_some());
+    assert!(
+        report
+            .get("prompt_efficiency_signals")
+            .and_then(|value| value.get("summary_rebuild_budget_change"))
+            .and_then(|value| value.get("estimated_session_local_recall_chars"))
+            .is_some()
+    );
+    assert!(
+        report
+            .get("prompt_efficiency_signals")
+            .and_then(|value| value.get("summary_metadata_realign"))
+            .and_then(|value| value.get("estimated_non_recall_context_chars"))
+            .is_some()
+    );
+    assert!(
+        report
+            .get("prompt_efficiency_signals")
+            .and_then(|value| value.get("summary_steady_state"))
+            .and_then(|value| value.get("estimated_session_local_recall_chars"))
+            .is_some()
+    );
+    assert!(
+        report
+            .get("prompt_efficiency_signals")
+            .and_then(|value| value.get("summary_steady_state"))
+            .and_then(|value| value.get("estimated_non_recall_context_chars"))
+            .is_some()
+    );
+    assert!(
+        report
+            .get("prompt_efficiency_signals")
+            .and_then(|value| value.get("summary_steady_state"))
+            .and_then(|value| value.get("estimated_session_local_recall_share_ratio"))
+            .is_some()
+    );
     assert!(
         report
             .get("flattened_sample_ratios")

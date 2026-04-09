@@ -55,11 +55,38 @@ fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
+fn check_legacy_home_migration() {
+    if std::env::var_os("LOONG_HOME")
+        .as_deref()
+        .is_some_and(|v| !v.is_empty())
+    {
+        return;
+    }
+    let Some(user_home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    if let Some(legacy) = mvp::config::detect_legacy_home(&user_home) {
+        let new_home = user_home.join(mvp::config::HOME_DIR_NAME);
+        tracing::warn!(
+            "Legacy home directory {} found, but {} does not exist. Rename {} to {} to migrate.",
+            legacy.display(),
+            new_home.display(),
+            legacy.display(),
+            new_home.display(),
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let _stdin_guard = StdinGuard;
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
+    loongclaw_daemon::make_env_compatible();
+    check_legacy_home_migration();
     let cli = parse_cli();
     let command_source = if cli.command.is_some() {
         "explicit"
@@ -374,6 +401,7 @@ async fn main() {
         Commands::RuntimeCapability { command } => {
             runtime_capability_cli::run_runtime_capability_cli(command)
         }
+        Commands::WorkUnit { command } => work_unit_cli::run_work_unit_cli(command),
         Commands::ListContextEngines { config, json } => {
             run_list_context_engines_cli(config.as_deref(), json)
         }
@@ -516,6 +544,9 @@ async fn main() {
         ),
         Commands::TrajectoryInspect { artifact, json } => {
             run_trajectory_inspect_cli(&artifact, json)
+        }
+        Commands::RuntimeTrajectory { command } => {
+            runtime_trajectory_cli::execute_runtime_trajectory_command(command)
         }
         Commands::TelegramSend {
             config,

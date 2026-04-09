@@ -919,7 +919,7 @@ fn external_skill_artifact_label(artifact: &ExternalSkillArtifact) -> String {
         .to_owned()
 }
 
-fn merge_profile_note_addendum(existing: Option<&str>, addendum: &str) -> Option<String> {
+pub fn merge_profile_note_addendum(existing: Option<&str>, addendum: &str) -> Option<String> {
     let trimmed_addendum = addendum.trim();
     if trimmed_addendum.is_empty() {
         return None;

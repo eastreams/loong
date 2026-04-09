@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::prompt_fragments::PromptFrameLayer;
+use super::prompt_frame::PromptFrameSummary;
 use super::safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
     SafeLaneTerminalRouteSnapshot, is_safe_lane_backpressure_failure_code,
@@ -412,6 +414,43 @@ pub struct DiscoveryFirstEventSummary {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptFrameEventSummary {
+    pub snapshot_events: u32,
+    pub initial_snapshot_events: u32,
+    pub followup_snapshot_events: u32,
+    pub stable_runtime_hash_change_events: u32,
+    pub session_latched_hash_change_events: u32,
+    pub stable_prefix_hash_change_events: u32,
+    pub cached_prefix_hash_change_events: u32,
+    pub advisory_profile_hash_change_events: u32,
+    pub session_local_recall_hash_change_events: u32,
+    pub recent_window_hash_change_events: u32,
+    pub turn_ephemeral_hash_change_events: u32,
+    pub latest_phase: Option<String>,
+    pub latest_total_estimated_tokens: Option<usize>,
+    pub latest_stable_runtime_segment_count: Option<usize>,
+    pub latest_stable_runtime_estimated_tokens: Option<usize>,
+    pub latest_session_latched_segment_count: Option<usize>,
+    pub latest_session_latched_estimated_tokens: Option<usize>,
+    pub latest_advisory_profile_segment_count: Option<usize>,
+    pub latest_advisory_profile_estimated_tokens: Option<usize>,
+    pub latest_session_local_recall_segment_count: Option<usize>,
+    pub latest_session_local_recall_estimated_tokens: Option<usize>,
+    pub latest_recent_window_segment_count: Option<usize>,
+    pub latest_recent_window_estimated_tokens: Option<usize>,
+    pub latest_turn_ephemeral_segment_count: Option<usize>,
+    pub latest_turn_ephemeral_estimated_tokens: Option<usize>,
+    pub latest_stable_runtime_hash: Option<String>,
+    pub latest_session_latched_hash: Option<String>,
+    pub latest_stable_prefix_hash: Option<String>,
+    pub latest_cached_prefix_hash: Option<String>,
+    pub latest_advisory_profile_hash: Option<String>,
+    pub latest_session_local_recall_hash: Option<String>,
+    pub latest_recent_window_hash: Option<String>,
+    pub latest_turn_ephemeral_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FastLaneToolBatchSegmentSnapshot {
     pub segment_index: u32,
     pub scheduling_class: String,
@@ -508,6 +547,41 @@ where
             continue;
         };
         fold_discovery_first_event_record(&record, &mut summary);
+    }
+
+    summary
+}
+
+pub fn summarize_prompt_frame_events<'a, I>(contents: I) -> PromptFrameEventSummary
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut summary = PromptFrameEventSummary::default();
+    let mut previous_stable_runtime_hash: Option<String> = None;
+    let mut previous_session_latched_hash: Option<String> = None;
+    let mut previous_stable_prefix_hash: Option<String> = None;
+    let mut previous_cached_prefix_hash: Option<String> = None;
+    let mut previous_advisory_profile_hash: Option<String> = None;
+    let mut previous_session_local_recall_hash: Option<String> = None;
+    let mut previous_recent_window_hash: Option<String> = None;
+    let mut previous_turn_ephemeral_hash: Option<String> = None;
+
+    for content in contents {
+        let Some(record) = parse_conversation_event(content) else {
+            continue;
+        };
+        fold_prompt_frame_event_record(
+            &record,
+            &mut summary,
+            &mut previous_stable_runtime_hash,
+            &mut previous_session_latched_hash,
+            &mut previous_stable_prefix_hash,
+            &mut previous_cached_prefix_hash,
+            &mut previous_advisory_profile_hash,
+            &mut previous_session_local_recall_hash,
+            &mut previous_recent_window_hash,
+            &mut previous_turn_ephemeral_hash,
+        );
     }
 
     summary
@@ -816,6 +890,218 @@ fn fold_discovery_first_event_record(
         }
         _ => {}
     }
+}
+
+fn fold_prompt_frame_event_record(
+    record: &ConversationEventRecord,
+    summary: &mut PromptFrameEventSummary,
+    previous_stable_runtime_hash: &mut Option<String>,
+    previous_session_latched_hash: &mut Option<String>,
+    previous_stable_prefix_hash: &mut Option<String>,
+    previous_cached_prefix_hash: &mut Option<String>,
+    previous_advisory_profile_hash: &mut Option<String>,
+    previous_session_local_recall_hash: &mut Option<String>,
+    previous_recent_window_hash: &mut Option<String>,
+    previous_turn_ephemeral_hash: &mut Option<String>,
+) {
+    if record.event.as_str() != "provider_prompt_frame_snapshot" {
+        return;
+    }
+
+    let phase = record.payload.get("phase").and_then(Value::as_str);
+    let prompt_frame_value = record.payload.get("prompt_frame").cloned();
+    let Some(prompt_frame_value) = prompt_frame_value else {
+        return;
+    };
+    let Ok(prompt_frame_summary) = serde_json::from_value::<PromptFrameSummary>(prompt_frame_value)
+    else {
+        return;
+    };
+
+    summary.snapshot_events = summary.snapshot_events.saturating_add(1);
+    match phase {
+        Some("initial") => {
+            summary.initial_snapshot_events = summary.initial_snapshot_events.saturating_add(1);
+        }
+        Some("followup") => {
+            summary.followup_snapshot_events = summary.followup_snapshot_events.saturating_add(1);
+        }
+        _ => {}
+    }
+
+    summary.latest_phase = phase.map(str::to_owned);
+    let stable_runtime_bucket =
+        prompt_frame_summary.bucket(PromptFrameLayer::StableRuntimeGuidance);
+    let session_latched_bucket =
+        prompt_frame_summary.bucket(PromptFrameLayer::SessionLatchedContext);
+    let advisory_profile_bucket = prompt_frame_summary.bucket(PromptFrameLayer::AdvisoryProfile);
+    let session_local_recall_bucket =
+        prompt_frame_summary.bucket(PromptFrameLayer::SessionLocalRecall);
+    let recent_window_bucket = prompt_frame_summary.bucket(PromptFrameLayer::RecentWindow);
+    let turn_ephemeral_bucket = prompt_frame_summary.bucket(PromptFrameLayer::TurnEphemeralTail);
+
+    summary.latest_total_estimated_tokens =
+        Some(prompt_frame_total_estimated_tokens(&prompt_frame_summary));
+    summary.latest_stable_runtime_segment_count = stable_runtime_bucket
+        .map(prompt_frame_bucket_segment_count)
+        .or(Some(prompt_frame_summary.stable_runtime_segment_count));
+    summary.latest_stable_runtime_estimated_tokens = stable_runtime_bucket
+        .map(prompt_frame_bucket_estimated_tokens)
+        .or(Some(prompt_frame_summary.stable_runtime_estimated_tokens));
+    summary.latest_session_latched_segment_count = session_latched_bucket
+        .map(prompt_frame_bucket_segment_count)
+        .or(Some(prompt_frame_summary.session_latched_segment_count));
+    summary.latest_session_latched_estimated_tokens = session_latched_bucket
+        .map(prompt_frame_bucket_estimated_tokens)
+        .or(Some(prompt_frame_summary.session_latched_estimated_tokens));
+    summary.latest_advisory_profile_segment_count = advisory_profile_bucket
+        .map(prompt_frame_bucket_segment_count)
+        .or(Some(prompt_frame_summary.advisory_profile_segment_count));
+    summary.latest_advisory_profile_estimated_tokens = advisory_profile_bucket
+        .map(prompt_frame_bucket_estimated_tokens)
+        .or(Some(prompt_frame_summary.advisory_profile_estimated_tokens));
+    summary.latest_session_local_recall_segment_count = session_local_recall_bucket
+        .map(prompt_frame_bucket_segment_count)
+        .or(Some(
+            prompt_frame_summary.session_local_recall_segment_count,
+        ));
+    summary.latest_session_local_recall_estimated_tokens = session_local_recall_bucket
+        .map(prompt_frame_bucket_estimated_tokens)
+        .or(Some(
+            prompt_frame_summary.session_local_recall_estimated_tokens,
+        ));
+    summary.latest_recent_window_segment_count = recent_window_bucket
+        .map(prompt_frame_bucket_segment_count)
+        .or(Some(prompt_frame_summary.recent_window_segment_count));
+    summary.latest_recent_window_estimated_tokens = recent_window_bucket
+        .map(prompt_frame_bucket_estimated_tokens)
+        .or(Some(prompt_frame_summary.recent_window_estimated_tokens));
+    summary.latest_turn_ephemeral_segment_count = turn_ephemeral_bucket
+        .map(prompt_frame_bucket_segment_count)
+        .or(Some(prompt_frame_summary.turn_ephemeral_segment_count));
+    summary.latest_turn_ephemeral_estimated_tokens = turn_ephemeral_bucket
+        .map(prompt_frame_bucket_estimated_tokens)
+        .or(Some(prompt_frame_summary.turn_ephemeral_estimated_tokens));
+    summary.latest_stable_runtime_hash = stable_runtime_bucket
+        .and_then(prompt_frame_bucket_hash)
+        .or_else(|| prompt_frame_summary.stable_runtime_hash.clone());
+    summary.latest_session_latched_hash = session_latched_bucket
+        .and_then(prompt_frame_bucket_hash)
+        .or_else(|| prompt_frame_summary.session_latched_hash.clone());
+    summary.latest_stable_prefix_hash = prompt_frame_summary.stable_prefix_hash_sha256.clone();
+    summary.latest_cached_prefix_hash = prompt_frame_summary.cached_prefix_sha256.clone();
+    summary.latest_advisory_profile_hash = advisory_profile_bucket
+        .and_then(prompt_frame_bucket_hash)
+        .or_else(|| prompt_frame_summary.advisory_profile_hash.clone());
+    summary.latest_session_local_recall_hash = session_local_recall_bucket
+        .and_then(prompt_frame_bucket_hash)
+        .or_else(|| prompt_frame_summary.session_local_recall_hash.clone());
+    summary.latest_recent_window_hash = recent_window_bucket
+        .and_then(prompt_frame_bucket_hash)
+        .or_else(|| prompt_frame_summary.recent_window_hash.clone());
+    summary.latest_turn_ephemeral_hash = turn_ephemeral_bucket
+        .and_then(prompt_frame_bucket_hash)
+        .or_else(|| prompt_frame_summary.turn_ephemeral_hash.clone());
+
+    update_hash_change_count(
+        previous_stable_runtime_hash,
+        summary.latest_stable_runtime_hash.as_ref(),
+        &mut summary.stable_runtime_hash_change_events,
+    );
+    update_hash_change_count(
+        previous_session_latched_hash,
+        summary.latest_session_latched_hash.as_ref(),
+        &mut summary.session_latched_hash_change_events,
+    );
+    update_hash_change_count(
+        previous_stable_prefix_hash,
+        summary.latest_stable_prefix_hash.as_ref(),
+        &mut summary.stable_prefix_hash_change_events,
+    );
+    update_hash_change_count(
+        previous_cached_prefix_hash,
+        summary.latest_cached_prefix_hash.as_ref(),
+        &mut summary.cached_prefix_hash_change_events,
+    );
+    update_hash_change_count(
+        previous_advisory_profile_hash,
+        summary.latest_advisory_profile_hash.as_ref(),
+        &mut summary.advisory_profile_hash_change_events,
+    );
+    update_hash_change_count(
+        previous_session_local_recall_hash,
+        summary.latest_session_local_recall_hash.as_ref(),
+        &mut summary.session_local_recall_hash_change_events,
+    );
+    update_hash_change_count(
+        previous_recent_window_hash,
+        summary.latest_recent_window_hash.as_ref(),
+        &mut summary.recent_window_hash_change_events,
+    );
+    update_hash_change_count(
+        previous_turn_ephemeral_hash,
+        summary.latest_turn_ephemeral_hash.as_ref(),
+        &mut summary.turn_ephemeral_hash_change_events,
+    );
+}
+
+fn update_hash_change_count(
+    previous_hash: &mut Option<String>,
+    current_hash: Option<&String>,
+    change_count: &mut u32,
+) {
+    let current_hash = current_hash.cloned();
+    let changed = previous_hash
+        .as_ref()
+        .zip(current_hash.as_ref())
+        .map(|(previous_hash, current_hash)| previous_hash != current_hash)
+        .unwrap_or(false);
+    if changed {
+        *change_count = change_count.saturating_add(1);
+    }
+
+    if let Some(current_hash) = current_hash {
+        *previous_hash = Some(current_hash);
+    }
+}
+
+fn prompt_frame_total_estimated_tokens(summary: &PromptFrameSummary) -> usize {
+    let total_from_summary = summary.total_estimated_tokens;
+    if let Some(total_from_summary) = total_from_summary {
+        return total_from_summary;
+    }
+
+    let mut total = 0usize;
+
+    for bucket in &summary.buckets {
+        let bucket_tokens = prompt_frame_bucket_estimated_tokens(bucket);
+        total = total.saturating_add(bucket_tokens);
+    }
+
+    total
+}
+
+fn prompt_frame_bucket_segment_count(
+    bucket: &super::prompt_frame::PromptFrameBucketSummary,
+) -> usize {
+    let fragment_count = bucket.fragment_count;
+    let message_count = bucket.message_count;
+
+    fragment_count.saturating_add(message_count)
+}
+
+fn prompt_frame_bucket_estimated_tokens(
+    bucket: &super::prompt_frame::PromptFrameBucketSummary,
+) -> usize {
+    let adjusted_chars = bucket.content_chars.saturating_add(3);
+
+    adjusted_chars / 4
+}
+
+fn prompt_frame_bucket_hash(
+    bucket: &super::prompt_frame::PromptFrameBucketSummary,
+) -> Option<String> {
+    bucket.content_sha256.clone()
 }
 
 fn fold_fast_lane_tool_batch_event_record(
@@ -3070,6 +3356,92 @@ mod tests {
         assert_eq!(summary.latest_added_estimated_tokens, Some(12));
         assert_eq!(summary.outcome_counts.get("final_reply").copied(), Some(1));
         assert_eq!(summary.outcome_counts.get("tool.invoke").copied(), None);
+    }
+
+    #[test]
+    fn summarize_prompt_frame_events_tracks_hash_changes_and_advisory_profile() {
+        let payloads = [
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":1,"phase":"initial","prompt_frame":{"schema_version":1,"total_estimated_tokens":42,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":0,"turn_ephemeral_estimated_tokens":0,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":null}}}"#,
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":2,"phase":"followup","prompt_frame":{"schema_version":1,"total_estimated_tokens":55,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":2,"turn_ephemeral_estimated_tokens":11,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-b","advisory_profile_hash":"profile-b","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":"tail-b"}}}"#,
+        ];
+
+        let summary = summarize_prompt_frame_events(payloads.iter().copied());
+
+        assert_eq!(summary.snapshot_events, 2);
+        assert_eq!(summary.initial_snapshot_events, 1);
+        assert_eq!(summary.followup_snapshot_events, 1);
+        assert_eq!(summary.stable_prefix_hash_change_events, 0);
+        assert_eq!(summary.cached_prefix_hash_change_events, 1);
+        assert_eq!(summary.advisory_profile_hash_change_events, 1);
+        assert_eq!(summary.turn_ephemeral_hash_change_events, 0);
+        assert_eq!(summary.latest_phase.as_deref(), Some("followup"));
+        assert_eq!(summary.latest_total_estimated_tokens, Some(55));
+        assert_eq!(summary.latest_advisory_profile_segment_count, Some(1));
+        assert_eq!(summary.latest_advisory_profile_estimated_tokens, Some(6));
+        assert_eq!(
+            summary.latest_advisory_profile_hash.as_deref(),
+            Some("profile-b")
+        );
+        assert_eq!(
+            summary.latest_stable_prefix_hash.as_deref(),
+            Some("prefix-a")
+        );
+        assert_eq!(
+            summary.latest_cached_prefix_hash.as_deref(),
+            Some("cached-b")
+        );
+        assert_eq!(summary.latest_turn_ephemeral_segment_count, Some(2));
+        assert_eq!(
+            summary.latest_turn_ephemeral_hash.as_deref(),
+            Some("tail-b")
+        );
+    }
+
+    #[test]
+    fn summarize_prompt_frame_events_preserves_previous_hash_across_missing_tail_hash() {
+        let payloads = [
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":1,"phase":"initial","prompt_frame":{"schema_version":1,"total_estimated_tokens":42,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":1,"turn_ephemeral_estimated_tokens":4,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":"tail-a"}}}"#,
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":2,"phase":"followup","prompt_frame":{"schema_version":1,"total_estimated_tokens":55,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":0,"turn_ephemeral_estimated_tokens":0,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":null}}}"#,
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":3,"phase":"followup","prompt_frame":{"schema_version":1,"total_estimated_tokens":60,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":1,"turn_ephemeral_estimated_tokens":5,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":"tail-b"}}}"#,
+        ];
+
+        let summary = summarize_prompt_frame_events(payloads.iter().copied());
+
+        assert_eq!(summary.turn_ephemeral_hash_change_events, 1);
+        assert_eq!(
+            summary.latest_turn_ephemeral_hash.as_deref(),
+            Some("tail-b")
+        );
+    }
+
+    #[test]
+    fn summarize_prompt_frame_events_counts_session_latched_drift_as_prefix_drift() {
+        let payloads = [
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":1,"phase":"initial","prompt_frame":{"schema_version":1,"total_estimated_tokens":42,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":0,"turn_ephemeral_estimated_tokens":0,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":null}}}"#,
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":2,"phase":"followup","prompt_frame":{"schema_version":1,"total_estimated_tokens":55,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":2,"turn_ephemeral_estimated_tokens":11,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-b","stable_prefix_hash_sha256":"prefix-b","cached_prefix_sha256":"cached-b","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":"tail-b"}}}"#,
+        ];
+
+        let summary = summarize_prompt_frame_events(payloads.iter().copied());
+
+        assert_eq!(summary.snapshot_events, 2);
+        assert_eq!(summary.stable_runtime_hash_change_events, 0);
+        assert_eq!(summary.session_latched_hash_change_events, 1);
+        assert_eq!(summary.stable_prefix_hash_change_events, 1);
+        assert_eq!(summary.cached_prefix_hash_change_events, 1);
+        assert_eq!(summary.advisory_profile_hash_change_events, 0);
+        assert_eq!(summary.latest_phase.as_deref(), Some("followup"));
+        assert_eq!(
+            summary.latest_session_latched_hash.as_deref(),
+            Some("latched-b")
+        );
+        assert_eq!(
+            summary.latest_stable_prefix_hash.as_deref(),
+            Some("prefix-b")
+        );
+        assert_eq!(
+            summary.latest_cached_prefix_hash.as_deref(),
+            Some("cached-b")
+        );
     }
 
     #[test]

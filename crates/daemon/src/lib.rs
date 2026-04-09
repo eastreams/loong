@@ -37,6 +37,7 @@ pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
+pub use self::env_compat::make_env_compatible;
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
     run_list_mcp_servers_cli, run_show_mcp_server_cli,
@@ -47,6 +48,7 @@ pub use loongclaw_bench::{
 };
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
+pub use runtime_trajectory_cli::{format_runtime_trajectory_summary, run_runtime_trajectory_cli};
 #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
 pub fn run_memory_context_benchmark_cli(
     output_path: &str,
@@ -95,8 +97,10 @@ mod cli_json;
 mod command_kind;
 pub mod completions_cli;
 mod control_plane_server;
+mod copilot_onboarding;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
+mod env_compat;
 mod external_skills_policy_probe;
 pub mod feishu_cli;
 pub mod feishu_support;
@@ -128,6 +132,7 @@ pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
+pub mod runtime_trajectory_cli;
 pub mod session_cli;
 pub mod sessions_cli;
 pub mod skills_cli;
@@ -137,6 +142,7 @@ mod task_execution;
 pub mod tasks_cli;
 mod tlon_cli;
 pub mod trajectory_cli;
+pub mod work_unit_cli;
 
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
@@ -754,6 +760,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: runtime_capability_cli::RuntimeCapabilityCommands,
     },
+    /// Manage durable work units for long-running runtime orchestration
+    WorkUnit {
+        #[command(subcommand)]
+        command: work_unit_cli::WorkUnitCommands,
+    },
     /// List available conversation context engines and selected runtime engine
     ListContextEngines {
         #[arg(long)]
@@ -956,6 +967,11 @@ pub enum Commands {
         artifact: String,
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+    /// Export or inspect runtime trajectory artifacts for replay, evaluation, or research workflows
+    RuntimeTrajectory {
+        #[command(subcommand)]
+        command: runtime_trajectory_cli::RuntimeTrajectoryCommands,
     },
     /// Send one Telegram message
     TelegramSend {
@@ -1642,7 +1658,7 @@ mod first_run_entry_tests {
         let home = unique_temp_dir(prefix);
         fs::create_dir_all(&home).expect("create isolated home");
         env.set("HOME", &home);
-        env.remove("LOONGCLAW_HOME");
+        env.remove("LOONG_HOME");
         env.remove("LOONGCLAW_CONFIG_PATH");
         (env, home)
     }

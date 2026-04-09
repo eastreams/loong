@@ -114,6 +114,10 @@ impl AssembledConversationContext {
             system_prompt_addition: None,
         }
     }
+
+    pub fn prompt_frame_summary(&self) -> crate::conversation::PromptFrameSummary {
+        crate::conversation::summarize_assembled_prompt_frame(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -701,6 +705,18 @@ mod tests {
     fn assembled_context_from_messages_defaults_to_empty_artifacts() {
         let assembled = AssembledConversationContext::from_messages(vec![Value::Null]);
         assert!(assembled.artifacts.is_empty());
+    }
+
+    #[test]
+    fn assembled_context_prompt_frame_summary_defaults_to_empty_buckets() {
+        let assembled = AssembledConversationContext::from_messages(vec![Value::Null]);
+        let frame_summary = assembled.prompt_frame_summary();
+        let sliding_window_bucket = frame_summary
+            .bucket(crate::conversation::PromptFrameLayer::RecentWindow)
+            .expect("sliding window bucket");
+
+        assert_eq!(frame_summary.fragments.len(), 0);
+        assert_eq!(sliding_window_bucket.message_count, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

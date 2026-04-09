@@ -68,7 +68,7 @@ fn file_read_uses_workspace_root_from_trusted_internal_payload() {
     assert_eq!(outcome.status, "ok");
     assert_eq!(outcome.payload["content"], "child");
     let expected_path =
-        std::fs::canonicalize(child_root.join("note.txt")).expect("canonicalize child note");
+        dunce::canonicalize(child_root.join("note.txt")).expect("canonicalize child note");
     assert_eq!(outcome.payload["path"], expected_path.display().to_string());
 
     std::fs::remove_dir_all(&outer_root).ok();

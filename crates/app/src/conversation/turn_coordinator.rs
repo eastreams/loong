@@ -1,8 +1,4 @@
-#[cfg(feature = "memory-sqlite")]
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(feature = "memory-sqlite")]
-use std::future::Future;
 #[cfg(feature = "memory-sqlite")]
 use std::panic::AssertUnwindSafe;
 
@@ -18,6 +14,9 @@ use tokio::sync::Mutex;
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, timeout};
 
+#[path = "turn_coordinator_support.rs"]
+mod support;
+
 use crate::CliResult;
 #[cfg(test)]
 use crate::KernelContext;
@@ -29,7 +28,7 @@ use crate::acp::{
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
-    DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed, next_delegate_child_depth,
+    DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed,
 };
 use crate::runtime_self_continuity;
 
@@ -41,8 +40,15 @@ use super::analytics::{
     TurnCheckpointRecoveryAction, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,
 };
 #[cfg(feature = "memory-sqlite")]
+use super::announce::DelegateAnnounceSettings;
+#[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
 use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
+#[cfg(feature = "memory-sqlite")]
+use super::delegate_support::{
+    finalize_and_announce_delegate_child_terminal, format_delegate_child_panic,
+    next_delegate_child_depth_for_delegate, spawn_async_delegate_detached,
+};
 use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 use super::persistence::{
@@ -62,8 +68,7 @@ use super::plan_verifier::{
     PlanVerificationReport, verify_output,
 };
 use super::runtime::{
-    AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime,
-    DefaultConversationRuntime, SessionContext,
+    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
 };
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::safe_lane_failure::{
@@ -134,12 +139,56 @@ use crate::conversation::workspace_isolation::{
 #[cfg(all(feature = "memory-sqlite", test))]
 use crate::session::recovery::RECOVERY_EVENT_KIND;
 #[cfg(all(test, feature = "memory-sqlite"))]
+use crate::session::repository::FinalizeSessionTerminalRequest;
+#[cfg(all(test, feature = "memory-sqlite"))]
 use crate::session::repository::TransitionApprovalRequestIfCurrentRequest;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    ApprovalDecision, ApprovalRequestStatus, FinalizeSessionTerminalRequest, NewSessionEvent,
-    NewSessionRecord, SessionKind, SessionRepository, SessionState,
+    ApprovalDecision, ApprovalRequestStatus, NewSessionEvent, NewSessionRecord, SessionKind,
+    SessionRepository, SessionState,
 };
+use support::{
+    ProviderTurnPreparation, ProviderTurnReplyTailPhase, ProviderTurnSessionState,
+    emit_async_delegate_child_queued_event, emit_discovery_first_event, emit_prompt_frame_event,
+    estimate_tokens_for_messages, inject_delegate_workspace_metadata,
+    split_delegate_workspace_cleanup, summarize_discovery_first_followup_turn,
+};
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_label: Option<&str>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
+    phase: &'static str,
+    isolation: crate::conversation::ConstrainedSubagentIsolation,
+    duration_ms: u64,
+    turn_count: Option<usize>,
+    error: Option<&str>,
+    final_output: Option<&str>,
+    workspace_root: Option<&std::path::Path>,
+    workspace_retained: Option<bool>,
+    binding: ConversationRuntimeBinding<'_>,
+) {
+    support::emit_async_delegate_child_terminal_event(
+        runtime,
+        parent_session_id,
+        child_session_id,
+        child_label,
+        profile,
+        phase,
+        isolation,
+        duration_ms,
+        turn_count,
+        error,
+        final_output,
+        workspace_root,
+        workspace_retained,
+        binding,
+    )
+    .await;
+}
 
 #[derive(Default)]
 pub struct ConversationTurnCoordinator;
@@ -481,142 +530,6 @@ struct SafeLaneRoundExecution {
     report: PlanRunReport,
     tool_outputs: Vec<String>,
     tool_output_stats: SafeLaneToolOutputStats,
-}
-
-#[derive(Debug, Clone)]
-struct ProviderTurnSessionState {
-    messages: Vec<Value>,
-    estimated_tokens: Option<usize>,
-}
-
-impl ProviderTurnSessionState {
-    fn from_assembled_context(
-        assembled_context: AssembledConversationContext,
-        user_input: &str,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> Self {
-        let mut messages = assembled_context.messages;
-        if let Some(ingress) = ingress.filter(|value| value.has_contextual_hints()) {
-            messages.push(ingress.as_system_message());
-        }
-        messages.push(json!({
-            "role": "user",
-            "content": user_input,
-        }));
-        Self {
-            messages,
-            estimated_tokens: assembled_context.estimated_tokens,
-        }
-    }
-
-    fn after_turn_messages(&self, reply: &str) -> Vec<Value> {
-        let mut messages = self.messages.clone();
-        messages.push(json!({
-            "role": "assistant",
-            "content": reply,
-        }));
-        messages
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ProviderTurnReplyTailPhase {
-    reply: String,
-    after_turn_messages: Vec<Value>,
-    estimated_tokens: Option<usize>,
-}
-
-impl ProviderTurnReplyTailPhase {
-    fn from_session(session: &ProviderTurnSessionState, reply: &str) -> Self {
-        Self {
-            reply: reply.to_owned(),
-            after_turn_messages: session.after_turn_messages(reply),
-            estimated_tokens: session.estimated_tokens,
-        }
-    }
-
-    fn reply(&self) -> &str {
-        self.reply.as_str()
-    }
-
-    fn after_turn_messages(&self) -> &[Value] {
-        &self.after_turn_messages
-    }
-
-    fn estimated_tokens(&self) -> Option<usize> {
-        self.estimated_tokens
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ProviderTurnPreparation {
-    session: ProviderTurnSessionState,
-    lane_plan: ProviderTurnLanePlan,
-    raw_tool_output_requested: bool,
-    turn_id: String,
-}
-
-impl ProviderTurnPreparation {
-    #[cfg(test)]
-    fn from_assembled_context(
-        config: &LoongClawConfig,
-        assembled_context: AssembledConversationContext,
-        user_input: &str,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> Self {
-        let turn_id = next_conversation_turn_id();
-        Self::from_assembled_context_with_turn_id(
-            config,
-            assembled_context,
-            user_input,
-            turn_id.as_str(),
-            ingress,
-        )
-    }
-
-    fn from_assembled_context_with_turn_id(
-        config: &LoongClawConfig,
-        assembled_context: AssembledConversationContext,
-        user_input: &str,
-        turn_id: &str,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> Self {
-        Self {
-            session: ProviderTurnSessionState::from_assembled_context(
-                assembled_context,
-                user_input,
-                ingress,
-            ),
-            lane_plan: ProviderTurnLanePlan::from_user_input(config, user_input),
-            raw_tool_output_requested: user_requested_raw_tool_output(user_input),
-            turn_id: turn_id.to_owned(),
-        }
-    }
-
-    fn for_followup_messages(&self, messages: Vec<Value>) -> Self {
-        Self {
-            session: ProviderTurnSessionState {
-                messages,
-                estimated_tokens: None,
-            },
-            lane_plan: self.lane_plan.clone(),
-            raw_tool_output_requested: self.raw_tool_output_requested,
-            turn_id: self.turn_id.clone(),
-        }
-    }
-
-    fn checkpoint(&self) -> TurnPreparationSnapshot {
-        TurnPreparationSnapshot {
-            lane: self.lane_plan.decision.lane,
-            max_tool_steps: self.lane_plan.max_tool_steps,
-            raw_tool_output_requested: self.raw_tool_output_requested,
-            context_message_count: self.session.messages.len(),
-            context_fingerprint_sha256: checkpoint_context_fingerprint_sha256(
-                &self.session.messages,
-            ),
-            estimated_tokens: self.session.estimated_tokens,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1940,6 +1853,15 @@ impl ConversationTurnCoordinator {
                 ),
             );
             observe_turn_phase(observer.as_ref(), initial_request_event);
+            emit_prompt_frame_event(
+                runtime,
+                session_id,
+                1,
+                "initial",
+                preparation.session.prompt_frame_summary(),
+                binding,
+            )
+            .await;
 
             let provider_turn_result = request_provider_turn_with_observer(
                 config,
@@ -3082,6 +3004,15 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             followup_context_estimated_tokens,
                         );
                     observe_turn_phase(observer, followup_request_event);
+                    emit_prompt_frame_event(
+                        runtime,
+                        session_id,
+                        next_provider_round,
+                        "followup",
+                        followup_preparation.session.prompt_frame_summary(),
+                        binding,
+                    )
+                    .await;
                     emit_discovery_first_event(
                         runtime,
                         session_id,
@@ -3307,235 +3238,6 @@ fn build_turn_reply_guard_messages(
         |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
     ));
     messages
-}
-
-#[derive(Debug)]
-struct DiscoveryFirstFollowupTurnSummary {
-    outcome: String,
-    followup_tool_name: Option<String>,
-    followup_target_tool_id: Option<String>,
-    resolved_to_tool_invoke: bool,
-}
-
-fn summarize_discovery_first_followup_turn(
-    turn: &ProviderTurn,
-) -> DiscoveryFirstFollowupTurnSummary {
-    let Some(first) = turn.tool_intents.first() else {
-        return DiscoveryFirstFollowupTurnSummary {
-            outcome: "final_reply".to_owned(),
-            followup_tool_name: None,
-            followup_target_tool_id: None,
-            resolved_to_tool_invoke: false,
-        };
-    };
-
-    // Prefer the first `tool.invoke` intent if present; fall back to first intent.
-    let intent = turn
-        .tool_intents
-        .iter()
-        .find(|i| crate::tools::canonical_tool_name(i.tool_name.as_str()) == "tool.invoke")
-        .unwrap_or(first);
-
-    let canonical_tool_name =
-        crate::tools::canonical_tool_name(intent.tool_name.as_str()).to_owned();
-    let resolved_to_tool_invoke = canonical_tool_name == "tool.invoke";
-    let followup_target_tool_id = resolved_to_tool_invoke
-        .then(|| {
-            intent
-                .args_json
-                .get("tool_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .flatten();
-
-    DiscoveryFirstFollowupTurnSummary {
-        outcome: canonical_tool_name.clone(),
-        followup_tool_name: Some(canonical_tool_name),
-        followup_target_tool_id,
-        resolved_to_tool_invoke,
-    }
-}
-
-fn estimate_tokens_for_messages(
-    estimated_tokens: Option<usize>,
-    messages: &[Value],
-) -> Option<usize> {
-    estimated_tokens.or_else(|| estimate_tokens(messages))
-}
-
-const DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS: usize = 200;
-
-async fn emit_discovery_first_event<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    event_name: &str,
-    payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
-) {
-    let _ = persist_conversation_event(runtime, session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.kernel_context() {
-        let _ = ctx.kernel.record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.discovery_first".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.discovery_first.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn emit_async_delegate_child_queued_event<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    parent_session_id: &str,
-    child_session_id: &str,
-    child_label: Option<&str>,
-    profile: Option<crate::conversation::DelegateBuiltinProfile>,
-    isolation: crate::conversation::ConstrainedSubagentIsolation,
-    timeout_seconds: u64,
-    workspace_root: Option<&std::path::Path>,
-    binding: ConversationRuntimeBinding<'_>,
-) {
-    emit_delegate_child_projection_event(
-        runtime,
-        parent_session_id,
-        "delegate_child_queued",
-        json!({
-            "child_session_id": child_session_id,
-            "label": child_label,
-            "profile": profile.map(crate::conversation::DelegateBuiltinProfile::as_str),
-            "mode": "async",
-            "phase": "queued",
-            "isolation": isolation.as_str(),
-            "timeout_seconds": timeout_seconds,
-            "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
-        }),
-        binding,
-    )
-    .await;
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    parent_session_id: &str,
-    child_session_id: &str,
-    child_label: Option<&str>,
-    profile: Option<crate::conversation::DelegateBuiltinProfile>,
-    phase: &'static str,
-    isolation: crate::conversation::ConstrainedSubagentIsolation,
-    duration_ms: u64,
-    turn_count: Option<usize>,
-    error: Option<&str>,
-    final_output: Option<&str>,
-    workspace_root: Option<&std::path::Path>,
-    workspace_retained: Option<bool>,
-    binding: ConversationRuntimeBinding<'_>,
-) {
-    emit_delegate_child_projection_event(
-        runtime,
-        parent_session_id,
-        "delegate_child_terminal",
-        json!({
-            "child_session_id": child_session_id,
-            "label": child_label,
-            "profile": profile.map(crate::conversation::DelegateBuiltinProfile::as_str),
-            "mode": "async",
-            "phase": phase,
-            "isolation": isolation.as_str(),
-            "duration_ms": duration_ms,
-            "turn_count": turn_count,
-            "error": error,
-            "final_output_preview": final_output.map(truncate_delegate_child_output_preview),
-            "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
-            "workspace_retained": workspace_retained,
-        }),
-        binding,
-    )
-    .await;
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn emit_delegate_child_projection_event<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    parent_session_id: &str,
-    event_name: &str,
-    payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
-) {
-    let _ =
-        persist_conversation_event(runtime, parent_session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.kernel_context() {
-        let _ = ctx.kernel.record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.delegate_child".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.delegate_child.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn truncate_delegate_child_output_preview(value: &str) -> String {
-    let total_chars = value.chars().count();
-    if total_chars <= DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS {
-        return value.to_owned();
-    }
-
-    let mut truncated = String::new();
-    for ch in value.chars().take(DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS) {
-        truncated.push(ch);
-    }
-    let omitted = total_chars.saturating_sub(DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS);
-    truncated.push_str(&format!("...(truncated {omitted} chars)"));
-    truncated
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn inject_delegate_workspace_metadata(
-    outcome: &mut loongclaw_contracts::ToolCoreOutcome,
-    execution: &ConstrainedSubagentExecution,
-    cleanup: Option<&DelegateWorkspaceCleanupResult>,
-    cleanup_error: Option<String>,
-) {
-    let Some(object) = outcome.payload.as_object_mut() else {
-        return;
-    };
-
-    object.insert("isolation".to_owned(), json!(execution.isolation.as_str()));
-    if let Some(workspace_root) = execution.workspace_root.as_ref() {
-        let display_path = workspace_root.display().to_string();
-        object.insert("workspace_root".to_owned(), json!(display_path));
-    }
-    if let Some(cleanup) = cleanup {
-        object.insert("workspace_retained".to_owned(), json!(cleanup.retained));
-        object.insert("workspace_dirty".to_owned(), json!(cleanup.dirty));
-    }
-    if let Some(cleanup_error) = cleanup_error {
-        object.insert("workspace_cleanup_error".to_owned(), json!(cleanup_error));
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn split_delegate_workspace_cleanup(
-    cleanup: Result<Option<DelegateWorkspaceCleanupResult>, String>,
-) -> (Option<DelegateWorkspaceCleanupResult>, Option<String>) {
-    match cleanup {
-        Ok(metadata) => (metadata, None),
-        Err(error) => (None, Some(error)),
-    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4266,7 +3968,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let workspace_cleanup_owned_by_child_for_work =
         std::sync::Arc::clone(&workspace_cleanup_owned_by_child);
-    with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+    super::delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
         runtime,
         &session_context.session_id,
         &child_session_id,
@@ -4438,6 +4140,8 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
             timeout_seconds: delegate_policy.timeout_seconds,
             binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
         },
+        config.tools.delegate.max_frozen_bytes,
+        DelegateAnnounceSettings::from_config(config),
     );
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
@@ -4605,23 +4309,22 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::Completed,
+                duration_ms,
+                Some(turn_count),
+                None,
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::Completed,
-                    last_error: None,
-                    event_kind: "delegate_completed".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::Completed,
-                        duration_ms,
-                        Some(turn_count),
-                        None,
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                },
+                parent_session_id,
+                &outcome,
+                SessionState::Completed,
+                None,
+                "delegate_completed",
+                event_payload_json,
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
@@ -4662,23 +4365,22 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::Failed,
+                duration_ms,
+                None,
+                Some(error.as_str()),
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::Failed,
-                    last_error: Some(error.clone()),
-                    event_kind: "delegate_failed".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::Failed,
-                        duration_ms,
-                        None,
-                        Some(error.as_str()),
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                },
+                parent_session_id,
+                &outcome,
+                SessionState::Failed,
+                Some(error.clone()),
+                "delegate_failed",
+                event_payload_json,
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
@@ -4720,23 +4422,22 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::Failed,
+                duration_ms,
+                None,
+                Some(panic_error.as_str()),
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::Failed,
-                    last_error: Some(panic_error.clone()),
-                    event_kind: "delegate_failed".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::Failed,
-                        duration_ms,
-                        None,
-                        Some(panic_error.as_str()),
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                },
+                parent_session_id,
+                &outcome,
+                SessionState::Failed,
+                Some(panic_error.clone()),
+                "delegate_failed",
+                event_payload_json,
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
@@ -4777,23 +4478,22 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::TimedOut,
+                duration_ms,
+                None,
+                Some(timeout_error.as_str()),
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::TimedOut,
-                    last_error: Some(timeout_error.clone()),
-                    event_kind: "delegate_timed_out".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::TimedOut,
-                        duration_ms,
-                        None,
-                        Some(timeout_error.as_str()),
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                },
+                parent_session_id,
+                &outcome,
+                SessionState::TimedOut,
+                Some(timeout_error.clone()),
+                "delegate_timed_out",
+                event_payload_json,
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
@@ -4816,242 +4516,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
             }
             Ok(outcome)
         }
-    }
-}
-
-#[cfg(all(feature = "memory-sqlite", test))]
-fn finalize_async_delegate_spawn_failure(
-    memory_config: &MemoryRuntimeConfig,
-    child_session_id: &str,
-    parent_session_id: &str,
-    label: Option<String>,
-    profile: Option<crate::conversation::DelegateBuiltinProfile>,
-    execution: &ConstrainedSubagentExecution,
-    error: String,
-) -> Result<(), String> {
-    crate::operator::delegate_runtime::finalize_async_delegate_spawn_failure(
-        memory_config,
-        child_session_id,
-        parent_session_id,
-        label,
-        profile,
-        execution,
-        error,
-    )
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn finalize_async_delegate_spawn_failure_with_recovery(
-    memory_config: &MemoryRuntimeConfig,
-    child_session_id: &str,
-    parent_session_id: &str,
-    label: Option<String>,
-    profile: Option<crate::conversation::DelegateBuiltinProfile>,
-    execution: &ConstrainedSubagentExecution,
-    error: String,
-) -> Result<(), String> {
-    crate::operator::delegate_runtime::finalize_async_delegate_spawn_failure_with_recovery(
-        memory_config,
-        child_session_id,
-        parent_session_id,
-        label,
-        profile,
-        execution,
-        error,
-    )
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn format_async_delegate_spawn_panic(panic_payload: Box<dyn Any + Send>) -> String {
-    let panic_payload = match panic_payload.downcast::<String>() {
-        Ok(message) => return format!("delegate_async_spawn_panic: {}", *message),
-        Err(panic_payload) => panic_payload,
-    };
-    match panic_payload.downcast::<&'static str>() {
-        Ok(message) => format!("delegate_async_spawn_panic: {}", *message),
-        Err(_) => "delegate_async_spawn_panic".to_owned(),
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn spawn_async_delegate_detached(
-    runtime_handle: Handle,
-    config: std::sync::Arc<LoongClawConfig>,
-    memory_config: MemoryRuntimeConfig,
-    spawner: std::sync::Arc<dyn AsyncDelegateSpawner>,
-    request: AsyncDelegateSpawnRequest,
-) {
-    let child_session_id = request.child_session_id.clone();
-    let parent_session_id = request.parent_session_id.clone();
-    let label = request.label.clone();
-    let profile = request.profile;
-    let execution = request.execution.clone();
-    let binding = request.binding.clone();
-    runtime_handle.spawn(async move {
-        let spawn_failure = match AssertUnwindSafe(spawner.spawn(request))
-            .catch_unwind()
-            .await
-        {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error),
-            Err(panic_payload) => Some(format_async_delegate_spawn_panic(panic_payload)),
-        };
-        if let Some(error) = spawn_failure {
-            let finalize_result = finalize_async_delegate_spawn_failure_with_recovery(
-                &memory_config,
-                &child_session_id,
-                &parent_session_id,
-                label.clone(),
-                profile,
-                &execution,
-                error.clone(),
-            );
-            if let Err(finalize_error) = finalize_result {
-                tracing::warn!(
-                    child_session_id = %child_session_id,
-                    parent_session_id = %parent_session_id,
-                    error = %finalize_error,
-                    "delegate async spawn failure recovery did not fully persist"
-                );
-            }
-
-            let runtime = DefaultConversationRuntime::from_config_or_env(config.as_ref());
-            match runtime {
-                Ok(runtime) => {
-                    emit_async_delegate_child_terminal_event(
-                        &runtime,
-                        &parent_session_id,
-                        &child_session_id,
-                        label.as_deref(),
-                        profile,
-                        "failed",
-                        execution.isolation,
-                        0,
-                        None,
-                        Some(error.as_str()),
-                        None,
-                        execution.workspace_root.as_deref(),
-                        None,
-                        binding.as_borrowed(),
-                    )
-                    .await;
-                }
-                Err(runtime_error) => {
-                    tracing::warn!(
-                        child_session_id = %child_session_id,
-                        parent_session_id = %parent_session_id,
-                        error = %runtime_error,
-                        "delegate async spawn failure could not emit parent terminal projection"
-                    );
-                }
-            }
-        }
-    });
-}
-
-fn next_delegate_child_depth_for_delegate(
-    config: &LoongClawConfig,
-    repo: &SessionRepository,
-    session_context: &SessionContext,
-) -> Result<usize, String> {
-    next_delegate_child_depth(
-        repo,
-        &session_context.session_id,
-        config.tools.delegate.max_depth,
-    )
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) async fn with_prepared_subagent_spawn_cleanup_if_kernel_bound<
-    R: ConversationRuntime + ?Sized,
-    F,
-    Fut,
-    T,
->(
-    runtime: &R,
-    parent_session_id: &str,
-    child_session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-    work: F,
-) -> Result<T, String>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<T, String>>,
-{
-    prepare_subagent_spawn_if_kernel_bound(runtime, parent_session_id, child_session_id, binding)
-        .await?;
-    let work_result = work().await;
-    let notify_result = notify_subagent_ended_if_kernel_bound(
-        runtime,
-        parent_session_id,
-        child_session_id,
-        binding,
-    )
-    .await;
-    match (work_result, notify_result) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(work_error), Ok(())) => Err(work_error),
-        (Ok(_), Err(notify_error)) => {
-            Err(format!("delegate_subagent_end_hook_failed: {notify_error}"))
-        }
-        (Err(work_error), Err(notify_error)) => Err(format!(
-            "{work_error}; delegate_subagent_end_hook_failed: {notify_error}"
-        )),
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn prepare_subagent_spawn_if_kernel_bound<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    parent_session_id: &str,
-    child_session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> Result<(), String> {
-    let Some(kernel_ctx) = binding.kernel_context() else {
-        return Ok(());
-    };
-    runtime
-        .prepare_subagent_spawn(parent_session_id, child_session_id, kernel_ctx)
-        .await
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn notify_subagent_ended_if_kernel_bound<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    parent_session_id: &str,
-    child_session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> Result<(), String> {
-    let Some(kernel_ctx) = binding.kernel_context() else {
-        return Ok(());
-    };
-    runtime
-        .on_subagent_ended(parent_session_id, child_session_id, kernel_ctx)
-        .await
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn finalize_delegate_child_terminal_with_recovery(
-    repo: &SessionRepository,
-    child_session_id: &str,
-    request: FinalizeSessionTerminalRequest,
-) -> Result<(), String> {
-    crate::operator::delegate_runtime::finalize_delegate_child_terminal_with_recovery(
-        repo,
-        child_session_id,
-        request,
-    )
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn format_delegate_child_panic(panic_payload: Box<dyn Any + Send>) -> String {
-    let panic_payload = match panic_payload.downcast::<String>() {
-        Ok(message) => return format!("delegate_child_panic: {}", *message),
-        Err(panic_payload) => panic_payload,
-    };
-    match panic_payload.downcast::<&'static str>() {
-        Ok(message) => format!("delegate_child_panic: {}", *message),
-        Err(_) => "delegate_child_panic".to_owned(),
     }
 }
 
@@ -6989,6 +6453,10 @@ mod tests {
     use super::*;
     use crate::config::ToolConfig;
     use crate::context::bootstrap_test_kernel_context;
+    use crate::conversation::delegate_support::{
+        finalize_async_delegate_spawn_failure, finalize_async_delegate_spawn_failure_with_recovery,
+        finalize_delegate_child_terminal_with_recovery,
+    };
     use crate::conversation::turn_engine::ToolBatchExecutionIntentTrace;
     use crate::conversation::{
         ConversationTurnObserver, ConversationTurnPhase, ConversationTurnToolState,
@@ -7033,6 +6501,48 @@ mod tests {
 
         assert_eq!(error.kind, PlanNodeErrorKind::PolicyDenied);
         assert_eq!(error.message, "no_kernel_context");
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_single_tool_intent_marks_repairable_shell_preflight_failure_retryable() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
+            "shell.exec",
+            json!({
+                "command": "\"ls -la\"",
+            }),
+            Some("root-session"),
+            Some("turn-shell-plan-node"),
+        );
+        let intent = ToolIntent {
+            tool_name,
+            args_json,
+            source: "provider_tool_call".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-shell-plan-node".to_owned(),
+            tool_call_id: "call-shell-plan-node".to_owned(),
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::planned_root_tool_view(),
+        );
+
+        let error = execute_single_tool_intent(
+            &intent,
+            &session_context,
+            &DefaultAppToolDispatcher::runtime(),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+            None,
+            2_048,
+        )
+        .await
+        .expect_err("repairable shell preflight should return a plan-node error");
+
+        assert_eq!(error.kind, PlanNodeErrorKind::Retryable);
+        assert!(error.message.contains("tool input needs repair"));
     }
 
     fn unique_sqlite_path(label: &str) -> PathBuf {
@@ -8081,6 +7591,14 @@ mod tests {
         repo: &SessionRepository,
         expected_state: SessionState,
     ) -> FinalizeSessionTerminalResult {
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text(
+                "delegate_recovered".to_owned(),
+            ),
+            captured_at: std::time::SystemTime::now(),
+            byte_len: "delegate_recovered".len(),
+            truncated: false,
+        };
         repo.finalize_session_terminal_if_current(
             "child-session",
             expected_state,
@@ -8097,6 +7615,7 @@ mod tests {
                 outcome_payload_json: json!({
                     "error": "delegate_recovered"
                 }),
+                frozen_result: Some(frozen_result),
             },
         )
         .expect("recover child terminal state")
@@ -8146,6 +7665,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "final_output": "late success",
                 }),
+                frozen_result: None,
             },
         )
         .expect("stale running finalizer should no-op");
@@ -8173,6 +7693,13 @@ mod tests {
             .expect("terminal outcome row");
         assert_eq!(terminal_outcome.status, "error");
         assert_eq!(terminal_outcome.payload_json["error"], "delegate_recovered");
+        assert_eq!(
+            terminal_outcome
+                .frozen_result
+                .expect("frozen result")
+                .content,
+            crate::session::frozen_result::FrozenContent::Text("delegate_recovered".to_owned())
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -8228,6 +7755,9 @@ mod tests {
             Some("Child".to_owned()),
             None,
             &execution,
+            crate::config::ToolConfig::default()
+                .delegate
+                .max_frozen_bytes,
             "spawn unavailable".to_owned(),
         )
         .expect("stale queued spawn failure finalizer should no-op");
@@ -8255,6 +7785,13 @@ mod tests {
             .expect("terminal outcome row");
         assert_eq!(terminal_outcome.status, "error");
         assert_eq!(terminal_outcome.payload_json["error"], "delegate_recovered");
+        assert_eq!(
+            terminal_outcome
+                .frozen_result
+                .expect("frozen result")
+                .content,
+            crate::session::frozen_result::FrozenContent::Text("delegate_recovered".to_owned())
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -8288,6 +7825,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "final_output": "late success",
                 }),
+                frozen_result: None,
             },
         )
         .expect_err("missing child session should not be treated as stale");
@@ -8337,6 +7875,9 @@ mod tests {
             Some("Child".to_owned()),
             None,
             &execution,
+            crate::config::ToolConfig::default()
+                .delegate
+                .max_frozen_bytes,
             "spawn unavailable".to_owned(),
         )
         .expect_err("missing child session should not bypass spawn failure recovery");
@@ -9520,6 +9061,16 @@ mod tests {
         assert_eq!(session.messages.len(), 2);
         assert_eq!(session.messages[1]["role"], "user");
         assert_eq!(session.messages[1]["content"], "hello world");
+        assert_eq!(
+            session.prompt_frame_summary().turn_ephemeral_segment_count,
+            1
+        );
+        assert!(
+            session
+                .prompt_frame_summary()
+                .turn_ephemeral_estimated_tokens
+                > 0
+        );
     }
 
     #[test]
@@ -9563,6 +9114,170 @@ mod tests {
         assert_eq!(phase.after_turn_messages().len(), 3);
         assert_eq!(phase.after_turn_messages()[2]["role"], "assistant");
         assert_eq!(phase.after_turn_messages()[2]["content"], "done");
+    }
+
+    #[test]
+    fn provider_turn_followup_preparation_preserves_stable_prefix_hash_and_updates_tail_hash() {
+        let base_fragment = crate::conversation::PromptFragment::new(
+            "base-system",
+            crate::conversation::PromptLane::BaseSystem,
+            "base-system",
+            "base system prompt",
+            crate::conversation::ContextArtifactKind::SystemPrompt,
+        )
+        .with_cacheable(true);
+        let assembled = AssembledConversationContext {
+            messages: vec![
+                serde_json::json!({
+                    "role": "system",
+                    "content": "base system prompt"
+                }),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": "recent assistant turn"
+                }),
+            ],
+            artifacts: vec![
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 0,
+                    artifact_kind: crate::conversation::ContextArtifactKind::SystemPrompt,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 1,
+                    artifact_kind: crate::conversation::ContextArtifactKind::ConversationTurn,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+            ],
+            estimated_tokens: Some(24),
+            prompt_fragments: vec![base_fragment],
+            system_prompt_addition: None,
+        };
+        let preparation = ProviderTurnPreparation::from_assembled_context(
+            &LoongClawConfig::default(),
+            assembled,
+            "use the recent result",
+            None,
+        );
+        let mut followup_messages = preparation.session.messages.clone();
+
+        followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] compacted tail"
+        }));
+        followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue"
+        }));
+
+        let followup_preparation = preparation.for_followup_messages(followup_messages);
+        let initial_summary = preparation.session.prompt_frame_summary();
+        let followup_summary = followup_preparation.session.prompt_frame_summary();
+
+        assert_eq!(
+            initial_summary.stable_prefix_hash_sha256,
+            followup_summary.stable_prefix_hash_sha256
+        );
+        assert_eq!(
+            initial_summary.cached_prefix_sha256,
+            followup_summary.cached_prefix_sha256
+        );
+        assert_ne!(
+            initial_summary.turn_ephemeral_hash_sha256,
+            followup_summary.turn_ephemeral_hash_sha256
+        );
+        assert!(
+            followup_summary.turn_ephemeral_segment_count
+                > initial_summary.turn_ephemeral_segment_count
+        );
+    }
+
+    #[test]
+    fn provider_turn_followup_preparation_retains_original_tail_across_multiple_followups() {
+        let base_fragment = crate::conversation::PromptFragment::new(
+            "base-system",
+            crate::conversation::PromptLane::BaseSystem,
+            "base-system",
+            "base system prompt",
+            crate::conversation::ContextArtifactKind::SystemPrompt,
+        )
+        .with_cacheable(true);
+        let assembled = AssembledConversationContext {
+            messages: vec![
+                serde_json::json!({
+                    "role": "system",
+                    "content": "base system prompt"
+                }),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": "recent assistant turn"
+                }),
+            ],
+            artifacts: vec![
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 0,
+                    artifact_kind: crate::conversation::ContextArtifactKind::SystemPrompt,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 1,
+                    artifact_kind: crate::conversation::ContextArtifactKind::ConversationTurn,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+            ],
+            estimated_tokens: Some(24),
+            prompt_fragments: vec![base_fragment],
+            system_prompt_addition: None,
+        };
+        let preparation = ProviderTurnPreparation::from_assembled_context(
+            &LoongClawConfig::default(),
+            assembled,
+            "use the recent result",
+            None,
+        );
+        let mut first_followup_messages = preparation.session.messages.clone();
+
+        first_followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] compacted tail"
+        }));
+        first_followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue"
+        }));
+
+        let first_followup_preparation = preparation.for_followup_messages(first_followup_messages);
+        let mut second_followup_messages = first_followup_preparation.session.messages.clone();
+
+        second_followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] second tail"
+        }));
+        second_followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue again"
+        }));
+
+        let second_followup_preparation =
+            first_followup_preparation.for_followup_messages(second_followup_messages);
+        let second_summary = second_followup_preparation.session.prompt_frame_summary();
+        let tail_bucket = second_summary
+            .bucket(crate::conversation::PromptFrameLayer::TurnEphemeralTail)
+            .expect("turn-ephemeral bucket should exist");
+
+        assert_eq!(tail_bucket.message_count, 5);
+        assert_eq!(second_summary.turn_ephemeral_segment_count, 5);
+        assert_eq!(
+            second_summary.stable_prefix_hash_sha256,
+            preparation
+                .session
+                .prompt_frame_summary()
+                .stable_prefix_hash_sha256
+        );
     }
 
     #[test]
@@ -10374,1024 +10089,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn decide_provider_request_action_inlines_synthetic_reply_when_requested() {
-        let decision = decide_provider_turn_request_action(
-            Err("provider unavailable".to_owned()),
-            ProviderErrorMode::InlineMessage,
-        );
-
-        if let ProviderTurnRequestAction::FinalizeInlineProviderError { reply } = decision {
-            assert!(reply.contains("provider unavailable"));
-        } else {
-            panic!("unexpected decision: {decision:?}");
-        }
-    }
-
-    #[test]
-    fn decide_provider_request_action_returns_error_in_propagate_mode() {
-        let decision = decide_provider_turn_request_action(
-            Err("provider unavailable".to_owned()),
-            ProviderErrorMode::Propagate,
-        );
-
-        if let ProviderTurnRequestAction::ReturnError { error } = decision {
-            assert_eq!(error, "provider unavailable");
-        } else {
-            panic!("unexpected decision: {decision:?}");
-        }
-    }
-
-    #[test]
-    fn safe_lane_route_retryable_failure_replans_with_remaining_budget() {
-        let failure = TurnFailure::retryable("safe_lane_plan_node_retryable_error", "transient");
-        let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(1));
-
-        assert_eq!(route.decision, SafeLaneFailureRouteDecision::Replan);
-        assert_eq!(route.reason, SafeLaneFailureRouteReason::RetryableFailure);
-        assert_eq!(route.source, SafeLaneFailureRouteSource::BaseRouting);
-        assert_eq!(route.reason.as_str(), "retryable_failure");
-    }
-
-    #[test]
-    fn safe_lane_route_retryable_failure_becomes_terminal_after_budget_exhaustion() {
-        let failure = TurnFailure::retryable("safe_lane_plan_node_retryable_error", "transient");
-        let route = SafeLaneFailureRoute::from_failure(
-            &failure,
-            SafeLaneReplanBudget::new(1).after_replan(),
-        );
-
-        assert_eq!(route.decision, SafeLaneFailureRouteDecision::Terminal);
-        assert_eq!(
-            route.reason,
-            SafeLaneFailureRouteReason::RoundBudgetExhausted
-        );
-        assert_eq!(route.source, SafeLaneFailureRouteSource::BaseRouting);
-        assert!(route.is_base_round_budget_terminal());
-    }
-
-    #[test]
-    fn safe_lane_route_policy_denied_failure_is_terminal() {
-        let failure = TurnFailure::policy_denied("safe_lane_plan_node_policy_denied", "denied");
-        let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(3));
-
-        assert_eq!(route.decision, SafeLaneFailureRouteDecision::Terminal);
-        assert_eq!(route.reason, SafeLaneFailureRouteReason::PolicyDenied);
-        assert_eq!(route.source, SafeLaneFailureRouteSource::BaseRouting);
-    }
-
-    #[test]
-    fn safe_lane_route_non_retryable_failure_is_terminal() {
-        let failure = TurnFailure::non_retryable("safe_lane_plan_node_non_retryable_error", "bad");
-        let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(3));
-
-        assert_eq!(route.decision, SafeLaneFailureRouteDecision::Terminal);
-        assert_eq!(
-            route.reason,
-            SafeLaneFailureRouteReason::NonRetryableFailure
-        );
-        assert_eq!(route.source, SafeLaneFailureRouteSource::BaseRouting);
-    }
-
-    #[test]
-    fn turn_failure_from_plan_failure_node_error_mapping_is_stable() {
-        let cases = [
-            (
-                PlanNodeErrorKind::ApprovalRequired,
-                TurnFailureKind::PolicyDenied,
-                "safe_lane_plan_node_policy_denied",
-                false,
-            ),
-            (
-                PlanNodeErrorKind::PolicyDenied,
-                TurnFailureKind::PolicyDenied,
-                "safe_lane_plan_node_policy_denied",
-                false,
-            ),
-            (
-                PlanNodeErrorKind::Retryable,
-                TurnFailureKind::Retryable,
-                "safe_lane_plan_node_retryable_error",
-                true,
-            ),
-            (
-                PlanNodeErrorKind::NonRetryable,
-                TurnFailureKind::NonRetryable,
-                "safe_lane_plan_node_non_retryable_error",
-                false,
-            ),
-        ];
-
-        for (node_kind, expected_kind, expected_code, expected_retryable) in cases {
-            let failure = PlanRunFailure::NodeFailed {
-                node_id: "tool-1".to_owned(),
-                attempts_used: 1,
-                last_error_kind: node_kind,
-                last_error: "boom".to_owned(),
-            };
-            let mapped = turn_failure_from_plan_failure(&failure);
-            assert_eq!(mapped.kind, expected_kind, "node_kind={node_kind:?}");
-            assert_eq!(mapped.code, expected_code, "node_kind={node_kind:?}");
-            assert_eq!(
-                mapped.retryable, expected_retryable,
-                "node_kind={node_kind:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn turn_failure_from_plan_failure_static_failure_mapping_is_stable() {
-        let failures = [
-            PlanRunFailure::ValidationFailed("invalid".to_owned()),
-            PlanRunFailure::TopologyResolutionFailed,
-            PlanRunFailure::BudgetExceeded {
-                attempts_used: 5,
-                limit: 4,
-            },
-            PlanRunFailure::WallTimeExceeded {
-                elapsed_ms: 1200,
-                limit_ms: 1000,
-            },
-        ];
-
-        for failure in failures {
-            let mapped = turn_failure_from_plan_failure(&failure);
-            assert_eq!(mapped.kind, TurnFailureKind::NonRetryable);
-            assert!(!mapped.retryable);
-            assert!(
-                mapped.code.starts_with("safe_lane_plan_"),
-                "unexpected code: {}",
-                mapped.code
-            );
-        }
-    }
-
-    #[test]
-    fn safe_lane_event_sampling_keeps_critical_events() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_emit_runtime_events = true;
-        config.conversation.safe_lane_event_sample_every = 3;
-
-        let emitted = should_emit_safe_lane_event(
-            &config,
-            "final_status",
-            &json!({
-                "round": 1
-            }),
-        );
-        assert!(emitted, "critical final_status event must always emit");
-    }
-
-    #[test]
-    fn safe_lane_event_sampling_skips_non_critical_rounds() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_emit_runtime_events = true;
-        config.conversation.safe_lane_event_sample_every = 2;
-        config.conversation.safe_lane_event_adaptive_sampling = false;
-
-        let emit_round_0 = should_emit_safe_lane_event(
-            &config,
-            "plan_round_started",
-            &json!({
-                "round": 0
-            }),
-        );
-        let emit_round_1 = should_emit_safe_lane_event(
-            &config,
-            "plan_round_started",
-            &json!({
-                "round": 1
-            }),
-        );
-
-        assert!(emit_round_0, "round 0 should pass sampling gate");
-        assert!(!emit_round_1, "round 1 should be sampled out");
-    }
-
-    #[test]
-    fn safe_lane_event_sampling_adaptive_mode_keeps_failure_pressure_events() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_emit_runtime_events = true;
-        config.conversation.safe_lane_event_sample_every = 4;
-        config.conversation.safe_lane_event_adaptive_sampling = true;
-        config
-            .conversation
-            .safe_lane_event_adaptive_failure_threshold = 1;
-
-        let emitted = should_emit_safe_lane_event(
-            &config,
-            "plan_round_completed",
-            &json!({
-                "round": 1,
-                "failure_code": "safe_lane_plan_node_retryable_error",
-                "route_decision": "replan",
-                "metrics": {
-                    "rounds_started": 2,
-                    "rounds_succeeded": 0,
-                    "rounds_failed": 1,
-                    "verify_failures": 0,
-                    "replans_triggered": 1,
-                    "total_attempts_used": 2
-                }
-            }),
-        );
-
-        assert!(
-            emitted,
-            "adaptive failure-pressure sampling should force emit for troubleshooting"
-        );
-    }
-
-    #[test]
-    fn safe_lane_event_sampling_adaptive_mode_can_be_disabled() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_emit_runtime_events = true;
-        config.conversation.safe_lane_event_sample_every = 4;
-        config.conversation.safe_lane_event_adaptive_sampling = false;
-        config
-            .conversation
-            .safe_lane_event_adaptive_failure_threshold = 1;
-
-        let emitted = should_emit_safe_lane_event(
-            &config,
-            "plan_round_completed",
-            &json!({
-                "round": 1,
-                "failure_code": "safe_lane_plan_node_retryable_error",
-                "route_decision": "replan",
-                "metrics": {
-                    "rounds_started": 2,
-                    "rounds_succeeded": 0,
-                    "rounds_failed": 1,
-                    "verify_failures": 0,
-                    "replans_triggered": 1,
-                    "total_attempts_used": 2
-                }
-            }),
-        );
-
-        assert!(
-            !emitted,
-            "with adaptive sampling disabled, round-based sampling should still drop this event"
-        );
-    }
-
-    #[test]
-    fn safe_lane_failure_pressure_counts_truncated_tool_output_stats() {
-        let payload = json!({
-            "tool_output_stats": {
-                "output_lines": 1,
-                "result_lines": 1,
-                "truncated_result_lines": 1,
-                "any_truncated": true,
-                "truncation_ratio_milli": 1000
-            }
-        });
-        assert_eq!(safe_lane_failure_pressure(&payload), 1);
-    }
-
-    #[test]
-    fn safe_lane_tool_output_stats_detect_truncated_result_lines() {
-        let outputs = vec![
-            "[ok] {\"payload_truncated\":true}".to_owned(),
-            "[ok] {\"payload_truncated\":false}\n[tool_result_truncated] removed_chars=2"
-                .to_owned(),
-            "plain diagnostic line".to_owned(),
-        ];
-
-        let stats = summarize_safe_lane_tool_output_stats(outputs.as_slice());
-        assert_eq!(stats.output_lines, 4);
-        assert_eq!(stats.result_lines, 3);
-        assert_eq!(stats.truncated_result_lines, 2);
-        assert_eq!(stats.truncation_ratio_milli(), 666);
-        let encoded = stats.as_json();
-        assert_eq!(encoded["any_truncated"], true);
-        assert_eq!(encoded["truncation_ratio_milli"], 666);
-    }
-
-    #[test]
-    fn safe_lane_tool_output_stats_handles_mixed_multiline_blocks() {
-        let outputs = vec![
-            "\n[ok] {\"payload_truncated\":false}\nnot a result line\n[ok] {\"payload_truncated\":true}\n"
-                .to_owned(),
-            "[result] completed\n\n[ok] {\"payload_truncated\":false}".to_owned(),
-        ];
-
-        let stats = summarize_safe_lane_tool_output_stats(outputs.as_slice());
-        assert_eq!(stats.output_lines, 5);
-        assert_eq!(stats.result_lines, 4);
-        assert_eq!(stats.truncated_result_lines, 1);
-        assert_eq!(stats.truncation_ratio_milli(), 250);
-        let encoded = stats.as_json();
-        assert_eq!(encoded["any_truncated"], true);
-        assert_eq!(encoded["truncation_ratio_milli"], 250);
-    }
-
-    #[test]
-    fn runtime_health_signal_marks_warn_on_truncation_pressure() {
-        let mut config = LoongClawConfig::default();
-        config
-            .conversation
-            .safe_lane_health_truncation_warn_threshold = 0.20;
-        config
-            .conversation
-            .safe_lane_health_truncation_critical_threshold = 0.50;
-        let metrics = SafeLaneExecutionMetrics {
-            rounds_started: 2,
-            tool_output_result_lines_total: 4,
-            tool_output_truncated_result_lines_total: 1,
-            ..SafeLaneExecutionMetrics::default()
-        };
-
-        let signal = derive_safe_lane_runtime_health_signal(&config, metrics, false, None);
-        assert_eq!(signal.severity, "warn");
-        assert!(
-            signal
-                .flags
-                .iter()
-                .any(|value| value.contains("truncation_pressure(0.250)"))
-        );
-    }
-
-    #[test]
-    fn runtime_health_signal_marks_critical_on_terminal_instability() {
-        let config = LoongClawConfig::default();
-        let metrics = SafeLaneExecutionMetrics {
-            rounds_started: 2,
-            verify_failures: 1,
-            replans_triggered: 1,
-            tool_output_result_lines_total: 2,
-            tool_output_truncated_result_lines_total: 1,
-            ..SafeLaneExecutionMetrics::default()
-        };
-
-        let signal = derive_safe_lane_runtime_health_signal(
-            &config,
-            metrics,
-            true,
-            Some("safe_lane_plan_verify_failed_session_governor"),
-        );
-        assert_eq!(signal.severity, "critical");
-        assert!(
-            signal
-                .flags
-                .iter()
-                .any(|value| value == "terminal_instability")
-        );
-    }
-
-    #[test]
-    fn verify_anchor_policy_escalates_after_configured_failures() {
-        let mut config = LoongClawConfig::default();
-        config
-            .conversation
-            .safe_lane_verify_adaptive_anchor_escalation = true;
-        config
-            .conversation
-            .safe_lane_verify_anchor_escalation_after_failures = 2;
-        config
-            .conversation
-            .safe_lane_verify_anchor_escalation_min_matches = 1;
-
-        assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 0), 0);
-        assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 1), 0);
-        assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 2), 1);
-        assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 5), 1);
-    }
-
-    #[test]
-    fn verify_anchor_policy_escalation_can_be_disabled() {
-        let mut config = LoongClawConfig::default();
-        config
-            .conversation
-            .safe_lane_verify_adaptive_anchor_escalation = false;
-        config
-            .conversation
-            .safe_lane_verify_anchor_escalation_after_failures = 1;
-        config
-            .conversation
-            .safe_lane_verify_anchor_escalation_min_matches = 3;
-
-        assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 5), 0);
-    }
-
-    #[test]
-    fn backpressure_guard_blocks_replan_when_attempt_budget_exhausted() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_backpressure_guard_enabled = true;
-        config
-            .conversation
-            .safe_lane_backpressure_max_total_attempts = 2;
-        config.conversation.safe_lane_backpressure_max_replans = 10;
-
-        let route = SafeLaneFailureRoute {
-            decision: SafeLaneFailureRouteDecision::Replan,
-            reason: SafeLaneFailureRouteReason::RetryableFailure,
-            source: SafeLaneFailureRouteSource::BaseRouting,
-        };
-        let metrics = SafeLaneExecutionMetrics {
-            total_attempts_used: 2,
-            ..SafeLaneExecutionMetrics::default()
-        };
-        let guarded =
-            route.with_backpressure_guard(safe_lane_backpressure_budget(&config), metrics);
-        assert_eq!(guarded.decision, SafeLaneFailureRouteDecision::Terminal);
-        assert_eq!(
-            guarded.reason,
-            SafeLaneFailureRouteReason::BackpressureAttemptsExhausted
-        );
-        assert_eq!(
-            guarded.source,
-            SafeLaneFailureRouteSource::BackpressureGuard
-        );
-    }
-
-    #[test]
-    fn backpressure_guard_blocks_replan_when_replan_budget_exhausted() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_backpressure_guard_enabled = true;
-        config
-            .conversation
-            .safe_lane_backpressure_max_total_attempts = 10;
-        config.conversation.safe_lane_backpressure_max_replans = 1;
-
-        let route = SafeLaneFailureRoute {
-            decision: SafeLaneFailureRouteDecision::Replan,
-            reason: SafeLaneFailureRouteReason::RetryableFailure,
-            source: SafeLaneFailureRouteSource::BaseRouting,
-        };
-        let metrics = SafeLaneExecutionMetrics {
-            replans_triggered: 1,
-            ..SafeLaneExecutionMetrics::default()
-        };
-        let guarded =
-            route.with_backpressure_guard(safe_lane_backpressure_budget(&config), metrics);
-        assert_eq!(guarded.decision, SafeLaneFailureRouteDecision::Terminal);
-        assert_eq!(
-            guarded.reason,
-            SafeLaneFailureRouteReason::BackpressureReplansExhausted
-        );
-        assert_eq!(
-            guarded.source,
-            SafeLaneFailureRouteSource::BackpressureGuard
-        );
-    }
-
-    fn governor_history_with_summary(
-        summary: SafeLaneEventSummary,
-    ) -> SafeLaneGovernorHistorySignals {
-        SafeLaneGovernorHistorySignals {
-            summary,
-            ..SafeLaneGovernorHistorySignals::default()
-        }
-    }
-
-    #[test]
-    fn safe_lane_backpressure_budget_detects_attempt_exhaustion() {
-        let budget = SafeLaneBackpressureBudget::new(2, 10);
-        let metrics = SafeLaneExecutionMetrics {
-            total_attempts_used: 2,
-            ..SafeLaneExecutionMetrics::default()
-        };
-
-        assert_eq!(
-            budget.continuation_decision(metrics.total_attempts_used, metrics.replans_triggered),
-            SafeLaneContinuationBudgetDecision::Terminal {
-                reason: SafeLaneFailureRouteReason::BackpressureAttemptsExhausted,
-            }
-        );
-    }
-
-    #[test]
-    fn decide_safe_lane_failure_route_applies_backpressure_after_retryable_base_route() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_backpressure_guard_enabled = true;
-        config
-            .conversation
-            .safe_lane_backpressure_max_total_attempts = 2;
-        config.conversation.safe_lane_backpressure_max_replans = 10;
-
-        let route = decide_safe_lane_failure_route(
-            &config,
-            &TurnFailure::retryable("safe_lane_plan_node_retryable_error", "transient"),
-            SafeLaneReplanBudget::new(3),
-            SafeLaneExecutionMetrics {
-                total_attempts_used: 2,
-                ..SafeLaneExecutionMetrics::default()
-            },
-            &SafeLaneSessionGovernorDecision::default(),
-        );
-
-        assert_eq!(route.decision, SafeLaneFailureRouteDecision::Terminal);
-        assert_eq!(
-            route.reason,
-            SafeLaneFailureRouteReason::BackpressureAttemptsExhausted
-        );
-        assert_eq!(route.source, SafeLaneFailureRouteSource::BackpressureGuard);
-    }
-
-    #[test]
-    fn decide_safe_lane_failure_route_applies_session_governor_override_to_exhausted_budget() {
-        let config = LoongClawConfig::default();
-        let route = decide_safe_lane_failure_route(
-            &config,
-            &TurnFailure::retryable("safe_lane_plan_node_retryable_error", "transient"),
-            SafeLaneReplanBudget::new(1).after_replan(),
-            SafeLaneExecutionMetrics::default(),
-            &SafeLaneSessionGovernorDecision {
-                force_no_replan: true,
-                ..SafeLaneSessionGovernorDecision::default()
-            },
-        );
-
-        assert_eq!(route.decision, SafeLaneFailureRouteDecision::Terminal);
-        assert_eq!(
-            route.reason,
-            SafeLaneFailureRouteReason::SessionGovernorNoReplan
-        );
-        assert_eq!(route.source, SafeLaneFailureRouteSource::SessionGovernor);
-    }
-
-    #[test]
-    fn summarize_governor_history_signals_extracts_failure_samples() {
-        let contents = [
-            r#"{"type":"conversation_event","event":"final_status","payload":{"status":"failed","failure_code":"safe_lane_plan_backpressure_guard","route_reason":"backpressure_attempts_exhausted"}}"#,
-            r#"{"type":"conversation_event","event":"final_status","payload":{"status":"succeeded"}}"#,
-        ];
-
-        let signals = summarize_governor_history_signals(contents.iter().copied());
-        assert_eq!(signals.final_status_failed_samples, vec![true, false]);
-        assert_eq!(signals.backpressure_failure_samples, vec![true, false]);
-        assert_eq!(
-            signals
-                .summary
-                .failure_code_counts
-                .get("safe_lane_plan_backpressure_guard")
-                .copied(),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn summarize_governor_history_signals_ignores_unknown_backpressure_like_strings() {
-        let contents = [
-            r#"{"type":"conversation_event","event":"final_status","payload":{"status":"failed","failure_code":"unknown_backpressure_hint","route_reason":"backpressure_noise"}}"#,
-        ];
-
-        let signals = summarize_governor_history_signals(contents.iter().copied());
-        assert_eq!(signals.final_status_failed_samples, vec![true]);
-        assert_eq!(signals.backpressure_failure_samples, vec![false]);
-    }
-
-    #[test]
-    fn session_governor_engages_on_failed_final_status_threshold() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_session_governor_enabled = true;
-        config
-            .conversation
-            .safe_lane_session_governor_failed_final_status_threshold = 2;
-        config
-            .conversation
-            .safe_lane_session_governor_backpressure_failure_threshold = 9;
-        config
-            .conversation
-            .safe_lane_session_governor_force_no_replan = true;
-        config
-            .conversation
-            .safe_lane_session_governor_force_node_max_attempts = 1;
-
-        let mut summary = SafeLaneEventSummary::default();
-        summary.final_status_counts.insert("failed".to_owned(), 2);
-
-        let history = governor_history_with_summary(summary);
-        let decision = decide_safe_lane_session_governor(&config, &history);
-        assert!(decision.engaged);
-        assert!(decision.failed_threshold_triggered);
-        assert!(!decision.backpressure_threshold_triggered);
-        assert!(decision.force_no_replan);
-        assert_eq!(decision.forced_node_max_attempts, Some(1));
-    }
-
-    #[test]
-    fn session_governor_engages_on_backpressure_threshold() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_session_governor_enabled = true;
-        config
-            .conversation
-            .safe_lane_session_governor_failed_final_status_threshold = 9;
-        config
-            .conversation
-            .safe_lane_session_governor_backpressure_failure_threshold = 2;
-        config
-            .conversation
-            .safe_lane_session_governor_force_node_max_attempts = 2;
-
-        let mut summary = SafeLaneEventSummary::default();
-        summary
-            .failure_code_counts
-            .insert("safe_lane_plan_backpressure_guard".to_owned(), 1);
-        summary.failure_code_counts.insert(
-            "safe_lane_plan_verify_failed_backpressure_guard".to_owned(),
-            1,
-        );
-
-        let history = governor_history_with_summary(summary);
-        let decision = decide_safe_lane_session_governor(&config, &history);
-        assert!(decision.engaged);
-        assert!(!decision.failed_threshold_triggered);
-        assert!(decision.backpressure_threshold_triggered);
-        assert_eq!(decision.backpressure_failure_events, 2);
-        assert_eq!(decision.forced_node_max_attempts, Some(2));
-    }
-
-    #[test]
-    fn session_governor_stays_disabled_when_thresholds_not_reached() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_session_governor_enabled = true;
-        config
-            .conversation
-            .safe_lane_session_governor_failed_final_status_threshold = 3;
-        config
-            .conversation
-            .safe_lane_session_governor_backpressure_failure_threshold = 2;
-
-        let mut summary = SafeLaneEventSummary::default();
-        summary.final_status_counts.insert("failed".to_owned(), 1);
-        summary
-            .failure_code_counts
-            .insert("safe_lane_plan_backpressure_guard".to_owned(), 1);
-
-        let history = governor_history_with_summary(summary);
-        let decision = decide_safe_lane_session_governor(&config, &history);
-        assert!(!decision.engaged);
-        assert!(!decision.force_no_replan);
-        assert_eq!(decision.forced_node_max_attempts, None);
-    }
-
-    #[test]
-    fn session_governor_engages_on_trend_threshold_when_counts_are_low() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_session_governor_enabled = true;
-        config
-            .conversation
-            .safe_lane_session_governor_failed_final_status_threshold = 9;
-        config
-            .conversation
-            .safe_lane_session_governor_backpressure_failure_threshold = 9;
-        config.conversation.safe_lane_session_governor_trend_enabled = true;
-        config
-            .conversation
-            .safe_lane_session_governor_trend_min_samples = 4;
-        config
-            .conversation
-            .safe_lane_session_governor_trend_ewma_alpha = 0.5;
-        config
-            .conversation
-            .safe_lane_session_governor_trend_failure_ewma_threshold = 0.60;
-        config
-            .conversation
-            .safe_lane_session_governor_trend_backpressure_ewma_threshold = 0.70;
-
-        let mut summary = SafeLaneEventSummary::default();
-        summary.final_status_counts.insert("failed".to_owned(), 1);
-        let history = SafeLaneGovernorHistorySignals {
-            history_load_status: SafeLaneGovernorHistoryLoadStatus::Loaded,
-            history_load_error: None,
-            summary,
-            final_status_failed_samples: vec![false, true, true, true],
-            backpressure_failure_samples: vec![false, false, false, false],
-        };
-
-        let decision = decide_safe_lane_session_governor(&config, &history);
-        assert!(decision.engaged);
-        assert!(!decision.failed_threshold_triggered);
-        assert!(!decision.backpressure_threshold_triggered);
-        assert!(decision.trend_threshold_triggered);
-        assert!(
-            decision
-                .trend_failure_ewma
-                .map(|value| value > 0.60)
-                .unwrap_or(false)
-        );
-    }
-
-    #[test]
-    fn session_governor_recovery_threshold_can_suppress_engagement() {
-        let mut config = LoongClawConfig::default();
-        config.conversation.safe_lane_session_governor_enabled = true;
-        config
-            .conversation
-            .safe_lane_session_governor_failed_final_status_threshold = 1;
-        config
-            .conversation
-            .safe_lane_session_governor_backpressure_failure_threshold = 9;
-        config.conversation.safe_lane_session_governor_trend_enabled = true;
-        config
-            .conversation
-            .safe_lane_session_governor_trend_min_samples = 4;
-        config
-            .conversation
-            .safe_lane_session_governor_trend_ewma_alpha = 0.5;
-        config
-            .conversation
-            .safe_lane_session_governor_trend_failure_ewma_threshold = 0.70;
-        config
-            .conversation
-            .safe_lane_session_governor_recovery_success_streak = 3;
-        config
-            .conversation
-            .safe_lane_session_governor_recovery_max_failure_ewma = 0.30;
-        config
-            .conversation
-            .safe_lane_session_governor_recovery_max_backpressure_ewma = 0.10;
-
-        let mut summary = SafeLaneEventSummary::default();
-        summary.final_status_counts.insert("failed".to_owned(), 1);
-        let history = SafeLaneGovernorHistorySignals {
-            history_load_status: SafeLaneGovernorHistoryLoadStatus::Loaded,
-            history_load_error: None,
-            summary,
-            final_status_failed_samples: vec![true, false, false, false, false],
-            backpressure_failure_samples: vec![true, false, false, false, false],
-        };
-
-        let decision = decide_safe_lane_session_governor(&config, &history);
-        assert!(decision.failed_threshold_triggered);
-        assert!(!decision.trend_threshold_triggered);
-        assert!(decision.recovery_threshold_triggered);
-        assert_eq!(decision.recovery_success_streak, 4);
-        assert!(!decision.engaged);
-    }
-
-    #[test]
-    fn session_governor_route_override_marks_no_replan_terminal_reason() {
-        let route = SafeLaneFailureRoute {
-            decision: SafeLaneFailureRouteDecision::Terminal,
-            reason: SafeLaneFailureRouteReason::RoundBudgetExhausted,
-            source: SafeLaneFailureRouteSource::BaseRouting,
-        };
-        let governor = SafeLaneSessionGovernorDecision {
-            force_no_replan: true,
-            ..SafeLaneSessionGovernorDecision::default()
-        };
-        let overridden = route.with_session_governor_override(&governor);
-        assert_eq!(
-            overridden.reason,
-            SafeLaneFailureRouteReason::SessionGovernorNoReplan
-        );
-        assert_eq!(
-            overridden.source,
-            SafeLaneFailureRouteSource::SessionGovernor
-        );
-    }
-
-    #[test]
-    fn terminal_verify_failure_uses_backpressure_error_code() {
-        let failure = terminal_turn_failure_from_verify_failure(
-            "retryable verify failure",
-            true,
-            SafeLaneFailureRoute {
-                decision: SafeLaneFailureRouteDecision::Terminal,
-                reason: SafeLaneFailureRouteReason::BackpressureAttemptsExhausted,
-                source: SafeLaneFailureRouteSource::BackpressureGuard,
-            },
-        );
-        assert_eq!(
-            failure.code,
-            "safe_lane_plan_verify_failed_backpressure_guard"
-        );
-        assert_eq!(failure.kind, TurnFailureKind::NonRetryable);
-    }
-
-    #[test]
-    fn safe_lane_terminal_verify_failure_code_prefers_budget_exhaustion_for_retryable_base_route() {
-        let code = SafeLaneFailureRoute {
-            decision: SafeLaneFailureRouteDecision::Terminal,
-            reason: SafeLaneFailureRouteReason::RoundBudgetExhausted,
-            source: SafeLaneFailureRouteSource::BaseRouting,
-        }
-        .terminal_verify_failure_code(true);
-        assert_eq!(code, SafeLaneFailureCode::VerifyFailedBudgetExhausted);
-    }
-
-    #[test]
-    fn safe_lane_route_verify_summary_label_marks_backpressure_guard() {
-        let label = SafeLaneFailureRoute {
-            decision: SafeLaneFailureRouteDecision::Terminal,
-            reason: SafeLaneFailureRouteReason::BackpressureAttemptsExhausted,
-            source: SafeLaneFailureRouteSource::BackpressureGuard,
-        }
-        .verify_terminal_summary_label();
-        assert_eq!(label, "verify_failed_backpressure_guard");
-    }
-
-    #[test]
-    fn safe_lane_route_profile_methods_encode_decision_and_source_labels() {
-        let route = SafeLaneFailureRoute::replan(SafeLaneFailureRouteReason::RetryableFailure);
-        assert!(route.should_replan());
-        assert_eq!(route.decision_label(), "replan");
-        assert_eq!(route.source_label(), "base_routing");
-
-        let terminal = SafeLaneFailureRoute::terminal_with_source(
-            SafeLaneFailureRouteReason::SessionGovernorNoReplan,
-            SafeLaneFailureRouteSource::SessionGovernor,
-        );
-        assert!(!terminal.should_replan());
-        assert_eq!(terminal.decision_label(), "terminal");
-        assert_eq!(terminal.source_label(), "session_governor");
-    }
-
-    #[test]
-    fn safe_lane_route_backpressure_transition_is_localized_on_route() {
-        let route = SafeLaneFailureRoute::replan(SafeLaneFailureRouteReason::RetryableFailure)
-            .with_backpressure_guard(
-                Some(SafeLaneBackpressureBudget::new(2, 10)),
-                SafeLaneExecutionMetrics {
-                    total_attempts_used: 2,
-                    ..SafeLaneExecutionMetrics::default()
-                },
-            );
-        assert!(!route.should_replan());
-        assert_eq!(
-            route.reason,
-            SafeLaneFailureRouteReason::BackpressureAttemptsExhausted
-        );
-        assert_eq!(route.source, SafeLaneFailureRouteSource::BackpressureGuard);
-    }
-
-    #[test]
-    fn terminal_verify_failure_uses_budget_exhaustion_error_code() {
-        let failure = terminal_turn_failure_from_verify_failure(
-            "retryable verify failure",
-            true,
-            SafeLaneFailureRoute {
-                decision: SafeLaneFailureRouteDecision::Terminal,
-                reason: SafeLaneFailureRouteReason::RoundBudgetExhausted,
-                source: SafeLaneFailureRouteSource::BaseRouting,
-            },
-        );
-        assert_eq!(
-            failure.code,
-            "safe_lane_plan_verify_failed_budget_exhausted"
-        );
-        assert_eq!(failure.kind, TurnFailureKind::NonRetryable);
-    }
-
-    #[test]
-    fn terminal_verify_failure_uses_session_governor_error_code() {
-        let failure = terminal_turn_failure_from_verify_failure(
-            "retryable verify failure",
-            true,
-            SafeLaneFailureRoute {
-                decision: SafeLaneFailureRouteDecision::Terminal,
-                reason: SafeLaneFailureRouteReason::SessionGovernorNoReplan,
-                source: SafeLaneFailureRouteSource::SessionGovernor,
-            },
-        );
-        assert_eq!(
-            failure.code,
-            "safe_lane_plan_verify_failed_session_governor"
-        );
-        assert_eq!(failure.kind, TurnFailureKind::NonRetryable);
-    }
-
-    #[test]
-    fn terminal_plan_failure_uses_session_governor_error_code() {
-        let failure = PlanRunFailure::NodeFailed {
-            node_id: "tool-1".to_owned(),
-            attempts_used: 1,
-            last_error_kind: PlanNodeErrorKind::Retryable,
-            last_error: "transient".to_owned(),
-        };
-        let route = SafeLaneFailureRoute {
-            decision: SafeLaneFailureRouteDecision::Terminal,
-            reason: SafeLaneFailureRouteReason::SessionGovernorNoReplan,
-            source: SafeLaneFailureRouteSource::SessionGovernor,
-        };
-        assert_eq!(
-            route.terminal_plan_failure_code(),
-            Some(SafeLaneFailureCode::PlanSessionGovernorNoReplan)
-        );
-        let result = terminal_turn_result_from_plan_failure_with_route(failure, route);
-        let meta = result.failure().expect("failure metadata");
-        assert_eq!(meta.code, "safe_lane_plan_session_governor_no_replan");
-        assert_eq!(meta.kind, TurnFailureKind::NonRetryable);
-    }
-
-    #[test]
-    fn decide_safe_lane_verify_failure_action_replans_with_remaining_budget() {
-        let decision = decide_safe_lane_verify_failure_action(
-            "missing anchors",
-            true,
-            SafeLaneFailureRoute {
-                decision: SafeLaneFailureRouteDecision::Replan,
-                reason: SafeLaneFailureRouteReason::RetryableFailure,
-                source: SafeLaneFailureRouteSource::BaseRouting,
-            },
-        );
-
-        if let SafeLaneRoundDecision::Replan {
-            reason,
-            next_plan_start_tool_index,
-            next_seed_tool_outputs,
-        } = decision
-        {
-            assert_eq!(reason, "verify_failed");
-            assert_eq!(next_plan_start_tool_index, 0);
-            assert!(next_seed_tool_outputs.is_empty());
-        } else {
-            panic!("unexpected decision: {decision:?}");
-        }
-    }
-
-    #[test]
-    fn decide_safe_lane_verify_failure_action_terminalizes_with_governor_code() {
-        let decision = decide_safe_lane_verify_failure_action(
-            "missing anchors",
-            true,
-            SafeLaneFailureRoute {
-                decision: SafeLaneFailureRouteDecision::Terminal,
-                reason: SafeLaneFailureRouteReason::SessionGovernorNoReplan,
-                source: SafeLaneFailureRouteSource::SessionGovernor,
-            },
-        );
-
-        if let SafeLaneRoundDecision::Finalize {
-            result: TurnResult::ToolError(failure),
-        } = decision
-        {
-            assert_eq!(
-                failure.code,
-                "safe_lane_plan_verify_failed_session_governor"
-            );
-            assert_eq!(failure.kind, TurnFailureKind::NonRetryable);
-        } else {
-            panic!("unexpected decision: {decision:?}");
-        }
-    }
-
-    #[test]
-    fn decide_safe_lane_plan_failure_action_replans_with_failed_subgraph_cursor() {
-        let decision = decide_safe_lane_plan_failure_action(
-            PlanRunFailure::NodeFailed {
-                node_id: "tool-2".to_owned(),
-                attempts_used: 1,
-                last_error_kind: PlanNodeErrorKind::Retryable,
-                last_error: "transient".to_owned(),
-            },
-            SafeLaneFailureRoute {
-                decision: SafeLaneFailureRouteDecision::Replan,
-                reason: SafeLaneFailureRouteReason::RetryableFailure,
-                source: SafeLaneFailureRouteSource::BaseRouting,
-            },
-            1,
-            vec!["[ok] {\"path\":\"note.md\"}".to_owned()],
-        );
-
-        if let SafeLaneRoundDecision::Replan {
-            reason,
-            next_plan_start_tool_index,
-            next_seed_tool_outputs,
-        } = decision
-        {
-            assert_eq!(
-                reason,
-                "node_failed node=tool-2 error_kind=Retryable reason=transient"
-            );
-            assert_eq!(next_plan_start_tool_index, 1);
-            assert_eq!(next_seed_tool_outputs.len(), 1);
-            assert!(next_seed_tool_outputs[0].contains("note.md"));
-        } else {
-            panic!("unexpected decision: {decision:?}");
-        }
-    }
-
-    #[test]
-    fn decide_safe_lane_plan_failure_action_terminalizes_with_backpressure_code() {
-        let decision = decide_safe_lane_plan_failure_action(
-            PlanRunFailure::NodeFailed {
-                node_id: "tool-1".to_owned(),
-                attempts_used: 2,
-                last_error_kind: PlanNodeErrorKind::Retryable,
-                last_error: "transient".to_owned(),
-            },
-            SafeLaneFailureRoute {
-                decision: SafeLaneFailureRouteDecision::Terminal,
-                reason: SafeLaneFailureRouteReason::BackpressureAttemptsExhausted,
-                source: SafeLaneFailureRouteSource::BackpressureGuard,
-            },
-            0,
-            Vec::new(),
-        );
-
-        if let SafeLaneRoundDecision::Finalize {
-            result: TurnResult::ToolError(failure),
-        } = decision
-        {
-            assert_eq!(failure.code, "safe_lane_plan_backpressure_guard");
-            assert_eq!(failure.kind, TurnFailureKind::NonRetryable);
-        } else {
-            panic!("unexpected decision: {decision:?}");
-        }
-    }
+    #[path = "turn_coordinator_safe_lane_route_tests.rs"]
+    mod safe_lane_route_tests;
 }

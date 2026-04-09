@@ -11,6 +11,20 @@ use crate::secrets::{
     SecretLookup, has_configured_secret_ref, resolve_secret_lookup, secret_ref_env_name,
 };
 
+pub(crate) const GITHUB_COPILOT_EDITOR_VERSION: &str = "vscode/1.85.1";
+pub(crate) const GITHUB_COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot/1.155.0";
+pub(crate) const GITHUB_COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+pub(crate) const GITHUB_COPILOT_USER_AGENT: &str = "GithubCopilot/1.155.0";
+pub(crate) const GITHUB_COPILOT_OAUTH_TOKEN_ENV: &str = "GITHUB_COPILOT_OAUTH_TOKEN";
+pub(crate) const GITHUB_COPILOT_DEFAULT_HEADERS: [(&str, &str); 3] = [
+    ("Editor-Version", GITHUB_COPILOT_EDITOR_VERSION),
+    (
+        "Editor-Plugin-Version",
+        GITHUB_COPILOT_EDITOR_PLUGIN_VERSION,
+    ),
+    ("Copilot-Integration-Id", GITHUB_COPILOT_INTEGRATION_ID),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderProfile {
     pub kind: ProviderKind,
@@ -617,6 +631,8 @@ pub enum ProviderKind {
     KimiCoding,
     #[serde(alias = "groq_compatible")]
     Groq,
+    #[serde(rename = "github-copilot", alias = "github_copilot", alias = "copilot")]
+    GithubCopilot,
     #[serde(alias = "fireworks_compatible", alias = "fireworks-ai")]
     Fireworks,
     #[serde(alias = "mistral_compatible")]
@@ -2540,6 +2556,7 @@ impl ProviderKind {
             ProviderKind::Deepseek => "DeepSeek",
             ProviderKind::Fireworks => "Fireworks",
             ProviderKind::Gemini => "Gemini",
+            ProviderKind::GithubCopilot => "GitHub Copilot",
             ProviderKind::Groq => "Groq",
             ProviderKind::Kimi => "Kimi",
             ProviderKind::KimiCoding => "Kimi Coding",
@@ -2592,6 +2609,7 @@ impl ProviderKind {
             deepseek,
             fireworks,
             gemini,
+            github_copilot,
             groq,
             kimi,
             kimi_coding,
@@ -2637,6 +2655,7 @@ impl ProviderKind {
             ProviderKind::Deepseek => deepseek,
             ProviderKind::Fireworks => fireworks,
             ProviderKind::Gemini => gemini,
+            ProviderKind::GithubCopilot => github_copilot,
             ProviderKind::Groq => groq,
             ProviderKind::Kimi => kimi,
             ProviderKind::KimiCoding => kimi_coding,
@@ -2844,6 +2863,7 @@ impl ProviderKind {
             | ProviderKind::Fireworks
             | ProviderKind::Gemini
             | ProviderKind::Groq
+            | ProviderKind::GithubCopilot
             | ProviderKind::KimiCoding
             | ProviderKind::Llamacpp
             | ProviderKind::LmStudio
@@ -3005,7 +3025,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 42] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 43] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -3018,6 +3038,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 42] = [
     ProviderKind::Deepseek,
     ProviderKind::Fireworks,
     ProviderKind::Gemini,
+    ProviderKind::GithubCopilot,
     ProviderKind::Groq,
     ProviderKind::Kimi,
     ProviderKind::KimiCoding,
@@ -3050,7 +3071,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 42] = [
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 42] = [
+const PROVIDER_PROFILES: [ProviderProfile; 43] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -3262,6 +3283,23 @@ const PROVIDER_PROFILES: [ProviderProfile; 42] = [
         api_key_env_aliases: &["GOOGLE_API_KEY"],
         default_user_agent: None,
         default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::GithubCopilot,
+        id: "github-copilot",
+        aliases: &["github_copilot", "copilot"],
+        base_url: "https://api.githubcopilot.com",
+        chat_completions_path: "/chat/completions",
+        models_path: None,
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &GITHUB_COPILOT_DEFAULT_HEADERS,
+        default_api_key_env: None,
+        api_key_env_aliases: &[],
+        default_user_agent: Some(GITHUB_COPILOT_USER_AGENT),
+        default_oauth_access_token_env: Some(GITHUB_COPILOT_OAUTH_TOKEN_ENV),
         oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::OpenAiCompatible,
     },
@@ -4245,6 +4283,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn provider_kind_serializes_github_copilot_using_canonical_hyphenated_id() {
+        let raw = serde_json::to_string(&ProviderKind::GithubCopilot)
+            .expect("provider kind should serialize");
+
+        assert_eq!(raw, "\"github-copilot\"");
     }
 
     #[test]

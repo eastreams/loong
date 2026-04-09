@@ -777,6 +777,9 @@ fn restore_output_from_backup(
     output_preexisted: bool,
 ) -> CliResult<()> {
     if output_preexisted {
+        if output_path.exists() {
+            remove_config_output_path(output_path)?;
+        }
         fs::copy(backup_path, output_path).map_err(|error| {
             format!(
                 "failed to restore config {} from backup {}: {error}",
@@ -785,14 +788,30 @@ fn restore_output_from_backup(
             )
         })?;
     } else if output_path.exists() {
-        fs::remove_file(output_path).map_err(|error| {
-            format!(
-                "failed to remove partial config {} after rollback: {error}",
-                output_path.display()
-            )
-        })?;
+        remove_config_output_path(output_path)?;
     }
     Ok(())
+}
+
+fn remove_config_output_path(output_path: &Path) -> CliResult<()> {
+    let metadata = fs::symlink_metadata(output_path).map_err(|error| {
+        format!(
+            "failed to inspect partial config {} during rollback: {error}",
+            output_path.display()
+        )
+    })?;
+    let file_type = metadata.file_type();
+    let removal_result = if file_type.is_dir() {
+        fs::remove_dir_all(output_path)
+    } else {
+        fs::remove_file(output_path)
+    };
+    removal_result.map_err(|error| {
+        format!(
+            "failed to remove partial config {} after rollback: {error}",
+            output_path.display()
+        )
+    })
 }
 
 fn finalize_apply_import_selection_failure(
@@ -1226,8 +1245,6 @@ fn import_session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1905,7 +1922,6 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    #[cfg(unix)]
     #[test]
     fn apply_import_selection_rolls_back_bridged_external_skills_when_config_write_fails() {
         let root = unique_temp_dir("loongclaw-import-apply-managed-external-skills-rollback");
@@ -1933,14 +1949,9 @@ mod tests {
         let mut baseline = crate::config::LoongClawConfig::default();
         baseline.external_skills.install_root =
             Some(root.join("managed-skills").display().to_string());
-        let rendered = crate::config::render(&baseline).expect("render baseline config");
-        fs::write(&output_path, rendered).expect("write baseline config");
-        let mut readonly_permissions = fs::metadata(&output_path)
-            .expect("read output metadata")
-            .permissions();
-        readonly_permissions.set_mode(0o400);
-        fs::set_permissions(&output_path, readonly_permissions)
-            .expect("make output file read only");
+        let baseline_body = crate::config::render(&baseline).expect("render baseline config");
+        fs::write(&output_path, &baseline_body).expect("write baseline config");
+        let _write_failure = crate::config::inject_test_config_write_failure();
 
         let discovery = discover_import_sources(&root, DiscoveryOptions::default())
             .expect("discovery should succeed");
@@ -1953,23 +1964,21 @@ mod tests {
             apply_external_skills_plan: true,
             external_skills_input_path: Some(root.clone()),
         })
-        .expect_err("read-only config path should fail to persist");
+        .expect_err("injected config write failure should abort apply");
 
         assert!(
             error.contains("failed to write config file"),
             "expected config write failure, got: {error}"
         );
         assert!(
-            !root.join("managed-skills").join("release-guard").exists(),
-            "rollback should remove bridged managed installs after config persistence failure"
+            output_path.is_file(),
+            "rollback should restore the original config file after config persistence failure"
         );
-
-        let mut cleanup_permissions = fs::metadata(&output_path)
-            .expect("read output metadata for cleanup")
-            .permissions();
-        cleanup_permissions.set_mode(0o600);
-        fs::set_permissions(&output_path, cleanup_permissions)
-            .expect("restore output permissions for cleanup");
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("read restored baseline config"),
+            baseline_body,
+            "rollback should restore the original config body after config persistence failure"
+        );
         fs::remove_dir_all(&root).ok();
     }
 

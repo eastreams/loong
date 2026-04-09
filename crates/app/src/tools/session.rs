@@ -26,6 +26,8 @@ use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::runtime_self_continuity;
 #[cfg(feature = "memory-sqlite")]
+use crate::session::frozen_result::capture_frozen_result;
+#[cfg(feature = "memory-sqlite")]
 use crate::session::recovery::{
     RECOVERY_EVENT_KIND, RECOVERY_KIND_QUEUED_ASYNC_OVERDUE_MARKED_FAILED,
     RECOVERY_KIND_RUNNING_ASYNC_OVERDUE_MARKED_FAILED, SessionRecoveryRecord,
@@ -2199,6 +2201,7 @@ fn apply_session_recover_plan(
         recovery_error.clone(),
         recover_plan.elapsed_seconds.saturating_mul(1_000),
     );
+    let frozen_result = capture_frozen_result(&outcome, tool_config.delegate.max_frozen_bytes);
     let outcome_status = outcome.status.clone();
     let outcome_payload = outcome.payload;
     let event_payload_json = match recover_plan.recovery_kind {
@@ -2246,6 +2249,7 @@ fn apply_session_recover_plan(
             event_payload_json,
             outcome_status,
             outcome_payload_json: outcome_payload,
+            frozen_result: Some(frozen_result),
         },
     )?;
     if finalized.is_none() {
@@ -2514,6 +2518,8 @@ fn apply_session_cancel_plan(
                 cancel_error.clone(),
                 0,
             );
+            let frozen_result =
+                capture_frozen_result(&outcome, tool_config.delegate.max_frozen_bytes);
             let outcome_status = outcome.status.clone();
             let outcome_payload = outcome.payload;
             let finalized = repo.finalize_session_terminal_if_current(
@@ -2530,6 +2536,7 @@ fn apply_session_cancel_plan(
                     }),
                     outcome_status,
                     outcome_payload_json: outcome_payload,
+                    frozen_result: Some(frozen_result),
                 },
             )?;
             if finalized.is_none() {
@@ -3738,6 +3745,7 @@ fn session_terminal_outcome_json(
         "session_id": outcome.session_id,
         "status": outcome.status,
         "payload": outcome.payload_json,
+        "frozen_result": outcome.frozen_result,
         "recorded_at": outcome.recorded_at,
     })
 }
@@ -4066,6 +4074,7 @@ mod tests {
                     event_payload_json: json!({ "result": "ok" }),
                     outcome_status: "ok".to_owned(),
                     outcome_payload_json: json!({ "child_session_id": session_id }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize child");
@@ -4136,6 +4145,7 @@ mod tests {
                 event_payload_json: json!({ "result": "ok" }),
                 outcome_status: "ok".to_owned(),
                 outcome_payload_json: json!({ "child_session_id": "archived-child" }),
+                frozen_result: None,
             },
         )
         .expect("finalize child");
@@ -5269,6 +5279,14 @@ mod tests {
         assert!(outcome.payload["delegate_lifecycle"]["staleness"].is_null());
         assert_eq!(outcome.payload["terminal_outcome_state"], "present");
         assert_eq!(outcome.payload["terminal_outcome"]["status"], "error");
+        let frozen_error_code =
+            outcome.payload["terminal_outcome"]["frozen_result"]["content"]["error"]["code"]
+                .as_str()
+                .expect("queued frozen error code");
+        assert!(
+            frozen_error_code.starts_with("delegate_async_queued_overdue_marked_failed:"),
+            "unexpected queued frozen error code: {frozen_error_code}"
+        );
         assert_eq!(
             outcome.payload["recovery_action"]["kind"],
             "queued_async_overdue_marked_failed"
@@ -5403,6 +5421,14 @@ mod tests {
         assert!(outcome.payload["delegate_lifecycle"]["staleness"].is_null());
         assert_eq!(outcome.payload["terminal_outcome_state"], "present");
         assert_eq!(outcome.payload["terminal_outcome"]["status"], "error");
+        let frozen_error_code =
+            outcome.payload["terminal_outcome"]["frozen_result"]["content"]["error"]["code"]
+                .as_str()
+                .expect("running frozen error code");
+        assert!(
+            frozen_error_code.starts_with("delegate_async_running_overdue_marked_failed:"),
+            "unexpected running frozen error code: {frozen_error_code}"
+        );
         assert_eq!(
             outcome.payload["recovery_action"]["kind"],
             "running_async_overdue_marked_failed"
@@ -5846,6 +5872,10 @@ mod tests {
         assert_eq!(outcome.payload["terminal_outcome_state"], "present");
         assert_eq!(outcome.payload["terminal_outcome"]["status"], "error");
         assert_eq!(
+            outcome.payload["terminal_outcome"]["frozen_result"]["content"]["error"]["code"],
+            "delegate_cancelled: operator_requested"
+        );
+        assert_eq!(
             outcome.payload["cancel_action"]["kind"],
             "queued_async_cancelled"
         );
@@ -6205,6 +6235,11 @@ mod tests {
                 .expect("load queued outcome")
                 .is_some()
         );
+        let queued_outcome = repo
+            .load_terminal_outcome("queued-child")
+            .expect("load queued outcome")
+            .expect("queued outcome row");
+        assert!(queued_outcome.frozen_result.is_some());
         assert!(
             repo.load_terminal_outcome("running-child")
                 .expect("load running outcome")
@@ -6867,6 +6902,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "result": "ok"
                 }),
+                frozen_result: None,
             },
         )
         .expect("finalize child");
@@ -6957,6 +6993,7 @@ mod tests {
                     event_payload_json: json!({ "result": "ok" }),
                     outcome_status: "ok".to_owned(),
                     outcome_payload_json: json!({ "child_session_id": session_id }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize child");
@@ -7070,6 +7107,7 @@ mod tests {
                     event_payload_json: json!({ "result": "ok" }),
                     outcome_status: "ok".to_owned(),
                     outcome_payload_json: json!({ "child_session_id": session_id }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize child");

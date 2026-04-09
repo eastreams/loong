@@ -874,22 +874,29 @@ fn runtime_restore_apply_reports_verification_failure_without_reverting_applied_
 #[test]
 fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fails() {
     let root = unique_temp_dir("loongclaw-runtime-restore-rollback");
-    let _env = RuntimeRestoreEnvGuard::set(&[
+    let (config_path, config) = write_runtime_restore_config(&root);
+    let config_path_text = config_path.to_string_lossy().to_string();
+    let artifact_path = {
+        let _runtime_env = RuntimeRestoreEnvGuard::set(&[
+            ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+            ("OPENAI_API_KEY", None),
+            ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+        ]);
+        install_demo_skill(&root, &config, &config_path);
+        let (artifact_path, _snapshot, _payload) = write_snapshot_artifact(&root, &config_path);
+        artifact_path
+    };
+
+    mutate_runtime_restore_config(&config_path, &root);
+    let _apply_env = RuntimeRestoreEnvGuard::set(&[
         ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+        (
+            "LOONGCLAW_TEST_FAIL_CONFIG_WRITE_PATH",
+            Some(config_path_text.as_str()),
+        ),
     ]);
-    let (config_path, config) = write_runtime_restore_config(&root);
-    install_demo_skill(&root, &config, &config_path);
-    let (artifact_path, _snapshot, _payload) = write_snapshot_artifact(&root, &config_path);
-
-    mutate_runtime_restore_config(&config_path, &root);
-
-    let metadata = fs::metadata(&config_path).expect("read config metadata");
-    let original_permissions = metadata.permissions();
-    let mut readonly_permissions = original_permissions.clone();
-    readonly_permissions.set_readonly(true);
-    fs::set_permissions(&config_path, readonly_permissions).expect("mark config read-only");
 
     let apply_error = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
         loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
@@ -900,8 +907,6 @@ fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fail
         },
     )
     .expect_err("apply should fail when config persistence fails");
-
-    fs::set_permissions(&config_path, original_permissions).expect("restore config write access");
 
     assert!(apply_error.contains("persist runtime restore config"));
     assert!(

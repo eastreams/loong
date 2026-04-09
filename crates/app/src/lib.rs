@@ -24,6 +24,7 @@ pub mod session;
 pub mod tools;
 pub(crate) mod trust;
 pub mod tui_surface;
+pub mod work;
 
 mod process_env;
 #[doc(hidden)]

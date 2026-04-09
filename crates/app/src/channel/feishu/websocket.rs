@@ -15,7 +15,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::feishu::api::{FeishuClient, FeishuWsEndpointClientConfig};
-use crate::channel::{ChannelServeStopHandle, runtime_state::ChannelOperationRuntimeTracker};
+use crate::channel::{ChannelServeStopHandle, runtime::state::ChannelOperationRuntimeTracker};
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedFeishuChannelConfig,
 };

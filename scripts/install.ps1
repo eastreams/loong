@@ -8,9 +8,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-$ReleaseBaseUrl = if ($env:LOONG_INSTALL_RELEASE_BASE_URL) { $env:LOONG_INSTALL_RELEASE_BASE_URL } else { "https://github.com/$Repository/releases" }
+$Prefix = [IO.Path]::GetFullPath(($Prefix -replace '^~', $HOME))
+$ReleaseBaseUrl = if ($env:LOONG_INSTALL_RELEASE_BASE_URL) {
+    $env:LOONG_INSTALL_RELEASE_BASE_URL
+} elseif ($env:LOONGCLAW_INSTALL_RELEASE_BASE_URL) {
+    $env:LOONGCLAW_INSTALL_RELEASE_BASE_URL
+} else {
+    "https://github.com/$Repository/releases"
+}
 $BinName = "loong"
-$LegacyBinName = "loong"
+$LegacyBinName = "loongclaw"
 
 function Write-Usage {
     @"
@@ -186,21 +193,65 @@ function Install-FromRelease {
     }
 }
 
+function Resolve-NormalizedPathEntryOrNull([string]$PathEntry) {
+    if ([string]::IsNullOrWhiteSpace($PathEntry)) {
+        return $null
+    }
+
+    try {
+        return [IO.Path]::GetFullPath($PathEntry)
+    } catch {
+        return $null
+    }
+}
+
 $installResult = if ($Source) { Install-FromSource } else { Install-FromRelease }
 
 Write-Host "==> Installed loong to $($installResult.Primary)"
 Write-Host "==> Installed compatible loong command to $($installResult.Legacy)"
 
-if ($Onboard) {
-    Write-Host "==> Running guided onboarding"
-    & $installResult.Primary onboard | Out-Host
+$normalizedPrefix = $Prefix
+$pathItems = ($env:PATH -split [IO.Path]::PathSeparator) |
+    Where-Object { $_ } |
+    ForEach-Object { Resolve-NormalizedPathEntryOrNull $_ } |
+    Where-Object { $_ }
+$alreadyInSessionPath = $pathItems | Where-Object { $_ -ieq $normalizedPrefix }
+if (-not $alreadyInSessionPath) {
+    $currentUserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    $userPathItems = if ($currentUserPath) {
+        ($currentUserPath -split [IO.Path]::PathSeparator) |
+            Where-Object { $_ } |
+            ForEach-Object { Resolve-NormalizedPathEntryOrNull $_ } |
+            Where-Object { $_ }
+    } else { @() }
+    $alreadyInUserPath = $userPathItems | Where-Object { $_ -ieq $normalizedPrefix }
+    if (-not $alreadyInUserPath) {
+        $newUserPath = if ($currentUserPath) { "$normalizedPrefix$([IO.Path]::PathSeparator)$currentUserPath" } else { $normalizedPrefix }
+        try {
+            [Environment]::SetEnvironmentVariable("PATH", $newUserPath, "User")
+            Write-Host "==> Added $normalizedPrefix to user PATH"
+        } catch {
+            Write-Host "==> Could not persist PATH automatically: $_"
+            Write-Host "    Add manually: `$env:PATH = `"$normalizedPrefix`$([IO.Path]::PathSeparator)`$env:PATH`""
+        }
+    } else {
+        Write-Host "==> PATH entry already present in user environment"
+    }
+    $env:PATH = "$normalizedPrefix$([IO.Path]::PathSeparator)$env:PATH"
 }
 
-$pathItems = ($env:PATH -split [IO.Path]::PathSeparator)
-if (-not ($pathItems -contains $Prefix)) {
-    Write-Host ""
-    Write-Host "Add to PATH if needed:"
-    Write-Host "  `$env:PATH = \"$Prefix$([IO.Path]::PathSeparator)$env:PATH\""
+if ($Onboard) {
+    Write-Host "==> Running guided onboarding"
+    try {
+        & $installResult.Primary onboard | Out-Host
+        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            Write-Host "==> Onboarding exited with code $LASTEXITCODE"
+            Write-Host "==> You can run 'loong onboard' later to complete setup"
+        }
+    } catch {
+        Write-Host "==> Onboarding encountered an error: $_"
+        Write-Host "==> You can run 'loong onboard' later to complete setup"
+    }
 }
 
 Write-Host ""

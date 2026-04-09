@@ -113,7 +113,7 @@ impl ChatCliFixture {
             .arg("chat")
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
-            .env("LOONGCLAW_HOME", &loongclaw_home)
+            .env("LOONG_HOME", &loongclaw_home)
             .env_remove("LOONGCLAW_CONFIG_PATH")
             .env_remove("USERPROFILE")
             .stdin(Stdio::piped())
@@ -332,15 +332,9 @@ fn chat_without_config_reports_onboard_failure() {
 fn chat_without_config_surfaces_config_path_access_errors() {
     let fixture = ChatCliFixture::new("config-access-error");
 
-    let blocked_dir = fixture.root.join("blocked");
-    std::fs::create_dir_all(&blocked_dir).expect("create blocked directory");
-    let _reset_guard = PermissionsResetGuard::new(&blocked_dir);
-    let mut permissions = std::fs::metadata(&blocked_dir)
-        .expect("blocked directory metadata")
-        .permissions();
-    permissions.set_mode(0o000);
-    std::fs::set_permissions(&blocked_dir, permissions).expect("lock blocked directory");
-    let blocked_config = blocked_dir.join("loongclaw.toml");
+    let blocked_parent = fixture.root.join("blocked");
+    std::fs::write(&blocked_parent, b"not a directory").expect("create blocking parent file");
+    let blocked_config = blocked_parent.join("loongclaw.toml");
 
     let output = fixture.run_chat_command(Some(&blocked_config), None);
     let stdout = render_output(&output.stdout);

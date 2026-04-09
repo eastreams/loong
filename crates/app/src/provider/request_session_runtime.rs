@@ -37,6 +37,8 @@ pub(super) async fn prepare_provider_request_session(
 ) -> CliResult<ProviderRequestSession> {
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
+    super::copilot_auth::ensure_provider_copilot_api_key(&config.provider).await?;
+
     validate_provider_auth_readiness(config).await?;
     ensure_provider_profile_state_backend(config);
 

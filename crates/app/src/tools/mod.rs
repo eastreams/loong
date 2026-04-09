@@ -655,13 +655,23 @@ pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution>
     None
 }
 
+fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &Value) -> String {
+    if canonical_name != "tool.invoke" {
+        return "-".to_owned();
+    }
+
+    let inner_tool_id = payload.get("tool_id");
+    let inner_tool_id = inner_tool_id.and_then(Value::as_str);
+    let inner_tool_name = inner_tool_id.map(canonical_tool_name);
+    let inner_tool_name = inner_tool_name.unwrap_or("-");
+    inner_tool_name.to_owned()
+}
+
 pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let requested_tool_name = request.tool_name.clone();
-    let payload_kind = crate::observability::json_value_kind(&request.payload);
-    let payload_keys = crate::observability::top_level_json_keys(&request.payload);
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let payload = request.payload;
     let workspace_root = trusted_workspace_root_from_payload(&payload)?;
@@ -674,6 +684,16 @@ pub fn execute_tool_core_with_config(
         effective_config = effective_config.narrowed(&runtime_narrowing);
     }
     let config = &effective_config;
+    let debug_log_enabled = tracing::enabled!(target: "loongclaw.tools", tracing::Level::DEBUG);
+    let warn_log_enabled = tracing::enabled!(target: "loongclaw.tools", tracing::Level::WARN);
+    let should_log_payload_metadata = debug_log_enabled || warn_log_enabled;
+    let mut payload_kind = "-";
+    let mut payload_keys = Vec::new();
+    if should_log_payload_metadata {
+        payload_kind = crate::observability::json_value_kind(&payload);
+        payload_keys = crate::observability::top_level_json_keys(&payload);
+    }
+    let inner_tool_name = resolved_inner_tool_name_for_logs(canonical_name, &payload);
     let started_at = std::time::Instant::now();
     let result = (|| {
         ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
@@ -699,40 +719,49 @@ pub fn execute_tool_core_with_config(
     let duration_ms = started_at.elapsed().as_millis();
     match &result {
         Ok(outcome) => {
-            tracing::debug!(
-                target: "loongclaw.tools",
-                requested_tool_name = %requested_tool_name,
-                canonical_tool_name = %canonical_name,
-                payload_kind,
-                payload_keys = ?payload_keys,
-                status = %outcome.status,
-                duration_ms,
-                "tool execution completed"
-            );
-        }
-        Err(error) => {
-            if is_expected_tool_request_error(error) {
+            if debug_log_enabled {
                 tracing::debug!(
                     target: "loongclaw.tools",
                     requested_tool_name = %requested_tool_name,
                     canonical_tool_name = %canonical_name,
+                    inner_tool_name = %inner_tool_name,
                     payload_kind,
                     payload_keys = ?payload_keys,
+                    status = %outcome.status,
                     duration_ms,
-                    error = %crate::observability::summarize_error(error),
-                    "tool execution rejected"
+                    "tool execution completed"
                 );
+            }
+        }
+        Err(error) => {
+            if is_expected_tool_request_error(error) {
+                if debug_log_enabled {
+                    tracing::debug!(
+                        target: "loongclaw.tools",
+                        requested_tool_name = %requested_tool_name,
+                        canonical_tool_name = %canonical_name,
+                        inner_tool_name = %inner_tool_name,
+                        payload_kind,
+                        payload_keys = ?payload_keys,
+                        duration_ms,
+                        error = %crate::observability::summarize_error(error),
+                        "tool execution rejected"
+                    );
+                }
             } else {
-                tracing::warn!(
-                    target: "loongclaw.tools",
-                    requested_tool_name = %requested_tool_name,
-                    canonical_tool_name = %canonical_name,
-                    payload_kind,
-                    payload_keys = ?payload_keys,
-                    duration_ms,
-                    error = %crate::observability::summarize_error(error),
-                    "tool execution failed"
-                );
+                if warn_log_enabled {
+                    tracing::warn!(
+                        target: "loongclaw.tools",
+                        requested_tool_name = %requested_tool_name,
+                        canonical_tool_name = %canonical_name,
+                        inner_tool_name = %inner_tool_name,
+                        payload_kind,
+                        payload_keys = ?payload_keys,
+                        duration_ms,
+                        error = %crate::observability::summarize_error(error),
+                        "tool execution failed"
+                    );
+                }
             }
         }
     }
@@ -1802,7 +1831,7 @@ mod tests {
     ) -> (runtime_config::BashExecRuntimePolicy, PathBuf) {
         let log_path = root.join("bash-args.log");
         let runtime_path = write_fake_bash_runtime(root, "fake-bash", &log_path);
-        let rules_dir = root.join(".loongclaw").join("rules");
+        let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
         let rules = bash_rules::load_rules_from_dir(&rules_dir).expect("load rules");
 
         (
@@ -2427,12 +2456,9 @@ mod tests {
         assert!(tool_search_properties.contains_key("query"));
         assert!(tool_search_properties.contains_key("exact_tool_id"));
         assert!(!tool_search_required.contains(&Value::String("query".to_owned())));
-        assert_eq!(
-            tool_search["function"]["parameters"]["anyOf"],
-            json!([
-                { "required": ["query"] },
-                { "required": ["exact_tool_id"] }
-            ])
+        assert!(
+            tool_search["function"]["parameters"].get("anyOf").is_none(),
+            "anyOf removed for OpenAI-compatible provider compatibility"
         );
     }
 
@@ -2801,6 +2827,21 @@ mod tests {
                 .all(|entry| entry["source"] == "workspace_file"),
             "expected workspace-file results only: {results:?}"
         );
+        assert!(
+            results.iter().all(|entry| {
+                entry["provenance"]["memory_system_id"] == "builtin"
+                    && entry["provenance"]["source_kind"] == "workspace_document"
+                    && entry["provenance"]["recall_mode"] == "operator_inspection"
+            }),
+            "expected structured operator-inspection provenance: {results:?}"
+        );
+        assert!(
+            results.iter().all(|entry| {
+                entry["metadata"]["record_status"] == "active"
+                    && entry["metadata"]["body_line_offset"].as_u64().is_some()
+            }),
+            "expected structured workspace metadata: {results:?}"
+        );
     }
 
     #[cfg(feature = "tool-file")]
@@ -2835,6 +2876,48 @@ mod tests {
         assert_eq!(outcome.payload["start_line"], 2);
         assert_eq!(outcome.payload["end_line"], 3);
         assert_eq!(outcome.payload["text"], "line two\nline three");
+        assert_eq!(outcome.payload["provenance"]["memory_system_id"], "builtin");
+        assert_eq!(
+            outcome.payload["provenance"]["source_kind"],
+            "workspace_document"
+        );
+        assert_eq!(outcome.payload["provenance"]["scope"], "workspace");
+        assert_eq!(
+            outcome.payload["provenance"]["recall_mode"],
+            "operator_inspection"
+        );
+        assert_eq!(outcome.payload["metadata"]["record_status"], "active");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_uses_selected_memory_system_id_in_provenance() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-selected-system");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(&memory_path, "line one\nline two\n").expect("write root memory");
+
+        let mut config = test_tool_runtime_config(root);
+        config.selected_memory_system_id = "workspace_recall".to_owned();
+
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 1,
+                    "lines": 1
+                }),
+            },
+            &config,
+        )
+        .expect("memory get should succeed");
+
+        assert_eq!(
+            outcome.payload["provenance"]["memory_system_id"],
+            "workspace_recall"
+        );
     }
 
     #[cfg(feature = "tool-file")]
@@ -4014,7 +4097,7 @@ mod tests {
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
-    fn tool_search_reports_alternative_required_fields_for_bundled_skill_install() {
+    fn tool_search_reports_no_required_field_groups_for_bundled_skill_install() {
         let descriptor = catalog::tool_catalog()
             .descriptor("external_skills.install")
             .expect("external_skills.install should exist in the catalog");
@@ -4028,10 +4111,7 @@ mod tests {
             searchable.required_fields.is_empty(),
             "search should not flatten grouped alternatives into required_fields"
         );
-        assert_eq!(
-            searchable.required_field_groups,
-            vec![vec!["path".to_owned()], vec!["bundled_skill_id".to_owned()]]
-        );
+        assert_eq!(searchable.required_field_groups, Vec::<Vec<String>>::new());
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -8276,7 +8356,7 @@ mod tests {
 
         let expected_path = file_root.join("artifacts/specs/spec-sheet.pdf");
         let canonical_expected_path =
-            std::fs::canonicalize(&expected_path).expect("canonicalize downloaded file");
+            dunce::canonicalize(&expected_path).expect("canonicalize downloaded file");
         assert_eq!(
             outcome.payload["path"].as_str(),
             Some(canonical_expected_path.display().to_string().as_str())
@@ -13965,7 +14045,7 @@ mod tests {
                 outcome.payload["output_path"]
                     .as_str()
                     .expect("output path should exist"),
-                fs::canonicalize(&output_path)
+                dunce::canonicalize(&output_path)
                     .expect("output path should canonicalize")
                     .display()
                     .to_string()

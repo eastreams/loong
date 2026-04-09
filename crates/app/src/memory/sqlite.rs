@@ -19,7 +19,7 @@ use super::{
     canonical_memory_record_from_persisted_turn, runtime_config::MemoryRuntimeConfig,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationTurn {
     pub role: String,
     pub content: String,
@@ -69,6 +69,16 @@ pub struct SqliteContextLoadDiagnostics {
     pub summary_catch_up_ms: f64,
 }
 
+const SESSION_TERMINAL_OUTCOMES_TABLE_SQL: &str = "
+CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
+  session_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  frozen_result_json TEXT NULL,
+  recorded_at INTEGER NOT NULL
+);
+";
+
 #[derive(Debug, Clone, Default)]
 struct SqliteConnectionBootstrapDiagnostics {
     parent_dir_create_ms: f64,
@@ -103,12 +113,21 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 9;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 10;
 const CANONICAL_REBUILD_BATCH_SIZE: i64 = 256;
 const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 18;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
+const SESSION_TERMINAL_OUTCOMES_DDL: &str = "
+CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
+  session_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  frozen_result_json TEXT NULL,
+  recorded_at INTEGER NOT NULL
+);
+";
 const SQL_INSERT_TURN: &str = "INSERT INTO turns(session_id, session_turn_index, role, content, ts) VALUES (?1, ?2, ?3, ?4, ?5)";
 const SQL_DELETE_TURNS_FOR_SESSION: &str = "DELETE FROM turns WHERE session_id = ?1";
 const SQL_UPSERT_SESSION_TURN_COUNT: &str =
@@ -178,11 +197,6 @@ const SQL_QUERY_RECENT_TURNS_NO_ID: &str = "SELECT role, content, ts, session_tu
              WHERE session_id = ?1
              ORDER BY id DESC
              LIMIT ?2";
-const SQL_QUERY_RECENT_PROMPT_TURNS: &str = "SELECT role, content
-             FROM turns
-             WHERE session_id = ?1
-             ORDER BY id DESC
-             LIMIT ?2";
 #[cfg(test)]
 const SQL_QUERY_RECENT_TURNS_WITH_BOUNDARY_ID: &str =
     "SELECT role, content, ts, id, session_turn_index
@@ -239,6 +253,16 @@ const SQL_QUERY_RECENT_PROMPT_TURNS_WITH_OVERFLOW_PROBE_FALLBACK: &str = "SELECT
              WHERE session_id = ?1
              ORDER BY id DESC
              LIMIT ?2";
+const SQL_QUERY_TURNS_AFTER_ID_WITH_LIMIT: &str = "SELECT id, role, content, ts
+             FROM turns
+             WHERE session_id = ?1
+               AND id > ?2
+               AND id <= ?3
+             ORDER BY id ASC
+             LIMIT ?4";
+const SQL_QUERY_MAX_TURN_ID_FOR_SESSION: &str = "SELECT COALESCE(MAX(id), 0)
+             FROM turns
+             WHERE session_id = ?1";
 const SQL_QUERY_TURNS_UP_TO_ID: &str = "SELECT id, role, content
              FROM turns
              WHERE session_id = ?1 AND id <= ?2
@@ -255,6 +279,22 @@ const SQL_QUERY_INITIAL_SUMMARY_ROWS_BY_SESSION_TURN_INDEX: &str = "SELECT id, r
                AND session_turn_index <= 2
              ORDER BY session_turn_index ASC
              LIMIT 2";
+const SQL_QUERY_INITIAL_SUMMARY_ROWS_AFTER_SEED_SESSION_INDEX: &str = "SELECT id, role, content
+             FROM turns
+             WHERE session_id = ?1
+               AND session_turn_index > 1
+             ORDER BY session_turn_index ASC";
+const SQL_QUERY_SUMMARY_BOUNDARY_TURN_ID_BY_SESSION_TURN_COUNT: &str = "WITH state AS (
+             SELECT turn_count
+             FROM memory_session_state
+             WHERE session_id = ?1
+         )
+         SELECT turns.id
+         FROM state
+         JOIN turns
+           ON turns.session_id = ?1
+          AND turns.session_turn_index = state.turn_count - ?2 + 1
+         WHERE state.turn_count >= ?2";
 const SQL_QUERY_SUMMARY_FRONTIER_UP_TO_ID: &str = "SELECT id
              FROM turns
              WHERE session_id = ?1
@@ -299,17 +339,6 @@ const SQL_QUERY_SUMMARY_APPEND_MAINTENANCE_STATE: &str = "WITH checkpoint AS (
              checkpoint.summary_format_version
          FROM (SELECT 1) AS seed
          LEFT JOIN checkpoint ON 1 = 1";
-const SQL_QUERY_SUMMARY_BOUNDARY_TURN_ID_BY_SESSION_TURN_COUNT: &str = "WITH state AS (
-             SELECT turn_count
-             FROM memory_session_state
-             WHERE session_id = ?1
-         )
-         SELECT turns.id
-         FROM state
-         JOIN turns
-           ON turns.session_id = ?1
-          AND turns.session_turn_index = state.turn_count - ?2 + 1
-         WHERE state.turn_count >= ?2";
 const SQL_UPSERT_SUMMARY_CHECKPOINT_METADATA: &str = "INSERT INTO memory_summary_checkpoints(
              session_id,
              summarized_through_turn_id,
@@ -416,6 +445,13 @@ struct WindowLoadResult {
     limit: usize,
     turns: Vec<ConversationTurn>,
     turn_count: Option<usize>,
+}
+
+struct TranscriptPageRow {
+    id: i64,
+    role: String,
+    content: String,
+    ts: i64,
 }
 
 enum ReplaceTurnsFailure {
@@ -711,6 +747,81 @@ pub(super) fn window_direct(
     window_direct_with_options(session_id, limit, true, config)
 }
 
+pub(super) fn transcript_direct_paged(
+    session_id: &str,
+    page_size: usize,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    if page_size == 0 {
+        return Err("memory transcript page_size must be >= 1".to_owned());
+    }
+
+    let runtime = acquire_memory_runtime(config)?;
+    runtime.with_connection("memory.transcript_direct_paged", |conn| {
+        transcript_direct_paged_with_conn(conn, session_id, page_size)
+    })
+}
+
+pub(crate) fn window_direct_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    let (turns, _) = query_recent_turns(conn, session_id, limit)?;
+    Ok(turns)
+}
+
+pub(crate) fn transcript_direct_paged_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    page_size: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    if page_size == 0 {
+        return Err("memory transcript page_size must be >= 1".to_owned());
+    }
+
+    let upper_bound_turn_id = query_max_turn_id_for_session(conn, session_id)?;
+    if upper_bound_turn_id <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut transcript = Vec::new();
+    let mut last_seen_turn_id = 0_i64;
+
+    loop {
+        if last_seen_turn_id >= upper_bound_turn_id {
+            break;
+        }
+
+        let page = query_transcript_page_after_id(
+            conn,
+            session_id,
+            last_seen_turn_id,
+            upper_bound_turn_id,
+            page_size,
+        )?;
+
+        if page.is_empty() {
+            break;
+        }
+
+        let next_last_seen_turn_id = page.last().map(|row| row.id).unwrap_or(last_seen_turn_id);
+
+        for row in page {
+            let turn = ConversationTurn {
+                role: row.role,
+                content: row.content,
+                ts: row.ts,
+            };
+            transcript.push(turn);
+        }
+
+        last_seen_turn_id = next_last_seen_turn_id;
+    }
+
+    Ok(transcript)
+}
+
 pub(super) fn window_direct_with_options(
     session_id: &str,
     limit: usize,
@@ -884,6 +995,55 @@ fn lexical_normalize_runtime_db_path(path: &Path) -> PathBuf {
     } else {
         normalized
     }
+}
+
+fn query_transcript_page_after_id(
+    conn: &Connection,
+    session_id: &str,
+    after_id: i64,
+    upper_bound_turn_id: i64,
+    page_size: usize,
+) -> Result<Vec<TranscriptPageRow>, String> {
+    let page_size_i64 = i64::try_from(page_size).map_err(|conversion_error| {
+        format!("memory transcript page_size exceeds SQLite LIMIT range: {conversion_error}")
+    })?;
+    let mut statement = prepare_cached_sqlite_statement(
+        conn,
+        SQL_QUERY_TURNS_AFTER_ID_WITH_LIMIT,
+        "prepare transcript page query failed",
+    )?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![session_id, after_id, upper_bound_turn_id, page_size_i64],
+            |row| {
+                Ok(TranscriptPageRow {
+                    id: row.get(0)?,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    ts: row.get(3)?,
+                })
+            },
+        )
+        .map_err(|error| format!("query transcript page failed: {error}"))?;
+
+    let mut page = Vec::new();
+
+    for row in rows {
+        let transcript_row =
+            row.map_err(|error| format!("decode transcript page row failed: {error}"))?;
+        page.push(transcript_row);
+    }
+
+    Ok(page)
+}
+
+fn query_max_turn_id_for_session(conn: &Connection, session_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        SQL_QUERY_MAX_TURN_ID_FOR_SESSION,
+        rusqlite::params![session_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map_err(|error| format!("query transcript upper bound failed: {error}"))
 }
 
 /// Walk up the directory tree to find the deepest existing ancestor, canonicalize it
@@ -1665,6 +1825,7 @@ fn ensure_sqlite_schema_repairs_if_needed(conn: &mut Connection) -> Result<(), S
     }
 
     ensure_turn_session_index_and_state_metadata(conn)?;
+    ensure_session_terminal_outcome_storage(conn)?;
     ensure_approval_lifecycle_tables(conn)?;
     ensure_session_tool_consent_storage(conn)?;
     ensure_session_tool_policy_storage(conn)?;
@@ -1689,8 +1850,10 @@ fn sqlite_current_schema_objects_ready(conn: &Connection) -> Result<bool, String
         .map_err(|error| format!("probe sqlite current schema objects failed: {error}"))?;
     let object_count_ready = object_count == SQLITE_CURRENT_SCHEMA_OBJECT_COUNT;
     let canonical_fts_ready = !canonical_record_fts_needs_rebuild(conn)?;
+    let terminal_outcome_storage_ready =
+        sqlite_table_has_column(conn, "session_terminal_outcomes", "frozen_result_json")?;
 
-    Ok(object_count_ready && canonical_fts_ready)
+    Ok(object_count_ready && canonical_fts_ready && terminal_outcome_storage_ready)
 }
 
 fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(), String> {
@@ -1750,15 +1913,14 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
         );
         CREATE INDEX IF NOT EXISTS idx_session_events_session_id
           ON session_events(session_id, id);
-        CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
-          session_id TEXT PRIMARY KEY,
-          status TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          recorded_at INTEGER NOT NULL
-        );
         ",
     )
     .map_err(|error| format!("backfill session turn index metadata failed: {error}"))?;
+    conn.execute_batch(SESSION_TERMINAL_OUTCOMES_DDL)
+        .map_err(|error| format!("ensure session terminal outcome storage failed: {error}"))?;
+
+    conn.execute_batch(SESSION_TERMINAL_OUTCOMES_TABLE_SQL)
+        .map_err(|error| format!("backfill session terminal outcome storage failed: {error}"))?;
 
     conn.execute(
         "INSERT INTO memory_session_state(session_id, turn_count)
@@ -1782,6 +1944,29 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
         [],
     )
     .map_err(|error| format!("remove stale session turn count metadata failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_session_terminal_outcome_storage(conn: &Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("session_terminal_outcomes");
+
+    conn.execute_batch(SESSION_TERMINAL_OUTCOMES_TABLE_SQL)
+        .map_err(|error| format!("ensure session terminal outcome storage failed: {error}"))?;
+
+    let has_frozen_result_column =
+        sqlite_table_has_column(conn, "session_terminal_outcomes", "frozen_result_json")?;
+    if !has_frozen_result_column {
+        conn.execute(
+            "ALTER TABLE session_terminal_outcomes
+             ADD COLUMN frozen_result_json TEXT NULL",
+            [],
+        )
+        .map_err(|error| {
+            format!("add session terminal outcome frozen result column failed: {error}")
+        })?;
+    }
 
     Ok(())
 }
@@ -2610,6 +2795,12 @@ fn reset_sqlite_runtime_test_state() {
     test_support::reset_test_state();
 }
 
+#[cfg(test)]
+fn sqlite_runtime_test_lock() -> &'static Mutex<()> {
+    static SQLITE_RUNTIME_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    SQLITE_RUNTIME_TEST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 pub(super) fn drop_cached_sqlite_runtime(path: &Path) -> Result<bool, String> {
     let normalized_path = normalize_runtime_db_path(path)?;
     let mut registry = sqlite_runtime_registry()
@@ -2725,29 +2916,14 @@ fn query_recent_prompt_turns(
     session_id: &str,
     limit: usize,
 ) -> Result<Vec<PromptWindowTurn>, String> {
-    let mut stmt = prepare_cached_sqlite_statement(
-        conn,
-        SQL_QUERY_RECENT_PROMPT_TURNS,
-        "prepare prompt window query failed",
-    )?;
-    let mut rows = stmt
-        .query(rusqlite::params![session_id, limit as i64])
-        .map_err(|error| format!("query prompt window failed: {error}"))?;
-    let mut turns = Vec::with_capacity(limit);
-    while let Some(row) = rows
-        .next()
-        .map_err(|error| format!("read prompt window row failed: {error}"))?
-    {
-        turns.push(PromptWindowTurn {
-            role: row
-                .get(0)
-                .map_err(|error| format!("decode prompt window role failed: {error}"))?,
-            content: row
-                .get(1)
-                .map_err(|error| format!("decode prompt window content failed: {error}"))?,
-        });
-    }
-    turns.reverse();
+    let mut recent_rows = query_recent_prompt_turn_rows_with_ids(conn, session_id, limit)?;
+
+    recent_rows.reverse();
+    let turns = recent_rows
+        .into_iter()
+        .map(|(_, turn)| turn)
+        .collect::<Vec<_>>();
+
     Ok(turns)
 }
 
@@ -2884,15 +3060,25 @@ fn query_recent_prompt_turns_with_known_overflow(
     session_id: &str,
     limit: usize,
 ) -> Result<RecentPromptWindowTurns, String> {
+    let fetch_limit = limit.saturating_add(1);
     let (mut recent_rows, checkpoint_meta) =
-        query_recent_prompt_turn_rows_with_ids_and_checkpoint_meta(conn, session_id, limit)?;
+        query_recent_prompt_turn_rows_with_ids_and_checkpoint_meta(conn, session_id, fetch_limit)?;
     recent_rows.reverse();
-    let summary_before_turn_id = recent_rows.first().map(|(turn_id, _)| *turn_id);
-    let turns = recent_rows.into_iter().map(|(_, turn)| turn).collect();
+    let has_visible_overflow = recent_rows.len() > limit;
+    let summary_before_turn_id = if has_visible_overflow {
+        recent_rows.get(1).map(|(turn_id, _)| *turn_id)
+    } else {
+        None
+    };
+    let turns = recent_rows
+        .into_iter()
+        .skip(usize::from(has_visible_overflow))
+        .map(|(_, turn)| turn)
+        .collect();
     Ok(RecentPromptWindowTurns {
         turns,
         summary_before_turn_id,
-        window_starts_at_session_origin: false,
+        window_starts_at_session_origin: !has_visible_overflow,
         checkpoint_meta_lookup: SummaryCheckpointMetaLookup::Known(checkpoint_meta),
     })
 }
@@ -2934,33 +3120,55 @@ fn query_recent_prompt_turn_rows_with_ids(
     session_id: &str,
     limit: usize,
 ) -> Result<Vec<(i64, PromptWindowTurn)>, String> {
-    let mut stmt = prepare_cached_sqlite_statement(
-        conn,
-        SQL_QUERY_RECENT_PROMPT_TURNS_WITH_OVERFLOW_PROBE_FALLBACK,
-        "prepare prompt window id query failed",
-    )?;
-    let mut rows = stmt
-        .query(rusqlite::params![session_id, limit as i64])
-        .map_err(|error| format!("query prompt window id rows failed: {error}"))?;
-    let mut recent_rows = Vec::with_capacity(limit);
-    while let Some(row) = rows
-        .next()
-        .map_err(|error| format!("read prompt window id row failed: {error}"))?
-    {
-        recent_rows.push((
-            row.get::<_, i64>(0)
-                .map_err(|error| format!("decode prompt window turn id failed: {error}"))?,
-            PromptWindowTurn {
-                role: row
-                    .get(1)
-                    .map_err(|error| format!("decode prompt window role failed: {error}"))?,
-                content: row
-                    .get(2)
-                    .map_err(|error| format!("decode prompt window content failed: {error}"))?,
-            },
-        ));
+    let mut request_limit = limit.max(1);
+
+    loop {
+        let mut stmt = prepare_cached_sqlite_statement(
+            conn,
+            SQL_QUERY_RECENT_PROMPT_TURNS_WITH_OVERFLOW_PROBE_FALLBACK,
+            "prepare prompt window id query failed",
+        )?;
+        let mut rows = stmt
+            .query(rusqlite::params![session_id, request_limit as i64])
+            .map_err(|error| format!("query prompt window id rows failed: {error}"))?;
+        let mut recent_rows = Vec::with_capacity(limit);
+        let mut raw_row_count = 0usize;
+
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| format!("read prompt window id row failed: {error}"))?
+        {
+            raw_row_count = raw_row_count.saturating_add(1);
+            let turn_id = row
+                .get::<_, i64>(0)
+                .map_err(|error| format!("decode prompt window turn id failed: {error}"))?;
+            let role = row
+                .get::<_, String>(1)
+                .map_err(|error| format!("decode prompt window role failed: {error}"))?;
+            let content = row
+                .get::<_, String>(2)
+                .map_err(|error| format!("decode prompt window content failed: {error}"))?;
+            let include_turn =
+                prompt_window_turn_is_visible(session_id, role.as_str(), content.as_str());
+
+            if !include_turn {
+                continue;
+            }
+
+            recent_rows.push((turn_id, PromptWindowTurn { role, content }));
+            if recent_rows.len() >= limit {
+                break;
+            }
+        }
+
+        let reached_visible_limit = recent_rows.len() >= limit;
+        let exhausted_rows = raw_row_count < request_limit;
+        if reached_visible_limit || exhausted_rows {
+            return Ok(recent_rows);
+        }
+
+        request_limit = request_limit.saturating_mul(2);
     }
-    Ok(recent_rows)
 }
 
 fn query_recent_prompt_turn_rows_with_ids_and_checkpoint_meta(
@@ -2968,87 +3176,119 @@ fn query_recent_prompt_turn_rows_with_ids_and_checkpoint_meta(
     session_id: &str,
     limit: usize,
 ) -> Result<(Vec<(i64, PromptWindowTurn)>, Option<SummaryCheckpointMeta>), String> {
-    let mut stmt = prepare_cached_sqlite_statement(
-        conn,
-        SQL_QUERY_RECENT_PROMPT_TURNS_WITH_CHECKPOINT_META,
-        "prepare prompt window checkpoint query failed",
-    )?;
-    let mut rows = stmt
-        .query(rusqlite::params![session_id, limit as i64])
-        .map_err(|error| format!("query prompt window checkpoint rows failed: {error}"))?;
-    let mut recent_rows = Vec::with_capacity(limit);
-    let mut checkpoint_meta = None;
+    let mut request_limit = limit.max(1);
 
-    while let Some(row) = rows
-        .next()
-        .map_err(|error| format!("read prompt window checkpoint row failed: {error}"))?
-    {
-        if checkpoint_meta.is_none() {
-            let summarized_through_turn_id = row.get::<_, Option<i64>>(3).map_err(|error| {
-                format!("decode summary checkpoint frontier from prompt window row failed: {error}")
-            })?;
-            if let Some(summarized_through_turn_id) = summarized_through_turn_id {
-                checkpoint_meta = Some(SummaryCheckpointMeta {
-                    summarized_through_turn_id,
-                    summary_before_turn_id: row.get::<_, Option<i64>>(4).map_err(|error| {
-                        format!(
-                            "decode summary checkpoint boundary from prompt window row failed: {error}"
-                        )
-                    })?,
-                    summary_body_len: row
-                        .get::<_, Option<i64>>(5)
-                        .map_err(|error| {
+    loop {
+        let mut stmt = prepare_cached_sqlite_statement(
+            conn,
+            SQL_QUERY_RECENT_PROMPT_TURNS_WITH_CHECKPOINT_META,
+            "prepare prompt window checkpoint query failed",
+        )?;
+        let mut rows = stmt
+            .query(rusqlite::params![session_id, request_limit as i64])
+            .map_err(|error| format!("query prompt window checkpoint rows failed: {error}"))?;
+        let mut recent_rows = Vec::with_capacity(limit);
+        let mut checkpoint_meta = None;
+        let mut raw_row_count = 0usize;
+
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| format!("read prompt window checkpoint row failed: {error}"))?
+        {
+            raw_row_count = raw_row_count.saturating_add(1);
+            if checkpoint_meta.is_none() {
+                let summarized_through_turn_id = row.get::<_, Option<i64>>(3).map_err(|error| {
+                    format!(
+                        "decode summary checkpoint frontier from prompt window row failed: {error}"
+                    )
+                })?;
+                if let Some(summarized_through_turn_id) = summarized_through_turn_id {
+                    checkpoint_meta = Some(SummaryCheckpointMeta {
+                        summarized_through_turn_id,
+                        summary_before_turn_id: row.get::<_, Option<i64>>(4).map_err(|error| {
                             format!(
-                                "decode summary checkpoint body length from prompt window row failed: {error}"
+                                "decode summary checkpoint boundary from prompt window row failed: {error}"
                             )
-                        })?
-                        .unwrap_or_default()
-                        .max(0) as usize,
-                    summary_budget_chars: row
-                        .get::<_, Option<i64>>(6)
-                        .map_err(|error| {
-                            format!(
-                                "decode summary checkpoint budget from prompt window row failed: {error}"
-                            )
-                        })?
-                        .unwrap_or_default()
-                        .max(0) as usize,
-                    summary_window_size: row
-                        .get::<_, Option<i64>>(7)
-                        .map_err(|error| {
-                            format!(
-                                "decode summary checkpoint window from prompt window row failed: {error}"
-                            )
-                        })?
-                        .unwrap_or_default()
-                        .max(0) as usize,
-                    summary_format_version: row
-                        .get::<_, Option<i64>>(8)
-                        .map_err(|error| {
-                            format!(
-                                "decode summary checkpoint version from prompt window row failed: {error}"
-                            )
-                        })?
-                        .unwrap_or_default(),
-                });
+                        })?,
+                        summary_body_len: row
+                            .get::<_, Option<i64>>(5)
+                            .map_err(|error| {
+                                format!(
+                                    "decode summary checkpoint body length from prompt window row failed: {error}"
+                                )
+                            })?
+                            .unwrap_or_default()
+                            .max(0) as usize,
+                        summary_budget_chars: row
+                            .get::<_, Option<i64>>(6)
+                            .map_err(|error| {
+                                format!(
+                                    "decode summary checkpoint budget from prompt window row failed: {error}"
+                                )
+                            })?
+                            .unwrap_or_default()
+                            .max(0) as usize,
+                        summary_window_size: row
+                            .get::<_, Option<i64>>(7)
+                            .map_err(|error| {
+                                format!(
+                                    "decode summary checkpoint window from prompt window row failed: {error}"
+                                )
+                            })?
+                            .unwrap_or_default()
+                            .max(0) as usize,
+                        summary_format_version: row
+                            .get::<_, Option<i64>>(8)
+                            .map_err(|error| {
+                                format!(
+                                    "decode summary checkpoint version from prompt window row failed: {error}"
+                                )
+                            })?
+                            .unwrap_or_default(),
+                    });
+                }
+            }
+
+            let turn_id = row
+                .get::<_, i64>(0)
+                .map_err(|error| format!("decode prompt window turn id failed: {error}"))?;
+            let role = row
+                .get::<_, String>(1)
+                .map_err(|error| format!("decode prompt window role failed: {error}"))?;
+            let content = row
+                .get::<_, String>(2)
+                .map_err(|error| format!("decode prompt window content failed: {error}"))?;
+            let include_turn =
+                prompt_window_turn_is_visible(session_id, role.as_str(), content.as_str());
+
+            if !include_turn {
+                continue;
+            }
+
+            recent_rows.push((turn_id, PromptWindowTurn { role, content }));
+            if recent_rows.len() >= limit {
+                break;
             }
         }
 
-        recent_rows.push((
-            row.get::<_, i64>(0)
-                .map_err(|error| format!("decode prompt window turn id failed: {error}"))?,
-            PromptWindowTurn {
-                role: row
-                    .get(1)
-                    .map_err(|error| format!("decode prompt window role failed: {error}"))?,
-                content: row
-                    .get(2)
-                    .map_err(|error| format!("decode prompt window content failed: {error}"))?,
-            },
-        ));
-    }
+        let reached_visible_limit = recent_rows.len() >= limit;
+        let exhausted_rows = raw_row_count < request_limit;
+        if reached_visible_limit || exhausted_rows {
+            return Ok((recent_rows, checkpoint_meta));
+        }
 
-    Ok((recent_rows, checkpoint_meta))
+        request_limit = request_limit.saturating_mul(2);
+    }
+}
+
+fn prompt_window_turn_is_visible(session_id: &str, role: &str, content: &str) -> bool {
+    let canonical_record = canonical_memory_record_from_persisted_turn(session_id, role, content);
+    let canonical_kind = canonical_record.kind;
+
+    matches!(
+        canonical_kind,
+        CanonicalMemoryKind::UserTurn | CanonicalMemoryKind::AssistantTurn
+    )
 }
 
 struct SummaryStreamProgress {
@@ -3430,17 +3670,30 @@ fn query_summary_boundary_turn_id_by_session_turn_count(
         .map_err(|error| {
             format!("query summary boundary turn id by session turn count failed: {error}")
         })?;
+    let direct_boundary_turn_id = rows
+        .next()
+        .map_err(|error| {
+            format!("read summary boundary turn id by session turn count row failed: {error}")
+        })?
+        .map(|row| {
+            row.get::<_, i64>(0).map_err(|error| {
+                format!("decode summary boundary turn id by session turn count failed: {error}")
+            })
+        })
+        .transpose()?;
+    let fetch_limit = limit.saturating_add(1);
+    let mut visible_rows = query_recent_prompt_turn_rows_with_ids(conn, session_id, fetch_limit)?;
 
-    let Some(row) = rows.next().map_err(|error| {
-        format!("read summary boundary turn id by session turn count row failed: {error}")
-    })?
-    else {
+    visible_rows.reverse();
+
+    let has_visible_overflow = visible_rows.len() > limit;
+    if !has_visible_overflow {
         return Ok(None);
-    };
+    }
 
-    row.get::<_, i64>(0).map(Some).map_err(|error| {
-        format!("decode summary boundary turn id by session turn count failed: {error}")
-    })
+    let boundary_turn_id = visible_rows.get(1).map(|(turn_id, _)| *turn_id);
+
+    Ok(boundary_turn_id.or(direct_boundary_turn_id))
 }
 
 fn upsert_summary_checkpoint(
@@ -4135,6 +4388,22 @@ fn materialize_initial_summary_checkpoint(
     summary_budget_chars: usize,
     summary_window_size: usize,
 ) -> Result<Option<SummaryCheckpoint>, String> {
+    let visible_limit = summary_window_size.saturating_add(1);
+    let mut visible_rows = query_recent_prompt_turn_rows_with_ids(conn, session_id, visible_limit)?;
+
+    visible_rows.reverse();
+
+    if visible_rows.len() <= summary_window_size {
+        delete_summary_checkpoint(conn, session_id)?;
+        return Ok(None);
+    }
+
+    let summary_before_turn_id = visible_rows.get(1).map(|(turn_id, _turn)| *turn_id);
+    let Some(summary_before_turn_id) = summary_before_turn_id else {
+        delete_summary_checkpoint(conn, session_id)?;
+        return Ok(None);
+    };
+
     let mut stmt = prepare_cached_sqlite_statement(
         conn,
         SQL_QUERY_INITIAL_SUMMARY_ROWS_BY_SESSION_TURN_INDEX,
@@ -4144,47 +4413,57 @@ fn materialize_initial_summary_checkpoint(
         .query(rusqlite::params![session_id])
         .map_err(|error| format!("query initial summary checkpoint rows failed: {error}"))?;
 
-    let (turn_id, summary_body) = {
-        let Some(first_row) = rows
-            .next()
-            .map_err(|error| format!("read initial summary checkpoint row failed: {error}"))?
-        else {
-            delete_summary_checkpoint(conn, session_id)?;
-            return Ok(None);
-        };
-        #[cfg(test)]
-        test_support::record_summary_row_observed();
+    let mut first_visible_turn_id: Option<i64> = None;
+    let mut first_visible_role: Option<String> = None;
+    let mut first_visible_content: Option<String> = None;
 
-        let turn_id = first_row
-            .get::<_, i64>(0)
-            .map_err(|error| format!("decode initial summary turn id failed: {error}"))?;
-        let role = first_row
-            .get_ref(1)
-            .map_err(|error| format!("decode initial summary turn role failed: {error}"))?
-            .as_str()
-            .map_err(|error| format!("decode initial summary turn role failed: {error}"))?;
-        let content = first_row
-            .get_ref(2)
-            .map_err(|error| format!("decode initial summary turn content failed: {error}"))?
-            .as_str()
-            .map_err(|error| format!("decode initial summary turn content failed: {error}"))?;
-        #[cfg(test)]
-        test_support::record_summary_payload_decode();
+    collect_initial_summary_first_visible_turn(
+        session_id,
+        &mut rows,
+        &mut first_visible_turn_id,
+        &mut first_visible_role,
+        &mut first_visible_content,
+    )?;
 
-        let mut summary_body = String::with_capacity(summary_budget_chars);
-        append_summary_line(&mut summary_body, role, content, summary_budget_chars);
-        (turn_id, summary_body)
-    };
-    let Some(boundary_row) = rows
-        .next()
-        .map_err(|error| format!("read initial summary checkpoint boundary row failed: {error}"))?
-    else {
+    if first_visible_turn_id.is_none() {
+        let mut stmt = prepare_cached_sqlite_statement(
+            conn,
+            SQL_QUERY_INITIAL_SUMMARY_ROWS_AFTER_SEED_SESSION_INDEX,
+            "prepare initial summary checkpoint fallback query failed",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![session_id]).map_err(|error| {
+            format!("query initial summary checkpoint fallback rows failed: {error}")
+        })?;
+
+        collect_initial_summary_first_visible_turn(
+            session_id,
+            &mut rows,
+            &mut first_visible_turn_id,
+            &mut first_visible_role,
+            &mut first_visible_content,
+        )?;
+    }
+
+    let Some(first_visible_turn_id) = first_visible_turn_id else {
         delete_summary_checkpoint(conn, session_id)?;
         return Ok(None);
     };
-    let summary_before_turn_id = boundary_row
-        .get::<_, i64>(0)
-        .map_err(|error| format!("decode initial summary boundary turn id failed: {error}"))?;
+    let Some(first_visible_role) = first_visible_role else {
+        delete_summary_checkpoint(conn, session_id)?;
+        return Ok(None);
+    };
+    let Some(first_visible_content) = first_visible_content else {
+        delete_summary_checkpoint(conn, session_id)?;
+        return Ok(None);
+    };
+    let mut summary_body = String::with_capacity(summary_budget_chars);
+
+    append_summary_line(
+        &mut summary_body,
+        first_visible_role.as_str(),
+        first_visible_content.as_str(),
+        summary_budget_chars,
+    );
 
     if summary_body.is_empty() {
         delete_summary_checkpoint(conn, session_id)?;
@@ -4192,7 +4471,7 @@ fn materialize_initial_summary_checkpoint(
     }
 
     let checkpoint = SummaryCheckpoint {
-        summarized_through_turn_id: turn_id,
+        summarized_through_turn_id: first_visible_turn_id,
         summary_before_turn_id: Some(summary_before_turn_id),
         summary_body,
         summary_budget_chars,
@@ -4201,6 +4480,51 @@ fn materialize_initial_summary_checkpoint(
     };
     upsert_summary_checkpoint(conn, session_id, &checkpoint)?;
     Ok(Some(checkpoint))
+}
+
+fn collect_initial_summary_first_visible_turn(
+    session_id: &str,
+    rows: &mut rusqlite::Rows<'_>,
+    first_visible_turn_id: &mut Option<i64>,
+    first_visible_role: &mut Option<String>,
+    first_visible_content: &mut Option<String>,
+) -> Result<(), String> {
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| format!("read initial summary checkpoint row failed: {error}"))?
+    {
+        let turn_id = row
+            .get::<_, i64>(0)
+            .map_err(|error| format!("decode initial summary turn id failed: {error}"))?;
+        let role = row
+            .get_ref(1)
+            .map_err(|error| format!("decode initial summary turn role failed: {error}"))?
+            .as_str()
+            .map_err(|error| format!("decode initial summary turn role failed: {error}"))?;
+        let content = row
+            .get_ref(2)
+            .map_err(|error| format!("decode initial summary turn content failed: {error}"))?
+            .as_str()
+            .map_err(|error| format!("decode initial summary turn content failed: {error}"))?;
+        let include_turn = prompt_window_turn_is_visible(session_id, role, content);
+
+        if !include_turn {
+            continue;
+        }
+
+        if first_visible_turn_id.is_none() {
+            #[cfg(test)]
+            test_support::record_summary_row_observed();
+            #[cfg(test)]
+            test_support::record_summary_payload_decode();
+            *first_visible_turn_id = Some(turn_id);
+            *first_visible_role = Some(role.to_owned());
+            *first_visible_content = Some(content.to_owned());
+            return Ok(());
+        }
+    }
+
+    Ok(())
 }
 
 fn append_summary_line(
@@ -4303,11 +4627,6 @@ mod tests {
         fn drop(&mut self) {
             std::env::set_current_dir(&self.original).expect("restore current dir");
         }
-    }
-
-    fn sqlite_runtime_test_lock() -> &'static Mutex<()> {
-        static SQLITE_RUNTIME_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        SQLITE_RUNTIME_TEST_LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn set_current_dir_for_test(path: &Path) -> CurrentDirGuard {
@@ -5006,6 +5325,67 @@ mod tests {
     }
 
     #[test]
+    fn ensure_memory_db_ready_repairs_session_terminal_outcome_frozen_result_column() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-session-terminal-outcome-frozen-column-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("terminal-outcome.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("open legacy sqlite db");
+        configure_sqlite_connection(&conn).expect("configure legacy sqlite db");
+        conn.execute_batch(
+            "
+            CREATE TABLE turns(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              ts INTEGER NOT NULL
+            );
+            CREATE TABLE session_terminal_outcomes(
+              session_id TEXT PRIMARY KEY,
+              status TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              recorded_at INTEGER NOT NULL
+            );
+            PRAGMA user_version = 9;
+            ",
+        )
+        .expect("create legacy terminal outcome schema");
+        drop(conn);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..MemoryRuntimeConfig::default()
+        };
+
+        ensure_memory_db_ready(Some(db_path.clone()), &config).expect("repair sqlite db");
+
+        let conn = Connection::open(&db_path).expect("open repaired sqlite db");
+        let columns = sqlite_table_columns(&conn, "session_terminal_outcomes")
+            .expect("session_terminal_outcomes columns");
+
+        assert!(columns.iter().any(|column| column == "frozen_result_json"));
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn ensure_memory_db_ready_repairs_session_tool_consent_mode_check_constraint() {
         use crate::config::{MemoryMode, MemoryProfile};
 
@@ -5404,10 +5784,17 @@ mod tests {
         assert_eq!(snapshot.window_turns.len(), 2);
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests(
-                "SELECT role, content\n             FROM turns"
+                "SELECT id, role, content\n             FROM turns"
             ),
             1,
-            "expected window-only prompt snapshots to use a prompt-hydration query that does not fetch timestamps"
+            "expected window-only prompt snapshots to use the visible-turn prompt query that can skip internal persisted records without fetching timestamps"
+        );
+        assert_eq!(
+            cached_prepare_count_for_sql_fragment_for_tests(
+                "SELECT role, content\n             FROM turns"
+            ),
+            0,
+            "expected window-only prompt snapshots to retire the older lean query shape now that internal records require visible-turn filtering by id"
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests("SELECT role, content, ts"),
@@ -6720,6 +7107,103 @@ mod tests {
         assert!(summary_body.contains("turn 2"));
         assert_eq!(summary_budget_chars, 256);
         assert_eq!(summary_window_size, 2);
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir(&tmp);
+    }
+
+    #[test]
+    fn initial_summary_checkpoint_waits_for_visible_overflow() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-initial-summary-visible-overflow-{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&tmp);
+        let db_path = tmp.join("initial-summary-visible-overflow.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            summary_max_chars: 256,
+            ..MemoryRuntimeConfig::default()
+        };
+        let hidden_turn = crate::memory::build_conversation_event_content(
+            "provider_prompt_frame_snapshot",
+            serde_json::json!({"phase": "initial"}),
+        );
+
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "user",
+            "visible 1",
+            &config,
+        )
+        .expect("append visible turn 1 should succeed");
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "assistant",
+            hidden_turn.as_str(),
+            &config,
+        )
+        .expect("append hidden prompt-frame turn should succeed");
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "assistant",
+            "visible 2",
+            &config,
+        )
+        .expect("append visible turn 2 should succeed");
+
+        assert_eq!(
+            count_summary_checkpoints(&config, "initial-summary-visible-overflow")
+                .expect("count checkpoints after raw overflow"),
+            0,
+            "raw overflow without visible overflow must not materialize a checkpoint",
+        );
+
+        let pre_overflow_snapshot =
+            load_context_snapshot("initial-summary-visible-overflow", &config)
+                .expect("load pre-overflow context snapshot");
+        let pre_overflow_contents = pre_overflow_snapshot
+            .window_turns
+            .iter()
+            .map(|turn| turn.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(pre_overflow_contents, vec!["visible 1", "visible 2"]);
+        assert!(pre_overflow_snapshot.summary_body.is_none());
+
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "user",
+            "visible 3",
+            &config,
+        )
+        .expect("append visible turn 3 should succeed");
+
+        assert_eq!(
+            count_summary_checkpoints(&config, "initial-summary-visible-overflow")
+                .expect("count checkpoints after visible overflow"),
+            1,
+            "checkpoint should materialize once the visible window actually overflows",
+        );
+
+        let post_overflow_snapshot =
+            load_context_snapshot("initial-summary-visible-overflow", &config)
+                .expect("load post-overflow context snapshot");
+        let post_overflow_contents = post_overflow_snapshot
+            .window_turns
+            .iter()
+            .map(|turn| turn.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(post_overflow_contents, vec!["visible 2", "visible 3"]);
+        assert!(post_overflow_snapshot.summary_body.is_some());
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir(&tmp);
@@ -8196,17 +8680,17 @@ mod tests {
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests(
-                "SELECT role, content\n             FROM turns"
+                "SELECT id, role, content\n             FROM turns"
             ),
             1,
-            "expected exact-window summary snapshots to reuse the lean window query once turn-count metadata proves there is no summarized prefix"
+            "expected exact-window summary snapshots to reuse the visible-turn prompt query once turn-count metadata proves there is no summarized prefix"
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests(
-                "SELECT id, role, content\n             FROM turns"
+                "SELECT role, content\n             FROM turns"
             ),
             0,
-            "expected exact-window summary snapshots to retire the older limit+1 overflow-probe query shape"
+            "expected exact-window summary snapshots to retire the older lean prompt query shape now that internal records require visible-turn filtering by id"
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests("state.turn_count"),
@@ -9031,6 +9515,7 @@ mod tests {
 #[cfg(test)]
 mod test_support {
     use super::*;
+    use crate::config::{MemoryMode, MemoryProfile};
     use std::sync::Condvar;
 
     #[derive(Default)]
@@ -9047,6 +9532,10 @@ mod test_support {
         target_waiters: usize,
         waiting_threads: usize,
         released: bool,
+    }
+
+    fn sqlite_runtime_test_support_lock() -> &'static Mutex<()> {
+        super::sqlite_runtime_test_lock()
     }
 
     fn bootstrap_counts() -> &'static Mutex<HashMap<PathBuf, usize>> {
@@ -9432,6 +9921,160 @@ mod test_support {
         capture.cached_prepare_counts.clear();
         capture.summary_materialization_counts.clear();
         capture.runtime_path_normalization_counts.clear();
+    }
+
+    #[test]
+    fn prompt_window_turn_is_visible_filters_internal_persisted_records() {
+        let conversation_event = crate::memory::build_conversation_event_content(
+            "provider_prompt_frame_snapshot",
+            serde_json::json!({"phase": "initial"}),
+        );
+        let tool_decision = crate::memory::build_tool_decision_content(
+            "turn-1",
+            "call-1",
+            serde_json::json!({"decision": "allow"}),
+        );
+        let plain_assistant = "assistant reply";
+        let plain_user = "user prompt";
+
+        assert!(!prompt_window_turn_is_visible(
+            "session-visible-filter",
+            "assistant",
+            conversation_event.as_str()
+        ));
+        assert!(!prompt_window_turn_is_visible(
+            "session-visible-filter",
+            "assistant",
+            tool_decision.as_str()
+        ));
+        assert!(prompt_window_turn_is_visible(
+            "session-visible-filter",
+            "assistant",
+            plain_assistant
+        ));
+        assert!(prompt_window_turn_is_visible(
+            "session-visible-filter",
+            "user",
+            plain_user
+        ));
+    }
+
+    #[test]
+    fn prompt_window_mixed_overflow_regression() {
+        let runtime_test_support_lock = sqlite_runtime_test_support_lock();
+        let guard_result = runtime_test_support_lock.lock();
+        let _guard = match guard_result {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-prompt-window-mixed-overflow-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("prompt-window-mixed-overflow.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 3,
+            ..MemoryRuntimeConfig::default()
+        };
+        let hidden_inner = crate::memory::build_conversation_event_content(
+            "provider_prompt_frame_snapshot",
+            serde_json::json!({"phase": "initial"}),
+        );
+        let hidden_tail = crate::memory::build_tool_decision_content(
+            "turn-4",
+            "call-1",
+            serde_json::json!({"decision": "allow"}),
+        );
+
+        assert!(!prompt_window_turn_is_visible(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_inner.as_str()
+        ));
+        assert!(!prompt_window_turn_is_visible(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_tail.as_str()
+        ));
+        assert!(prompt_window_turn_is_visible(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            "visible 4"
+        ));
+
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "user",
+            "visible 1",
+            &config,
+        )
+        .expect("append visible turn 1");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_inner.as_str(),
+            &config,
+        )
+        .expect("append hidden inner record");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            "visible 2",
+            &config,
+        )
+        .expect("append visible turn 2");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "user",
+            "visible 3",
+            &config,
+        )
+        .expect("append visible turn 3");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_tail.as_str(),
+            &config,
+        )
+        .expect("append hidden tail record");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            "visible 4",
+            &config,
+        )
+        .expect("append visible turn 4");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "user",
+            "visible 5",
+            &config,
+        )
+        .expect("append visible turn 5");
+
+        let snapshot = load_context_snapshot("prompt-window-mixed-overflow-session", &config)
+            .expect("load mixed-overflow context snapshot");
+        let window_contents = snapshot
+            .window_turns
+            .iter()
+            .map(|turn| turn.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(snapshot.window_turns.len(), 3);
+        assert_eq!(window_contents, vec!["visible 3", "visible 4", "visible 5"]);
+        assert!(snapshot.summary_body.is_none());
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     pub(super) fn reset_test_state() {

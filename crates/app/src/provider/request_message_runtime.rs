@@ -646,6 +646,7 @@ fn append_hydrated_memory_messages(
         match entry.kind {
             memory::MemoryContextKind::Profile
             | memory::MemoryContextKind::Summary
+            | memory::MemoryContextKind::Derived
             | memory::MemoryContextKind::RetrievedMemory => {
                 append_advisory_memory_message(messages, artifacts, entry);
             }
@@ -760,6 +761,7 @@ fn advisory_artifact_kind(kind: memory::MemoryContextKind) -> ContextArtifactKin
     match kind {
         memory::MemoryContextKind::Profile => ContextArtifactKind::Profile,
         memory::MemoryContextKind::Summary => ContextArtifactKind::Summary,
+        memory::MemoryContextKind::Derived => ContextArtifactKind::Summary,
         memory::MemoryContextKind::RetrievedMemory => ContextArtifactKind::RetrievedMemory,
         memory::MemoryContextKind::Turn => ContextArtifactKind::ConversationTurn,
     }
@@ -770,6 +772,7 @@ fn advisory_allowed_root_headings(kind: memory::MemoryContextKind) -> &'static [
     match kind {
         memory::MemoryContextKind::Profile => &["session profile"],
         memory::MemoryContextKind::Summary => &["memory summary"],
+        memory::MemoryContextKind::Derived => &["session local overview"],
         memory::MemoryContextKind::RetrievedMemory => &["advisory durable recall"],
         memory::MemoryContextKind::Turn => &[],
     }

@@ -52,6 +52,7 @@ impl Commands {
             Self::SessionSearchInspect { .. } => "session_search_inspect",
             Self::TrajectoryExport { .. } => "trajectory_export",
             Self::TrajectoryInspect { .. } => "trajectory_inspect",
+            Self::RuntimeTrajectory { .. } => "runtime_trajectory",
             Self::TelegramSend { .. } => "telegram_send",
             Self::TelegramServe { .. } => "telegram_serve",
             Self::FeishuSend { .. } => "feishu_send",
@@ -83,6 +84,7 @@ impl Commands {
             Self::Gateway { .. } => "gateway",
             Self::Feishu { .. } => "feishu",
             Self::Completions { .. } => "completions",
+            Self::WorkUnit { .. } => "work_unit",
         }
     }
 }
@@ -90,6 +92,10 @@ impl Commands {
 #[cfg(test)]
 mod tests {
     use crate::Commands;
+    use crate::work_unit_cli::{
+        WorkUnitCommands, WorkUnitHealthCommandOptions, WorkUnitStatusArg,
+        WorkUnitUpdateCommandOptions,
+    };
 
     #[test]
     fn command_kind_for_logging_uses_stable_variant_names() {
@@ -105,6 +111,49 @@ mod tests {
             }
             .command_kind_for_logging(),
             "validate_config"
+        );
+        assert_eq!(
+            Commands::WorkUnit {
+                command: WorkUnitCommands::Update(WorkUnitUpdateCommandOptions {
+                    config: None,
+                    id: "wu-demo".to_owned(),
+                    title: None,
+                    description: None,
+                    status: Some(WorkUnitStatusArg::Ready),
+                    priority: None,
+                    next_run_at_ms: None,
+                    blocking_reason: None,
+                    clear_blocking_reason: false,
+                    actor: None,
+                    now_ms: None,
+                    json: false,
+                }),
+            }
+            .command_kind_for_logging(),
+            "work_unit"
+        );
+        assert_eq!(
+            Commands::WorkUnit {
+                command: WorkUnitCommands::Health(WorkUnitHealthCommandOptions {
+                    config: None,
+                    now_ms: None,
+                    json: false,
+                }),
+            }
+            .command_kind_for_logging(),
+            "work_unit"
+        );
+        assert_eq!(
+            Commands::RuntimeTrajectory {
+                command: crate::runtime_trajectory_cli::RuntimeTrajectoryCommands::Show(
+                    crate::runtime_trajectory_cli::RuntimeTrajectoryShowCommandOptions {
+                        artifact: "artifact.json".to_owned(),
+                        json: false,
+                    },
+                ),
+            }
+            .command_kind_for_logging(),
+            "runtime_trajectory"
         );
     }
 }

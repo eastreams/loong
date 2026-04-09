@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::config::LoongClawConfig;
 use crate::conversation::{
@@ -10,13 +10,14 @@ use crate::conversation::{
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
+use crate::session::frozen_result::capture_frozen_result;
 use crate::session::recovery::{
     RECOVERY_EVENT_KIND, build_async_spawn_failure_recovery_payload,
     build_terminal_finalize_recovery_payload,
 };
 use crate::session::repository::{
     CreateSessionWithEventRequest, FinalizeSessionTerminalRequest, NewSessionRecord, SessionKind,
-    SessionRepository, SessionState, TransitionSessionWithEventIfCurrentRequest,
+    SessionRepository, SessionState,
 };
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::trust::{
@@ -270,6 +271,7 @@ fn build_delegate_child_event_payload(
     payload_with_trust
 }
 
+#[cfg(test)]
 pub(crate) fn finalize_async_delegate_spawn_failure(
     memory_config: &MemoryRuntimeConfig,
     child_session_id: &str,
@@ -277,31 +279,19 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
+    max_frozen_bytes: usize,
     error: String,
 ) -> Result<(), String> {
     let repo = SessionRepository::new(memory_config)?;
-    let outcome = crate::tools::delegate::delegate_error_outcome(
-        child_session_id.to_owned(),
-        Some(parent_session_id.to_owned()),
+    let request = build_async_delegate_spawn_failure_request(
+        child_session_id,
+        parent_session_id,
         label,
         profile,
-        error.clone(),
-        0,
+        execution,
+        max_frozen_bytes,
+        error,
     );
-    let request = FinalizeSessionTerminalRequest {
-        state: SessionState::Failed,
-        last_error: Some(error.clone()),
-        event_kind: "delegate_spawn_failed".to_owned(),
-        actor_session_id: Some(parent_session_id.to_owned()),
-        event_payload_json: execution.terminal_payload(
-            ConstrainedSubagentTerminalReason::SpawnFailed,
-            0,
-            None,
-            Some(error.as_str()),
-        ),
-        outcome_status: outcome.status,
-        outcome_payload_json: outcome.payload,
-    };
     finalize_terminal_if_current_allowing_stale_state(
         &repo,
         child_session_id,
@@ -319,39 +309,55 @@ pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
+    max_frozen_bytes: usize,
     error: String,
 ) -> Result<(), String> {
     let recovery_label = label.clone();
-    let finalize_result = finalize_async_delegate_spawn_failure(
-        memory_config,
+    let request = build_async_delegate_spawn_failure_request(
         child_session_id,
         parent_session_id,
         label,
         profile,
         execution,
+        max_frozen_bytes,
         error.clone(),
+    );
+    let request_frozen_result = request.frozen_result.clone();
+    let repo = SessionRepository::new(memory_config)?;
+    let finalize_result = finalize_terminal_if_current_allowing_stale_state(
+        &repo,
+        child_session_id,
+        SessionState::Ready,
+        request,
     );
     match finalize_result {
         Ok(()) => Ok(()),
         Err(finalize_error) => {
-            let repo = SessionRepository::new(memory_config)?;
             let recovery_error = format!(
                 "delegate_async_spawn_failure_persist_failed: {finalize_error}; original spawn error: {error}"
             );
-            let transition_result = repo.transition_session_with_event_if_current(
+            let recovery_frozen_result = request_frozen_result.clone();
+            let fallback_frozen_result = request_frozen_result;
+            let recovery_request = FinalizeSessionTerminalRequest {
+                state: SessionState::Failed,
+                last_error: Some(recovery_error.clone()),
+                event_kind: RECOVERY_EVENT_KIND.to_owned(),
+                actor_session_id: Some(parent_session_id.to_owned()),
+                event_payload_json: build_async_spawn_failure_recovery_payload(
+                    recovery_label.as_deref(),
+                    &error,
+                    &recovery_error,
+                ),
+                outcome_status: "error".to_owned(),
+                outcome_payload_json: json!({
+                    "error": recovery_error.as_str(),
+                }),
+                frozen_result: recovery_frozen_result,
+            };
+            let transition_result = repo.finalize_session_terminal_if_current(
                 child_session_id,
-                TransitionSessionWithEventIfCurrentRequest {
-                    expected_state: SessionState::Ready,
-                    next_state: SessionState::Failed,
-                    last_error: Some(recovery_error.clone()),
-                    event_kind: RECOVERY_EVENT_KIND.to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: build_async_spawn_failure_recovery_payload(
-                        recovery_label.as_deref(),
-                        &error,
-                        &recovery_error,
-                    ),
-                },
+                SessionState::Ready,
+                recovery_request,
             );
             match transition_result {
                 Ok(Some(_)) => Ok(()),
@@ -373,7 +379,15 @@ pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
                         Some(recovery_error.clone()),
                     );
                     match state_result {
-                        Ok(Some(_)) => Ok(()),
+                        Ok(Some(_)) => {
+                            persist_recovery_terminal_outcome(
+                                &repo,
+                                child_session_id,
+                                &recovery_error,
+                                fallback_frozen_result,
+                            )?;
+                            Ok(())
+                        }
                         Ok(None) => {
                             let current_state = repo
                                 .load_session(child_session_id)?
@@ -413,19 +427,26 @@ pub(crate) fn finalize_delegate_child_terminal_with_recovery(
         Ok(()) => Ok(()),
         Err(finalize_error) => {
             let recovery_error = format!("delegate_terminal_finalize_failed: {finalize_error}");
-            let transition_result = repo.transition_session_with_event_if_current(
+            let fallback_frozen_result = recovery_request.frozen_result.clone();
+            let recovery_request = FinalizeSessionTerminalRequest {
+                state: SessionState::Failed,
+                last_error: Some(recovery_error.clone()),
+                event_kind: RECOVERY_EVENT_KIND.to_owned(),
+                actor_session_id: recovery_request.actor_session_id.clone(),
+                event_payload_json: build_terminal_finalize_recovery_payload(
+                    &recovery_request,
+                    &recovery_error,
+                ),
+                outcome_status: "error".to_owned(),
+                outcome_payload_json: json!({
+                    "error": recovery_error.as_str(),
+                }),
+                frozen_result: recovery_request.frozen_result,
+            };
+            let transition_result = repo.finalize_session_terminal_if_current(
                 child_session_id,
-                TransitionSessionWithEventIfCurrentRequest {
-                    expected_state: SessionState::Running,
-                    next_state: SessionState::Failed,
-                    last_error: Some(recovery_error.clone()),
-                    event_kind: RECOVERY_EVENT_KIND.to_owned(),
-                    actor_session_id: recovery_request.actor_session_id.clone(),
-                    event_payload_json: build_terminal_finalize_recovery_payload(
-                        &recovery_request,
-                        &recovery_error,
-                    ),
-                },
+                SessionState::Running,
+                recovery_request,
             );
             match transition_result {
                 Ok(Some(_)) => Err(recovery_error),
@@ -441,6 +462,17 @@ pub(crate) fn finalize_delegate_child_terminal_with_recovery(
                     );
                     match state_result {
                         Ok(Some(_)) => {
+                            if let Err(persist_error) = persist_recovery_terminal_outcome(
+                                repo,
+                                child_session_id,
+                                &recovery_error,
+                                fallback_frozen_result,
+                            ) {
+                                let message = format!(
+                                    "{recovery_error}; delegate_terminal_recovery_outcome_persist_failed: {persist_error}; delegate_terminal_recovery_event_failed: {recovery_event_error}"
+                                );
+                                return Err(message);
+                            }
                             let message = format!(
                                 "{recovery_error}; delegate_terminal_recovery_event_failed: {recovery_event_error}"
                             );
@@ -462,6 +494,61 @@ pub(crate) fn finalize_delegate_child_terminal_with_recovery(
             }
         }
     }
+}
+
+fn build_async_delegate_spawn_failure_request(
+    child_session_id: &str,
+    parent_session_id: &str,
+    label: Option<String>,
+    profile: Option<DelegateBuiltinProfile>,
+    execution: &ConstrainedSubagentExecution,
+    max_frozen_bytes: usize,
+    error: String,
+) -> FinalizeSessionTerminalRequest {
+    let outcome = crate::tools::delegate::delegate_error_outcome(
+        child_session_id.to_owned(),
+        Some(parent_session_id.to_owned()),
+        label,
+        profile,
+        error.clone(),
+        0,
+    );
+    let frozen_result = capture_frozen_result(&outcome, max_frozen_bytes);
+
+    FinalizeSessionTerminalRequest {
+        state: SessionState::Failed,
+        last_error: Some(error.clone()),
+        event_kind: "delegate_spawn_failed".to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        event_payload_json: execution.terminal_payload(
+            ConstrainedSubagentTerminalReason::SpawnFailed,
+            0,
+            None,
+            Some(error.as_str()),
+        ),
+        outcome_status: outcome.status,
+        outcome_payload_json: outcome.payload,
+        frozen_result: Some(frozen_result),
+    }
+}
+
+fn persist_recovery_terminal_outcome(
+    repo: &SessionRepository,
+    child_session_id: &str,
+    recovery_error: &str,
+    frozen_result: Option<crate::session::frozen_result::FrozenResult>,
+) -> Result<(), String> {
+    let recovery_outcome_payload = json!({
+        "error": recovery_error,
+    });
+    repo.upsert_terminal_outcome_with_frozen_result(
+        child_session_id,
+        "error",
+        recovery_outcome_payload,
+        frozen_result,
+    )?;
+
+    Ok(())
 }
 
 fn finalize_terminal_if_current_allowing_stale_state(
@@ -502,6 +589,7 @@ fn delegate_terminal_recovery_skipped_error(
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Connection;
     use serde_json::json;
 
     use super::*;
@@ -511,6 +599,11 @@ mod tests {
     use crate::trust::extract_trust_event_payload;
 
     fn isolated_repo(test_name: &str) -> SessionRepository {
+        let (repo, _sqlite_path) = isolated_repo_with_path(test_name);
+        repo
+    }
+
+    fn isolated_repo_with_path(test_name: &str) -> (SessionRepository, std::path::PathBuf) {
         let sqlite_path = std::env::temp_dir().join(format!(
             "loongclaw-operator-delegate-runtime-{test_name}-{}.sqlite3",
             std::process::id()
@@ -520,8 +613,10 @@ mod tests {
             sqlite_path: Some(sqlite_path),
             ..MemoryRuntimeConfig::default()
         };
+        let repo = SessionRepository::new(&config).expect("session repository");
+        let sqlite_path = config.sqlite_path.expect("sqlite path");
 
-        SessionRepository::new(&config).expect("session repository")
+        (repo, sqlite_path)
     }
 
     #[test]
@@ -674,5 +769,195 @@ mod tests {
 
         let trust_event = extract_trust_event_payload(&seed.request.event_payload_json);
         assert!(trust_event.is_some(), "expected trust event payload");
+    }
+
+    #[test]
+    fn finalize_delegate_child_terminal_with_recovery_persists_frozen_result_after_recovery_event()
+    {
+        let (repo, sqlite_path) = isolated_repo_with_path("terminal-recovery-frozen-result");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child session");
+
+        let conn = Connection::open(&sqlite_path).expect("open sqlite connection");
+        conn.execute(
+            "CREATE TRIGGER fail_delegate_completed_event
+             BEFORE INSERT ON session_events
+             WHEN NEW.event_kind = 'delegate_completed'
+             BEGIN
+                SELECT RAISE(FAIL, 'forced delegate_completed event failure');
+             END;",
+            [],
+        )
+        .expect("create event failure trigger");
+        drop(conn);
+
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: std::time::SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+        let error = finalize_delegate_child_terminal_with_recovery(
+            &repo,
+            "child-session",
+            FinalizeSessionTerminalRequest {
+                state: SessionState::Completed,
+                last_error: None,
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                event_payload_json: json!({
+                    "turn_count": 1,
+                }),
+                outcome_status: "ok".to_owned(),
+                outcome_payload_json: json!({
+                    "child_session_id": "child-session",
+                    "final_output": "done",
+                }),
+                frozen_result: Some(frozen_result.clone()),
+            },
+        )
+        .expect_err("forced finalize failure should surface recovery error");
+
+        assert!(error.contains("delegate_terminal_finalize_failed"));
+
+        let child = repo
+            .load_session("child-session")
+            .expect("load child session")
+            .expect("child session row");
+        assert_eq!(child.state, SessionState::Failed);
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list child events");
+        let event_kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_kind.as_str())
+            .collect();
+        assert!(event_kinds.contains(&RECOVERY_EVENT_KIND));
+        assert!(!event_kinds.contains(&"delegate_completed"));
+
+        let terminal_outcome = repo
+            .load_terminal_outcome("child-session")
+            .expect("load terminal outcome")
+            .expect("terminal outcome row");
+        assert_eq!(terminal_outcome.status, "error");
+        assert_eq!(terminal_outcome.frozen_result, Some(frozen_result));
+    }
+
+    #[test]
+    fn finalize_async_delegate_spawn_failure_with_recovery_persists_frozen_result() {
+        let (repo, sqlite_path) = isolated_repo_with_path("spawn-failure-recovery-frozen-result");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child session");
+
+        let execution = ConstrainedSubagentExecution {
+            mode: ConstrainedSubagentMode::Async,
+            isolation: ConstrainedSubagentIsolation::default(),
+            depth: 1,
+            max_depth: 1,
+            active_children: 0,
+            max_active_children: 1,
+            timeout_seconds: 60,
+            allow_shell_in_child: false,
+            child_tool_allowlist: vec![
+                "file.read".to_owned(),
+                "file.write".to_owned(),
+                "file.edit".to_owned(),
+            ],
+            workspace_root: None,
+            runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+            kernel_bound: false,
+            identity: None,
+            profile: Some(crate::conversation::ConstrainedSubagentProfile::for_child_depth(1, 1)),
+        };
+
+        let conn = Connection::open(&sqlite_path).expect("open sqlite connection");
+        conn.execute(
+            "CREATE TRIGGER fail_delegate_spawn_failed_event
+             BEFORE INSERT ON session_events
+             WHEN NEW.event_kind = 'delegate_spawn_failed'
+             BEGIN
+                SELECT RAISE(FAIL, 'forced delegate_spawn_failed event failure');
+             END;",
+            [],
+        )
+        .expect("create spawn failure trigger");
+        drop(conn);
+
+        finalize_async_delegate_spawn_failure_with_recovery(
+            &MemoryRuntimeConfig {
+                sqlite_path: Some(sqlite_path),
+                ..MemoryRuntimeConfig::default()
+            },
+            "child-session",
+            "root-session",
+            Some("Child".to_owned()),
+            None,
+            &execution,
+            256 * 1024,
+            "spawn unavailable".to_owned(),
+        )
+        .expect("recovery should persist terminal outcome");
+
+        let child = repo
+            .load_session("child-session")
+            .expect("load child session")
+            .expect("child session row");
+        assert_eq!(child.state, SessionState::Failed);
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list child events");
+        let event_kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_kind.as_str())
+            .collect();
+        assert!(event_kinds.contains(&RECOVERY_EVENT_KIND));
+        assert!(!event_kinds.contains(&"delegate_spawn_failed"));
+
+        let terminal_outcome = repo
+            .load_terminal_outcome("child-session")
+            .expect("load terminal outcome")
+            .expect("terminal outcome row");
+        assert_eq!(terminal_outcome.status, "error");
+        assert!(terminal_outcome.frozen_result.is_some());
+        assert_eq!(
+            terminal_outcome
+                .frozen_result
+                .expect("frozen result")
+                .content,
+            crate::session::frozen_result::FrozenContent::Error {
+                code: "spawn unavailable".to_owned(),
+                message: "spawn unavailable".to_owned(),
+            }
+        );
     }
 }

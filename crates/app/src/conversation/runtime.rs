@@ -42,7 +42,7 @@ use super::turn_middleware_registry::{
     default_turn_middleware_ids, describe_turn_middlewares, list_turn_middleware_metadata,
     resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
-use super::{PromptFragment, PromptLane};
+use super::{PromptFragment, PromptFrameAuthority, PromptLane};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -746,7 +746,7 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
         let parent_session_id_for_spawn = parent_session_id.clone();
         let borrowed_binding = binding.as_borrowed();
         let child_binding = binding.clone();
-        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+        super::delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime_ref,
             &parent_session_id,
             &child_session_id,
@@ -1037,16 +1037,19 @@ where
             &mut assembled,
             "runtime-self-continuity",
             runtime_self_continuity,
+            PromptFrameAuthority::RuntimeSelf,
         );
         append_runtime_prompt_fragment(
             &mut assembled,
             "delegate-child-profile",
             delegate_profile_contract,
+            PromptFrameAuthority::AdvisoryProfile,
         );
         append_runtime_prompt_fragment(
             &mut assembled,
             "delegate-child-runtime-contract",
             delegate_runtime_contract,
+            PromptFrameAuthority::CapabilityContract,
         );
         sync_prompt_fragments_into_context(&mut assembled);
 
@@ -1738,6 +1741,7 @@ fn append_runtime_prompt_fragment(
     assembled: &mut AssembledConversationContext,
     source_id: &'static str,
     content: Option<String>,
+    frame_authority: PromptFrameAuthority,
 ) {
     let Some(content) = content else {
         return;
@@ -1750,7 +1754,9 @@ fn append_runtime_prompt_fragment(
         content,
         ContextArtifactKind::RuntimeContract,
     )
-    .with_dedupe_key(source_id);
+    .with_dedupe_key(source_id)
+    .with_cacheable(true)
+    .with_frame_authority(frame_authority);
 
     assembled.prompt_fragments.push(fragment);
 }

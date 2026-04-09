@@ -63,7 +63,8 @@ impl StageOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DerivedMemoryKind {
     Summary,
     Profile,
@@ -139,6 +140,8 @@ impl MemoryRecallMode {
 #[serde(rename_all = "snake_case")]
 pub enum MemoryProvenanceSourceKind {
     WorkspaceDocument,
+    CanonicalMemoryRecord,
+    DerivedSessionOverview,
     ProfileNote,
     SummaryCheckpoint,
     RecentWindowTurn,
@@ -149,11 +152,73 @@ impl MemoryProvenanceSourceKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::WorkspaceDocument => "workspace_document",
+            Self::CanonicalMemoryRecord => "canonical_memory_record",
+            Self::DerivedSessionOverview => "derived_session_overview",
             Self::ProfileNote => "profile_note",
             Self::SummaryCheckpoint => "summary_checkpoint",
             Self::RecentWindowTurn => "recent_window_turn",
             Self::MemorySystem => "memory_system",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTrustLevel {
+    Session,
+    Derived,
+    WorkspaceCurated,
+    WorkspaceLog,
+}
+
+impl MemoryTrustLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Derived => "derived",
+            Self::WorkspaceCurated => "workspace_curated",
+            Self::WorkspaceLog => "workspace_log",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryAuthority {
+    Advisory,
+    IdentityForbidden,
+}
+
+impl MemoryAuthority {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Advisory => "advisory",
+            Self::IdentityForbidden => "identity_forbidden",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryRecordStatus {
+    Active,
+    Superseded,
+    Tombstoned,
+    Archived,
+}
+
+impl MemoryRecordStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Superseded => "superseded",
+            Self::Tombstoned => "tombstoned",
+            Self::Archived => "archived",
+        }
+    }
+
+    pub const fn is_active(self) -> bool {
+        matches!(self, Self::Active)
     }
 }
 
@@ -165,6 +230,20 @@ pub struct MemoryContextProvenance {
     pub source_path: Option<String>,
     pub scope: Option<MemoryScope>,
     pub recall_mode: MemoryRecallMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_level: Option<MemoryTrustLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<MemoryAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_kind: Option<DerivedMemoryKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_ts: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_status: Option<MemoryRecordStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
 }
 
 impl MemoryContextProvenance {
@@ -186,7 +265,49 @@ impl MemoryContextProvenance {
             source_path,
             scope,
             recall_mode,
+            trust_level: None,
+            authority: None,
+            derived_kind: None,
+            freshness_ts: None,
+            content_hash: None,
+            record_status: None,
+            superseded_by: None,
         }
+    }
+
+    pub fn with_trust_level(mut self, trust_level: MemoryTrustLevel) -> Self {
+        self.trust_level = Some(trust_level);
+        self
+    }
+
+    pub fn with_authority(mut self, authority: MemoryAuthority) -> Self {
+        self.authority = Some(authority);
+        self
+    }
+
+    pub fn with_derived_kind(mut self, derived_kind: DerivedMemoryKind) -> Self {
+        self.derived_kind = Some(derived_kind);
+        self
+    }
+
+    pub fn with_freshness_ts(mut self, freshness_ts: i64) -> Self {
+        self.freshness_ts = Some(freshness_ts);
+        self
+    }
+
+    pub fn with_content_hash(mut self, content_hash: impl Into<String>) -> Self {
+        self.content_hash = Some(content_hash.into());
+        self
+    }
+
+    pub fn with_record_status(mut self, record_status: MemoryRecordStatus) -> Self {
+        self.record_status = Some(record_status);
+        self
+    }
+
+    pub fn with_superseded_by(mut self, superseded_by: impl Into<String>) -> Self {
+        self.superseded_by = Some(superseded_by.into());
+        self
     }
 }
 

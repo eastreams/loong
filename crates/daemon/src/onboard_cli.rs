@@ -15,6 +15,7 @@ use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 use serde_json::json;
 
+use crate::copilot_onboarding::finalize_github_copilot_onboard_credentials;
 use crate::onboard_finalize::{
     ConfigWritePlan, build_onboarding_success_summary_with_memory, prepare_output_path_for_write,
     render_onboarding_success_summary_lines, resolve_backup_path, rollback_onboard_write_failure,
@@ -1472,16 +1473,25 @@ pub async fn run_onboard_cli_with_ui(
         )?;
         config.provider.model = selected_model;
 
-        let default_api_key_env = preferred_api_key_env_default(&config);
-        let selected_api_key_env = resolve_api_key_env_selection(
-            &options,
-            &config,
-            default_api_key_env,
-            guided_prompt_path,
-            ui,
-            context,
-        )?;
-        apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
+        if config.provider.kind == mvp::config::ProviderKind::GithubCopilot {
+            finalize_github_copilot_onboard_credentials(
+                &mut config.provider,
+                &output_path,
+                options.non_interactive,
+            )
+            .await?;
+        } else {
+            let default_api_key_env = preferred_api_key_env_default(&config);
+            let selected_api_key_env = resolve_api_key_env_selection(
+                &options,
+                &config,
+                default_api_key_env,
+                guided_prompt_path,
+                ui,
+                context,
+            )?;
+            apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
+        }
 
         match guided_prompt_path {
             GuidedPromptPath::NativePromptPack => {
@@ -3037,36 +3047,8 @@ fn non_interactive_preflight_warning_message(
         "onboard preflight failed: {detail}; rerun without --non-interactive to inspect and confirm them"
     )
 }
-fn render_configured_provider_credential_source_value(
-    provider: &mvp::config::ProviderConfig,
-) -> Option<String> {
-    let configured_oauth = provider.configured_oauth_access_token_env_override();
-    let rendered_oauth = provider_credential_policy::render_provider_credential_source_value(
-        configured_oauth.as_deref(),
-    );
-    if rendered_oauth.is_some() {
-        return rendered_oauth;
-    }
-
-    let configured_api_key = provider.configured_api_key_env_override();
-    provider_credential_policy::render_provider_credential_source_value(
-        configured_api_key.as_deref(),
-    )
-}
-
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
-    let provider = &config.provider;
-    if let Some(binding) =
-        provider_credential_policy::configured_provider_credential_env_binding(provider)
-    {
-        return binding.env_name;
-    }
-    if provider_credential_policy::provider_has_inline_credential(provider) {
-        return String::new();
-    }
-    provider_credential_policy::preferred_provider_credential_env_binding(provider)
-        .map(|binding| binding.env_name)
-        .unwrap_or_default()
+    provider_credential_policy::preferred_provider_credential_env_name(config)
 }
 
 pub fn collect_import_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<ImportSurface> {
@@ -5331,7 +5313,10 @@ fn render_api_key_env_selection_screen_lines_with_style(
         "- provider: {}",
         crate::provider_presentation::guided_provider_label(config.provider.kind)
     )];
-    if let Some(current_env) = render_configured_provider_credential_source_value(&config.provider)
+    if let Some(current_env) =
+        provider_credential_policy::render_configured_provider_credential_source_value(
+            &config.provider,
+        )
     {
         context_lines.push(format!("- current source: {current_env}"));
     }
@@ -5877,7 +5862,9 @@ pub(crate) fn summarize_provider_credential(
             value: "inline oauth token".to_owned(),
         });
     }
-    if let Some(configured_env) = render_configured_provider_credential_source_value(provider) {
+    if let Some(configured_env) =
+        provider_credential_policy::render_configured_provider_credential_source_value(provider)
+    {
         return Some(OnboardingCredentialSummary {
             label: "credential source",
             value: configured_env,
@@ -7615,12 +7602,23 @@ mod tests {
         assert!(error.contains("unknown-provider"));
     }
 
+    fn clear_web_search_credential_envs(env: &mut ScopedEnv) {
+        for descriptor in mvp::config::web_search_provider_descriptors() {
+            if let Some(default_env) = descriptor.default_api_key_env {
+                env.remove(default_env);
+            }
+            for env_name in descriptor.api_key_env_names {
+                env.remove(*env_name);
+            }
+        }
+    }
     #[test]
     fn recommend_web_search_provider_from_available_credentials_prefers_unique_ready_provider() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("PERPLEXITY_API_KEY", "perplexity-test-token");
 
         let recommendation = recommend_web_search_provider_from_available_credentials(&config)
@@ -7647,6 +7645,7 @@ mod tests {
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
         env.set("PERPLEXITY_API_KEY", "perplexity-test-token");
 
@@ -7700,6 +7699,7 @@ mod tests {
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
 
         let mut ui = TestOnboardUi::with_inputs([""]);
@@ -7812,6 +7812,8 @@ mod tests {
             skip_model_probe: false,
         };
         let config = mvp::config::LoongClawConfig::default();
+        let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         let recommendation = WebSearchProviderRecommendation {
             provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
             reason: "domestic locale or timezone was detected".to_owned(),

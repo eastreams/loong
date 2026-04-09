@@ -18,6 +18,21 @@ pub(super) struct DelegateWorkspaceCleanupResult {
     pub dirty: bool,
 }
 
+pub(super) fn normalize_delegate_workspace_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let raw_path = path.as_os_str().to_string_lossy();
+        if let Some(trimmed_path) = raw_path.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{trimmed_path}"));
+        }
+        if let Some(trimmed_path) = raw_path.strip_prefix(r"\\?\") {
+            return PathBuf::from(trimmed_path);
+        }
+    }
+
+    path.to_path_buf()
+}
+
 pub(super) fn prepare_delegate_workspace_root(
     config: &LoongClawConfig,
     child_session_id: &str,
@@ -180,13 +195,14 @@ fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
     // Windows because Git then tries to delete its own current working
     // directory. Resolve the owning repo root and run the removal from there.
     let repo_root = resolve_git_repo_root_for_worktree(worktree_root)?;
+    let normalized_worktree_root = normalize_delegate_workspace_path(worktree_root);
     let args = [
         OsStr::new("-C"),
         repo_root.as_os_str(),
         OsStr::new("worktree"),
         OsStr::new("remove"),
         OsStr::new("--force"),
-        worktree_root.as_os_str(),
+        normalized_worktree_root.as_os_str(),
     ];
     let output = run_git_command(&args)?;
     if output.status.success() {

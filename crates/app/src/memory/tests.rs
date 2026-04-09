@@ -371,7 +371,7 @@ fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
     let _durable_flush_guard = durable_flush_lock.blocking_lock();
     let _guard = core_dispatch_test_lock()
         .lock()
-        .expect("core dispatch test lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -439,7 +439,7 @@ fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
     let _durable_flush_guard = durable_flush_lock.blocking_lock();
     let _guard = core_dispatch_test_lock()
         .lock()
-        .expect("core dispatch test lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -633,4 +633,140 @@ fn replace_session_turns_direct_requires_explicit_timestamps() {
 
     let _ = fs::remove_file(&db_path);
     let _ = fs::remove_dir(&tmp);
+}
+
+#[test]
+fn registry_selected_system_can_override_memory_runtime_execution() {
+    use async_trait::async_trait;
+
+    struct RuntimeExecutingMemorySystem;
+
+    struct RuntimeExecutingMemorySystemRuntime {
+        metadata: MemorySystemMetadata,
+    }
+
+    impl MemorySystem for RuntimeExecutingMemorySystem {
+        fn id(&self) -> &'static str {
+            "registry-runtime-executing"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-runtime-executing",
+                [MemorySystemCapability::PromptHydration],
+                "Registry runtime-executing test system",
+            )
+            .with_supported_pre_assembly_stage_families([MemoryStageFamily::Retrieve])
+        }
+
+        fn create_runtime(
+            &self,
+            _config: &runtime_config::MemoryRuntimeConfig,
+        ) -> crate::CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+            let metadata = self.metadata();
+            let runtime = RuntimeExecutingMemorySystemRuntime { metadata };
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            Ok(Some(boxed_runtime))
+        }
+    }
+
+    #[async_trait]
+    impl MemorySystemRuntime for RuntimeExecutingMemorySystemRuntime {
+        fn metadata(&self) -> &MemorySystemMetadata {
+            &self.metadata
+        }
+
+        fn execute_core(&self, request: MemoryCoreRequest) -> Result<MemoryCoreOutcome, String> {
+            let operation = request.operation;
+            let payload = json!({
+                "adapter": "registry-runtime-executing",
+                "operation": operation,
+            });
+            let outcome = MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload,
+            };
+
+            Ok(outcome)
+        }
+
+        fn hydrate_stage_envelope(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+        ) -> Result<StageEnvelope, String> {
+            let diagnostics = MemoryDiagnostics {
+                system_id: self.metadata.id.to_owned(),
+                fail_open: true,
+                strict_mode_requested: false,
+                strict_mode_active: false,
+                degraded: false,
+                derivation_error: None,
+                retrieval_error: None,
+                rank_error: None,
+                recent_window_count: 0,
+                entry_count: 0,
+            };
+            let hydrated = HydratedMemoryContext {
+                entries: Vec::new(),
+                recent_window: Vec::new(),
+                diagnostics,
+            };
+            let envelope = StageEnvelope {
+                hydrated,
+                retrieval_request: None,
+                diagnostics: vec![StageDiagnostics::succeeded(MemoryStageFamily::Retrieve)],
+            };
+
+            Ok(envelope)
+        }
+
+        async fn run_compact_stage(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+        ) -> Result<StageDiagnostics, String> {
+            let diagnostics = StageDiagnostics::succeeded(MemoryStageFamily::Compact);
+            Ok(diagnostics)
+        }
+    }
+
+    fn ensure_registry_runtime_executing_system_registered() {
+        static REGISTRY_RUNTIME_EXECUTING_SYSTEM: OnceLock<()> = OnceLock::new();
+        REGISTRY_RUNTIME_EXECUTING_SYSTEM.get_or_init(|| {
+            register_memory_system("registry-runtime-executing", || {
+                Box::new(RuntimeExecutingMemorySystem)
+            })
+            .expect("register runtime-executing memory system");
+        });
+    }
+
+    let _guard = core_dispatch_test_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    ensure_registry_runtime_executing_system_registered();
+
+    let config = runtime_config::MemoryRuntimeConfig {
+        resolved_system_id: Some("registry-runtime-executing".to_owned()),
+        ..runtime_config::MemoryRuntimeConfig::default()
+    };
+
+    let request = MemoryCoreRequest {
+        operation: "noop".to_owned(),
+        payload: json!({}),
+    };
+    let outcome = execute_memory_core_with_config(request, &config)
+        .expect("registry runtime should handle memory core execution");
+
+    assert_eq!(outcome.payload["adapter"], "registry-runtime-executing");
+
+    let envelope = hydrate_stage_envelope("runtime-executing-session", &config)
+        .expect("registry runtime should handle stage envelope hydration");
+
+    assert_eq!(
+        envelope.hydrated.diagnostics.system_id,
+        "registry-runtime-executing"
+    );
 }

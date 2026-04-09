@@ -10,12 +10,14 @@ use super::context_engine::ToolOutputStreamingPolicy;
 use super::prompt_fragments::PromptFragment;
 use super::prompt_fragments::PromptLane;
 use super::prompt_fragments::PromptRenderPolicy;
+use super::prompt_frame::PromptFrameSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PromptCompilation {
     pub fragments: Vec<PromptFragment>,
     pub system_text: String,
     pub artifacts: Vec<ContextArtifactDescriptor>,
+    pub frame_summary: PromptFrameSummary,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -27,11 +29,13 @@ impl PromptCompiler {
         let ordered_fragments = order_fragments(normalized_fragments);
         let system_text = render_system_text(&ordered_fragments);
         let artifacts = build_artifacts(&ordered_fragments);
+        let frame_summary = PromptFrameSummary::from_fragments(ordered_fragments.as_slice());
 
         PromptCompilation {
             fragments: ordered_fragments,
             system_text,
             artifacts,
+            frame_summary,
         }
     }
 }
