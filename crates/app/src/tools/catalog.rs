@@ -497,6 +497,8 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "sessions_history"
         | "sessions_list"
         | "file.read"
+        | "glob.search"
+        | "content.search"
         | "memory_search"
         | "memory_get"
         | "browser.companion.snapshot"
@@ -1312,6 +1314,34 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: file_read_definition,
         });
         descriptors.push(ToolDescriptor {
+            name: "glob.search",
+            provider_name: "glob_search",
+            aliases: &[],
+            description: "Search the workspace for files matching a glob pattern",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: glob_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "content.search",
+            provider_name: "content_search",
+            aliases: &[],
+            description: "Search workspace file contents for a text match with bounded results",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: content_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
             name: "memory_search",
             provider_name: "memory_search",
             aliases: &[],
@@ -1547,6 +1577,24 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_open_definition,
+        });
+    }
+
+    #[cfg(feature = "tool-http")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "http.request",
+            provider_name: "http_request",
+            aliases: &["http_request"],
+            description: "Send a bounded HTTP request with status, headers, and response text output",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::WebFetch,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: http_request_definition,
         });
     }
 
@@ -2764,6 +2812,86 @@ fn file_write_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn glob_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern to match against workspace-relative paths."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path. Defaults to the configured file root."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Optional maximum number of matches to return. Defaults to 50."
+                    },
+                    "include_directories": {
+                        "type": "boolean",
+                        "description": "Include matching directories in addition to files. Defaults to false."
+                    }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn content_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Text to search for inside workspace files."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path. Defaults to the configured file root."
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional glob filter applied to workspace-relative file paths before content scanning."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Optional maximum number of matches to return. Defaults to 20."
+                    },
+                    "max_bytes_per_file": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1_048_576,
+                        "description": "Optional per-file scan budget in bytes. Defaults to 262144."
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Use case-sensitive matching. Defaults to false."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn memory_search_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2859,7 +2987,52 @@ fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
-#[cfg(feature = "tool-webfetch")]
+fn http_request_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS URL to request."
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method to send. Defaults to GET."
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "description": "Optional request headers."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional request body."
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Optional Content-Type header for the request body."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
+                        "description": "Optional maximum response bytes to return. Cannot exceed the configured runtime max."
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn web_fetch_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -3848,7 +4021,16 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "browser.companion.session.stop" => "session_id:string",
         "browser.companion.click" => "session_id:string,selector:string",
         "browser.companion.type" => "session_id:string,selector:string,text:string",
+        "http.request" => {
+            "url:string,method?:string,headers?:object,body?:string,content_type?:string,max_bytes?:integer"
+        }
         "file.read" => "path:string,max_bytes?:integer",
+        "glob.search" => {
+            "pattern:string,root?:string,max_results?:integer,include_directories?:boolean"
+        }
+        "content.search" => {
+            "query:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean"
+        }
         "memory_search" => "query:string,max_results?:integer",
         "memory_get" => "path:string,from?:integer,lines?:integer",
         "file.write" => "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
@@ -3875,7 +4057,16 @@ fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
             "discover a non-core tool for the task or refresh a known tool card by exact tool id"
         }
         "tool.invoke" => "invoke a discovered non-core tool with a valid short-lived lease",
+        "http.request" => {
+            "send a raw http request, inspect status and headers, fetch an api response"
+        }
         "file.read" => "read a workspace file, inspect file contents, open a repo text file",
+        "glob.search" => {
+            "find workspace files by glob pattern, search repo paths, match files under a root"
+        }
+        "content.search" => {
+            "search workspace file contents, find text in repo files, grep text in the project"
+        }
         "file.write" => {
             "write a workspace file, save file content, create or overwrite a repo file"
         }
@@ -4241,6 +4432,14 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("selector", "string"),
             ("text", "string"),
         ],
+        "http.request" => &[
+            ("url", "string"),
+            ("method", "string"),
+            ("headers", "object"),
+            ("body", "string"),
+            ("content_type", "string"),
+            ("max_bytes", "integer"),
+        ],
         "external_skills.policy" => &[
             ("action", "string"),
             ("enabled", "boolean"),
@@ -4248,6 +4447,20 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("blocked_domains", "array"),
         ],
         "file.read" => &[("path", "string"), ("max_bytes", "integer")],
+        "glob.search" => &[
+            ("pattern", "string"),
+            ("root", "string"),
+            ("max_results", "integer"),
+            ("include_directories", "boolean"),
+        ],
+        "content.search" => &[
+            ("query", "string"),
+            ("root", "string"),
+            ("glob", "string"),
+            ("max_results", "integer"),
+            ("max_bytes_per_file", "integer"),
+            ("case_sensitive", "boolean"),
+        ],
         "memory_search" => &[("query", "string"), ("max_results", "integer")],
         "memory_get" => &[
             ("path", "string"),
@@ -4374,7 +4587,10 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         | "browser.companion.session.stop" => &["session_id"],
         "browser.companion.click" => &["session_id", "selector"],
         "browser.companion.type" => &["session_id", "selector", "text"],
+        "http.request" => &["url"],
         "file.read" => &["path"],
+        "glob.search" => &["pattern"],
+        "content.search" => &["query"],
         "memory_search" => &["query"],
         "memory_get" => &["path"],
         "file.write" => &["path", "content"],
@@ -4454,7 +4670,10 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "browser.companion.click" | "browser.companion.type" => {
             &["browser", "companion", "write", "approval"]
         }
+        "http.request" => &["http", "request", "web", "network", "external"],
         "file.read" => &["file", "read", "filesystem", "repo"],
+        "glob.search" => &["file", "search", "glob", "filesystem", "repo"],
+        "content.search" => &["file", "search", "content", "filesystem", "repo"],
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
         "file.write" => &["file", "write", "filesystem"],

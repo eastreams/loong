@@ -36,7 +36,7 @@ impl FilePolicyExtension {
         let mut required_capabilities = BTreeSet::new();
 
         match tool_name {
-            "file.read" | "memory_search" | "memory_get" => {
+            "file.read" | "glob.search" | "content.search" | "memory_search" | "memory_get" => {
                 required_capabilities.insert(Capability::FilesystemRead);
             }
             "file.write" | "file.edit" => {
@@ -157,6 +157,11 @@ impl FilePolicyExtension {
             }
 
             return raw_paths;
+        }
+
+        let root_path = trimmed_non_empty_path(payload.get("root"));
+        if let Some(root_path) = root_path {
+            raw_paths.push(root_path);
         }
 
         let raw_path = trimmed_non_empty_path(payload.get("path"));

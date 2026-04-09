@@ -118,7 +118,11 @@ pub(crate) fn validate_http_target(
 /// - Multi-thread runtime: use `block_in_place` + `block_on`
 /// - Current-thread runtime: run future on a dedicated worker thread
 /// - No runtime: create a temporary current-thread runtime
-#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
+#[cfg(any(
+    feature = "tool-http",
+    feature = "tool-webfetch",
+    feature = "tool-websearch"
+))]
 pub fn run_async<F>(fut: F) -> Result<F::Output, String>
 where
     F: std::future::Future + Send,
@@ -296,7 +300,14 @@ fn normalize_domain_text(value: &str) -> String {
     trimmed_root_label.to_ascii_lowercase()
 }
 
-#[cfg(all(test, any(feature = "tool-webfetch", feature = "tool-websearch")))]
+#[cfg(all(
+    test,
+    any(
+        feature = "tool-http",
+        feature = "tool-webfetch",
+        feature = "tool-websearch"
+    )
+))]
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
