@@ -199,3 +199,87 @@ async fn twitch_send_cli_requires_target() {
 
     assert_eq!(error, "twitch-send requires --target");
 }
+
+#[test]
+fn managed_bridge_send_cli_accepts_conversation_target_kind() {
+    let weixin_target_kind = parse_weixin_send_target_kind("conversation")
+        .expect("weixin-send should accept conversation targets");
+    let qqbot_target_kind = parse_qqbot_send_target_kind("conversation")
+        .expect("qqbot-send should accept conversation targets");
+    let onebot_target_kind = parse_onebot_send_target_kind("conversation")
+        .expect("onebot-send should accept conversation targets");
+
+    assert_eq!(
+        default_weixin_send_target_kind(),
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        default_qqbot_send_target_kind(),
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        default_onebot_send_target_kind(),
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        weixin_target_kind,
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        qqbot_target_kind,
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        onebot_target_kind,
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+}
+
+#[test]
+fn managed_bridge_send_cli_rejects_non_conversation_target_kind() {
+    let weixin_error = parse_weixin_send_target_kind("address")
+        .expect_err("weixin-send should reject address targets");
+    let qqbot_error = parse_qqbot_send_target_kind("endpoint")
+        .expect_err("qqbot-send should reject endpoint targets");
+    let onebot_error = parse_onebot_send_target_kind("message_reply")
+        .expect_err("onebot-send should reject reply targets");
+
+    assert_eq!(
+        weixin_error,
+        "weixin --target-kind does not support `address`; use `conversation`"
+    );
+    assert_eq!(
+        qqbot_error,
+        "qqbot --target-kind does not support `endpoint`; use `conversation`"
+    );
+    assert_eq!(
+        onebot_error,
+        "onebot --target-kind does not support `message_reply`; use `conversation`"
+    );
+}
+
+#[tokio::test]
+async fn managed_bridge_send_cli_requires_target() {
+    let args = ChannelSendCliArgs {
+        config_path: None,
+        account: None,
+        target: None,
+        target_kind: mvp::channel::ChannelOutboundTargetKind::Conversation,
+        text: "hello",
+        as_card: false,
+    };
+
+    let weixin_error = run_weixin_send_cli_impl(args)
+        .await
+        .expect_err("missing target should fail");
+    let qqbot_error = run_qqbot_send_cli_impl(args)
+        .await
+        .expect_err("missing target should fail");
+    let onebot_error = run_onebot_send_cli_impl(args)
+        .await
+        .expect_err("missing target should fail");
+
+    assert_eq!(weixin_error, "weixin-send requires --target");
+    assert_eq!(qqbot_error, "qqbot-send requires --target");
+    assert_eq!(onebot_error, "onebot-send requires --target");
+}

@@ -1,4 +1,5 @@
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -8,6 +9,16 @@
 ))]
 use std::collections::BTreeSet;
 
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-discord",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-signal",
+    feature = "channel-slack",
+    feature = "channel-wecom"
+))]
 use async_trait::async_trait;
 #[cfg(any(
     feature = "channel-telegram",
@@ -22,6 +33,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -31,6 +43,7 @@ use serde::Serialize;
 ))]
 use super::state::ChannelOperationRuntimeTracker;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -41,6 +54,7 @@ use super::state::ChannelOperationRuntimeTracker;
 use super::turn_feedback::ChannelTurnFeedbackPolicy;
 use crate::CliResult;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -50,6 +64,7 @@ use crate::CliResult;
 ))]
 use crate::config::LoongClawConfig;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -68,6 +83,7 @@ pub use super::super::core::types::*;
 // ============================================================================
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -883,6 +899,7 @@ fn looks_like_feishu_message_id(value: &str) -> bool {
 // ============================================================================
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -890,7 +907,7 @@ fn looks_like_feishu_message_id(value: &str) -> bool {
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
-pub(in crate::channel) async fn process_channel_batch<A, F>(
+pub async fn process_channel_batch<A, F>(
     adapter: &mut A,
     batch: Vec<ChannelInboundMessage>,
     runtime: Option<&ChannelOperationRuntimeTracker>,

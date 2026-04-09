@@ -138,6 +138,8 @@ pub struct ChannelDiscoveredPluginBridge {
     pub transport_family: Option<String>,
     pub target_contract: Option<String>,
     pub account_scope: Option<String>,
+    pub runtime_contract: Option<String>,
+    pub runtime_operations: Vec<String>,
     pub status: ChannelDiscoveredPluginBridgeStatus,
     pub issues: Vec<String>,
     pub missing_fields: Vec<String>,
@@ -761,6 +763,8 @@ fn discovered_plugin_match_from_descriptor(
     let transport_family = channel_bridge_transport_family(channel_bridge);
     let target_contract = channel_bridge_target_contract(channel_bridge);
     let account_scope = channel_bridge_account_scope(channel_bridge);
+    let runtime_contract = channel_bridge_runtime_contract(channel_bridge);
+    let runtime_operations = channel_bridge_runtime_operations(channel_bridge);
     let missing_fields = channel_bridge_missing_fields(channel_bridge);
     let setup_details = plugin_bridge_setup_details(&descriptor.manifest);
     let manifest_status = validation.status;
@@ -776,6 +780,8 @@ fn discovered_plugin_match_from_descriptor(
         transport_family,
         target_contract,
         account_scope,
+        runtime_contract,
+        runtime_operations,
         status,
         issues: validation.issues,
         missing_fields,
@@ -887,6 +893,24 @@ fn channel_bridge_account_scope(
     let channel_bridge = channel_bridge?;
 
     channel_bridge.account_scope.clone()
+}
+
+fn channel_bridge_runtime_contract(
+    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+) -> Option<String> {
+    let channel_bridge = channel_bridge?;
+
+    channel_bridge.runtime_contract.clone()
+}
+
+fn channel_bridge_runtime_operations(
+    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+) -> Vec<String> {
+    let Some(channel_bridge) = channel_bridge else {
+        return Vec::new();
+    };
+
+    channel_bridge.runtime_operations.clone()
 }
 
 fn channel_bridge_missing_fields(

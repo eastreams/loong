@@ -2172,7 +2172,7 @@ fn run_channel_serve_cli_forwards_optional_arguments_to_runner() {
     let error = runtime
         .block_on(run_channel_serve_cli(
             ChannelServeCliSpec {
-                family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+                family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
                 run: fake_serve_cli_runner,
             },
             ChannelServeCliArgs {

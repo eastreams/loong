@@ -73,7 +73,7 @@ impl PersistedChannelOperationRuntime {
     }
 }
 
-pub(crate) struct ChannelOperationRuntimeTracker {
+pub struct ChannelOperationRuntimeTracker {
     path: PathBuf,
     state: Arc<Mutex<PersistedChannelOperationRuntime>>,
     stopped: Arc<AtomicBool>,
@@ -88,7 +88,7 @@ pub(crate) struct ChannelOperationExclusiveGuard {
 }
 
 impl ChannelOperationRuntimeTracker {
-    pub(crate) async fn start(
+    pub async fn start(
         platform: ChannelPlatform,
         operation_id: &'static str,
         account_id: &str,
@@ -214,7 +214,7 @@ impl ChannelOperationRuntimeTracker {
         })
     }
 
-    pub(crate) async fn mark_run_start(&self) -> CliResult<()> {
+    pub async fn mark_run_start(&self) -> CliResult<()> {
         self.update_state(|state| {
             state.active_runs = state.active_runs.saturating_add(1);
             state.busy = true;
@@ -225,7 +225,7 @@ impl ChannelOperationRuntimeTracker {
         .await
     }
 
-    pub(crate) async fn mark_run_end(&self) -> CliResult<()> {
+    pub async fn mark_run_end(&self) -> CliResult<()> {
         self.update_state(|state| {
             state.active_runs = state.active_runs.saturating_sub(1);
             state.busy = state.active_runs > 0;
@@ -236,7 +236,7 @@ impl ChannelOperationRuntimeTracker {
         .await
     }
 
-    pub(crate) async fn shutdown(&self) -> CliResult<()> {
+    pub async fn shutdown(&self) -> CliResult<()> {
         self.stopped.store(true, Ordering::SeqCst);
         let task = self
             .heartbeat_task

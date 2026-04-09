@@ -98,6 +98,10 @@ pub struct PluginChannelBridgeContract {
     #[serde(default)]
     pub account_scope: Option<String>,
     #[serde(default)]
+    pub runtime_contract: Option<String>,
+    #[serde(default)]
+    pub runtime_operations: Vec<String>,
+    #[serde(default)]
     pub readiness: PluginChannelBridgeReadiness,
 }
 
@@ -1282,6 +1286,9 @@ fn derive_channel_bridge_contract(
     let transport_family = normalized_manifest_metadata_value(manifest, "transport_family");
     let target_contract = normalized_manifest_metadata_value(manifest, "target_contract");
     let account_scope = normalized_manifest_metadata_value(manifest, "account_scope");
+    let runtime_contract = normalized_manifest_metadata_value(manifest, "channel_runtime_contract");
+    let runtime_operations =
+        normalized_manifest_metadata_string_list(manifest, "channel_runtime_operations_json");
     let adapter_family = normalized_manifest_metadata_value(manifest, "adapter_family");
 
     let has_channel_bridge_metadata =
@@ -1309,6 +1316,8 @@ fn derive_channel_bridge_contract(
         transport_family,
         target_contract,
         account_scope,
+        runtime_contract,
+        runtime_operations,
         readiness,
     })
 }
@@ -1349,6 +1358,30 @@ fn normalized_manifest_metadata_value(manifest: &PluginManifest, key: &str) -> O
     let value = manifest.metadata.get(key);
     let value = value.map(String::as_str);
     normalized_optional_value(value)
+}
+
+fn normalized_manifest_metadata_string_list(manifest: &PluginManifest, key: &str) -> Vec<String> {
+    let Some(raw_value) = manifest.metadata.get(key) else {
+        return Vec::new();
+    };
+
+    let parsed_values = serde_json::from_str::<Vec<String>>(raw_value);
+    let Ok(parsed_values) = parsed_values else {
+        return Vec::new();
+    };
+
+    let mut normalized_values = Vec::new();
+    for parsed_value in parsed_values {
+        let trimmed_value = parsed_value.trim();
+        if trimmed_value.is_empty() {
+            continue;
+        }
+
+        let normalized_value = trimmed_value.to_owned();
+        normalized_values.push(normalized_value);
+    }
+
+    normalized_values
 }
 
 fn normalized_optional_value(raw: Option<&str>) -> Option<String> {
@@ -1775,6 +1808,14 @@ mod tests {
                 "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
             ),
             ("account_scope".to_owned(), "multi_account".to_owned()),
+            (
+                "channel_runtime_contract".to_owned(),
+                "loongclaw_channel_bridge_v1".to_owned(),
+            ),
+            (
+                "channel_runtime_operations_json".to_owned(),
+                "[\"send\",\"receive_batch\",\"ack_inbound\",\"complete_batch\"]".to_owned(),
+            ),
         ]));
 
         let translator = PluginTranslator::new();
@@ -1798,6 +1839,19 @@ mod tests {
         assert_eq!(
             channel_bridge.account_scope.as_deref(),
             Some("multi_account")
+        );
+        assert_eq!(
+            channel_bridge.runtime_contract.as_deref(),
+            Some("loongclaw_channel_bridge_v1")
+        );
+        assert_eq!(
+            channel_bridge.runtime_operations,
+            vec![
+                "send".to_owned(),
+                "receive_batch".to_owned(),
+                "ack_inbound".to_owned(),
+                "complete_batch".to_owned(),
+            ]
         );
         assert!(channel_bridge.readiness.ready);
         assert!(channel_bridge.readiness.missing_fields.is_empty());
@@ -1824,6 +1878,33 @@ mod tests {
                 "metadata.target_contract".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn translator_ignores_invalid_runtime_operations_metadata_json() {
+        let descriptor = channel_bridge_descriptor(BTreeMap::from([
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            (
+                "target_contract".to_owned(),
+                "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+            ),
+            (
+                "channel_runtime_operations_json".to_owned(),
+                "{not-json}".to_owned(),
+            ),
+        ]));
+
+        let translator = PluginTranslator::new();
+        let ir = translator.translate_descriptor(&descriptor);
+        let channel_bridge = ir
+            .channel_bridge
+            .as_ref()
+            .expect("channel bridge contract should exist");
+
+        assert!(channel_bridge.runtime_operations.is_empty());
     }
 
     #[test]

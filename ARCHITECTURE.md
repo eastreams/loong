@@ -1,6 +1,6 @@
 # Loong Architecture
 
-Loong is structured as a 7-crate Rust workspace with a strict acyclic
+Loong is structured as an 8-crate Rust workspace with a strict acyclic
 dependency graph. The kernel enforces layered execution planes separating
 contracts, security, execution, and orchestration concerns.
 
@@ -51,13 +51,14 @@ one product/runtime crate, two validation rails, and one daemon assembly crate.
 ```text
 direct dependency DAG
 
-contracts  (stable contract vocabulary)
-├── kernel   -> contracts
-├── protocol (independent transport foundation)
-├── app      -> contracts, kernel
-├── spec     -> contracts, kernel, protocol
-├── bench    -> kernel, spec
-└── daemon   -> app, bench, contracts, kernel, spec
+contracts      (stable contract vocabulary)
+├── kernel        -> contracts
+├── protocol      (independent transport foundation)
+├── bridge-runtime -> contracts, kernel, protocol
+├── app           -> contracts, kernel
+├── spec          -> contracts, kernel, protocol, bridge-runtime
+├── bench         -> kernel, spec
+└── daemon        -> app, bench, contracts, kernel, spec, bridge-runtime
 ```
 
 No dependency cycles. This is non-negotiable.
@@ -79,6 +80,7 @@ daemon     operator CLI and service assembly over the lower layers
 | `contracts` | Shared types and stable contract vocabulary: capability tokens, policy/audit types, runtime/tool/memory request-outcome shapes, task state, namespaces, and pack manifests. Zero internal dependencies. |
 | `kernel` | Governed execution core. Owns audit, policy, runtime/tool/memory/connector planes, harness brokerage, task supervision, plugin and integration control, bootstrap execution, and architecture awareness. |
 | `protocol` | Transport and route foundation: frames, route resolution, capability-aware authorization, json-line transport, and linked in-memory transport primitives. Independent leaf crate. |
+| `bridge-runtime` | Shared managed bridge transport primitives for `http_json` and `process_stdio`, reused by both the spec rail and production bridge execution paths. |
 | `app` | Product/runtime layer. Owns providers, channels, tools, memory backends, chat/conversation/session logic, config loading, runtime environment helpers, and presentation-facing surfaces. Houses the feature-flagged product modules. |
 | `spec` | Deterministic execution rail. Owns runner specs, bootstrap builders, programmatic tool/spec execution, and test-facing runtime scaffolding that should stay out of daemon business logic. |
 | `bench` | Performance and pressure rail. Owns benchmark suites and gate enforcement on top of the spec/kernel surfaces instead of folding that logic into the normal runtime path. |
@@ -165,7 +167,7 @@ the documented contract deliberately.
 2. **No breaking changes** -- new features are additive only. Existing public API signatures stay unchanged.
 3. **Capability-gated by default** -- every tool call, memory operation, and connector invocation requires a valid `CapabilityToken`.
 4. **Audit everything security-critical** -- policy denials, token lifecycle events, and module invocations all emit structured audit events.
-5. **7-crate DAG, no cycles** -- dependency direction is non-negotiable.
+5. **8-crate DAG, no cycles** -- dependency direction is non-negotiable.
 6. **Tests first** -- if a behavior isn't tested, it doesn't exist. All tests pass at every commit.
 7. **Proven technology preferred** -- choose well-understood, composable dependencies over opaque packages.
 8. **Repository is the system of record** -- design decisions and architectural context live in `docs/`, not in chat threads.

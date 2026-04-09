@@ -22,8 +22,9 @@ context lives in `docs/`, while the public reader-facing docs surface lives in
 contracts (leaf — zero internal deps)
 ├── kernel → contracts
 ├── protocol (independent leaf)
+├── bridge-runtime → contracts, kernel, protocol
 ├── app → contracts, kernel
-├── spec → contracts, kernel, protocol
+├── spec → contracts, kernel, protocol, bridge-runtime
 ├── bench → contracts, kernel, spec
 └── daemon (binary) → all of the above
 ```
