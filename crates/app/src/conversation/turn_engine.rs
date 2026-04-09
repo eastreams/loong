@@ -2719,8 +2719,14 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
     ) -> Result<PreparedToolIntent, PreparedToolIntentFailure> {
         let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name) else {
             let denied_tool_name = effective_denied_tool_name(intent);
-            let reason = format!("tool_not_found: {denied_tool_name}");
-            let turn_result = TurnResult::policy_denied("tool_not_found", reason.clone());
+            let raw_reason = format!("tool_not_found: {denied_tool_name}");
+            let reason = provider_tool_denial_reason(raw_reason.as_str(), intent.source.as_str());
+            let failure = if intent.source.starts_with("provider_") {
+                TurnFailure::policy_denied_with_discovery_recovery("tool_not_found", reason.clone())
+            } else {
+                TurnFailure::policy_denied("tool_not_found", reason.clone())
+            };
+            let turn_result = TurnResult::ToolDenied(failure);
             let decision =
                 ToolDecisionTelemetry::deny(denied_tool_name.as_str(), reason, "tool_not_found");
 
@@ -3826,97 +3832,14 @@ impl TurnEngine {
         budget_state: &AutonomyTurnBudgetState,
         ingress: Option<&ConversationIngressContext>,
     ) -> Result<PreparedToolIntent, PreparedToolIntentFailure> {
-        let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name) else {
-            let denied_tool_name = effective_denied_tool_name(intent);
-            let raw_reason = format!("tool_not_found: {denied_tool_name}");
-            let reason = provider_tool_denial_reason(raw_reason.as_str(), intent.source.as_str());
-            let failure = if intent.source.starts_with("provider_") {
-                TurnFailure::policy_denied_with_discovery_recovery("tool_not_found", reason.clone())
-            } else {
-                TurnFailure::policy_denied("tool_not_found", reason.clone())
-            };
-            let turn_result = TurnResult::ToolDenied(failure);
-            let decision =
-                ToolDecisionTelemetry::deny(denied_tool_name.as_str(), reason, "tool_not_found");
-            return Err(PreparedToolIntentFailure {
-                intent: intent.clone(),
-                turn_result,
-                decision,
-            });
-        };
-        let injected = inject_internal_tool_ingress(
-            resolved_tool.canonical_name,
-            intent.args_json.clone(),
-            ingress,
-        );
-        let normalized_payload = crate::tools::normalize_shell_payload_for_request(
-            resolved_tool.canonical_name,
-            injected.payload,
-        );
-        let injected_payload_uses_reserved_internal_context =
-            crate::tools::payload_uses_reserved_internal_tool_context(&normalized_payload);
-        let augmented_payload = augment_tool_payload_for_kernel(
-            resolved_tool.canonical_name,
-            normalized_payload.clone(),
-            session_context,
-        );
-        let augmented_payload_uses_reserved_internal_context =
-            crate::tools::payload_uses_reserved_internal_tool_context(&augmented_payload.payload);
-        let request = ToolCoreRequest {
-            tool_name: resolved_tool.canonical_name.to_owned(),
-            payload: augmented_payload.payload,
-        };
-        let normalized_intent = ToolIntent {
-            tool_name: resolved_tool.canonical_name.to_owned(),
-            args_json: normalized_payload,
-            source: intent.source.clone(),
-            session_id: intent.session_id.clone(),
-            turn_id: intent.turn_id.clone(),
-            tool_call_id: intent.tool_call_id.clone(),
-        };
-        let prepared_intent = build_prepared_tool_intent(
-            &normalized_intent,
-            &request,
+        let preparation_harness = ToolIntentPreparationHarness::new(
             session_context,
             app_dispatcher,
             binding,
             budget_state,
-            intent_sequence,
-        )
-        .await?;
-        if augmented_payload_uses_reserved_internal_context {
-            return Err(PreparedToolIntentFailure {
-                intent: prepared_intent.intent.clone(),
-                turn_result: TurnResult::non_retryable_tool_error(
-                    "reserved_internal_tool_context",
-                    "tool payload still contains reserved internal context after augmentation"
-                        .to_owned(),
-                ),
-                decision: ToolDecisionTelemetry::deny(
-                    prepared_intent.intent.tool_name.clone(),
-                    "reserved_internal_tool_context",
-                    "reserved_internal_tool_context",
-                ),
-            });
-        }
-        if injected_payload_uses_reserved_internal_context
-            && !prepared_intent.trusted_internal_context
-        {
-            return Err(PreparedToolIntentFailure {
-                intent: prepared_intent.intent.clone(),
-                turn_result: TurnResult::non_retryable_tool_error(
-                    "untrusted_internal_tool_context",
-                    "untrusted payload attempted to set reserved internal tool context"
-                        .to_owned(),
-                ),
-                decision: ToolDecisionTelemetry::deny(
-                    prepared_intent.intent.tool_name.clone(),
-                    "untrusted_internal_tool_context",
-                    "untrusted_internal_tool_context",
-                ),
-            });
-        }
-        Ok(prepared_intent)
+            ingress,
+        );
+        preparation_harness.prepare(intent, intent_sequence).await
     }
 
     async fn execute_prepared_tool_intent<D: AppToolDispatcher + ?Sized>(
