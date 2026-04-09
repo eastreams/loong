@@ -11416,6 +11416,98 @@ async fn handle_turn_with_runtime_tool_error_returns_natural_language_fallback()
     assert_eq!(visible_turns[1].2, reply);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_request_context() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Trying to read the file now.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "file.read",
+                json!({}),
+                "session-file-read-followup",
+                "turn-file-read-followup",
+                "call-file-read-followup",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Ok("MODEL_FILE_READ_REPAIR_REPLY".to_owned()),
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-file-read-followup",
+            "read the file",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+        )
+        .await
+        .expect("repairable file.read failure should still return completion fallback");
+
+    assert_eq!(reply, "MODEL_FILE_READ_REPAIR_REPLY");
+
+    let completion_requests = runtime
+        .completion_requested_messages
+        .lock()
+        .expect("completion request lock")
+        .clone();
+    assert_eq!(completion_requests.len(), 1);
+
+    let followup_messages = &completion_requests[0];
+    assert!(
+        followup_messages.iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            let is_assistant = role == Some("assistant");
+            let has_request_marker =
+                content.is_some_and(|value| value.starts_with("[tool_request]\n"));
+            let mentions_file_read =
+                content.is_some_and(|value| value.contains("\"tool\":\"file.read\""));
+            let shows_empty_request = content.is_some_and(|value| value.contains("\"request\":{}"));
+            is_assistant && has_request_marker && mentions_file_read && shows_empty_request
+        }),
+        "completion followup should include the failed file.read request: {followup_messages:?}"
+    );
+    assert!(
+        followup_messages.iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            let is_assistant = role == Some("assistant");
+            let has_failure_marker =
+                content.is_some_and(|value| value.starts_with("[tool_failure]\n"));
+            let mentions_repair =
+                content.is_some_and(|value| value.contains("tool input needs repair"));
+            let mentions_required_path =
+                content.is_some_and(|value| value.contains("file.read payload.path is required"));
+            is_assistant && has_failure_marker && mentions_repair && mentions_required_path
+        }),
+        "completion followup should include the repairable file.read failure reason: {followup_messages:?}"
+    );
+    assert!(
+        followup_messages.iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            let is_user = role == Some("user");
+            let has_guidance =
+                content.is_some_and(|value| value.contains("Repair guidance for file.read:"));
+            let mentions_path = content.is_some_and(|value| {
+                value.contains("Add required field `payload.path` as a string.")
+            });
+            let mentions_shape = content.is_some_and(|value| {
+                value.contains("Expected payload shape: path:string,max_bytes?:integer.")
+            });
+            is_user && has_guidance && mentions_path && mentions_shape
+        }),
+        "completion followup should include file.read repair guidance: {followup_messages:?}"
+    );
+}
+
 #[cfg(feature = "tool-shell")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_failed_request_context()
