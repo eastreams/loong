@@ -62,6 +62,25 @@ fn legacy_acp_status_payload_json(
     })
 }
 
+fn legacy_acp_session_list_payload_json(
+    config_path: &str,
+    matched_count: usize,
+    sessions: &[mvp::acp::AcpSessionMetadata],
+) -> Value {
+    let returned_count = sessions.len();
+    let sessions = sessions
+        .iter()
+        .map(acp_session_metadata_json)
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "config": config_path,
+        "matched_count": matched_count,
+        "returned_count": returned_count,
+        "sessions": sessions,
+    })
+}
+
 fn legacy_acp_observability_payload_json(
     config_path: &str,
     snapshot: &mvp::acp::AcpManagerObservabilitySnapshot,
@@ -179,6 +198,66 @@ fn gateway_read_model_acp_status_keeps_requested_and_resolved_session_fields() {
         "telegram:bot_123456:42"
     );
     assert_eq!(encoded["status"]["last_error"], "permission denied");
+}
+
+#[test]
+fn gateway_read_model_acp_session_list_keeps_metadata_and_counts() {
+    let sessions = vec![
+        mvp::acp::AcpSessionMetadata {
+            session_key: "agent:codex:telegram:42".to_owned(),
+            conversation_id: Some("telegram:42".to_owned()),
+            binding: Some(mvp::acp::AcpSessionBindingScope {
+                route_session_id: "telegram:bot_123456:42".to_owned(),
+                channel_id: Some("telegram".to_owned()),
+                account_id: Some("bot_123456".to_owned()),
+                conversation_id: Some("42".to_owned()),
+                thread_id: None,
+            }),
+            activation_origin: Some(mvp::acp::AcpRoutingOrigin::AutomaticDispatch),
+            backend_id: "acpx".to_owned(),
+            runtime_session_name: "runtime-telegram-42".to_owned(),
+            working_directory: Some(PathBuf::from("/tmp/runtime-telegram-42")),
+            backend_session_id: Some("backend-42".to_owned()),
+            agent_session_id: Some("agent-42".to_owned()),
+            mode: Some(mvp::acp::AcpSessionMode::Interactive),
+            state: mvp::acp::AcpSessionState::Ready,
+            last_activity_ms: 1234,
+            last_error: None,
+        },
+        mvp::acp::AcpSessionMetadata {
+            session_key: "agent:codex:feishu:ops".to_owned(),
+            conversation_id: Some("feishu:ops".to_owned()),
+            binding: None,
+            activation_origin: Some(mvp::acp::AcpRoutingOrigin::ExplicitRequest),
+            backend_id: "acpx".to_owned(),
+            runtime_session_name: "runtime-feishu-ops".to_owned(),
+            working_directory: None,
+            backend_session_id: Some("backend-ops".to_owned()),
+            agent_session_id: Some("agent-ops".to_owned()),
+            mode: Some(mvp::acp::AcpSessionMode::Interactive),
+            state: mvp::acp::AcpSessionState::Error,
+            last_activity_ms: 5678,
+            last_error: Some("transport failed".to_owned()),
+        },
+    ];
+
+    let payload = gateway::read_models::build_acp_session_list_read_model(
+        "/tmp/loongclaw.toml",
+        9,
+        &sessions,
+    );
+    let encoded = serde_json::to_value(&payload).expect("serialize ACP session list read model");
+    let legacy = legacy_acp_session_list_payload_json("/tmp/loongclaw.toml", 9, &sessions);
+
+    assert_eq!(payload.config, "/tmp/loongclaw.toml");
+    assert_eq!(payload.matched_count, 9);
+    assert_eq!(payload.returned_count, sessions.len());
+    assert_eq!(encoded, legacy);
+    assert_eq!(encoded["sessions"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        encoded["sessions"][0]["provenance"]["surface"],
+        "session_activation"
+    );
 }
 
 #[test]

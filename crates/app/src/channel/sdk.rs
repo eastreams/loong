@@ -430,7 +430,7 @@ fn channel_serve_subcommand(
     Some(serve_command)
 }
 
-pub(crate) fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
+pub fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
     let integration = find_channel_integration(id)?;
     let descriptor_id = integration.channel_id;
     let descriptors = channel_descriptors();
@@ -468,7 +468,7 @@ fn channel_integration_order_key(
     (runtime_group, selection_order, channel_id)
 }
 
-pub(crate) fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+pub fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
     ordered_channel_integrations()
         .into_iter()
         .filter_map(|integration| channel_descriptor(integration.channel_id))
@@ -987,6 +987,39 @@ mod tests {
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.label, "Google Chat");
         assert_eq!(google_chat.surface_label, "google chat channel");
+    }
+
+    #[test]
+    fn non_cli_integrations_resolve_catalog_entries() {
+        for integration in CHANNEL_INTEGRATIONS {
+            let channel_id = integration.channel_id;
+            if channel_id == "cli" {
+                continue;
+            }
+
+            let catalog_entry = super::super::registry::resolve_channel_catalog_entry(channel_id);
+            assert!(
+                catalog_entry.is_some(),
+                "missing catalog entry for integrated channel `{channel_id}`"
+            );
+        }
+    }
+
+    #[test]
+    fn background_runtime_integrations_resolve_command_family_descriptors() {
+        for integration in CHANNEL_INTEGRATIONS {
+            let channel_id = integration.channel_id;
+            if integration.background_runtime.is_none() {
+                continue;
+            }
+
+            let family_descriptor =
+                super::super::registry::resolve_channel_command_family_descriptor(channel_id);
+            assert!(
+                family_descriptor.is_some(),
+                "missing command family descriptor for background runtime channel `{channel_id}`"
+            );
+        }
     }
 
     #[cfg(feature = "feishu-integration")]

@@ -19,6 +19,54 @@ pub const MEMORY_OP_READ_CONTEXT: &str = "read_context";
 pub const MEMORY_OP_REPLACE_TURNS: &str = "replace_turns";
 pub const MEMORY_OP_READ_STAGE_ENVELOPE: &str = "read_stage_envelope";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryCoreOperation {
+    AppendTurn,
+    Window,
+    ClearSession,
+    ReadContext,
+    ReplaceTurns,
+    ReadStageEnvelope,
+}
+
+impl MemoryCoreOperation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AppendTurn => MEMORY_OP_APPEND_TURN,
+            Self::Window => MEMORY_OP_WINDOW,
+            Self::ClearSession => MEMORY_OP_CLEAR_SESSION,
+            Self::ReadContext => MEMORY_OP_READ_CONTEXT,
+            Self::ReplaceTurns => MEMORY_OP_REPLACE_TURNS,
+            Self::ReadStageEnvelope => MEMORY_OP_READ_STAGE_ENVELOPE,
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            MEMORY_OP_APPEND_TURN => Some(Self::AppendTurn),
+            MEMORY_OP_WINDOW => Some(Self::Window),
+            MEMORY_OP_CLEAR_SESSION => Some(Self::ClearSession),
+            MEMORY_OP_READ_CONTEXT => Some(Self::ReadContext),
+            MEMORY_OP_REPLACE_TURNS => Some(Self::ReplaceTurns),
+            MEMORY_OP_READ_STAGE_ENVELOPE => Some(Self::ReadStageEnvelope),
+            _ => None,
+        }
+    }
+}
+
+pub fn parse_exact_memory_core_operation(raw: &str) -> Option<MemoryCoreOperation> {
+    let parsed_operation = MemoryCoreOperation::parse_id(raw)?;
+    let canonical_operation = parsed_operation.as_str();
+    let is_exact_match = raw == canonical_operation;
+    if !is_exact_match {
+        return None;
+    }
+
+    Some(parsed_operation)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowTurn {
     pub role: String,
@@ -581,5 +629,15 @@ mod tests {
         let rank_error = envelope.hydrated.diagnostics.rank_error;
 
         assert_eq!(rank_error.as_deref(), Some("rank stage timeout"));
+    }
+
+    #[test]
+    fn memory_core_operation_parse_and_render_are_stable() {
+        let operation = MemoryCoreOperation::parse_id(" read_stage_envelope ")
+            .expect("parse memory core operation");
+        let rendered = operation.as_str();
+
+        assert_eq!(operation, MemoryCoreOperation::ReadStageEnvelope);
+        assert_eq!(rendered, "read_stage_envelope");
     }
 }

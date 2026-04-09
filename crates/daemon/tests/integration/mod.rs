@@ -1422,6 +1422,11 @@ fn memory_system_metadata_json_includes_stage_families_summary_and_source() {
             .iter()
             .any(|entry| entry == "canonical_store")
     );
+    assert_eq!(payload["runtime_fallback_kind"], "metadata_only");
+    assert_eq!(
+        payload["supported_stage_families"],
+        json!(["derive", "retrieve", "rank", "compact"])
+    );
     assert_eq!(
         payload["supported_pre_assembly_stage_families"],
         json!(["derive", "retrieve", "rank"])
@@ -1452,12 +1457,31 @@ fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
     assert_eq!(payload["selected"]["id"], "builtin");
     assert_eq!(payload["selected"]["source"], "default");
     assert_eq!(
+        payload["selected"]["runtime_fallback_kind"],
+        "metadata_only"
+    );
+    assert_eq!(
+        payload["selected"]["supported_stage_families"],
+        json!(["derive", "retrieve", "rank", "compact"])
+    );
+    assert_eq!(
         payload["selected"]["supported_pre_assembly_stage_families"],
         json!(["derive", "retrieve", "rank"])
     );
     assert_eq!(
         payload["selected"]["supported_recall_modes"],
         json!(["prompt_assembly", "operator_inspection"])
+    );
+    assert_eq!(
+        payload["core_operations"],
+        json!([
+            "append_turn",
+            "window",
+            "clear_session",
+            "replace_turns",
+            "read_context",
+            "read_stage_envelope"
+        ])
     );
     assert_eq!(payload["policy"]["backend"], "sqlite");
     assert_eq!(payload["policy"]["profile"], "window_plus_summary");
@@ -1487,14 +1511,14 @@ fn render_memory_system_snapshot_text_reports_fail_open_policy() {
 
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
     assert!(rendered.contains(
-        "selected=builtin source=default api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly,operator_inspection"
+        "selected=builtin source=default api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance runtime_fallback_kind=metadata_only stages=derive,retrieve,rank,compact pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly,operator_inspection core_operations=append_turn,window,clear_session,replace_turns,read_context,read_stage_envelope"
     ));
     assert!(rendered.contains("policy=backend:sqlite profile:window_plus_summary mode:window_plus_summary ingest_mode:async_background fail_open:false strict_mode_requested:true strict_mode_active:false effective_fail_open:true"));
     assert!(rendered.contains(
-        "- builtin api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly,operator_inspection"
+        "- builtin api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance runtime_fallback_kind=metadata_only stages=derive,retrieve,rank,compact pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly,operator_inspection"
     ));
     assert!(rendered.contains(
-        "- recall_first api_version=1 capabilities=prompt_hydration,retrieval_provenance pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly"
+        "- recall_first api_version=1 capabilities=prompt_hydration,retrieval_provenance runtime_fallback_kind=system_backed stages=derive,retrieve,rank pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly"
     ));
 }
 

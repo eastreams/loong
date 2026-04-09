@@ -4,8 +4,6 @@ use loongclaw_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
-use crate::channel::sdk;
-pub use crate::channel::sdk::{ChannelDescriptor, ChannelRuntimeKind};
 use crate::prompt::{
     DEFAULT_PROMPT_PACK_ID, PromptPersonality, PromptRenderInput, render_default_system_prompt,
     render_system_prompt,
@@ -16,7 +14,6 @@ use super::irc::{
     default_irc_password_env, default_irc_server_env, validate_irc_env_pointer,
     validate_irc_nickname_field, validate_irc_secret_ref_env_pointer, validate_irc_server_field,
 };
-use super::runtime::LoongClawConfig;
 use super::shared::{
     ConfigValidationCode, ConfigValidationIssue, ConfigValidationSeverity,
     EnvPointerValidationHint, validate_env_pointer_field, validate_secret_ref_env_pointer_field,
@@ -129,35 +126,6 @@ impl WebhookPayloadFormat {
 pub(crate) enum EmailSmtpEndpoint {
     RelayHost(String),
     ConnectionUrl(String),
-}
-
-pub fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
-    sdk::channel_descriptor(id)
-}
-
-pub fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
-    sdk::service_channel_descriptors()
-}
-
-pub(super) fn enabled_channel_ids(config: &LoongClawConfig) -> Vec<String> {
-    enabled_channel_ids_for_runtime_kind(config, None)
-}
-
-pub(super) fn enabled_service_channel_ids(config: &LoongClawConfig) -> Vec<String> {
-    enabled_channel_ids_for_runtime_kind(config, Some(ChannelRuntimeKind::Service))
-}
-
-fn enabled_channel_ids_for_runtime_kind(
-    config: &LoongClawConfig,
-    runtime_kind: Option<ChannelRuntimeKind>,
-) -> Vec<String> {
-    sdk::enabled_channel_ids(config, runtime_kind)
-}
-
-pub(super) fn collect_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
-    sdk::collect_channel_validation_issues(config)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

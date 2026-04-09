@@ -9,12 +9,12 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode, header::AUTHORIZATION},
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
     net::TcpListener,
@@ -35,8 +35,9 @@ use super::api_turn::handle_turn;
 use super::event_bus::GatewayEventBus;
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
-    GatewayRuntimeSnapshotReadModel, build_operator_summary_read_model,
-    build_runtime_snapshot_read_model,
+    GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
+    build_acp_session_list_read_model, build_acp_status_read_model,
+    build_operator_summary_read_model, build_runtime_snapshot_read_model,
 };
 use super::state::{
     GatewayControlSurfaceBinding, GatewayStopRequestOutcome, gateway_control_token_path,
@@ -45,13 +46,28 @@ use super::state::{
 
 const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
 const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
+const GATEWAY_ACP_SESSION_LIST_DEFAULT_LIMIT: usize = 50;
+const GATEWAY_ACP_SESSION_LIST_MAX_LIMIT: usize = 200;
 
 type GatewayControlJsonResponse = (StatusCode, Json<Value>);
+
+#[derive(Debug, Default, Deserialize)]
+struct GatewayAcpSessionsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GatewayAcpStatusQuery {
+    session: Option<String>,
+    conversation_id: Option<String>,
+    route_session_id: Option<String>,
+}
 
 #[derive(Clone)]
 pub(crate) struct GatewayControlAppState {
     pub(crate) runtime_dir: PathBuf,
     pub(crate) bearer_token: String,
+    pub(crate) config_path: String,
     pub(crate) channel_inventory: Arc<GatewayChannelInventoryReadModel>,
     pub(crate) runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
     pub(crate) event_bus: Option<GatewayEventBus>,
@@ -107,6 +123,7 @@ impl GatewayControlAppState {
         Self {
             runtime_dir: PathBuf::from("/tmp/test"),
             bearer_token,
+            config_path: String::new(),
             channel_inventory: Arc::new(channel_inventory),
             runtime_snapshot: Arc::new(runtime_snapshot),
             event_bus: None,
@@ -239,6 +256,7 @@ pub async fn start_gateway_control_surface(
     let app_state = GatewayControlAppState {
         runtime_dir: runtime_dir.to_path_buf(),
         bearer_token,
+        config_path: loaded_config.resolved_path.display().to_string(),
         channel_inventory: Arc::new(channel_inventory),
         runtime_snapshot: Arc::new(runtime_snapshot),
         event_bus,
@@ -287,6 +305,15 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route(
             "/api/gateway/operator-summary",
             get(handle_gateway_operator_summary),
+        )
+        .route(
+            "/api/gateway/acp/sessions",
+            get(handle_gateway_acp_sessions),
+        )
+        .route("/api/gateway/acp/status", get(handle_gateway_acp_status))
+        .route(
+            "/api/gateway/acp/observability",
+            get(handle_gateway_acp_observability),
         )
         .route("/api/gateway/stop", post(handle_gateway_stop))
         .route("/v1/events", get(handle_events))
@@ -400,6 +427,203 @@ async fn handle_gateway_operator_summary(
     }
 }
 
+async fn handle_gateway_acp_sessions(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Query(query): Query<GatewayAcpSessionsQuery>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let manager = match gateway_control_acp_manager(app_state.as_ref()) {
+        Ok(manager) => manager,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let sessions_result = manager.list_sessions();
+    let mut sessions = match sessions_result {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "acp_sessions_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    sort_gateway_acp_sessions(sessions.as_mut_slice());
+    let matched_count = sessions.len();
+    let limit = gateway_acp_session_list_limit(query.limit);
+    sessions.truncate(limit);
+
+    let payload = build_acp_session_list_read_model(
+        app_state.config_path.as_str(),
+        matched_count,
+        sessions.as_slice(),
+    );
+    let payload = match serialize_json_value(&payload, "gateway ACP sessions payload") {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_failed",
+                error.as_str(),
+            );
+        }
+    };
+
+    json_response(StatusCode::OK, payload)
+}
+
+async fn handle_gateway_acp_status(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Query(query): Query<GatewayAcpStatusQuery>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let config = match gateway_control_config(app_state.as_ref()) {
+        Ok(config) => config,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+    let manager = match gateway_control_acp_manager(app_state.as_ref()) {
+        Ok(manager) => manager,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let resolved_session_key = crate::resolve_acp_status_session_key(
+        config,
+        query.session.as_deref(),
+        query.conversation_id.as_deref(),
+        query.route_session_id.as_deref(),
+    );
+    let resolved_session_key = match resolved_session_key {
+        Ok(resolved_session_key) => resolved_session_key,
+        Err(error) if is_gateway_acp_not_found_error(error.as_str()) => {
+            return json_error(StatusCode::NOT_FOUND, "not_found", error.as_str());
+        }
+        Err(error) => {
+            return json_error(StatusCode::BAD_REQUEST, "invalid_selector", error.as_str());
+        }
+    };
+
+    let status_result = manager
+        .get_status(config, resolved_session_key.as_str())
+        .await;
+    let status = match status_result {
+        Ok(status) => status,
+        Err(error) if is_gateway_acp_not_found_error(error.as_str()) => {
+            return json_error(StatusCode::NOT_FOUND, "not_found", error.as_str());
+        }
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "acp_status_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let payload = build_acp_status_read_model(
+        app_state.config_path.as_str(),
+        query.session.as_deref(),
+        query.conversation_id.as_deref(),
+        query.route_session_id.as_deref(),
+        resolved_session_key.as_str(),
+        &status,
+    );
+    let payload = match serialize_json_value(&payload, "gateway ACP status payload") {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_failed",
+                error.as_str(),
+            );
+        }
+    };
+
+    json_response(StatusCode::OK, payload)
+}
+
+async fn handle_gateway_acp_observability(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let config = match gateway_control_config(app_state.as_ref()) {
+        Ok(config) => config,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+    let manager = match gateway_control_acp_manager(app_state.as_ref()) {
+        Ok(manager) => manager,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let snapshot_result = manager.observability_snapshot(config).await;
+    let snapshot = match snapshot_result {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "acp_observability_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let payload = build_acp_observability_read_model(app_state.config_path.as_str(), &snapshot);
+    let payload = match serialize_json_value(&payload, "gateway ACP observability payload") {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_failed",
+                error.as_str(),
+            );
+        }
+    };
+
+    json_response(StatusCode::OK, payload)
+}
+
 async fn handle_gateway_stop(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
@@ -427,6 +651,15 @@ async fn handle_gateway_stop(
         "message": response_message,
     });
     json_response(response_status, payload)
+}
+
+fn is_gateway_acp_not_found_error(error: &str) -> bool {
+    let is_session_error = error.starts_with("ACP session `");
+    let is_conversation_error = error.starts_with("ACP conversation `");
+    let is_route_error = error.starts_with("ACP route session `");
+    let has_registration_marker = error.contains(" is not registered");
+    let is_lookup_error = is_session_error || is_conversation_error || is_route_error;
+    is_lookup_error && has_registration_marker
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -492,6 +725,39 @@ fn build_gateway_operator_summary_read_model(
     runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
 ) -> GatewayOperatorSummaryReadModel {
     build_operator_summary_read_model(status, channel_inventory, runtime_snapshot)
+}
+
+fn gateway_control_config(app_state: &GatewayControlAppState) -> CliResult<&LoongClawConfig> {
+    let config = app_state
+        .config
+        .as_ref()
+        .ok_or_else(|| "gateway ACP config is unavailable".to_owned())?;
+    Ok(config)
+}
+
+fn gateway_control_acp_manager(
+    app_state: &GatewayControlAppState,
+) -> CliResult<&AcpSessionManager> {
+    let manager = app_state
+        .acp_manager
+        .as_deref()
+        .ok_or_else(|| "gateway ACP session manager is unavailable".to_owned())?;
+    Ok(manager)
+}
+
+fn gateway_acp_session_list_limit(requested_limit: Option<usize>) -> usize {
+    let requested_limit = requested_limit.unwrap_or(GATEWAY_ACP_SESSION_LIST_DEFAULT_LIMIT);
+    requested_limit.clamp(1, GATEWAY_ACP_SESSION_LIST_MAX_LIMIT)
+}
+
+fn sort_gateway_acp_sessions(sessions: &mut [crate::mvp::acp::AcpSessionMetadata]) {
+    sessions.sort_by(|left, right| {
+        let activity_order = right.last_activity_ms.cmp(&left.last_activity_ms);
+        if activity_order == std::cmp::Ordering::Equal {
+            return left.session_key.cmp(&right.session_key);
+        }
+        activity_order
+    });
 }
 
 fn serialize_json_value<T: Serialize>(value: &T, context: &str) -> CliResult<Value> {

@@ -12,8 +12,8 @@ use crate::config::{
 use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
-    RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
-    WorkspaceRecallMemorySystem,
+    MemorySystemRuntimeFallbackKind, RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem,
+    WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
 };
 use super::system_runtime::{
     MemorySystemRuntime, MetadataOnlyMemorySystemRuntime, SystemBackedMemorySystemRuntime,
@@ -56,6 +56,7 @@ pub struct MemorySystemRuntimeSnapshot {
     pub selected: MemorySystemSelection,
     pub selected_metadata: MemorySystemMetadata,
     pub available: Vec<MemorySystemMetadata>,
+    pub core_operations: Vec<super::MemoryCoreOperation>,
     pub policy: MemorySystemPolicySnapshot,
 }
 
@@ -219,20 +220,35 @@ pub fn resolve_memory_system_runtime(
     }
 
     let metadata = system.metadata();
-    let metadata_supports_stages = !metadata.supported_pre_assembly_stage_families.is_empty();
     let shared_system: Arc<dyn MemorySystem> = Arc::from(system);
+    let runtime_fallback_kind = metadata.runtime_fallback_kind;
+    let has_supported_stages = !metadata.supported_stage_families.is_empty();
 
-    if metadata_supports_stages {
-        let runtime_config = config.clone();
-        let runtime = SystemBackedMemorySystemRuntime::new(runtime_config, metadata, shared_system);
-        let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+    let boxed_runtime: Box<dyn MemorySystemRuntime> = match runtime_fallback_kind {
+        MemorySystemRuntimeFallbackKind::MetadataOnly => {
+            if has_supported_stages {
+                let error = format!(
+                    "memory system `{resolved_system_id}` declares stage families but still resolves as metadata_only; set runtime fallback to system_backed or provide create_runtime(...)"
+                );
 
-        return Ok(boxed_runtime);
-    }
+                return Err(error);
+            }
 
-    let runtime_config = config.clone();
-    let runtime = MetadataOnlyMemorySystemRuntime::new(runtime_config, metadata);
-    let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+            let runtime_config = config.clone();
+            let runtime = MetadataOnlyMemorySystemRuntime::new(runtime_config, metadata);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            boxed_runtime
+        }
+        MemorySystemRuntimeFallbackKind::SystemBacked => {
+            let runtime_config = config.clone();
+            let runtime =
+                SystemBackedMemorySystemRuntime::new(runtime_config, metadata, shared_system);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            boxed_runtime
+        }
+    };
 
     Ok(boxed_runtime)
 }
@@ -299,15 +315,18 @@ pub fn collect_memory_system_runtime_snapshot(
     config: &LoongClawConfig,
 ) -> CliResult<MemorySystemRuntimeSnapshot> {
     let selected = resolve_memory_system_selection(config);
-    let selected_metadata = describe_memory_system(Some(selected.id.as_str()))?;
-    let available = list_memory_system_metadata()?;
     let runtime = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let selected_runtime = resolve_memory_system_runtime(&runtime)?;
+    let selected_metadata = selected_runtime.metadata().clone();
+    let core_operations = selected_runtime.supported_core_operations();
+    let available = list_memory_system_metadata()?;
     let policy = MemorySystemPolicySnapshot::from_runtime_config(&runtime);
 
     Ok(MemorySystemRuntimeSnapshot {
         selected,
         selected_metadata,
         available,
+        core_operations,
         policy,
     })
 }
@@ -315,7 +334,10 @@ pub fn collect_memory_system_runtime_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{BuiltinMemorySystemRuntime, MemorySystemRuntime};
+    use crate::memory::{
+        BuiltinMemorySystemRuntime, MemoryCoreOperation, MemorySystemRuntime,
+        MemorySystemRuntimeFallbackKind,
+    };
     use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemoryRecallMode, MemorySystemCapability};
     use crate::test_support::ScopedEnv;
 
@@ -408,6 +430,7 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Registry snapshot system",
             )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
             .with_supported_pre_assembly_stage_families([
                 crate::memory::MemoryStageFamily::Retrieve,
             ])
@@ -427,9 +450,42 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Registry config snapshot system",
             )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
             .with_supported_pre_assembly_stage_families([
                 crate::memory::MemoryStageFamily::Retrieve,
             ])
+        }
+    }
+
+    struct MetadataOnlyCompactRegistrySystem;
+
+    impl MemorySystem for MetadataOnlyCompactRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-metadata-only-compact"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-metadata-only-compact",
+                [MemorySystemCapability::PromptHydration],
+                "Registry compact system that should stay metadata-only",
+            )
+            .with_supported_stage_families([crate::memory::MemoryStageFamily::Compact])
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::MetadataOnly)
+        }
+
+        fn run_compact_stage(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+            _config: &MemoryRuntimeConfig,
+        ) -> Result<Option<crate::memory::StageDiagnostics>, String> {
+            let diagnostics = crate::memory::StageDiagnostics::succeeded(
+                crate::memory::MemoryStageFamily::Compact,
+            );
+            let maybe_diagnostics = Some(diagnostics);
+
+            Ok(maybe_diagnostics)
         }
     }
 
@@ -459,6 +515,84 @@ mod tests {
             let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
 
             Ok(Some(boxed_runtime))
+        }
+    }
+
+    struct RuntimeMetadataOverrideRegistrySystem;
+
+    struct RuntimeMetadataOverrideRuntime {
+        metadata: MemorySystemMetadata,
+    }
+
+    impl MemorySystem for RuntimeMetadataOverrideRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-runtime-metadata-override"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-runtime-metadata-override",
+                [MemorySystemCapability::PromptHydration],
+                "Registry system whose runtime metadata differs from registry metadata",
+            )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
+            .with_supported_stage_families([crate::memory::MemoryStageFamily::Compact])
+        }
+
+        fn create_runtime(
+            &self,
+            _config: &MemoryRuntimeConfig,
+        ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+            let metadata = MemorySystemMetadata::new(
+                "registry-runtime-metadata-override",
+                [MemorySystemCapability::PromptHydration],
+                "Runtime override metadata",
+            )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::MetadataOnly);
+            let runtime = RuntimeMetadataOverrideRuntime { metadata };
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            Ok(Some(boxed_runtime))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MemorySystemRuntime for RuntimeMetadataOverrideRuntime {
+        fn metadata(&self) -> &MemorySystemMetadata {
+            &self.metadata
+        }
+
+        fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
+            vec![MemoryCoreOperation::ReadContext]
+        }
+
+        fn execute_core(
+            &self,
+            _request: loongclaw_contracts::MemoryCoreRequest,
+        ) -> Result<loongclaw_contracts::MemoryCoreOutcome, String> {
+            let error = "snapshot-only runtime should not execute core in this test".to_owned();
+
+            Err(error)
+        }
+
+        fn hydrate_stage_envelope(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+        ) -> Result<crate::memory::StageEnvelope, String> {
+            let error = "snapshot-only runtime should not hydrate in this test".to_owned();
+
+            Err(error)
+        }
+
+        async fn run_compact_stage(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+        ) -> Result<crate::memory::StageDiagnostics, String> {
+            let error = "snapshot-only runtime should not compact in this test".to_owned();
+
+            Err(error)
         }
     }
 
@@ -556,6 +690,29 @@ mod tests {
             error.contains("registry-runtime-mismatch"),
             "error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn metadata_only_runtime_fallback_rejects_stage_execution_trap() {
+        register_memory_system("registry-metadata-only-compact", || {
+            Box::new(MetadataOnlyCompactRegistrySystem)
+        })
+        .expect("register metadata-only compact system");
+
+        let config = MemoryRuntimeConfig {
+            resolved_system_id: Some("registry-metadata-only-compact".to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let error = match resolve_memory_system_runtime(&config) {
+            Ok(_runtime) => {
+                panic!("metadata-only fallback should reject stage execution trap")
+            }
+            Err(error) => error,
+        };
+
+        assert!(error.contains("metadata_only"), "error: {error}");
+        assert!(error.contains("system_backed"), "error: {error}");
     }
 
     #[test]
@@ -708,6 +865,12 @@ mod tests {
         assert_eq!(snapshot.selected.id, DEFAULT_MEMORY_SYSTEM_ID);
         assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
         assert_eq!(
+            snapshot.core_operations,
+            crate::memory::supported_memory_core_operations(
+                crate::config::MemoryBackendKind::Sqlite
+            )
+        );
+        assert_eq!(
             snapshot.policy.profile,
             crate::config::MemoryProfile::ProfilePlusWindow
         );
@@ -783,6 +946,43 @@ mod tests {
                 .selected_metadata
                 .supported_pre_assembly_stage_families,
             vec![crate::memory::MemoryStageFamily::Retrieve]
+        );
+    }
+
+    #[test]
+    fn runtime_snapshot_prefers_resolved_runtime_metadata_and_core_operations() {
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+
+        register_memory_system("registry-runtime-metadata-override", || {
+            Box::new(RuntimeMetadataOverrideRegistrySystem)
+        })
+        .expect("register runtime metadata override system");
+
+        let config = LoongClawConfig {
+            memory: crate::config::MemoryConfig {
+                system_id: Some("registry-runtime-metadata-override".to_owned()),
+                ..crate::config::MemoryConfig::default()
+            },
+            ..LoongClawConfig::default()
+        };
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, "registry-runtime-metadata-override");
+        assert_eq!(
+            snapshot.selected_metadata.runtime_fallback_kind,
+            MemorySystemRuntimeFallbackKind::MetadataOnly
+        );
+        assert!(
+            snapshot
+                .selected_metadata
+                .supported_stage_families
+                .is_empty()
+        );
+        assert_eq!(
+            snapshot.core_operations,
+            vec![MemoryCoreOperation::ReadContext]
         );
     }
 
