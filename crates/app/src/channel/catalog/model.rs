@@ -130,6 +130,7 @@ pub struct ChannelCatalogOperationRequirement {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelCatalogOperationAvailability {
     Implemented,
+    ManagedBridge,
     Stub,
 }
 
@@ -137,7 +138,15 @@ impl ChannelCatalogOperationAvailability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Implemented => "implemented",
+            Self::ManagedBridge => "managed_bridge",
             Self::Stub => "stub",
+        }
+    }
+
+    pub const fn is_runnable(self) -> bool {
+        match self {
+            Self::Implemented | Self::ManagedBridge => true,
+            Self::Stub => false,
         }
     }
 }

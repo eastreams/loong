@@ -1,0 +1,21 @@
+[package]
+name = "loongclaw-bridge-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Internal support crate for LoongClaw: reusable managed bridge execution primitives"
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
+loongclaw-kernel = { version = "0.1.0-alpha.3", path = "../kernel" }
+loongclaw-protocol = { version = "0.1.0-alpha.3", path = "../protocol" }
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

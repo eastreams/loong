@@ -1408,6 +1408,19 @@ fn render_managed_plugin_bridge_discovery_plugin(
         segments.push(format!("account_scope={rendered_account_scope}"));
     }
 
+    if let Some(runtime_contract) = &plugin.runtime_contract {
+        let rendered_runtime_contract = crate::render_line_safe_text_value(runtime_contract);
+        segments.push(format!("runtime_contract={rendered_runtime_contract}"));
+    }
+
+    if !plugin.runtime_operations.is_empty() {
+        let rendered_runtime_operations = crate::render_line_safe_text_values(
+            plugin.runtime_operations.iter().map(String::as_str),
+            ",",
+        );
+        segments.push(format!("runtime_operations={rendered_runtime_operations}"));
+    }
+
     segments.push(format!("source_path={source_path}"));
     segments.push(format!("package_root={package_root}"));
     segments.push(format!("package_manifest_path={package_manifest_path}"));
@@ -3701,6 +3714,11 @@ mod tests {
                 transport_family: Some("qq official".to_owned()),
                 target_contract: Some("qqbot\nreply".to_owned()),
                 account_scope: Some("shared scope".to_owned()),
+                runtime_contract: Some("loongclaw_channel_bridge_v1".to_owned()),
+                runtime_operations: vec![
+                    "send_message".to_owned(),
+                    "receive_batch".to_owned(),
+                ],
                 status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
                 issues: vec!["missing\nfield".to_owned()],
                 missing_fields: vec!["metadata.transport family".to_owned()],
@@ -3776,6 +3794,8 @@ mod tests {
             transport_family: Some("wechat clawbot".to_owned()),
             target_contract: Some("weixin reply".to_owned()),
             account_scope: Some("shared scope".to_owned()),
+            runtime_contract: Some("loongclaw_channel_bridge_v1".to_owned()),
+            runtime_operations: vec!["send_message".to_owned(), "receive_batch".to_owned()],
             status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
             issues: vec!["missing\nfield".to_owned()],
             missing_fields: vec!["metadata.transport family".to_owned()],

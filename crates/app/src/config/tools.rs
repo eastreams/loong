@@ -537,6 +537,8 @@ pub struct RuntimePluginsConfig {
     pub supported_bridges: Vec<String>,
     #[serde(default)]
     pub supported_adapter_families: Vec<String>,
+    #[serde(default)]
+    pub allowed_process_commands: Vec<String>,
 }
 
 impl Default for ToolConfig {
@@ -1108,6 +1110,22 @@ impl RuntimePluginsConfig {
         }
 
         families.into_iter().collect()
+    }
+
+    pub fn normalized_allowed_process_commands(&self) -> Vec<String> {
+        let mut commands = BTreeSet::new();
+
+        for raw_command in &self.allowed_process_commands {
+            let trimmed_command = raw_command.trim();
+            if trimmed_command.is_empty() {
+                continue;
+            }
+
+            let normalized_command = trimmed_command.to_ascii_lowercase();
+            commands.insert(normalized_command);
+        }
+
+        commands.into_iter().collect()
     }
 
     pub fn readiness_evaluation_label(&self) -> &'static str {
@@ -2224,6 +2242,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         assert!(config.roots.is_empty());
         assert!(config.supported_bridges.is_empty());
         assert!(config.supported_adapter_families.is_empty());
+        assert!(config.allowed_process_commands.is_empty());
         assert_eq!(
             config.readiness_evaluation_label(),
             "default_bridge_support_matrix"
@@ -2241,6 +2260,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["~/runtime-plugins".to_owned()],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let roots = config.resolved_roots();
@@ -2260,6 +2280,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             ],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let roots = config.resolved_roots();
@@ -2281,6 +2302,11 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 " web-search ".to_owned(),
                 "python-stdio-adapter".to_owned(),
                 "web-search".to_owned(),
+            ],
+            allowed_process_commands: vec![
+                " node ".to_owned(),
+                "python".to_owned(),
+                "node".to_owned(),
             ],
         };
         let default_matrix = BridgeSupportMatrix::default();
@@ -2309,6 +2335,8 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 .contains("python-stdio-adapter")
         );
         assert!(matrix.supported_adapter_families.contains("web-search"));
+        let commands = config.normalized_allowed_process_commands();
+        assert_eq!(commands, vec!["node".to_owned(), "python".to_owned()]);
         assert_eq!(
             matrix.supported_compatibility_modes,
             default_matrix.supported_compatibility_modes
@@ -2330,6 +2358,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["/tmp/runtime-plugins".to_owned()],
             supported_bridges: vec!["bogus".to_owned(), "unknown".to_owned()],
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let issues = config.validate();
@@ -2349,6 +2378,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["   ".to_owned()],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let issues = config.validate();

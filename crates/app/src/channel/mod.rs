@@ -1,7 +1,5 @@
-#[cfg(test)]
 use crate::config::LoongClawConfig;
 
-pub(crate) mod access_policy;
 mod catalog;
 mod commands;
 mod core;
@@ -30,6 +28,8 @@ mod mattermost;
 mod nextcloud_talk;
 #[cfg(feature = "channel-nostr")]
 mod nostr;
+#[cfg(feature = "channel-plugin-bridge")]
+mod plugin_bridge_runtime;
 mod registry;
 mod runtime;
 pub(crate) mod sdk;
@@ -51,6 +51,7 @@ mod tlon_command;
 /// Channel API traits for platform-agnostic abstraction
 pub mod traits;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
@@ -70,6 +71,15 @@ mod whatsapp;
 
 #[cfg(feature = "channel-twitch")]
 pub use self::twitch_command::run_twitch_send;
+#[cfg(feature = "channel-plugin-bridge")]
+pub use plugin_bridge_runtime::{
+    CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+    CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+    CHANNEL_PLUGIN_BRIDGE_RUNTIME_CONTRACT_V1,
+    CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+    CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION, ManagedPluginBridgeRuntimeBinding,
+    resolve_managed_plugin_bridge_runtime_binding,
+};
 pub use registry::{
     CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCapability,
     ChannelCatalogCommandFamilyDescriptor, ChannelCatalogEntry, ChannelCatalogImplementationStatus,
@@ -93,6 +103,7 @@ pub use registry::{
     MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_RUNTIME_COMMAND_DESCRIPTOR, MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
@@ -100,7 +111,8 @@ pub use registry::{
     TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WEBHOOK_COMMAND_FAMILY_DESCRIPTOR, WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR,
     WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WHATSAPP_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
     catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
     list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
@@ -110,8 +122,9 @@ pub use registry::{
     resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
     validate_plugin_channel_bridge_manifest,
 };
-pub use runtime::state::ChannelOperationRuntime;
+pub use runtime::state::{ChannelOperationRuntime, ChannelOperationRuntimeTracker};
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -121,43 +134,28 @@ pub use runtime::state::ChannelOperationRuntime;
     feature = "channel-webhook"
 ))]
 pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
-pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
 pub use sdk::{
     ChannelDescriptor, ChannelRuntimeKind, background_channel_runtime_descriptors,
-    catalog_only_channel_descriptors, channel_descriptor, is_background_channel_surface_enabled,
-    outbound_only_channel_descriptors, plugin_backed_channel_descriptors,
-    runtime_backed_channel_descriptors, service_channel_descriptors,
+    channel_descriptor, is_background_channel_surface_enabled, service_channel_descriptors,
 };
 pub(crate) use sdk::{collect_channel_validation_issues, enabled_channel_ids};
 pub use tlon_command::run_tlon_send;
 
 mod types;
-pub use access_policy::{ChannelAccessRestrictionMode, ChannelInboundAccessPolicySummary};
 pub use types::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
 pub use types::{
     ChannelAdapter, ChannelDelivery, ChannelDeliveryFeishuCallback, ChannelDeliveryResource,
     ChannelInboundMessage, ChannelOutboundDeliveryOptions, ChannelOutboundMessage,
     ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform, ChannelSession,
-    ChannelStreamingMode, FeishuChannelSendRequest,
+    ChannelStreamingMode, FeishuChannelSendRequest, process_channel_batch,
 };
 
-pub use runtime::serve::ChannelServeStopHandle;
-#[cfg(all(
-    test,
-    any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom",
-        feature = "channel-whatsapp"
-    )
-))]
+pub use runtime::serve::{
+    ChannelServeRuntimeSpec, ChannelServeStopHandle,
+    ensure_channel_operation_runtime_slot_available_in_dir, with_channel_serve_runtime,
+    with_channel_serve_runtime_with_stop,
+};
+#[cfg(test)]
 use runtime::serve::{
     with_channel_serve_runtime_in_dir, with_channel_serve_runtime_with_stop_in_dir,
 };
@@ -170,15 +168,14 @@ use crate::conversation::ConversationIngressPrivateContext;
 #[cfg(test)]
 use commands::context::render_channel_route_notice;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]
-pub(crate) use dispatch::process_inbound_with_provider;
-#[cfg(all(test, feature = "config-toml"))]
-use dispatch::reload_channel_turn_config;
+pub use dispatch::process_inbound_with_provider;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -200,23 +197,14 @@ pub use dispatch::run_wecom_channel_with_stop;
 #[cfg(feature = "channel-whatsapp")]
 pub use dispatch::run_whatsapp_channel_with_stop;
 pub(crate) use dispatch::send_text_to_known_session;
-#[cfg(all(test, feature = "channel-matrix"))]
-use dispatch::validate_matrix_security_config;
-#[cfg(all(test, feature = "channel-feishu"))]
-use dispatch::{build_feishu_command_context, validate_feishu_security_config};
-#[cfg(all(test, feature = "channel-telegram"))]
-use dispatch::{build_telegram_command_context, validate_telegram_security_config};
-#[cfg(all(
-    test,
-    any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom",
-        feature = "channel-whatsapp"
-    )
-))]
-use dispatch::{channel_message_ingress_context, process_inbound_with_runtime_and_feedback};
+use dispatch::{ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command};
+#[cfg(test)]
+use dispatch::{
+    build_feishu_command_context, build_telegram_command_context, channel_message_ingress_context,
+    process_inbound_with_runtime_and_feedback, reload_channel_turn_config,
+    validate_feishu_security_config, validate_matrix_security_config,
+    validate_telegram_security_config,
+};
 pub use dispatch::{
     load_channel_operation_runtime_for_account_from_dir_for_test, run_background_channel_with_stop,
     run_dingtalk_send, run_discord_send, run_email_send, run_feishu_channel, run_feishu_send,
@@ -226,37 +214,7 @@ pub use dispatch::{
     run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
     run_wecom_channel, run_wecom_send, run_whatsapp_channel, run_whatsapp_send,
 };
-#[cfg(all(
-    test,
-    any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom",
-        feature = "channel-whatsapp"
-    )
-))]
-use runtime::serve::ChannelServeRuntimeSpec;
-#[cfg(all(
-    test,
-    any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom",
-        feature = "channel-whatsapp"
-    )
-))]
-use types::process_channel_batch;
-#[cfg(all(
-    test,
-    any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom"
-    )
-))]
+#[cfg(test)]
 use types::{KnownChannelSessionSendTarget, parse_known_channel_session_send_target};
 
 #[cfg(test)]
@@ -884,27 +842,6 @@ mod tests {
             session.session_key(),
             "feishu:lark_cli_a1b2c3:oc_123:ou_sender_1:om_root_1"
         );
-    }
-
-    #[cfg(any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix"
-    ))]
-    #[test]
-    fn channel_session_conversation_address_preserves_participant_scope() {
-        let session =
-            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
-                .with_participant_id("ou_sender_1")
-                .with_thread_id("om_root_1");
-
-        let address = session.conversation_address();
-
-        assert_eq!(address.channel_id.as_deref(), Some("feishu"));
-        assert_eq!(address.account_id.as_deref(), Some("lark_cli_a1b2c3"));
-        assert_eq!(address.conversation_id.as_deref(), Some("oc_123"));
-        assert_eq!(address.participant_id.as_deref(), Some("ou_sender_1"));
-        assert_eq!(address.thread_id.as_deref(), Some("om_root_1"));
     }
 
     #[cfg(any(
@@ -1828,10 +1765,7 @@ mod tests {
         assert_eq!(resolved.channel_id, "telegram");
         assert_eq!(resolved.account_id.as_deref(), Some("ops-bot"));
         assert_eq!(resolved.session_shape, "telegram_thread");
-        assert_eq!(
-            resolved.target_kind,
-            ChannelOutboundTargetKind::Conversation
-        );
+        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::Conversation);
         assert_eq!(resolved.target_id, "123:42");
         assert_eq!(resolved.conversation_id.as_deref(), Some("123"));
         assert_eq!(resolved.thread_id.as_deref(), Some("42"));

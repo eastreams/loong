@@ -114,10 +114,53 @@ fn compatible_bridge_metadata(
     target_contract: &str,
 ) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::new();
+    let runtime_operations = vec![
+        "send_message".to_owned(),
+        "receive_batch".to_owned(),
+        "ack_inbound".to_owned(),
+        "complete_batch".to_owned(),
+    ];
+    let runtime_operations_json =
+        serde_json::to_string(&runtime_operations).expect("serialize runtime operations");
 
     metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
     metadata.insert("transport_family".to_owned(), transport_family.to_owned());
     metadata.insert("target_contract".to_owned(), target_contract.to_owned());
+    metadata.insert(
+        "channel_runtime_contract".to_owned(),
+        "loongclaw_channel_bridge_v1".to_owned(),
+    );
+    metadata.insert(
+        "channel_runtime_operations_json".to_owned(),
+        runtime_operations_json,
+    );
+
+    metadata
+}
+
+fn compatible_runtime_bridge_metadata(
+    transport_family: &str,
+    target_contract: &str,
+    runtime_contract: &str,
+    runtime_operations: &[&str],
+) -> BTreeMap<String, String> {
+    let mut metadata = compatible_bridge_metadata(transport_family, target_contract);
+
+    let runtime_operations = runtime_operations
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    let encoded_runtime_operations =
+        serde_json::to_string(&runtime_operations).expect("encode runtime operations");
+
+    metadata.insert(
+        "channel_runtime_contract".to_owned(),
+        runtime_contract.to_owned(),
+    );
+    metadata.insert(
+        "channel_runtime_operations_json".to_owned(),
+        encoded_runtime_operations,
+    );
 
     metadata
 }
@@ -168,6 +211,8 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
             "transport_family",
             "target_contract",
             "account_scope",
+            "channel_runtime_contract",
+            "channel_runtime_operations_json",
         ]
     );
 
@@ -298,6 +343,8 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
             "transport_family",
             "target_contract",
             "account_scope",
+            "channel_runtime_contract",
+            "channel_runtime_operations_json",
         ]
     );
 
@@ -819,5 +866,51 @@ fn channel_inventory_marks_single_compatible_plugin_without_explicit_selection()
     assert_eq!(
         discovery.selected_plugin_id.as_deref(),
         Some("weixin-bridge-only")
+    );
+}
+
+#[test]
+fn channel_inventory_reports_runtime_contract_metadata_for_discovered_plugin_bridge() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let manifest = sample_channel_bridge_manifest_with_metadata(
+        Some("weixin"),
+        Some("channel"),
+        compatible_runtime_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+            "loongclaw_channel_bridge_v1",
+            &["send", "receive_batch", "ack_inbound", "complete_batch"],
+        ),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-runtime", &manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+    let plugin = discovery.plugins.first().expect("discovered plugin");
+
+    assert_eq!(
+        plugin.runtime_contract.as_deref(),
+        Some("loongclaw_channel_bridge_v1")
+    );
+    assert_eq!(
+        plugin.runtime_operations,
+        vec![
+            "send".to_owned(),
+            "receive_batch".to_owned(),
+            "ack_inbound".to_owned(),
+            "complete_batch".to_owned(),
+        ]
     );
 }

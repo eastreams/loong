@@ -751,6 +751,99 @@ async fn main() {
             )
             .await
         }
+        Commands::WeixinSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_weixin_send_cli_impl(ChannelSendCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                target: Some(target.as_str()),
+                target_kind,
+                text: &text,
+                as_card: false,
+            })
+            .await
+        }
+        Commands::WeixinServe {
+            config,
+            once,
+            account,
+        } => {
+            run_weixin_serve_cli_impl(ChannelServeCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                once,
+                bind_override: None,
+                path_override: None,
+            })
+            .await
+        }
+        Commands::QqbotSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_qqbot_send_cli_impl(ChannelSendCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                target: Some(target.as_str()),
+                target_kind,
+                text: &text,
+                as_card: false,
+            })
+            .await
+        }
+        Commands::QqbotServe {
+            config,
+            once,
+            account,
+        } => {
+            run_qqbot_serve_cli_impl(ChannelServeCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                once,
+                bind_override: None,
+                path_override: None,
+            })
+            .await
+        }
+        Commands::OnebotSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_onebot_send_cli_impl(ChannelSendCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                target: Some(target.as_str()),
+                target_kind,
+                text: &text,
+                as_card: false,
+            })
+            .await
+        }
+        Commands::OnebotServe {
+            config,
+            once,
+            account,
+        } => {
+            run_onebot_serve_cli_impl(ChannelServeCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                once,
+                bind_override: None,
+                path_override: None,
+            })
+            .await
+        }
         Commands::WhatsappServe {
             config,
             account,

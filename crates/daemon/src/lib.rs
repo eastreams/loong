@@ -40,6 +40,13 @@ pub use self::channel_send_target_kind::{
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
 pub use self::delegate_child_cli::run_detached_delegate_child_cli;
 pub use self::env_compat::make_env_compatible;
+pub use self::managed_plugin_bridge_runtime::{
+    default_onebot_send_target_kind, default_qqbot_send_target_kind,
+    default_weixin_send_target_kind, parse_onebot_send_target_kind, parse_qqbot_send_target_kind,
+    parse_weixin_send_target_kind, run_onebot_send_cli_impl, run_onebot_serve_cli_impl,
+    run_qqbot_send_cli_impl, run_qqbot_serve_cli_impl, run_weixin_send_cli_impl,
+    run_weixin_serve_cli_impl,
+};
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
     run_list_mcp_servers_cli, run_show_mcp_server_cli,
@@ -111,6 +118,7 @@ pub mod feishu_cli;
 pub mod feishu_support;
 pub mod gateway;
 pub mod import_cli;
+mod managed_plugin_bridge_runtime;
 mod mcp_cli;
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 mod memory_context_benchmark;
@@ -390,7 +398,7 @@ pub struct ChannelSendCliSpec {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelServeCliSpec {
-    pub family: mvp::channel::ChannelCommandFamilyDescriptor,
+    pub family: mvp::channel::ChannelCatalogCommandFamilyDescriptor,
     pub run: for<'a> fn(ChannelServeCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
 }
 
@@ -1181,6 +1189,84 @@ pub enum Commands {
     WecomServe {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Send one managed Weixin bridge message
+    WeixinSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_weixin_send_target_kind(),
+            value_parser = parse_weixin_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run one managed Weixin bridge reply loop
+    WeixinServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        once: bool,
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Send one managed QQBot bridge message
+    QqbotSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_qqbot_send_target_kind(),
+            value_parser = parse_qqbot_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run one managed QQBot bridge reply loop
+    QqbotServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        once: bool,
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Send one managed OneBot bridge message
+    OnebotSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_onebot_send_target_kind(),
+            value_parser = parse_onebot_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run one managed OneBot bridge reply loop
+    OnebotServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        once: bool,
         #[arg(long)]
         account: Option<String>,
     },
@@ -4861,6 +4947,21 @@ pub const WECOM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_wecom_send_cli_impl,
 };
 
+pub const WEIXIN_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_weixin_send_cli_impl,
+};
+
+pub const QQBOT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_qqbot_send_cli_impl,
+};
+
+pub const ONEBOT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_onebot_send_cli_impl,
+};
+
 pub const DISCORD_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_discord_send_cli_impl,
@@ -4947,20 +5048,43 @@ pub const NOSTR_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
 };
 
 pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_telegram_serve_cli_impl,
 };
 
+pub const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_feishu_serve_cli_impl,
+};
 pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_matrix_serve_cli_impl,
 };
 
 pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WECOM_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_wecom_serve_cli_impl,
 };
 
+pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_whatsapp_serve_cli_impl,
+};
+
+pub const WEIXIN_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_weixin_serve_cli_impl,
+};
+
+pub const QQBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_qqbot_serve_cli_impl,
+};
+
+pub const ONEBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_onebot_serve_cli_impl,
+};
 pub async fn run_channel_send_cli(
     spec: ChannelSendCliSpec,
     args: ChannelSendCliArgs<'_>,

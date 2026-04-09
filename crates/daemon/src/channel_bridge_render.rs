@@ -123,6 +123,9 @@ fn render_channel_surface_discovered_plugin_line(
     let transport_family = render_line_safe_optional_text_value(plugin.transport_family.as_deref());
     let target_contract = render_line_safe_optional_text_value(plugin.target_contract.as_deref());
     let account_scope = render_line_safe_optional_text_value(plugin.account_scope.as_deref());
+    let runtime_contract = render_line_safe_optional_text_value(plugin.runtime_contract.as_deref());
+    let runtime_operations =
+        render_line_safe_text_values(plugin.runtime_operations.iter().map(String::as_str), ",");
     let source_path = render_line_safe_text_value(&plugin.source_path);
     let package_root = render_line_safe_text_value(&plugin.package_root);
     let package_manifest_path =
@@ -143,7 +146,7 @@ fn render_channel_surface_discovered_plugin_line(
         render_line_safe_optional_text_value(plugin.setup_remediation.as_deref());
 
     format!(
-        "    managed_plugin id={} status={} bridge_kind={} adapter_family={} transport_family={} target_contract={} account_scope={} source_path={} package_root={} package_manifest_path={} missing_fields={} issues={} required_env_vars={} recommended_env_vars={} required_config_keys={} default_env_var={} setup_docs_urls={} setup_remediation={}",
+        "    managed_plugin id={} status={} bridge_kind={} adapter_family={} transport_family={} target_contract={} account_scope={} runtime_contract={} runtime_operations={} source_path={} package_root={} package_manifest_path={} missing_fields={} issues={} required_env_vars={} recommended_env_vars={} required_config_keys={} default_env_var={} setup_docs_urls={} setup_remediation={}",
         plugin_id,
         plugin.status.as_str(),
         bridge_kind,
@@ -151,6 +154,8 @@ fn render_channel_surface_discovered_plugin_line(
         transport_family,
         target_contract,
         account_scope,
+        runtime_contract,
+        runtime_operations,
         source_path,
         package_root,
         package_manifest_path,

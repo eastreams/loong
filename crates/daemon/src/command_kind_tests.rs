@@ -66,4 +66,15 @@ fn command_kind_for_logging_uses_stable_variant_names() {
         .command_kind_for_logging(),
         "webhook_serve"
     );
+    assert_eq!(
+        Commands::WeixinSend {
+            config: None,
+            account: None,
+            target: "weixin:default:contact:wxid_alice".to_owned(),
+            target_kind: crate::mvp::channel::ChannelOutboundTargetKind::Conversation,
+            text: "hello".to_owned(),
+        }
+        .command_kind_for_logging(),
+        "weixin_send"
+    );
 }

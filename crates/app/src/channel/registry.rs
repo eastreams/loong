@@ -41,6 +41,11 @@ use super::{
     core::webhook_auth::build_webhook_auth_header_from_parts,
     runtime::state,
 };
+#[allow(unused_imports)]
+pub use bridge::{
+    ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+};
 
 #[path = "registry_bridge.rs"]
 mod bridge;
@@ -770,6 +775,8 @@ const PLUGIN_BRIDGE_RECOMMENDED_METADATA_KEYS: &[&str] = &[
     "transport_family",
     "target_contract",
     "account_scope",
+    "channel_runtime_contract",
+    "channel_runtime_operations_json",
 ];
 
 const CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES: &[ChannelCapability] =

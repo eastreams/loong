@@ -7,8 +7,9 @@ set -euo pipefail
 #   contracts (leaf — zero internal deps)
 #   ├── kernel → contracts
 #   ├── protocol (independent leaf)
+#   ├── bridge-runtime → contracts, kernel, protocol
 #   ├── app → contracts, kernel
-#   ├── spec → contracts, kernel, protocol
+#   ├── spec → contracts, kernel, protocol, bridge-runtime
 #   ├── bench → contracts, kernel, spec
 #   └── daemon (binary) → all of the above
 
@@ -40,8 +41,12 @@ for node in meta["resolve"]["nodes"]:
 # Allowed edges (from architecture contract).
 allowed=(
   "kernel -> contracts"
+  "bridge-runtime -> contracts"
+  "bridge-runtime -> kernel"
+  "bridge-runtime -> protocol"
   "app -> contracts"
   "app -> kernel"
+  "spec -> bridge-runtime"
   "spec -> contracts"
   "spec -> kernel"
   "spec -> protocol"
@@ -52,6 +57,7 @@ allowed=(
   "daemon -> kernel"
   "daemon -> protocol"
   "daemon -> app"
+  "daemon -> bridge-runtime"
   "daemon -> spec"
   "daemon -> bench"
 )

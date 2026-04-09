@@ -3,6 +3,7 @@ members = [
   "crates/contracts",
   "crates/kernel",
   "crates/protocol",
+  "crates/bridge-runtime",
   "crates/spec",
   "crates/bench",
   "crates/app",
