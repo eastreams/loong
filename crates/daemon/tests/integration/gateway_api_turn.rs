@@ -41,6 +41,8 @@ use tower::ServiceExt;
 type BoxedShutdownFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send + 'static>>;
 
 const GATEWAY_TURN_TEST_TIMEOUT: Duration = Duration::from_secs(2);
+const GATEWAY_CONTROL_SURFACE_WAIT_ATTEMPTS: usize = 400;
+const GATEWAY_CONTROL_SURFACE_WAIT_INTERVAL: Duration = Duration::from_millis(10);
 
 struct GatewayEchoBackend {
     id: &'static str,
@@ -155,6 +157,14 @@ fn unique_sqlite_path(label: &str) -> PathBuf {
     sqlite_dir.join("gateway.sqlite3")
 }
 
+fn gateway_config_path(sqlite_path: &Path) -> PathBuf {
+    let parent_directory = sqlite_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    parent_directory.join("loongclaw-gateway-acp.toml")
+}
+
 fn gateway_turn_loaded_config_fixture(
     sqlite_path: &Path,
     backend_id: &str,
@@ -167,18 +177,27 @@ fn gateway_turn_loaded_config_fixture(
         backend: Some(backend_id.to_owned()),
         ..AcpConfig::default()
     };
+    let resolved_path = gateway_config_path(sqlite_path);
 
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw-gateway-acp.toml"),
+        resolved_path,
         config,
     }
 }
 
 async fn wait_for_gateway_control_surface(runtime_dir: &Path) {
-    for _ in 0..200 {
+    for _ in 0..GATEWAY_CONTROL_SURFACE_WAIT_ATTEMPTS {
         let maybe_status = load_gateway_owner_status(runtime_dir);
 
         if let Some(status) = maybe_status {
+            let failed_phase = status.phase == "failed";
+            if failed_phase {
+                let error_message = status
+                    .last_error
+                    .unwrap_or_else(|| "unknown gateway owner failure".to_owned());
+                panic!("gateway owner failed before control surface binding: {error_message}");
+            }
+
             let has_bind_address = status.bind_address.is_some();
             let has_port = status.port.is_some();
             let has_token_path = status.token_path.is_some();
@@ -188,7 +207,7 @@ async fn wait_for_gateway_control_surface(runtime_dir: &Path) {
             }
         }
 
-        sleep(Duration::from_millis(5)).await;
+        sleep(GATEWAY_CONTROL_SURFACE_WAIT_INTERVAL).await;
     }
 
     panic!("timed out waiting for gateway control surface binding");
@@ -394,6 +413,7 @@ async fn gateway_run_turn_persists_acp_session_metadata_into_configured_sqlite_s
 async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
     let backend_id = register_gateway_echo_backend("gateway-acp-surface");
     let sqlite_path = unique_sqlite_path("gateway-acp-surface-store");
+    let config_path = gateway_config_path(sqlite_path.as_path());
     let runtime_dir = super::unique_temp_dir("gateway-acp-surface-runtime");
     let runtime_dir_for_run = runtime_dir.clone();
     let sqlite_path_for_config = sqlite_path.clone();
@@ -477,7 +497,7 @@ async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
         .await
         .expect("read gateway ACP observability");
 
-    assert_eq!(observability["config"], "/tmp/loongclaw-gateway-acp.toml");
+    assert_eq!(observability["config"], config_path.display().to_string());
     let active_sessions = observability["snapshot"]["runtime_cache"]["active_sessions"].as_u64();
     assert!(active_sessions.is_some());
     let errors_by_code = observability["snapshot"]["errors_by_code"].as_object();
