@@ -1089,11 +1089,12 @@ async fn next_turn_sse_item(
             return Some((Ok(event), state));
         }
 
-        let snapshot_result = state.registry.read_turn(state.turn_id.as_str());
-        let snapshot_result = snapshot_result.ok().flatten();
-        if let Some(snapshot) = snapshot_result
-            && snapshot.status.is_terminal()
-        {
+        let snapshot = match state.registry.read_turn(state.turn_id.as_str()) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return None,
+            Err(_) => return None,
+        };
+        if snapshot.status.is_terminal() {
             return None;
         }
 
@@ -4963,6 +4964,33 @@ mod tests {
             final_result.output_text.as_deref(),
             Some(expected_output.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn turn_stream_stops_when_retention_prunes_completed_turn() {
+        let registry = Arc::new(mvp::control_plane::ControlPlaneTurnRegistry::new());
+        let turn = registry.issue_turn("session-pruned");
+        let turn_id = turn.turn_id.clone();
+        registry
+            .complete_success(turn_id.as_str(), "done", Some("completed"), None)
+            .expect("complete pruned turn");
+        let initial_state =
+            initial_turn_stream_state(registry.clone(), turn_id.as_str(), 1).expect("state");
+        for index in 0..300 {
+            let session_id = format!("session-retained-{index}");
+            let output_text = format!("output-{index}");
+            let retained_turn = registry.issue_turn(session_id.as_str());
+            registry
+                .complete_success(
+                    retained_turn.turn_id.as_str(),
+                    output_text.as_str(),
+                    Some("completed"),
+                    None,
+                )
+                .expect("complete retained turn");
+        }
+        let next_item = next_turn_sse_item(initial_state).await;
+        assert!(next_item.is_none());
     }
 
     #[cfg(feature = "memory-sqlite")]
