@@ -554,6 +554,9 @@ mod tests {
             for env_name in descriptor.api_key_env_names {
                 env.remove(*env_name);
             }
+            if let Some(default_env_name) = descriptor.default_api_key_env {
+                env.remove(default_env_name);
+            }
         }
     }
 
