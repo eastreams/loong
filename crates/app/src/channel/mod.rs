@@ -1,3 +1,5 @@
+use crate::config::LoongClawConfig;
+
 mod catalog;
 mod commands;
 mod core;
@@ -195,6 +197,7 @@ pub use dispatch::run_wecom_channel_with_stop;
 #[cfg(feature = "channel-whatsapp")]
 pub use dispatch::run_whatsapp_channel_with_stop;
 pub(crate) use dispatch::send_text_to_known_session;
+use dispatch::{ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command};
 #[cfg(test)]
 use dispatch::{
     build_feishu_command_context, build_telegram_command_context, channel_message_ingress_context,
