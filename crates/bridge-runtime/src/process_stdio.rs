@@ -1,5 +1,5 @@
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use loongclaw_kernel as kernel;
 use loongclaw_protocol::{JsonLineTransport, OutboundFrame, Transport, TransportInfo};
@@ -14,6 +14,9 @@ use crate::protocol::{
     ConnectorProtocolContext, ProcessStdioRuntimeEvidenceKind,
     authorize_connector_protocol_context, parse_process_timeout_ms, process_stdio_runtime_evidence,
 };
+
+const MAX_STDERR_BYTES: usize = 64 * 1024;
+const STDERR_READ_CHUNK_BYTES: usize = 4 * 1024;
 
 pub struct ProcessStdioExchangeOutcome {
     pub success: bool,
@@ -31,6 +34,14 @@ pub async fn execute_process_stdio_bridge_call(
     command: &kernel::ConnectorCommand,
     runtime_policy: &BridgeExecutionPolicy,
 ) -> Result<BridgeExecutionSuccess, BridgeExecutionFailure> {
+    if !runtime_policy.execute_process_stdio {
+        return Err(BridgeExecutionFailure {
+            blocked: true,
+            reason: "process_stdio execution is disabled by runtime policy".to_owned(),
+            runtime_evidence: Value::Null,
+        });
+    }
+
     let program = provider.metadata.get("command").cloned();
     let Some(program) = program else {
         return Err(BridgeExecutionFailure {
@@ -167,7 +178,25 @@ pub async fn run_process_stdio_json_line_exchange(
     let stderr_task = tokio::spawn(async move {
         let mut bytes = Vec::new();
         if let Some(mut stderr_pipe) = stderr {
-            let _ = stderr_pipe.read_to_end(&mut bytes).await;
+            let mut chunk = [0_u8; STDERR_READ_CHUNK_BYTES];
+            loop {
+                if bytes.len() >= MAX_STDERR_BYTES {
+                    break;
+                }
+
+                let read_result = stderr_pipe.read(&mut chunk).await;
+                let read = match read_result {
+                    Ok(read) => read,
+                    Err(_) => break,
+                };
+                if read == 0 {
+                    break;
+                }
+
+                let remaining_capacity = MAX_STDERR_BYTES.saturating_sub(bytes.len());
+                let bytes_to_take = remaining_capacity.min(read);
+                bytes.extend_from_slice(&chunk[..bytes_to_take]);
+            }
         }
         bytes
     });
@@ -181,8 +210,11 @@ pub async fn run_process_stdio_json_line_exchange(
 
     let expected_method = frame.method.clone();
     let expected_id = frame.id.clone();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
-    let send_result = timeout(Duration::from_millis(timeout_ms), transport.send(frame)).await;
+    let send_timeout =
+        remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport send")?;
+    let send_result = timeout(send_timeout, transport.send(frame)).await;
     let send_result = send_result
         .map_err(|_err| format!("process_stdio transport send timed out after {timeout_ms}ms"))?;
     if let Err(error) = send_result {
@@ -192,7 +224,9 @@ pub async fn run_process_stdio_json_line_exchange(
         return Err(format!("process_stdio transport send failed: {error}"));
     }
 
-    let close_result = timeout(Duration::from_millis(timeout_ms), transport.close()).await;
+    let close_timeout =
+        remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport close")?;
+    let close_result = timeout(close_timeout, transport.close()).await;
     let close_result = close_result
         .map_err(|_err| format!("process_stdio transport close timed out after {timeout_ms}ms"))?;
     if let Err(error) = close_result {
@@ -202,7 +236,9 @@ pub async fn run_process_stdio_json_line_exchange(
         return Err(format!("process_stdio transport close failed: {error}"));
     }
 
-    let response = match timeout(Duration::from_millis(timeout_ms), transport.recv()).await {
+    let recv_timeout =
+        remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport recv")?;
+    let response = match timeout(recv_timeout, transport.recv()).await {
         Ok(Ok(Some(frame))) => frame,
         Ok(Ok(None)) => {
             drop(transport);
@@ -249,7 +285,8 @@ pub async fn run_process_stdio_json_line_exchange(
     }
 
     drop(transport);
-    let status = timeout(Duration::from_millis(timeout_ms), child.wait()).await;
+    let wait_timeout = remaining_phase_timeout(deadline, timeout_ms, "process command")?;
+    let status = timeout(wait_timeout, child.wait()).await;
     let status = match status {
         Ok(Ok(status)) => status,
         Ok(Err(error)) => {
@@ -282,4 +319,65 @@ pub async fn run_process_stdio_json_line_exchange(
         response_method: response.method,
         response_id: response.id,
     })
+}
+
+fn remaining_phase_timeout(
+    deadline: Instant,
+    timeout_ms: u64,
+    phase: &str,
+) -> Result<Duration, String> {
+    let remaining_timeout = deadline.saturating_duration_since(Instant::now());
+    if remaining_timeout.is_zero() {
+        return Err(format!("{phase} timed out after {timeout_ms}ms"));
+    }
+
+    Ok(remaining_timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde_json::json;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn execute_process_stdio_bridge_call_blocks_when_policy_disables_execution() {
+        let provider = kernel::ProviderConfig {
+            provider_id: "stdio-provider".to_owned(),
+            connector_name: "stdio-provider".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([("command".to_owned(), "cat".to_owned())]),
+        };
+        let channel = kernel::ChannelConfig {
+            channel_id: "primary".to_owned(),
+            provider_id: "stdio-provider".to_owned(),
+            endpoint: "local://stdio-provider".to_owned(),
+            enabled: true,
+            metadata: BTreeMap::new(),
+        };
+        let command = kernel::ConnectorCommand {
+            connector_name: "stdio-provider".to_owned(),
+            operation: "invoke".to_owned(),
+            required_capabilities: BTreeSet::from([kernel::Capability::InvokeConnector]),
+            payload: json!({"question":"ping"}),
+        };
+        let runtime_policy = BridgeExecutionPolicy {
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: BTreeSet::from(["cat".to_owned()]),
+        };
+
+        let failure =
+            execute_process_stdio_bridge_call(&provider, &channel, &command, &runtime_policy)
+                .await
+                .expect_err("policy-disabled process bridge should be blocked");
+
+        assert!(failure.blocked);
+        assert_eq!(
+            failure.reason,
+            "process_stdio execution is disabled by runtime policy",
+        );
+    }
 }

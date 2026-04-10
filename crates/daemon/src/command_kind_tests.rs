@@ -77,4 +77,53 @@ fn command_kind_for_logging_uses_stable_variant_names() {
         .command_kind_for_logging(),
         "weixin_send"
     );
+    assert_eq!(
+        Commands::WeixinServe {
+            config: None,
+            once: false,
+            account: None,
+        }
+        .command_kind_for_logging(),
+        "weixin_serve"
+    );
+    assert_eq!(
+        Commands::QqbotSend {
+            config: None,
+            account: None,
+            target: "qqbot:default:group:123".to_owned(),
+            target_kind: crate::mvp::channel::ChannelOutboundTargetKind::Conversation,
+            text: "hello".to_owned(),
+        }
+        .command_kind_for_logging(),
+        "qqbot_send"
+    );
+    assert_eq!(
+        Commands::QqbotServe {
+            config: None,
+            once: false,
+            account: None,
+        }
+        .command_kind_for_logging(),
+        "qqbot_serve"
+    );
+    assert_eq!(
+        Commands::OnebotSend {
+            config: None,
+            account: None,
+            target: "onebot:default:user:10001".to_owned(),
+            target_kind: crate::mvp::channel::ChannelOutboundTargetKind::Conversation,
+            text: "hello".to_owned(),
+        }
+        .command_kind_for_logging(),
+        "onebot_send"
+    );
+    assert_eq!(
+        Commands::OnebotServe {
+            config: None,
+            once: false,
+            account: None,
+        }
+        .command_kind_for_logging(),
+        "onebot_serve"
+    );
 }
