@@ -1,9 +1,11 @@
 #[cfg(feature = "tool-shell")]
+use serde_json::Value;
+#[cfg(feature = "tool-shell")]
 use std::ffi::OsStr;
 #[cfg(feature = "tool-shell")]
 use std::future::Future;
 #[cfg(feature = "tool-shell")]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "tool-shell")]
 use std::process::{Output, Stdio};
 #[cfg(feature = "tool-shell")]
@@ -28,6 +30,102 @@ const OUTPUT_CAP_BYTES: usize = 1_048_576;
 const SPAWN_RETRY_ATTEMPTS: usize = 5;
 #[cfg(feature = "tool-shell")]
 const SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+#[cfg(feature = "tool-shell")]
+pub(super) fn resolve_process_cwd_with_config(
+    payload: &serde_json::Map<String, Value>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+    tool_name: &str,
+) -> Result<PathBuf, String> {
+    let raw_cwd = parse_optional_process_cwd(payload, tool_name)?;
+
+    let resolved_cwd = match raw_cwd {
+        Some(raw_cwd) => resolve_process_cwd_override(raw_cwd, config, tool_name)?,
+        None => default_process_cwd_with_config(config),
+    };
+
+    if !resolved_cwd.is_dir() {
+        let display_path = resolved_cwd.display();
+        let error = format!("{tool_name} cwd `{display_path}` is not a directory");
+        return Err(error);
+    }
+
+    Ok(resolved_cwd)
+}
+
+#[cfg(feature = "tool-shell")]
+fn parse_optional_process_cwd<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    tool_name: &str,
+) -> Result<Option<&'a str>, String> {
+    let Some(raw_value) = payload.get("cwd") else {
+        return Ok(None);
+    };
+
+    let raw_cwd = raw_value
+        .as_str()
+        .ok_or_else(|| format!("{tool_name} payload.cwd must be a string"))?;
+    let trimmed_cwd = raw_cwd.trim();
+    if trimmed_cwd.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(trimmed_cwd))
+}
+
+#[cfg(feature = "tool-shell")]
+fn default_process_cwd_with_config(config: &super::runtime_config::ToolRuntimeConfig) -> PathBuf {
+    let configured_root = config.file_root.clone();
+    if let Some(configured_root) = configured_root {
+        return configured_root;
+    }
+
+    let current_dir_result = std::env::current_dir();
+    match current_dir_result {
+        Ok(current_dir) => current_dir,
+        Err(_) => PathBuf::from("."),
+    }
+}
+
+#[cfg(feature = "tool-shell")]
+fn resolve_process_cwd_override(
+    raw_cwd: &str,
+    config: &super::runtime_config::ToolRuntimeConfig,
+    tool_name: &str,
+) -> Result<PathBuf, String> {
+    if config.file_root.is_some() {
+        return super::file::resolve_safe_directory_path_with_config(raw_cwd, config);
+    }
+
+    let requested_path = PathBuf::from(raw_cwd);
+    let base_path = if requested_path.is_absolute() {
+        requested_path
+    } else {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        current_dir.join(requested_path)
+    };
+
+    canonicalize_existing_directory(base_path.as_path(), tool_name)
+}
+
+#[cfg(feature = "tool-shell")]
+fn canonicalize_existing_directory(path: &Path, tool_name: &str) -> Result<PathBuf, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        let display_path = path.display();
+        format!("failed to inspect {tool_name} cwd `{display_path}`: {error}")
+    })?;
+
+    if !metadata.is_dir() {
+        let display_path = path.display();
+        let error = format!("{tool_name} cwd `{display_path}` is not a directory");
+        return Err(error);
+    }
+
+    std::fs::canonicalize(path).map_err(|error| {
+        let display_path = path.display();
+        format!("failed to canonicalize {tool_name} cwd `{display_path}`: {error}")
+    })
+}
 
 #[cfg(feature = "tool-shell")]
 pub(super) fn run_tool_async<F>(future: F, tool_label: &str) -> Result<F::Output, String>
