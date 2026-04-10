@@ -23,6 +23,8 @@ mod copilot_auth;
 mod failover;
 mod failover_telemetry_runtime;
 mod http_client_runtime;
+#[cfg(test)]
+mod mock_transport;
 mod model_candidate_cooldown_runtime;
 mod model_candidate_resolver_runtime;
 mod policy;
@@ -41,8 +43,10 @@ mod request_planner;
 mod request_session_runtime;
 mod runtime_binding;
 mod shape;
+mod sse;
 mod transport;
 mod transport_profile_runtime;
+mod transport_trait;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
 pub(crate) use failover::parse_provider_failover_snapshot_payload;
