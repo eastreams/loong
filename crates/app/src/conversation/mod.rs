@@ -80,8 +80,8 @@ pub use prompt_orchestrator::{PromptCompilation, PromptCompiler};
 pub use runtime::{
     AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ContextCompactionPolicySnapshot,
     ContextEngineRuntimeSnapshot, ContextEngineSelection, ContextEngineSelectionSource,
-    ConversationRuntime, DefaultConversationRuntime, SessionContext, TurnMiddlewareRuntimeSnapshot,
-    TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
+    ConversationRuntime, DefaultConversationRuntime, HostedConversationRuntime, SessionContext,
+    TurnMiddlewareRuntimeSnapshot, TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
     async_delegate_spawn_request_from_serialized_parts, collect_context_engine_runtime_snapshot,
     execute_async_delegate_spawn_request, resolve_context_engine_selection,
     resolve_turn_middleware_selection,
