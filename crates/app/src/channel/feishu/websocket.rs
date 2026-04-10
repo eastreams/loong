@@ -262,8 +262,13 @@ pub(super) async fn run_feishu_websocket_channel(
                 .max(1),
         );
 
-        if let Err(error) =
-            run_feishu_websocket_session(&state, &endpoint.url, &ws_config, stop.clone()).await
+        if let Err(error) = Box::pin(run_feishu_websocket_session(
+            &state,
+            &endpoint.url,
+            &ws_config,
+            stop.clone(),
+        ))
+        .await
         {
             #[allow(clippy::print_stderr)]
             {
@@ -399,7 +404,7 @@ async fn run_feishu_websocket_session(
                             "received feishu websocket event payload"
                         );
                         let response: FeishuWsOutboundResponse = match state.parse_websocket_payload(&payload) {
-                            Ok(parsed) => match handle_feishu_parsed_action(state, parsed).await {
+                            Ok(parsed) => match Box::pin(handle_feishu_parsed_action(state, parsed)).await {
                                 Ok(response) => build_ws_success_response(response, started_at.elapsed()),
                                 Err((status, message)) => build_ws_error_response(status, started_at.elapsed(), message),
                             },
