@@ -1,6 +1,7 @@
 use loongclaw_contracts::WorkRuntimeHealthSnapshot;
 use loongclaw_spec::CliResult;
 use serde::Serialize;
+use std::path::Path;
 
 use crate::gateway::read_models::{
     GatewayAcpObservabilityReadModel, GatewayOperatorSummaryReadModel,
@@ -85,10 +86,11 @@ pub async fn collect_status_cli_read_model(
     let runtime_snapshot = build_runtime_snapshot_read_model(&snapshot);
     let runtime_dir = default_gateway_runtime_state_dir();
     let owner_status_option = load_gateway_owner_status(runtime_dir.as_path());
-    let owner_status = match owner_status_option {
-        Some(owner_status) => owner_status,
-        None => default_gateway_owner_status(runtime_dir.as_path()),
-    };
+    let owner_status = select_gateway_owner_status_for_config(
+        runtime_dir.as_path(),
+        config_path_text,
+        owner_status_option,
+    );
     let gateway =
         build_operator_summary_read_model(&owner_status, &channel_inventory, &runtime_snapshot);
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
@@ -108,6 +110,26 @@ pub async fn collect_status_cli_read_model(
         work_units,
         recipes,
     })
+}
+
+fn select_gateway_owner_status_for_config(
+    runtime_dir: &Path,
+    config_path: &str,
+    owner_status: Option<crate::gateway::state::GatewayOwnerStatus>,
+) -> crate::gateway::state::GatewayOwnerStatus {
+    let Some(owner_status) = owner_status else {
+        return default_gateway_owner_status(runtime_dir);
+    };
+
+    let owner_config_path = Path::new(owner_status.config_path.as_str());
+    let requested_config_path = Path::new(config_path);
+    let matches_requested_config = owner_config_path == requested_config_path;
+
+    if matches_requested_config {
+        return owner_status;
+    }
+
+    default_gateway_owner_status(runtime_dir)
 }
 
 async fn collect_status_cli_acp_read_model(
@@ -513,5 +535,75 @@ mod tests {
         assert!(rendered.contains("acp enabled=false availability=disabled"));
         assert!(rendered.contains("work_units availability=available total_count=0"));
         assert!(rendered.contains("recipes:\n- loong gateway status"));
+    }
+
+    #[test]
+    fn select_gateway_owner_status_for_config_ignores_mismatched_gateway_owner() {
+        let runtime_dir = Path::new("/tmp/runtime");
+        let owner_status = GatewayOwnerStatus {
+            runtime_dir: runtime_dir.display().to_string(),
+            phase: "running".to_owned(),
+            running: true,
+            stale: false,
+            pid: Some(42),
+            mode: GatewayOwnerMode::GatewayHeadless,
+            version: "0.0.0-test".to_owned(),
+            config_path: "/tmp/other-config.toml".to_owned(),
+            attached_cli_session: None,
+            started_at_ms: 1,
+            last_heartbeat_at: 2,
+            stopped_at_ms: None,
+            shutdown_reason: None,
+            last_error: None,
+            configured_surface_count: 1,
+            running_surface_count: 1,
+            bind_address: None,
+            port: None,
+            token_path: None,
+        };
+
+        let selected = select_gateway_owner_status_for_config(
+            runtime_dir,
+            "/tmp/requested-config.toml",
+            Some(owner_status),
+        );
+
+        assert_eq!(selected.phase, "stopped");
+        assert!(!selected.running);
+        assert_eq!(selected.config_path, "-");
+    }
+
+    #[test]
+    fn select_gateway_owner_status_for_config_keeps_matching_gateway_owner() {
+        let runtime_dir = Path::new("/tmp/runtime");
+        let owner_status = GatewayOwnerStatus {
+            runtime_dir: runtime_dir.display().to_string(),
+            phase: "running".to_owned(),
+            running: true,
+            stale: false,
+            pid: Some(42),
+            mode: GatewayOwnerMode::GatewayHeadless,
+            version: "0.0.0-test".to_owned(),
+            config_path: "/tmp/requested-config.toml".to_owned(),
+            attached_cli_session: None,
+            started_at_ms: 1,
+            last_heartbeat_at: 2,
+            stopped_at_ms: None,
+            shutdown_reason: None,
+            last_error: None,
+            configured_surface_count: 1,
+            running_surface_count: 1,
+            bind_address: None,
+            port: None,
+            token_path: None,
+        };
+
+        let selected = select_gateway_owner_status_for_config(
+            runtime_dir,
+            "/tmp/requested-config.toml",
+            Some(owner_status.clone()),
+        );
+
+        assert_eq!(selected, owner_status);
     }
 }

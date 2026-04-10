@@ -145,7 +145,6 @@ mod tlon_cli;
 mod tool_calling_readiness;
 pub mod trajectory_cli;
 pub mod work_unit_cli;
-
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
     push_channel_surface_plugin_bridge_contract,
@@ -175,9 +174,8 @@ use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
-use tool_calling_readiness::{
-    RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state,
-};
+#[rustfmt::skip]
+use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
     TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
@@ -185,7 +183,6 @@ pub use trajectory_cli::{
     format_trajectory_inspect_text, load_trajectory_export_artifact, run_trajectory_export_cli,
     run_trajectory_inspect_cli,
 };
-
 #[allow(
     clippy::expect_used,
     clippy::panic,
@@ -709,12 +706,8 @@ pub enum Commands {
         command: sessions_cli::SessionsCommands,
     },
     /// Print one operator-readable runtime summary over gateway, ACP, and durable work-unit health
-    Status {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
+    #[rustfmt::skip]
+    Status { #[arg(long)] config: Option<String>, #[arg(long, default_value_t = false)] json: bool },
     #[command(
         visible_alias = "plugin",
         about = "Author manifest-first plugin packages and inspect shared plugin governance truth",
@@ -2325,7 +2318,6 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
 
 pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
 pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
-
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
     pub config: String,
@@ -2591,18 +2583,16 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let (external_skills, snapshot_tool_runtime) =
         collect_runtime_snapshot_external_skills_state(&tool_runtime);
     let tool_view = mvp::tools::runtime_tool_view_for_runtime_config(&snapshot_tool_runtime);
-    let visible_tool_names = tool_view
+    let visible_tools = tool_view
         .tool_names()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let visible_tool_count = visible_tool_names.len();
     let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
-        runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
-    let tool_calling = collect_runtime_snapshot_tool_calling_state(config, visible_tool_count);
+        runtime_snapshot_tool_digest(&visible_tools, &capability_snapshot)?;
+    let tool_calling = collect_runtime_snapshot_tool_calling_state(config, visible_tools.len());
     let runtime_plugins = collect_runtime_snapshot_runtime_plugins_state(config);
     let restore_spec = build_runtime_snapshot_restore_spec(config, &external_skills);
-
     Ok(RuntimeSnapshotCliState {
         config: config_display,
         provider,
@@ -2613,7 +2603,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         enabled_service_channel_ids,
         channels,
         tool_runtime: snapshot_tool_runtime,
-        visible_tool_names,
+        visible_tool_names: visible_tools,
         capability_snapshot,
         capability_snapshot_sha256,
         tool_calling,
