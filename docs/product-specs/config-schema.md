@@ -918,7 +918,7 @@ loongclaw validate-config --fail-on-diagnostics
 | `config.env_pointer.dollar_prefix` | Used `$VAR` instead of `${VAR}` or `VAR` | Remove `$` prefix from env pointer |
 | `config.numeric_range` | Value outside allowed range | Adjust to valid range |
 | `config.channel_account.duplicate_id` | Duplicate normalized account ID | Use unique account identifiers |
-| `config.unknown_search_provider` | Invalid web search provider | Use `duckduckgo`, `brave`, or `tavily` |
+| `config.unknown_search_provider` | Invalid web search provider | Use `duckduckgo` (or `ddg`), `brave`, or `tavily` |
 
 ## Environment Variable References
 
