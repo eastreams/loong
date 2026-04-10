@@ -1,12 +1,9 @@
 use std::path::Path;
 
 use crate::channel::http;
+#[cfg(feature = "channel-plugin-bridge")]
 use crate::channel::{
-    CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
-    CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
-    CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
-    CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION, ManagedPluginBridgeRuntimeBinding,
-    resolve_managed_plugin_bridge_runtime_binding,
+    ManagedPluginBridgeRuntimeBinding, resolve_managed_plugin_bridge_runtime_binding,
 };
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ONEBOT_ACCESS_TOKEN_ENV,
@@ -438,6 +435,26 @@ const QQBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str =
 const ONEBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str =
     "keep <account> stable so personal-account bridge routes stay unambiguous";
 
+const MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION: &str = "send_message";
+const MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION: &str = "receive_batch";
+const MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION: &str = "ack_inbound";
+const MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION: &str = "complete_batch";
+
+#[cfg(not(feature = "channel-plugin-bridge"))]
+fn managed_bridge_operation_status(
+    _config: &LoongClawConfig,
+    _channel_id: &str,
+    _configured_account_id: &str,
+    operation: ChannelCatalogOperation,
+    _required_runtime_operations: &[&str],
+) -> ChannelOperationStatus {
+    let detail =
+        "managed bridge runtime is unavailable in this feature set; enable channel-plugin-bridge"
+            .to_owned();
+    unsupported_operation(operation, detail)
+}
+
+#[cfg(feature = "channel-plugin-bridge")]
 fn managed_bridge_operation_status(
     config: &LoongClawConfig,
     channel_id: &str,
@@ -486,6 +503,7 @@ fn managed_bridge_operation_status(
     }
 }
 
+#[cfg(feature = "channel-plugin-bridge")]
 fn missing_managed_bridge_runtime_operations(
     binding: &ManagedPluginBridgeRuntimeBinding,
     required_runtime_operations: &[&str],
@@ -765,7 +783,7 @@ fn build_weixin_snapshot_for_account(
             descriptor.id,
             resolved.configured_account_id.as_str(),
             WEIXIN_SEND_OPERATION,
-            &[CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+            &[MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
         )
     };
 
@@ -788,10 +806,10 @@ fn build_weixin_snapshot_for_account(
             resolved.configured_account_id.as_str(),
             WEIXIN_SERVE_OPERATION,
             &[
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
             ],
         )
     };
@@ -893,7 +911,7 @@ fn build_qqbot_snapshot_for_account(
             descriptor.id,
             resolved.configured_account_id.as_str(),
             QQBOT_SEND_OPERATION,
-            &[CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+            &[MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
         )
     };
 
@@ -916,10 +934,10 @@ fn build_qqbot_snapshot_for_account(
             resolved.configured_account_id.as_str(),
             QQBOT_SERVE_OPERATION,
             &[
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
             ],
         )
     };
@@ -1022,7 +1040,7 @@ fn build_onebot_snapshot_for_account(
             descriptor.id,
             resolved.configured_account_id.as_str(),
             ONEBOT_SEND_OPERATION,
-            &[CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+            &[MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
         )
     };
 
@@ -1045,10 +1063,10 @@ fn build_onebot_snapshot_for_account(
             resolved.configured_account_id.as_str(),
             ONEBOT_SERVE_OPERATION,
             &[
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
-                CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
             ],
         )
     };
