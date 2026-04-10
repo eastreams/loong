@@ -1,12 +1,12 @@
+#[cfg(feature = "tool-shell")]
+use super::process_exec;
+#[cfg(feature = "tool-shell")]
+use super::runtime_events::current_tool_runtime_event_sink;
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-shell")]
-use std::path::PathBuf;
-
-#[cfg(feature = "tool-shell")]
-use super::process_exec;
-
+use std::path::{Path, PathBuf};
 pub(super) fn execute_shell_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -41,11 +41,7 @@ pub(super) fn execute_shell_tool_with_config(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let cwd = payload
-            .get("cwd")
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let cwd = resolve_shell_cwd_with_config(payload, config)?;
         let timeout_ms = parse_shell_timeout_ms(payload)?;
 
         let normalized_command =
@@ -78,11 +74,16 @@ pub(super) fn execute_shell_tool_with_config(
             ));
         }
 
+        let runtime_event_sink = current_tool_runtime_event_sink();
+        // process_exec owns runtime command metrics emission. Keep shell.exec
+        // focused on payload construction so the live surface observes one
+        // metrics event per command.
         let output = run_shell_async(run_shell_command_with_timeout(
             normalized_command.as_str(),
             &args,
             cwd.as_path(),
             timeout_ms,
+            runtime_event_sink.clone(),
         ))??;
 
         Ok(ToolCoreOutcome {
@@ -103,6 +104,65 @@ pub(super) fn execute_shell_tool_with_config(
             }),
         })
     }
+}
+
+#[cfg(feature = "tool-shell")]
+fn resolve_shell_cwd_with_config(
+    payload: &serde_json::Map<String, Value>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<PathBuf, String> {
+    let raw_cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let default_cwd = config.default_working_directory();
+    let resolved_cwd = match raw_cwd {
+        Some(raw_cwd) => resolve_shell_cwd_override(raw_cwd, config)?,
+        None => default_cwd,
+    };
+    if !resolved_cwd.is_dir() {
+        let display_path = resolved_cwd.display();
+        let error = format!("shell.exec cwd `{display_path}` is not a directory");
+        return Err(error);
+    }
+    Ok(resolved_cwd)
+}
+
+#[cfg(feature = "tool-shell")]
+fn resolve_shell_cwd_override(
+    raw_cwd: &str,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<PathBuf, String> {
+    if config.file_root.is_some() {
+        return super::file::resolve_safe_directory_path_with_config(raw_cwd, config);
+    }
+
+    let requested_path = PathBuf::from(raw_cwd);
+    let base_path = if requested_path.is_absolute() {
+        requested_path
+    } else {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        current_dir.join(requested_path)
+    };
+    canonicalize_existing_directory(base_path.as_path())
+}
+
+#[cfg(feature = "tool-shell")]
+fn canonicalize_existing_directory(path: &Path) -> Result<PathBuf, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        let display_path = path.display();
+        format!("failed to inspect shell cwd `{display_path}`: {error}")
+    })?;
+    if !metadata.is_dir() {
+        let display_path = path.display();
+        let error = format!("shell.exec cwd `{display_path}` is not a directory");
+        return Err(error);
+    }
+    std::fs::canonicalize(path).map_err(|error| {
+        let display_path = path.display();
+        format!("failed to canonicalize shell cwd `{display_path}`: {error}")
+    })
 }
 
 #[cfg(feature = "tool-shell")]
@@ -132,6 +192,276 @@ async fn run_shell_command_with_timeout(
     args: &[String],
     cwd: &std::path::Path,
     timeout_ms: u64,
+    runtime_event_sink: Option<
+        std::sync::Arc<dyn crate::tools::runtime_events::ToolRuntimeEventSink>,
+    >,
 ) -> Result<std::process::Output, String> {
-    process_exec::run_process_with_timeout(command, args, cwd, timeout_ms, "shell command").await
+    process_exec::run_process_with_timeout_with_sink(
+        command,
+        args,
+        cwd,
+        timeout_ms,
+        "shell command",
+        runtime_event_sink,
+    )
+    .await
+}
+
+#[cfg(all(test, feature = "tool-shell", unix))]
+mod tests {
+    use super::*;
+    use crate::test_support::unique_temp_dir;
+    use crate::tools::runtime_config::ToolRuntimeConfig;
+    use crate::tools::runtime_events::{
+        ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
+    };
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct RecordingRuntimeSink {
+        events: Mutex<Vec<ToolRuntimeEvent>>,
+    }
+
+    fn lock_runtime_events(
+        sink: &RecordingRuntimeSink,
+    ) -> std::sync::MutexGuard<'_, Vec<ToolRuntimeEvent>> {
+        match sink.events.lock() {
+            Ok(events) => events,
+            Err(poisoned_events) => poisoned_events.into_inner(),
+        }
+    }
+
+    impl ToolRuntimeEventSink for RecordingRuntimeSink {
+        fn emit(&self, event: ToolRuntimeEvent) {
+            let mut events = lock_runtime_events(self);
+            events.push(event);
+        }
+    }
+
+    fn shell_test_config(root: &Path) -> ToolRuntimeConfig {
+        ToolRuntimeConfig {
+            file_root: Some(root.to_path_buf()),
+            shell_allow: ["pwd".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        }
+    }
+
+    #[test]
+    fn shell_exec_defaults_cwd_to_configured_file_root() {
+        let root = unique_temp_dir("loongclaw-shell-default-cwd");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = shell_test_config(&root);
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "pwd"
+            }),
+        };
+
+        let outcome =
+            execute_shell_tool_with_config(request, &config).expect("shell.exec should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["cwd"], root.display().to_string());
+        let stdout = outcome.payload["stdout"]
+            .as_str()
+            .expect("stdout should be text");
+        assert!(
+            stdout.ends_with(root.display().to_string().as_str()),
+            "expected pwd output to resolve inside file_root, got: {stdout}"
+        );
+    }
+
+    #[test]
+    fn shell_exec_rejects_cwd_that_escapes_configured_file_root() {
+        let root = unique_temp_dir("loongclaw-shell-cwd-root");
+        let outside = unique_temp_dir("loongclaw-shell-cwd-outside");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        std::fs::create_dir_all(&outside).expect("create outside dir");
+        let config = shell_test_config(&root);
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "pwd",
+                "cwd": outside.display().to_string()
+            }),
+        };
+
+        let error =
+            execute_shell_tool_with_config(request, &config).expect_err("escape should fail");
+
+        assert!(
+            error.contains("escapes configured file root"),
+            "error: {error}"
+        );
+    }
+
+    #[test]
+    fn shell_exec_rejects_non_directory_cwd() {
+        let root = unique_temp_dir("loongclaw-shell-cwd-file");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let file_path = root.join("note.txt");
+        std::fs::write(&file_path, "hello").expect("write shell cwd file");
+        let config = shell_test_config(&root);
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "pwd",
+                "cwd": "note.txt"
+            }),
+        };
+
+        let error =
+            execute_shell_tool_with_config(request, &config).expect_err("file cwd should fail");
+
+        assert!(error.contains("is not a directory"), "error: {error}");
+    }
+
+    #[test]
+    fn shell_exec_emits_runtime_output_delta_and_metrics_events() {
+        let root = unique_temp_dir("loongclaw-shell-runtime-events");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            shell_allow: ["printf".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "printf",
+                "args": ["hello\\nworld"],
+            }),
+        };
+        let sink = Arc::new(RecordingRuntimeSink::default());
+        let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
+            execute_shell_tool_with_config(request, &config)
+        }));
+        let outcome = outcome.expect("shell.exec should succeed under runtime sink");
+        let events = lock_runtime_events(&sink);
+        let has_stdout_delta = events.iter().any(|event| {
+            if let ToolRuntimeEvent::OutputDelta(delta) = event {
+                let is_stdout = delta.stream == ToolRuntimeStream::Stdout;
+                let contains_output = delta.chunk.contains("hello");
+                return is_stdout && contains_output;
+            }
+
+            false
+        });
+        let has_metrics = events.iter().any(|event| {
+            if let ToolRuntimeEvent::CommandMetrics(metrics) = event {
+                return metrics.exit_code == Some(0);
+            }
+
+            false
+        });
+        let metrics_count = events
+            .iter()
+            .filter(|event| matches!(event, ToolRuntimeEvent::CommandMetrics(_)))
+            .count();
+
+        assert_eq!(outcome.status, "ok");
+        assert!(has_stdout_delta, "events: {events:?}");
+        assert!(has_metrics, "events: {events:?}");
+        assert_eq!(metrics_count, 1, "events: {events:?}");
+    }
+
+    #[test]
+    fn shell_exec_runtime_output_delta_counts_terminal_newline_without_extra_line() {
+        let root = unique_temp_dir("loongclaw-shell-runtime-line-count");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            shell_allow: ["printf".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "printf",
+                "args": ["alpha\\nbeta\\n"],
+            }),
+        };
+        let sink = Arc::new(RecordingRuntimeSink::default());
+        let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
+            execute_shell_tool_with_config(request, &config)
+        }));
+        let outcome = outcome.expect("shell.exec should succeed");
+        let events = lock_runtime_events(&sink);
+        let total_lines = events.iter().rev().find_map(|event| {
+            if let ToolRuntimeEvent::OutputDelta(delta) = event {
+                let is_stdout = delta.stream == ToolRuntimeStream::Stdout;
+                if is_stdout {
+                    return Some(delta.total_lines);
+                }
+            }
+
+            None
+        });
+        let total_lines = total_lines.expect("stdout delta should exist");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(total_lines, 2);
+    }
+
+    #[test]
+    fn shell_exec_emits_runtime_metrics_for_timeout_failures() {
+        let root = unique_temp_dir("loongclaw-shell-runtime-timeout-metrics");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            shell_allow: ["sh".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "sh",
+                "args": ["-c", "sleep 2"],
+                "timeout_ms": 1000,
+            }),
+        };
+        let sink = Arc::new(RecordingRuntimeSink::default());
+        let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let error = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
+            execute_shell_tool_with_config(request, &config)
+        }));
+        let error = error.expect_err("shell.exec should time out");
+        let events = lock_runtime_events(&sink);
+        let metrics = events.iter().find_map(|event| {
+            if let ToolRuntimeEvent::CommandMetrics(metrics) = event {
+                return Some(metrics);
+            }
+
+            None
+        });
+        let metrics = metrics.expect("timeout should still emit runtime metrics");
+        let metrics_count = events
+            .iter()
+            .filter(|event| matches!(event, ToolRuntimeEvent::CommandMetrics(_)))
+            .count();
+
+        assert!(error.contains("timed out after 1000ms"), "error: {error}");
+        assert_eq!(metrics.exit_code, None);
+        assert!(metrics.duration_ms > 0, "metrics: {metrics:?}");
+        assert_eq!(metrics_count, 1, "events: {events:?}");
+    }
 }

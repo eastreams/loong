@@ -229,18 +229,21 @@ pub enum MemoryProfile {
 pub enum MemorySystemKind {
     #[default]
     Builtin,
+    WorkspaceRecall,
 }
 
 impl MemorySystemKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
+            Self::WorkspaceRecall => "workspace_recall",
         }
     }
 
     pub fn parse_id(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "builtin" => Some(Self::Builtin),
+            "workspace_recall" => Some(Self::WorkspaceRecall),
             _ => None,
         }
     }
@@ -254,7 +257,7 @@ impl<'de> Deserialize<'de> for MemorySystemKind {
         let raw = String::deserialize(deserializer)?;
         Self::parse_id(&raw).ok_or_else(|| {
             serde::de::Error::custom(format!(
-                "unsupported memory.system `{}` (available: builtin)",
+                "unsupported memory.system `{}` (available: builtin, workspace_recall)",
                 raw.trim()
             ))
         })
@@ -519,6 +522,14 @@ mod tests {
         assert_eq!(config.system, MemorySystemKind::Builtin);
         assert_eq!(config.resolved_system(), MemorySystemKind::Builtin);
         assert_eq!(config.resolved_system().as_str(), DEFAULT_MEMORY_SYSTEM_ID);
+    }
+
+    #[test]
+    fn memory_system_accepts_workspace_recall_variant() {
+        assert_eq!(
+            MemorySystemKind::parse_id("workspace_recall"),
+            Some(MemorySystemKind::WorkspaceRecall)
+        );
     }
 
     #[test]

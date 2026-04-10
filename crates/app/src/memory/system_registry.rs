@@ -12,6 +12,11 @@ use crate::config::{
 use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
+    MemorySystemRuntimeFallbackKind, RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem,
+    WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
+};
+use super::system_runtime::{
+    MemorySystemRuntime, MetadataOnlyMemorySystemRuntime, SystemBackedMemorySystemRuntime,
 };
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
@@ -51,6 +56,7 @@ pub struct MemorySystemRuntimeSnapshot {
     pub selected: MemorySystemSelection,
     pub selected_metadata: MemorySystemMetadata,
     pub available: Vec<MemorySystemMetadata>,
+    pub core_operations: Vec<super::MemoryCoreOperation>,
     pub policy: MemorySystemPolicySnapshot,
 }
 
@@ -88,6 +94,14 @@ fn registry() -> &'static RwLock<BTreeMap<String, MemorySystemFactory>> {
             DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
             Arc::new(|| Box::new(BuiltinMemorySystem)),
         );
+        map.insert(
+            WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned(),
+            Arc::new(|| Box::new(WorkspaceRecallMemorySystem)),
+        );
+        map.insert(
+            RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned(),
+            Arc::new(|| Box::new(RecallFirstMemorySystem)),
+        );
         RwLock::new(map)
     })
 }
@@ -103,9 +117,15 @@ where
 {
     let normalized = super::normalize_system_id(id)
         .ok_or_else(|| "memory system id must not be empty".to_owned())?;
-    if normalized == DEFAULT_MEMORY_SYSTEM_ID {
+    let reserved_system_id = match normalized.as_str() {
+        DEFAULT_MEMORY_SYSTEM_ID => Some(DEFAULT_MEMORY_SYSTEM_ID),
+        WORKSPACE_RECALL_MEMORY_SYSTEM_ID => Some(WORKSPACE_RECALL_MEMORY_SYSTEM_ID),
+        RECALL_FIRST_MEMORY_SYSTEM_ID => Some(RECALL_FIRST_MEMORY_SYSTEM_ID),
+        _ => None,
+    };
+    if let Some(reserved_system_id) = reserved_system_id {
         return Err(format!(
-            "memory system `{DEFAULT_MEMORY_SYSTEM_ID}` is reserved and cannot be overridden"
+            "memory system `{reserved_system_id}` is reserved and cannot be overridden"
         ));
     }
 
@@ -126,6 +146,11 @@ where
     let mut guard = registry()
         .write()
         .map_err(|_error| "memory system registry lock poisoned".to_owned())?;
+    let already_registered = guard.contains_key(&normalized);
+    if already_registered {
+        let error = format!("memory system `{normalized}` is already registered");
+        return Err(error);
+    }
     guard.insert(normalized, Arc::new(factory));
     Ok(())
 }
@@ -168,6 +193,64 @@ pub fn resolve_memory_system(id: Option<&str>) -> CliResult<Box<dyn MemorySystem
 
 pub fn describe_memory_system(id: Option<&str>) -> CliResult<MemorySystemMetadata> {
     resolve_memory_system(id).map(|system| system.metadata())
+}
+
+pub fn resolve_memory_system_runtime(
+    config: &MemoryRuntimeConfig,
+) -> CliResult<Box<dyn MemorySystemRuntime>> {
+    let requested_system_id = config.selected_system_id();
+    let resolved_system_id = registered_memory_system_id(Some(requested_system_id))
+        .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
+    let system = resolve_memory_system(Some(resolved_system_id.as_str()))?;
+    let custom_runtime = system.create_runtime(config)?;
+    if let Some(runtime) = custom_runtime {
+        let runtime_metadata = runtime.metadata();
+        let runtime_id = super::normalize_system_id(runtime_metadata.id)
+            .ok_or_else(|| "memory system runtime id must not be empty".to_owned())?;
+        if runtime_id != resolved_system_id {
+            let error = format!(
+                "memory system runtime id `{}` must match selected system `{resolved_system_id}`",
+                runtime_metadata.id
+            );
+
+            return Err(error);
+        }
+
+        return Ok(runtime);
+    }
+
+    let metadata = system.metadata();
+    let shared_system: Arc<dyn MemorySystem> = Arc::from(system);
+    let runtime_fallback_kind = metadata.runtime_fallback_kind;
+    let has_supported_stages = !metadata.supported_stage_families.is_empty();
+
+    let boxed_runtime: Box<dyn MemorySystemRuntime> = match runtime_fallback_kind {
+        MemorySystemRuntimeFallbackKind::MetadataOnly => {
+            if has_supported_stages {
+                let error = format!(
+                    "memory system `{resolved_system_id}` declares stage families but still resolves as metadata_only; set runtime fallback to system_backed or provide create_runtime(...)"
+                );
+
+                return Err(error);
+            }
+
+            let runtime_config = config.clone();
+            let runtime = MetadataOnlyMemorySystemRuntime::new(runtime_config, metadata);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            boxed_runtime
+        }
+        MemorySystemRuntimeFallbackKind::SystemBacked => {
+            let runtime_config = config.clone();
+            let runtime =
+                SystemBackedMemorySystemRuntime::new(runtime_config, metadata, shared_system);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            boxed_runtime
+        }
+    };
+
+    Ok(boxed_runtime)
 }
 
 pub fn memory_system_id_from_env() -> Option<String> {
@@ -232,15 +315,18 @@ pub fn collect_memory_system_runtime_snapshot(
     config: &LoongClawConfig,
 ) -> CliResult<MemorySystemRuntimeSnapshot> {
     let selected = resolve_memory_system_selection(config);
-    let selected_metadata = describe_memory_system(Some(selected.id.as_str()))?;
-    let available = list_memory_system_metadata()?;
     let runtime = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let selected_runtime = resolve_memory_system_runtime(&runtime)?;
+    let selected_metadata = selected_runtime.metadata().clone();
+    let core_operations = selected_runtime.supported_core_operations();
+    let available = list_memory_system_metadata()?;
     let policy = MemorySystemPolicySnapshot::from_runtime_config(&runtime);
 
     Ok(MemorySystemRuntimeSnapshot {
         selected,
         selected_metadata,
         available,
+        core_operations,
         policy,
     })
 }
@@ -248,7 +334,11 @@ pub fn collect_memory_system_runtime_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
+    use crate::memory::{
+        BuiltinMemorySystemRuntime, MemoryCoreOperation, MemorySystemRuntime,
+        MemorySystemRuntimeFallbackKind,
+    };
+    use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemoryRecallMode, MemorySystemCapability};
     use crate::test_support::ScopedEnv;
 
     fn clear_memory_runtime_env_overrides(env: &mut ScopedEnv) {
@@ -275,6 +365,38 @@ mod tests {
                 "registry-custom",
                 [MemorySystemCapability::PromptHydration],
                 "Test registry system",
+            )
+        }
+    }
+
+    struct MatchingRegistryEnvSystem;
+
+    impl MemorySystem for MatchingRegistryEnvSystem {
+        fn id(&self) -> &'static str {
+            "registry-custom-env"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-custom-env",
+                [MemorySystemCapability::PromptHydration],
+                "Test env registry system",
+            )
+        }
+    }
+
+    struct DuplicateRegistrySystem;
+
+    impl MemorySystem for DuplicateRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-duplicate-check"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-duplicate-check",
+                [MemorySystemCapability::PromptHydration],
+                "Duplicate registry test system",
             )
         }
     }
@@ -308,6 +430,7 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Registry snapshot system",
             )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
             .with_supported_pre_assembly_stage_families([
                 crate::memory::MemoryStageFamily::Retrieve,
             ])
@@ -327,9 +450,149 @@ mod tests {
                 [MemorySystemCapability::PromptHydration],
                 "Registry config snapshot system",
             )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
             .with_supported_pre_assembly_stage_families([
                 crate::memory::MemoryStageFamily::Retrieve,
             ])
+        }
+    }
+
+    struct MetadataOnlyCompactRegistrySystem;
+
+    impl MemorySystem for MetadataOnlyCompactRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-metadata-only-compact"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-metadata-only-compact",
+                [MemorySystemCapability::PromptHydration],
+                "Registry compact system that should stay metadata-only",
+            )
+            .with_supported_stage_families([crate::memory::MemoryStageFamily::Compact])
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::MetadataOnly)
+        }
+
+        fn run_compact_stage(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+            _config: &MemoryRuntimeConfig,
+        ) -> Result<Option<crate::memory::StageDiagnostics>, String> {
+            let diagnostics = crate::memory::StageDiagnostics::succeeded(
+                crate::memory::MemoryStageFamily::Compact,
+            );
+            let maybe_diagnostics = Some(diagnostics);
+
+            Ok(maybe_diagnostics)
+        }
+    }
+
+    struct RuntimeIdMismatchRegistrySystem;
+
+    impl MemorySystem for RuntimeIdMismatchRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-runtime-mismatch"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-runtime-mismatch",
+                [MemorySystemCapability::PromptHydration],
+                "Registry system with mismatched runtime id",
+            )
+        }
+
+        fn create_runtime(
+            &self,
+            config: &MemoryRuntimeConfig,
+        ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+            let runtime_config = config.clone();
+            let metadata = BuiltinMemorySystem.metadata();
+            let system: std::sync::Arc<dyn MemorySystem> = std::sync::Arc::new(BuiltinMemorySystem);
+            let runtime = BuiltinMemorySystemRuntime::new(runtime_config, metadata, system);
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            Ok(Some(boxed_runtime))
+        }
+    }
+
+    struct RuntimeMetadataOverrideRegistrySystem;
+
+    struct RuntimeMetadataOverrideRuntime {
+        metadata: MemorySystemMetadata,
+    }
+
+    impl MemorySystem for RuntimeMetadataOverrideRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-runtime-metadata-override"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-runtime-metadata-override",
+                [MemorySystemCapability::PromptHydration],
+                "Registry system whose runtime metadata differs from registry metadata",
+            )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::SystemBacked)
+            .with_supported_stage_families([crate::memory::MemoryStageFamily::Compact])
+        }
+
+        fn create_runtime(
+            &self,
+            _config: &MemoryRuntimeConfig,
+        ) -> CliResult<Option<Box<dyn MemorySystemRuntime>>> {
+            let metadata = MemorySystemMetadata::new(
+                "registry-runtime-metadata-override",
+                [MemorySystemCapability::PromptHydration],
+                "Runtime override metadata",
+            )
+            .with_runtime_fallback_kind(MemorySystemRuntimeFallbackKind::MetadataOnly);
+            let runtime = RuntimeMetadataOverrideRuntime { metadata };
+            let boxed_runtime: Box<dyn MemorySystemRuntime> = Box::new(runtime);
+
+            Ok(Some(boxed_runtime))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MemorySystemRuntime for RuntimeMetadataOverrideRuntime {
+        fn metadata(&self) -> &MemorySystemMetadata {
+            &self.metadata
+        }
+
+        fn supported_core_operations(&self) -> Vec<MemoryCoreOperation> {
+            vec![MemoryCoreOperation::ReadContext]
+        }
+
+        fn execute_core(
+            &self,
+            _request: loongclaw_contracts::MemoryCoreRequest,
+        ) -> Result<loongclaw_contracts::MemoryCoreOutcome, String> {
+            let error = "snapshot-only runtime should not execute core in this test".to_owned();
+
+            Err(error)
+        }
+
+        fn hydrate_stage_envelope(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+        ) -> Result<crate::memory::StageEnvelope, String> {
+            let error = "snapshot-only runtime should not hydrate in this test".to_owned();
+
+            Err(error)
+        }
+
+        async fn run_compact_stage(
+            &self,
+            _session_id: &str,
+            _workspace_root: Option<&std::path::Path>,
+        ) -> Result<crate::memory::StageDiagnostics, String> {
+            let error = "snapshot-only runtime should not compact in this test".to_owned();
+
+            Err(error)
         }
     }
 
@@ -360,12 +623,96 @@ mod tests {
     }
 
     #[test]
+    fn registry_rejects_workspace_recall_override() {
+        let error = register_memory_system(WORKSPACE_RECALL_MEMORY_SYSTEM_ID, || {
+            Box::new(MatchingRegistrySystem)
+        })
+        .expect_err("workspace_recall memory system should stay reserved");
+        assert!(error.contains("reserved"), "error: {error}");
+    }
+
+    #[test]
+    fn registry_rejects_recall_first_override() {
+        let error = register_memory_system(RECALL_FIRST_MEMORY_SYSTEM_ID, || {
+            Box::new(MatchingRegistrySystem)
+        })
+        .expect_err("recall_first memory system should stay reserved");
+        assert!(error.contains("reserved"), "error: {error}");
+    }
+
+    #[test]
     fn registry_rejects_registry_id_mismatches() {
         let error = register_memory_system("registry-custom-alias", || {
             Box::new(MismatchedRegistrySystem)
         })
         .expect_err("registry id mismatch should fail");
         assert!(error.contains("must match"), "error: {error}");
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_custom_id() {
+        register_memory_system("registry-duplicate-check", || {
+            Box::new(DuplicateRegistrySystem)
+        })
+        .expect("register first custom system");
+
+        let error = register_memory_system("registry-duplicate-check", || {
+            Box::new(DuplicateRegistrySystem)
+        })
+        .expect_err("duplicate custom ids should fail");
+
+        assert!(error.contains("already registered"), "error: {error}");
+    }
+
+    #[test]
+    fn resolve_memory_system_runtime_rejects_mismatched_custom_runtime_id() {
+        register_memory_system("registry-runtime-mismatch", || {
+            Box::new(RuntimeIdMismatchRegistrySystem)
+        })
+        .expect("register runtime mismatch system");
+
+        let config = MemoryRuntimeConfig {
+            resolved_system_id: Some("registry-runtime-mismatch".to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let error = match resolve_memory_system_runtime(&config) {
+            Ok(_runtime) => panic!("mismatched runtime id should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.contains("must match selected system"),
+            "error: {error}"
+        );
+        assert!(error.contains("builtin"), "error: {error}");
+        assert!(
+            error.contains("registry-runtime-mismatch"),
+            "error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_only_runtime_fallback_rejects_stage_execution_trap() {
+        register_memory_system("registry-metadata-only-compact", || {
+            Box::new(MetadataOnlyCompactRegistrySystem)
+        })
+        .expect("register metadata-only compact system");
+
+        let config = MemoryRuntimeConfig {
+            resolved_system_id: Some("registry-metadata-only-compact".to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let error = match resolve_memory_system_runtime(&config) {
+            Ok(_runtime) => {
+                panic!("metadata-only fallback should reject stage execution trap")
+            }
+            Err(error) => error,
+        };
+
+        assert!(error.contains("metadata_only"), "error: {error}");
+        assert!(error.contains("system_backed"), "error: {error}");
     }
 
     #[test]
@@ -394,6 +741,42 @@ mod tests {
                 .capabilities
                 .contains(&MemorySystemCapability::CanonicalStore),
             "builtin metadata should include canonical-store capability"
+        );
+        assert_eq!(
+            builtin.supported_recall_modes,
+            vec![
+                MemoryRecallMode::PromptAssembly,
+                MemoryRecallMode::OperatorInspection
+            ]
+        );
+
+        let workspace_recall = metadata
+            .iter()
+            .find(|entry| entry.id == WORKSPACE_RECALL_MEMORY_SYSTEM_ID)
+            .expect("workspace_recall metadata entry");
+        assert!(
+            workspace_recall
+                .capabilities
+                .contains(&MemorySystemCapability::RetrievalProvenance),
+            "workspace_recall metadata should include retrieval provenance capability"
+        );
+        assert_eq!(
+            workspace_recall.supported_recall_modes,
+            vec![
+                MemoryRecallMode::PromptAssembly,
+                MemoryRecallMode::OperatorInspection
+            ]
+        );
+
+        let recall_first = metadata
+            .iter()
+            .find(|entry| entry.id == RECALL_FIRST_MEMORY_SYSTEM_ID)
+            .expect("recall_first metadata entry");
+        assert!(
+            recall_first
+                .capabilities
+                .contains(&MemorySystemCapability::RetrievalProvenance),
+            "recall_first metadata should include retrieval provenance capability"
         );
     }
 
@@ -482,6 +865,12 @@ mod tests {
         assert_eq!(snapshot.selected.id, DEFAULT_MEMORY_SYSTEM_ID);
         assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
         assert_eq!(
+            snapshot.core_operations,
+            crate::memory::supported_memory_core_operations(
+                crate::config::MemoryBackendKind::Sqlite
+            )
+        );
+        assert_eq!(
             snapshot.policy.profile,
             crate::config::MemoryProfile::ProfilePlusWindow
         );
@@ -500,15 +889,17 @@ mod tests {
     fn registry_backed_memory_system_env_surfaces_in_runtime_snapshot() {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
-        register_memory_system("registry-custom", || Box::new(MatchingRegistrySystem))
-            .expect("register custom registry system");
-        env.set(MEMORY_SYSTEM_ENV, "registry-custom");
+        register_memory_system("registry-custom-env", || {
+            Box::new(MatchingRegistryEnvSystem)
+        })
+        .expect("register custom registry system");
+        env.set(MEMORY_SYSTEM_ENV, "registry-custom-env");
 
         let config = LoongClawConfig::default();
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
 
-        assert_eq!(snapshot.selected.id, "registry-custom");
+        assert_eq!(snapshot.selected.id, "registry-custom-env");
         assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
     }
 
@@ -555,6 +946,43 @@ mod tests {
                 .selected_metadata
                 .supported_pre_assembly_stage_families,
             vec![crate::memory::MemoryStageFamily::Retrieve]
+        );
+    }
+
+    #[test]
+    fn runtime_snapshot_prefers_resolved_runtime_metadata_and_core_operations() {
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+
+        register_memory_system("registry-runtime-metadata-override", || {
+            Box::new(RuntimeMetadataOverrideRegistrySystem)
+        })
+        .expect("register runtime metadata override system");
+
+        let config = LoongClawConfig {
+            memory: crate::config::MemoryConfig {
+                system_id: Some("registry-runtime-metadata-override".to_owned()),
+                ..crate::config::MemoryConfig::default()
+            },
+            ..LoongClawConfig::default()
+        };
+        let snapshot =
+            collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
+
+        assert_eq!(snapshot.selected.id, "registry-runtime-metadata-override");
+        assert_eq!(
+            snapshot.selected_metadata.runtime_fallback_kind,
+            MemorySystemRuntimeFallbackKind::MetadataOnly
+        );
+        assert!(
+            snapshot
+                .selected_metadata
+                .supported_stage_families
+                .is_empty()
+        );
+        assert_eq!(
+            snapshot.core_operations,
+            vec![MemoryCoreOperation::ReadContext]
         );
     }
 

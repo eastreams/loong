@@ -185,6 +185,18 @@ mod tests {
     }
 
     #[test]
+    fn resolve_onboarding_model_prompt_default_uses_xiaomi_reviewed_default_for_auto() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Xiaomi;
+        config.provider.model = "auto".to_owned();
+
+        let prompt_default = resolve_onboarding_model_prompt_default(&config.provider, None)
+            .expect("resolve prompt default");
+
+        assert_eq!(prompt_default, "mimo-v2-pro");
+    }
+
+    #[test]
     fn resolve_onboarding_model_prompt_default_keeps_auto_for_unreviewed_provider() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Custom;

@@ -15,7 +15,7 @@ use tokio::{task::JoinHandle, time::sleep};
 
 use crate::{CliResult, config::default_loongclaw_home};
 
-use super::ChannelPlatform;
+use super::super::ChannelPlatform;
 
 const CHANNEL_RUNTIME_HEARTBEAT_MS: u64 = 5_000;
 const CHANNEL_RUNTIME_STALE_MS: u64 = 15_000;
@@ -736,7 +736,7 @@ fn acquire_exclusive_runtime_state(
 
         let write_result = file.write_all(encoded.as_bytes());
         if let Err(error) = write_result {
-            let _ = fs::remove_file(path);
+            _ = fs::remove_file(path);
             let display_path = path.display();
             return Err(format!(
                 "write exclusive channel runtime owner failed for {display_path}: {error}"
@@ -745,7 +745,7 @@ fn acquire_exclusive_runtime_state(
 
         let sync_result = file.sync_all();
         if let Err(error) = sync_result {
-            let _ = fs::remove_file(path);
+            _ = fs::remove_file(path);
             let display_path = path.display();
             return Err(format!(
                 "sync exclusive channel runtime owner failed for {display_path}: {error}"

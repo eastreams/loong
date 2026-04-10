@@ -21,6 +21,22 @@ It is a local product substrate.
 It is not a hosted control panel, a public admin API, or a second assistant
 runtime.
 
+## Current shipped slice
+
+The current localhost control-plane slice now includes:
+
+- authenticated runtime snapshot and event feeds
+- session, approval, pairing, and ACP session observation routes
+- authenticated turn submission
+- SSE turn-event streaming for submitted turns
+- non-streaming final turn-result fetch for submitted turns
+
+Turn execution still reuses the existing ACP conversation preparation path and
+the current session/runtime addressing model. The first turn-result cache stays
+runtime-local; it does not introduce a second durable session authority. The
+runtime-local turn registry only retains a bounded recent window of completed
+turns for replay and final-result fetch.
+
 ## Acceptance Criteria
 
 - [ ] LoongClaw defines one localhost-only product control plane that future

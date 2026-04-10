@@ -365,7 +365,7 @@ fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
     use std::fs;
 
     let root = unique_tool_temp_dir("loongclaw-bash-governance-allow");
-    let rules_dir = root.join(".loongclaw").join("rules");
+    let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
         rules_dir.join("allow.rules"),
@@ -399,7 +399,7 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
 
     let home = unique_tool_temp_dir("loongclaw-bash-home-rules");
     let workspace = unique_tool_temp_dir("loongclaw-bash-home-rules-workspace");
-    let rules_dir = home.join(".loongclaw").join("rules");
+    let rules_dir = home.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
         rules_dir.join("allow.rules"),
@@ -410,7 +410,7 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
 
     let mut env = ScopedEnv::new();
     env.set("HOME", &home);
-    env.remove("LOONGCLAW_HOME");
+    env.remove("LOONG_HOME");
     let _cwd = ScopedCurrentDir::new(&workspace);
 
     let mut runtime = runtime_config::ToolRuntimeConfig::from_loongclaw_config(
@@ -457,7 +457,7 @@ fn bash_exec_denies_plain_command_when_prefix_rule_denies() {
     use std::fs;
 
     let root = unique_tool_temp_dir("loongclaw-bash-governance-deny");
-    let rules_dir = root.join(".loongclaw").join("rules");
+    let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
         rules_dir.join("deny.rules"),
@@ -494,7 +494,7 @@ fn bash_exec_denies_escaped_static_command_name_when_deny_rule_matches_under_def
     use std::fs;
 
     let root = unique_tool_temp_dir("loongclaw-bash-governance-escaped-deny");
-    let rules_dir = root.join(".loongclaw").join("rules");
+    let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
         rules_dir.join("deny.rules"),
@@ -532,7 +532,7 @@ fn bash_exec_denies_or_list_when_rhs_branch_matches_deny_rule() {
     use std::fs;
 
     let root = unique_tool_temp_dir("loongclaw-bash-governance-or-deny");
-    let rules_dir = root.join(".loongclaw").join("rules");
+    let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
         rules_dir.join("rules.rules"),

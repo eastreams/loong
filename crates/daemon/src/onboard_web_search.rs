@@ -530,18 +530,10 @@ pub(crate) fn configured_web_search_provider_secret<'a>(
     config: &'a mvp::config::LoongClawConfig,
     provider: &str,
 ) -> Option<&'a str> {
-    match provider {
-        mvp::config::WEB_SEARCH_PROVIDER_BRAVE => config.tools.web_search.brave_api_key.as_deref(),
-        mvp::config::WEB_SEARCH_PROVIDER_TAVILY => {
-            config.tools.web_search.tavily_api_key.as_deref()
-        }
-        mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY => {
-            config.tools.web_search.perplexity_api_key.as_deref()
-        }
-        mvp::config::WEB_SEARCH_PROVIDER_EXA => config.tools.web_search.exa_api_key.as_deref(),
-        mvp::config::WEB_SEARCH_PROVIDER_JINA => config.tools.web_search.jina_api_key.as_deref(),
-        _ => None,
-    }
+    config
+        .tools
+        .web_search
+        .configured_api_key_for_provider(provider)
 }
 
 fn env_var_has_non_empty_value(env_name: &str) -> bool {
@@ -556,6 +548,14 @@ mod tests {
     use super::*;
 
     use crate::test_support::ScopedEnv;
+
+    fn clear_web_search_credential_envs(env: &mut ScopedEnv) {
+        for descriptor in mvp::config::web_search_provider_descriptors() {
+            for env_name in descriptor.api_key_env_names {
+                env.remove(*env_name);
+            }
+        }
+    }
 
     fn default_options() -> OnboardCommandOptions {
         OnboardCommandOptions {
@@ -583,6 +583,7 @@ mod tests {
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
 
         let recommendation = resolve_web_search_provider_recommendation(&options, &config)
@@ -619,6 +620,21 @@ mod tests {
             recommendation.source,
             WebSearchProviderRecommendationSource::Configured
         );
+    }
+
+    #[test]
+    fn configured_web_search_provider_secret_reads_firecrawl_field() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let secret_value = "${FIRECRAWL_API_KEY}".to_owned();
+
+        config.tools.web_search.firecrawl_api_key = Some(secret_value);
+
+        let configured_secret = configured_web_search_provider_secret(
+            &config,
+            mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL,
+        );
+
+        assert_eq!(configured_secret, Some("${FIRECRAWL_API_KEY}"));
     }
 
     #[test]

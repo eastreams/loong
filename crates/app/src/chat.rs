@@ -1,40 +1,80 @@
-use std::collections::BTreeMap;
-#[cfg(feature = "memory-sqlite")]
-use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::sync::Mutex as StdMutex;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
-#[cfg(feature = "memory-sqlite")]
-use loongclaw_contracts::Capability;
 use tokio::sync::Notify;
 
 use crate::CliResult;
-use crate::acp::{
-    AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink,
-    resolve_acp_backend_selection,
-};
+use crate::acp::{AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink};
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 mod cli_input;
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_session_selector_tests;
+mod live_runtime;
+mod operator_surfaces;
+mod session_surface;
 
 use self::cli_input::ConcurrentCliInputReader;
+use self::live_runtime::*;
+#[cfg(test)]
+use self::operator_surfaces::CliChatStartupSummary;
+#[cfg(test)]
+use self::operator_surfaces::ManualCompactionResult;
+#[cfg(test)]
+use self::operator_surfaces::ManualCompactionStatus;
+#[cfg(test)]
+use self::operator_surfaces::build_cli_chat_startup_summary;
+use self::operator_surfaces::is_cli_chat_status_command;
+use self::operator_surfaces::is_manual_compaction_command;
+use self::operator_surfaces::is_turn_checkpoint_repair_command;
+#[cfg(test)]
+use self::operator_surfaces::load_history_lines;
+#[cfg(test)]
+use self::operator_surfaces::load_manual_compaction_result;
+#[cfg(test)]
+use self::operator_surfaces::manual_compaction_status_from_report;
+use self::operator_surfaces::parse_exact_chat_command;
+use self::operator_surfaces::parse_fast_lane_summary_limit;
+use self::operator_surfaces::parse_safe_lane_summary_limit;
+#[cfg(test)]
+use self::operator_surfaces::parse_summary_limit;
+use self::operator_surfaces::parse_turn_checkpoint_summary_limit;
+use self::operator_surfaces::print_cli_chat_startup;
+use self::operator_surfaces::print_cli_chat_status;
+use self::operator_surfaces::print_help;
+use self::operator_surfaces::print_history;
+use self::operator_surfaces::print_manual_compaction;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_help_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_history_lines_with_width;
+use self::operator_surfaces::render_cli_chat_missing_config_decline_lines_with_width;
+use self::operator_surfaces::render_cli_chat_missing_config_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_startup_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_status_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_manual_compaction_lines_with_width;
+use self::operator_surfaces::should_run_missing_config_onboard;
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
+#[cfg(test)]
+use super::conversation::ContextCompactionReport;
 #[cfg(test)]
 use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
 use super::conversation::{
     ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
-    ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
-    ExecutionLane, ProviderErrorMode, parse_approval_prompt_view, resolve_context_engine_selection,
+    ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent, ConversationTurnToolEvent,
+    ConversationTurnToolState, ExecutionLane, ProviderErrorMode, parse_approval_prompt_view,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -59,19 +99,23 @@ use super::session::LATEST_SESSION_SELECTOR;
 #[cfg(feature = "memory-sqlite")]
 use super::session::latest_resumable_root_session_id;
 use super::tui_surface::{
-    TuiActionSpec, TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec,
-    TuiHeaderStyle, TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec,
-    render_tui_message_spec, render_tui_screen_spec,
+    TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec, TuiHeaderStyle,
+    TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec, render_tui_message_body_spec,
+    render_tui_screen_spec,
 };
+#[cfg(test)]
+use crate::tools::runtime_events::{ToolCommandMetrics, ToolFileChangePreview, ToolOutputDelta};
+use crate::tools::runtime_events::{ToolFileChangeKind, ToolRuntimeEvent, ToolRuntimeStream};
 
 pub const DEFAULT_FIRST_PROMPT: &str = "Summarize this repository and suggest the best next step.";
 const TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONGCLAW_TEST_ONBOARD_EXECUTABLE";
-const CLI_CHAT_LIVE_PREVIEW_MIN_EMIT_CHARS: usize = 80;
-const CLI_CHAT_LIVE_PREVIEW_MAX_EMIT_CHARS: usize = 240;
-const CLI_CHAT_LIVE_PREVIEW_MIN_BUFFER_CHARS: usize = 320;
-const CLI_CHAT_LIVE_PREVIEW_MAX_BUFFER_CHARS: usize = 4096;
-const CLI_CHAT_LIVE_TOOL_ARGS_MIN_BUFFER_CHARS: usize = 160;
-const CLI_CHAT_LIVE_TOOL_ARGS_MAX_BUFFER_CHARS: usize = 1024;
+const CLI_CHAT_HELP_COMMAND: &str = "/help";
+const CLI_CHAT_COMPACT_COMMAND: &str = "/compact";
+const CLI_CHAT_STATUS_COMMAND: &str = "/status";
+const CLI_CHAT_HISTORY_COMMAND: &str = "/history";
+const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND: &str = "/turn_checkpoint_repair";
+const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS: &str = "/turn-checkpoint-repair";
+const CLI_CHAT_COMPOSER_PROMPT: &str = "╰─ you · compose › ";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CliChatOptions {
@@ -226,82 +270,21 @@ enum CliChatLoopControl {
     AssistantText(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CliChatStartupSummary {
-    config_path: String,
-    memory_label: String,
-    session_id: String,
-    context_engine_id: String,
-    context_engine_source: String,
-    acp_enabled: bool,
-    dispatch_enabled: bool,
-    conversation_routing: String,
-    allowed_channels: Vec<String>,
-    acp_backend_id: String,
-    acp_backend_source: String,
-    explicit_acp_request: bool,
-    event_stream_enabled: bool,
-    bootstrap_mcp_servers: Vec<String>,
-    working_directory: Option<String>,
-}
-
-type CliChatLiveSurfaceSink = Arc<dyn Fn(Vec<String>) + Send + Sync>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CliChatLiveSurfaceSnapshot {
-    phase: ConversationTurnPhase,
-    provider_round: Option<usize>,
-    lane: Option<ExecutionLane>,
-    tool_call_count: usize,
-    message_count: Option<usize>,
-    estimated_tokens: Option<usize>,
-    draft_preview: Option<String>,
-    tool_activity_lines: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CliChatLiveToolState {
-    tool_call_id: String,
-    display_order: usize,
-    name: Option<String>,
-    args: String,
-    status: ConversationTurnToolState,
-    detail: Option<String>,
-}
-
-impl CliChatLiveToolState {
-    fn new(tool_call_id: String, display_order: usize) -> Self {
-        Self {
-            tool_call_id,
-            display_order,
-            name: None,
-            args: String::new(),
-            status: ConversationTurnToolState::Running,
-            detail: None,
-        }
+#[allow(clippy::print_stdout)] // CLI REPL output
+pub async fn run_cli_chat(
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    options: &CliChatOptions,
+) -> CliResult<()> {
+    if session_surface::interactive_terminal_surface_supported() {
+        return session_surface::run_cli_chat_surface(config_path, session_hint, options).await;
     }
-}
 
-#[derive(Debug, Default)]
-struct CliChatLiveSurfaceState {
-    latest_phase_event: Option<ConversationTurnPhaseEvent>,
-    draft_preview: String,
-    tool_states: BTreeMap<String, CliChatLiveToolState>,
-    tool_call_index_map: BTreeMap<usize, String>,
-    next_tool_display_order: usize,
-    total_text_chars_seen: usize,
-    last_preview_emit_chars_seen: usize,
-    last_emitted_snapshot: Option<CliChatLiveSurfaceSnapshot>,
-}
-
-struct CliChatLiveSurfaceObserver {
-    render_width: usize,
-    render_sink: CliChatLiveSurfaceSink,
-    state: StdMutex<CliChatLiveSurfaceState>,
+    run_cli_chat_repl(config_path, session_hint, options).await
 }
 
 #[allow(clippy::print_stdout)] // CLI REPL output
-pub async fn run_cli_chat(
+async fn run_cli_chat_repl(
     config_path: Option<&str>,
     session_hint: Option<&str>,
     options: &CliChatOptions,
@@ -361,7 +344,7 @@ pub async fn run_cli_chat(
         .then(|| JsonlAcpTurnEventSink::stderr_with_prefix("acp-event> "));
 
     loop {
-        print!("you> ");
+        print!("{CLI_CHAT_COMPOSER_PROMPT}");
         io::stdout()
             .flush()
             .map_err(|error| format!("flush stdout failed: {error}"))?;
@@ -428,6 +411,14 @@ pub async fn run_cli_ask(
 }
 
 pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<()> {
+    if session_surface::interactive_terminal_surface_supported() {
+        return session_surface::run_concurrent_cli_host_surface(options);
+    }
+
+    run_concurrent_cli_host_repl(options)
+}
+
+fn run_concurrent_cli_host_repl(options: &ConcurrentCliHostOptions) -> CliResult<()> {
     let chat_options = CliChatOptions::default();
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         options.resolved_path.clone(),
@@ -578,38 +569,7 @@ fn resolve_cli_runtime_session_id(
 
 #[allow(clippy::print_stdout)] // CLI output
 async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntime) {
-    #[cfg(feature = "memory-sqlite")]
-    let render_width = detect_cli_chat_render_width();
-
-    #[cfg(feature = "memory-sqlite")]
-    match runtime
-        .turn_coordinator
-        .load_turn_checkpoint_diagnostics(
-            &runtime.config,
-            &runtime.session_id,
-            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await
-    {
-        Ok(diagnostics) => {
-            if let Some(rendered_lines) = render_turn_checkpoint_startup_health_lines_with_width(
-                &runtime.session_id,
-                &diagnostics,
-                render_width,
-            ) {
-                print_rendered_cli_chat_lines(&rendered_lines);
-            }
-        }
-        Err(error) => {
-            let rendered_lines = render_turn_checkpoint_health_error_lines_with_width(
-                &runtime.session_id,
-                &error,
-                render_width,
-            );
-
-            print_rendered_cli_chat_lines(&rendered_lines);
-        }
-    }
+    operator_surfaces::print_turn_checkpoint_startup_health(runtime).await;
 }
 
 #[allow(clippy::print_stdout)] // CLI output
@@ -630,7 +590,7 @@ async fn run_concurrent_cli_host_loop(
             break;
         }
 
-        print!("you> ");
+        print!("{CLI_CHAT_COMPOSER_PROMPT}");
         io::stdout()
             .flush()
             .map_err(|error| format!("flush stdout failed: {error}"))?;
@@ -670,7 +630,7 @@ async fn run_concurrent_cli_host_loop(
 async fn process_cli_chat_input(
     runtime: &CliTurnRuntime,
     input: &str,
-    _options: &CliChatOptions,
+    options: &CliChatOptions,
     event_sink: Option<&dyn AcpTurnEventSink>,
 ) -> CliResult<CliChatLoopControl> {
     if input.is_empty() {
@@ -679,101 +639,207 @@ async fn process_cli_chat_input(
     if is_exit_command(&runtime.config, input) {
         return Ok(CliChatLoopControl::Exit);
     }
-    if input == "/help" {
-        print_help();
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(parse_exact_chat_command(
+        input,
+        &[CLI_CHAT_HELP_COMMAND],
+        "usage: /help",
+    ))? {
+        ChatCommandMatchResult::Matched => {
+            print_help();
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
-    if input == "/history" {
-        #[cfg(feature = "memory-sqlite")]
-        print_history(
-            &runtime.session_id,
-            runtime.config.memory.sliding_window,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_history(
-            &runtime.session_id,
-            runtime.config.memory.sliding_window,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(is_cli_chat_status_command(input))? {
+        ChatCommandMatchResult::Matched => {
+            print_cli_chat_status(runtime, options).await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
-    if let Some(limit) = parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window)?
-    {
-        #[cfg(feature = "memory-sqlite")]
-        print_fast_lane_summary(
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_fast_lane_summary(
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(is_manual_compaction_command(input))? {
+        ChatCommandMatchResult::Matched => {
+            print_manual_compaction(runtime).await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
-    if let Some(limit) = parse_safe_lane_summary_limit(input, runtime.config.memory.sliding_window)?
-    {
-        #[cfg(feature = "memory-sqlite")]
-        print_safe_lane_summary(
-            &runtime.session_id,
-            limit,
-            &runtime.config.conversation,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_safe_lane_summary(
-            &runtime.session_id,
-            limit,
-            &runtime.config.conversation,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(parse_exact_chat_command(
+        input,
+        &[CLI_CHAT_HISTORY_COMMAND],
+        "usage: /history",
+    ))? {
+        ChatCommandMatchResult::Matched => {
+            #[cfg(feature = "memory-sqlite")]
+            print_history(
+                &runtime.session_id,
+                runtime.config.memory.sliding_window,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_history(
+                &runtime.session_id,
+                runtime.config.memory.sliding_window,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(
+                &usage,
+                detect_cli_chat_render_width(),
+            );
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
-    if let Some(limit) =
-        parse_turn_checkpoint_summary_limit(input, runtime.config.memory.sliding_window)?
-    {
-        #[cfg(feature = "memory-sqlite")]
-        print_turn_checkpoint_summary(
-            &runtime.turn_coordinator,
-            &runtime.config,
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_turn_checkpoint_summary(
-            &runtime.turn_coordinator,
-            &runtime.config,
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+    let fast_lane_limit_result =
+        parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window);
+    match fast_lane_limit_result {
+        Ok(Some(limit)) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_fast_lane_summary(
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_fast_lane_summary(
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
+                print_rendered_cli_chat_lines(&usage_lines);
+                return Ok(CliChatLoopControl::Continue);
+            }
+
+            return Err(error);
+        }
     }
-    if is_turn_checkpoint_repair_command(input)? {
-        print_turn_checkpoint_repair(
-            &runtime.turn_coordinator,
-            &runtime.config,
-            &runtime.session_id,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+
+    let safe_lane_limit_result =
+        parse_safe_lane_summary_limit(input, runtime.config.memory.sliding_window);
+    match safe_lane_limit_result {
+        Ok(Some(limit)) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_safe_lane_summary(
+                &runtime.session_id,
+                limit,
+                &runtime.config.conversation,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_safe_lane_summary(
+                &runtime.session_id,
+                limit,
+                &runtime.config.conversation,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
+                print_rendered_cli_chat_lines(&usage_lines);
+                return Ok(CliChatLoopControl::Continue);
+            }
+
+            return Err(error);
+        }
+    }
+
+    let turn_checkpoint_limit_result =
+        parse_turn_checkpoint_summary_limit(input, runtime.config.memory.sliding_window);
+    match turn_checkpoint_limit_result {
+        Ok(Some(limit)) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_turn_checkpoint_summary(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_turn_checkpoint_summary(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
+                print_rendered_cli_chat_lines(&usage_lines);
+                return Ok(CliChatLoopControl::Continue);
+            }
+
+            return Err(error);
+        }
+    }
+    match classify_chat_command_match_result(is_turn_checkpoint_repair_command(input))? {
+        ChatCommandMatchResult::Matched => {
+            print_turn_checkpoint_repair(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let render_width = detect_cli_chat_render_width();
+            let usage_lines = render_cli_chat_command_usage_lines_with_width(&usage, render_width);
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
 
     Ok(CliChatLoopControl::AssistantText(
@@ -781,157 +847,22 @@ async fn process_cli_chat_input(
     ))
 }
 
-#[allow(clippy::print_stdout)] // CLI output
-fn print_cli_chat_startup(runtime: &CliTurnRuntime, options: &CliChatOptions) -> CliResult<()> {
-    let summary = build_cli_chat_startup_summary(runtime, options)?;
-    for line in render_cli_chat_startup_lines(&summary) {
-        println!("{line}");
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChatCommandMatchResult {
+    Matched,
+    NotMatched,
+    UsageError(String),
+}
+
+fn classify_chat_command_match_result(
+    result: CliResult<bool>,
+) -> CliResult<ChatCommandMatchResult> {
+    match result {
+        Ok(true) => Ok(ChatCommandMatchResult::Matched),
+        Ok(false) => Ok(ChatCommandMatchResult::NotMatched),
+        Err(error) if error.starts_with("usage:") => Ok(ChatCommandMatchResult::UsageError(error)),
+        Err(error) => Err(error),
     }
-    Ok(())
-}
-
-fn build_cli_chat_startup_summary(
-    runtime: &CliTurnRuntime,
-    options: &CliChatOptions,
-) -> CliResult<CliChatStartupSummary> {
-    let context_engine_selection = resolve_context_engine_selection(&runtime.config);
-    let acp_selection = resolve_acp_backend_selection(&runtime.config);
-    Ok(CliChatStartupSummary {
-        config_path: runtime.resolved_path.display().to_string(),
-        memory_label: runtime.memory_label.clone(),
-        session_id: runtime.session_id.clone(),
-        context_engine_id: context_engine_selection.id.to_owned(),
-        context_engine_source: context_engine_selection.source.as_str().to_owned(),
-        acp_enabled: runtime.config.acp.enabled,
-        dispatch_enabled: runtime.config.acp.dispatch_enabled(),
-        conversation_routing: runtime
-            .config
-            .acp
-            .dispatch
-            .conversation_routing
-            .as_str()
-            .to_owned(),
-        allowed_channels: runtime.config.acp.dispatch.allowed_channel_ids()?,
-        acp_backend_id: acp_selection.id.to_owned(),
-        acp_backend_source: acp_selection.source.as_str().to_owned(),
-        explicit_acp_request: runtime.explicit_acp_request,
-        event_stream_enabled: options.acp_event_stream,
-        bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
-        working_directory: runtime
-            .effective_working_directory
-            .as_ref()
-            .map(|path| path.display().to_string()),
-    })
-}
-
-fn render_cli_chat_startup_lines(summary: &CliChatStartupSummary) -> Vec<String> {
-    let render_width = detect_cli_chat_render_width();
-    render_cli_chat_startup_lines_with_width(summary, render_width)
-}
-
-fn should_run_missing_config_onboard(read: usize, input: &str) -> bool {
-    if read == 0 {
-        return false;
-    }
-
-    let normalized_input = input.trim().to_ascii_lowercase();
-
-    if normalized_input.is_empty() {
-        return true;
-    }
-
-    matches!(normalized_input.as_str(), "y" | "yes")
-}
-
-fn render_cli_chat_missing_config_lines_with_width(
-    onboard_hint: &str,
-    width: usize,
-) -> Vec<String> {
-    let screen_spec = build_cli_chat_missing_config_screen_spec(onboard_hint);
-    render_tui_screen_spec(&screen_spec, width, false)
-}
-
-fn build_cli_chat_missing_config_screen_spec(onboard_hint: &str) -> TuiScreenSpec {
-    let intro_lines = vec![
-        format!("Welcome to {}!", config::PRODUCT_DISPLAY_NAME),
-        "No configuration found for interactive chat.".to_owned(),
-    ];
-    let sections = vec![TuiSectionSpec::ActionGroup {
-        title: Some("setup command".to_owned()),
-        inline_title_when_wide: true,
-        items: vec![TuiActionSpec {
-            label: "start setup".to_owned(),
-            command: onboard_hint.to_owned(),
-        }],
-    }];
-    let choices = vec![
-        TuiChoiceSpec {
-            key: "y".to_owned(),
-            label: "run setup wizard".to_owned(),
-            detail_lines: vec!["Create a config now and return to interactive chat.".to_owned()],
-            recommended: true,
-        },
-        TuiChoiceSpec {
-            key: "n".to_owned(),
-            label: "skip for now".to_owned(),
-            detail_lines: vec!["Exit chat now and keep the setup command for later.".to_owned()],
-            recommended: false,
-        },
-    ];
-    let footer_lines = vec!["Press Enter to accept y.".to_owned()];
-
-    TuiScreenSpec {
-        header_style: TuiHeaderStyle::Compact,
-        subtitle: Some("interactive chat".to_owned()),
-        title: Some("setup required".to_owned()),
-        progress_line: None,
-        intro_lines,
-        sections,
-        choices,
-        footer_lines,
-    }
-}
-
-fn render_cli_chat_missing_config_decline_lines_with_width(
-    onboard_hint: &str,
-    width: usize,
-) -> Vec<String> {
-    let message_spec = build_cli_chat_missing_config_decline_message_spec(onboard_hint);
-    render_tui_message_spec(&message_spec, width)
-}
-
-fn build_cli_chat_missing_config_decline_message_spec(onboard_hint: &str) -> TuiMessageSpec {
-    let setup_hint = format!("You can run '{onboard_hint}' later to get started.");
-    let sections = vec![
-        TuiSectionSpec::Callout {
-            tone: TuiCalloutTone::Info,
-            title: Some("setup skipped".to_owned()),
-            lines: vec![setup_hint],
-        },
-        TuiSectionSpec::ActionGroup {
-            title: Some("start later".to_owned()),
-            inline_title_when_wide: true,
-            items: vec![TuiActionSpec {
-                label: "setup command".to_owned(),
-                command: onboard_hint.to_owned(),
-            }],
-        },
-    ];
-
-    TuiMessageSpec {
-        role: "chat".to_owned(),
-        caption: Some("setup required".to_owned()),
-        sections,
-        footer_lines: Vec::new(),
-    }
-}
-
-fn render_cli_chat_startup_lines_with_width(
-    summary: &CliChatStartupSummary,
-    width: usize,
-) -> Vec<String> {
-    let screen_spec = build_cli_chat_startup_screen_spec(summary);
-    render_tui_screen_spec(&screen_spec, width, false)
 }
 
 fn detect_cli_chat_render_width() -> usize {
@@ -945,198 +876,39 @@ fn print_rendered_cli_chat_lines(lines: &[String]) {
     }
 }
 
-fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
-    let allowed_channels = if summary.allowed_channels.is_empty() {
-        "-".to_owned()
-    } else {
-        summary.allowed_channels.join(",")
-    };
-    let runtime_line = format!(
-        "ACP enabled={} dispatch_enabled={} routing={} backend={} ({}) allowed_channels={allowed_channels}",
-        summary.acp_enabled,
-        summary.dispatch_enabled,
-        summary.conversation_routing,
-        summary.acp_backend_id,
-        summary.acp_backend_source,
-    );
-    let mut sections = vec![
-        TuiSectionSpec::ActionGroup {
-            title: Some("start here".to_owned()),
-            inline_title_when_wide: true,
-            items: vec![TuiActionSpec {
-                label: "first prompt".to_owned(),
-                command: DEFAULT_FIRST_PROMPT.to_owned(),
-            }],
-        },
-        TuiSectionSpec::Narrative {
-            title: None,
-            lines: vec!["- type your request, or use /help for commands".to_owned()],
-        },
-        TuiSectionSpec::KeyValues {
-            title: Some("session details".to_owned()),
-            items: vec![
-                TuiKeyValueSpec::Plain {
-                    key: "session".to_owned(),
-                    value: summary.session_id.clone(),
-                },
-                TuiKeyValueSpec::Plain {
-                    key: "config".to_owned(),
-                    value: summary.config_path.clone(),
-                },
-                TuiKeyValueSpec::Plain {
-                    key: "memory".to_owned(),
-                    value: summary.memory_label.clone(),
-                },
-            ],
-        },
-        TuiSectionSpec::KeyValues {
-            title: Some("runtime details".to_owned()),
-            items: vec![
-                TuiKeyValueSpec::Plain {
-                    key: "context engine".to_owned(),
-                    value: format!(
-                        "{} ({})",
-                        summary.context_engine_id, summary.context_engine_source
-                    ),
-                },
-                TuiKeyValueSpec::Plain {
-                    key: "acp".to_owned(),
-                    value: runtime_line,
-                },
-            ],
-        },
-    ];
-
-    if summary.explicit_acp_request
-        || summary.event_stream_enabled
-        || !summary.bootstrap_mcp_servers.is_empty()
-        || summary.working_directory.is_some()
-    {
-        let bootstrap_label = if summary.bootstrap_mcp_servers.is_empty() {
-            "-".to_owned()
-        } else {
-            summary.bootstrap_mcp_servers.join(",")
-        };
-        let cwd_label = summary.working_directory.as_deref().unwrap_or("-");
-        let override_lines = vec![
-            format!("explicit request: {}", summary.explicit_acp_request),
-            format!("event stream: {}", summary.event_stream_enabled),
-            format!("bootstrap MCP servers: {bootstrap_label}"),
-            format!("working directory: {cwd_label}"),
-        ];
-        sections.push(TuiSectionSpec::Callout {
-            tone: TuiCalloutTone::Info,
-            title: Some("acp overrides".to_owned()),
-            lines: override_lines,
-        });
-    }
-
-    TuiScreenSpec {
-        header_style: TuiHeaderStyle::Compact,
-        subtitle: Some("interactive chat".to_owned()),
-        title: Some("chat ready".to_owned()),
-        progress_line: None,
-        intro_lines: Vec::new(),
-        sections,
-        choices: Vec::new(),
-        footer_lines: Vec::new(),
-    }
-}
-
-fn render_cli_chat_help_lines_with_width(width: usize) -> Vec<String> {
-    let message_spec = build_cli_chat_help_message_spec();
-    render_tui_message_spec(&message_spec, width)
-}
-
-fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
-    let command_items = vec![
-        TuiKeyValueSpec::Plain {
-            key: "/help".to_owned(),
-            value: "show chat commands".to_owned(),
-        },
-        TuiKeyValueSpec::Plain {
-            key: "/history".to_owned(),
-            value: "print the current session sliding window".to_owned(),
-        },
-        TuiKeyValueSpec::Plain {
-            key: "/fast_lane_summary [limit]".to_owned(),
-            value: "summarize fast-lane batch execution events".to_owned(),
-        },
-        TuiKeyValueSpec::Plain {
-            key: "/safe_lane_summary [limit]".to_owned(),
-            value: "summarize safe-lane runtime events".to_owned(),
-        },
-        TuiKeyValueSpec::Plain {
-            key: "/turn_checkpoint_summary [limit]".to_owned(),
-            value: "summarize durable turn finalization state".to_owned(),
-        },
-        TuiKeyValueSpec::Plain {
-            key: "/turn_checkpoint_repair".to_owned(),
-            value: "repair durable turn finalization tail when safe".to_owned(),
-        },
-        TuiKeyValueSpec::Plain {
-            key: "/exit".to_owned(),
-            value: "quit chat".to_owned(),
-        },
-    ];
-    let note_lines = vec![
-        "Type any non-command text to send a normal assistant turn.".to_owned(),
-        "Use /history to inspect the active memory window when a reply feels off.".to_owned(),
-    ];
-
-    TuiMessageSpec {
-        role: "chat".to_owned(),
-        caption: Some("commands".to_owned()),
-        sections: vec![
-            TuiSectionSpec::KeyValues {
-                title: Some("slash commands".to_owned()),
-                items: command_items,
-            },
-            TuiSectionSpec::Callout {
-                tone: TuiCalloutTone::Info,
-                title: Some("usage notes".to_owned()),
-                lines: note_lines,
-            },
-        ],
-        footer_lines: Vec::new(),
-    }
-}
-
-fn render_cli_chat_history_lines_with_width(
-    session_id: &str,
-    limit: usize,
-    history_lines: &[String],
-    width: usize,
-) -> Vec<String> {
-    let message_spec = build_cli_chat_history_message_spec(session_id, limit, history_lines);
-    render_tui_message_spec(&message_spec, width)
-}
-
-fn build_cli_chat_history_message_spec(
-    session_id: &str,
-    limit: usize,
-    history_lines: &[String],
-) -> TuiMessageSpec {
-    let caption = format!("session={session_id} limit={limit}");
-    let history_section = TuiSectionSpec::Narrative {
-        title: Some("sliding window".to_owned()),
-        lines: history_lines.to_vec(),
-    };
-
-    TuiMessageSpec {
-        role: "history".to_owned(),
-        caption: Some(caption),
-        sections: vec![history_section],
-        footer_lines: Vec::new(),
-    }
-}
-
 fn render_cli_chat_assistant_lines_with_width(assistant_text: &str, width: usize) -> Vec<String> {
     if let Some(screen_spec) = build_cli_chat_approval_screen_spec(assistant_text) {
         return render_tui_screen_spec(&screen_spec, width, false);
     }
     let message_spec = build_cli_chat_assistant_message_spec(assistant_text);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+fn render_cli_chat_command_usage_lines_with_width(usage: &str, width: usize) -> Vec<String> {
+    let message_spec = TuiMessageSpec {
+        role: "chat".to_owned(),
+        caption: Some("command".to_owned()),
+        sections: vec![TuiSectionSpec::Callout {
+            tone: TuiCalloutTone::Warning,
+            title: Some("usage".to_owned()),
+            lines: vec![usage.to_owned()],
+        }],
+        footer_lines: vec!["Use /help to inspect the available command surface.".to_owned()],
+    };
+
+    render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+fn maybe_render_nonfatal_usage_error(error: &str) -> Option<Vec<String>> {
+    let usage_error = error.contains("usage:");
+    if !usage_error {
+        return None;
+    }
+
+    let render_width = detect_cli_chat_render_width();
+    let usage_lines = render_cli_chat_command_usage_lines_with_width(error, render_width);
+
+    Some(usage_lines)
 }
 
 fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec {
@@ -1146,11 +918,11 @@ fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec
         role: config::CLI_COMMAND_NAME.to_owned(),
         caption: Some("reply".to_owned()),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec!["/help commands · /status runtime · /history transcript".to_owned()],
     }
 }
 
-fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreenSpec> {
+pub(super) fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreenSpec> {
     let parsed = parse_approval_prompt_view(assistant_text)?;
     let mut intro_lines = Vec::new();
     if let Some(preface) = parsed
@@ -1229,844 +1001,67 @@ fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreen
     })
 }
 
-fn build_cli_chat_live_surface_observer(render_width: usize) -> ConversationTurnObserverHandle {
-    let render_sink: CliChatLiveSurfaceSink = Arc::new(|lines| {
-        print_rendered_cli_chat_lines(&lines);
-    });
-    let observer = CliChatLiveSurfaceObserver::new(render_width, render_sink);
-    Arc::new(observer)
+fn cli_chat_card_inner_width(width: usize) -> usize {
+    width.saturating_sub(2).max(24)
 }
 
-impl CliChatLiveSurfaceObserver {
-    fn new(render_width: usize, render_sink: CliChatLiveSurfaceSink) -> Self {
-        Self {
-            render_width,
-            render_sink,
-            state: StdMutex::new(CliChatLiveSurfaceState::default()),
-        }
-    }
-
-    fn lock_state(&self) -> std::sync::MutexGuard<'_, CliChatLiveSurfaceState> {
-        match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned_state) => poisoned_state.into_inner(),
-        }
-    }
-
-    fn record_phase_event(&self, event: ConversationTurnPhaseEvent) {
-        let lines_to_render = {
-            let mut state = self.lock_state();
-            if cli_chat_live_phase_starts_provider_request(event.phase) {
-                reset_cli_chat_live_request_state(&mut state);
-            }
-            state.latest_phase_event = Some(event.clone());
-            reconcile_cli_chat_live_tool_states_for_phase(&mut state.tool_states, event.phase);
-            if !should_render_cli_chat_live_phase(event.phase) {
-                None
-            } else {
-                self.prepare_live_surface_lines(&mut state)
-            }
-        };
-
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
-        }
-    }
-
-    fn record_tool_event(&self, event: ConversationTurnToolEvent) {
-        let lines_to_render = {
-            let mut state = self.lock_state();
-            apply_cli_chat_live_tool_event(&mut state, &event, self.render_width);
-            let current_phase = match state.latest_phase_event.as_ref() {
-                Some(phase_event) => phase_event.phase,
-                None => return,
-            };
-            if should_render_cli_chat_live_phase(current_phase) {
-                self.prepare_live_surface_lines(&mut state)
-            } else {
-                None
-            }
-        };
-
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
-        }
-    }
-
-    fn record_streaming_token_event(&self, event: crate::acp::StreamingTokenEvent) {
-        let lines_to_render = {
-            let mut state = self.lock_state();
-            let current_phase = match state.latest_phase_event.as_ref() {
-                Some(phase_event) => phase_event.phase,
-                None => return,
-            };
-
-            let text_delta = event.delta.text;
-            let tool_call_delta = event.delta.tool_call;
-            let tool_call_index = event.index;
-            let mut should_render = false;
-
-            if let Some(text_delta) = text_delta {
-                let preview_char_limit = cli_chat_live_preview_char_limit(self.render_width);
-                append_cli_chat_live_buffer(
-                    &mut state.draft_preview,
-                    text_delta.as_str(),
-                    preview_char_limit,
-                );
-                let delta_chars = text_delta.chars().count();
-                state.total_text_chars_seen =
-                    state.total_text_chars_seen.saturating_add(delta_chars);
-
-                if should_emit_cli_chat_live_preview(&state, self.render_width)
-                    && phase_supports_cli_chat_live_preview(current_phase)
-                {
-                    should_render = true;
-                }
-            }
-
-            let tool_call_update = match (tool_call_delta, tool_call_index) {
-                (Some(tool_call_delta), Some(index)) => Some((tool_call_delta, index)),
-                (Some(_), None) | (None, Some(_)) | (None, None) => None,
-            };
-
-            if let Some((tool_call_delta, index)) = tool_call_update {
-                update_cli_chat_live_tool_state(
-                    &mut state,
-                    index,
-                    &tool_call_delta,
-                    self.render_width,
-                );
-
-                let render_tool_activity_now = event.event_type == "tool_call_start"
-                    && current_phase == ConversationTurnPhase::RunningTools;
-                if render_tool_activity_now {
-                    should_render = true;
-                }
-            }
-
-            if should_render {
-                self.prepare_live_surface_lines(&mut state)
-            } else {
-                None
-            }
-        };
-
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
-        }
-    }
-
-    fn prepare_live_surface_lines(
-        &self,
-        state: &mut CliChatLiveSurfaceState,
-    ) -> Option<Vec<String>> {
-        let snapshot = build_cli_chat_live_surface_snapshot(state)?;
-        if state.last_emitted_snapshot.as_ref() == Some(&snapshot) {
-            return None;
-        }
-
-        let lines = render_cli_chat_live_surface_lines_with_width(&snapshot, self.render_width);
-        state.last_preview_emit_chars_seen = state.total_text_chars_seen;
-        state.last_emitted_snapshot = Some(snapshot);
-        Some(lines)
-    }
-}
-
-impl ConversationTurnObserver for CliChatLiveSurfaceObserver {
-    fn on_phase(&self, event: ConversationTurnPhaseEvent) {
-        self.record_phase_event(event);
-    }
-
-    fn on_tool(&self, event: ConversationTurnToolEvent) {
-        self.record_tool_event(event);
-    }
-
-    fn on_streaming_token(&self, event: crate::acp::StreamingTokenEvent) {
-        self.record_streaming_token_event(event);
-    }
-}
-
-fn cli_chat_live_phase_starts_provider_request(phase: ConversationTurnPhase) -> bool {
-    matches!(
-        phase,
-        ConversationTurnPhase::RequestingProvider
-            | ConversationTurnPhase::RequestingFollowupProvider
-    )
-}
-
-fn reset_cli_chat_live_request_state(state: &mut CliChatLiveSurfaceState) {
-    state.draft_preview.clear();
-    state.tool_states.clear();
-    state.tool_call_index_map.clear();
-    state.next_tool_display_order = 0;
-    state.total_text_chars_seen = 0;
-    state.last_preview_emit_chars_seen = 0;
-}
-
-fn should_render_cli_chat_live_phase(phase: ConversationTurnPhase) -> bool {
-    match phase {
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::RequestingFollowupProvider
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Failed => true,
-        ConversationTurnPhase::ContextReady | ConversationTurnPhase::Completed => false,
-    }
-}
-
-fn phase_supports_cli_chat_live_preview(phase: ConversationTurnPhase) -> bool {
-    match phase {
-        ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RequestingFollowupProvider => true,
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed
-        | ConversationTurnPhase::Failed => false,
-    }
-}
-
-fn should_emit_cli_chat_live_preview(state: &CliChatLiveSurfaceState, render_width: usize) -> bool {
-    if state.total_text_chars_seen == 0 {
-        return false;
-    }
-
-    if state.last_preview_emit_chars_seen == 0 {
-        return true;
-    }
-
-    let emit_stride = cli_chat_live_preview_emit_stride(render_width);
-    let unseen_chars = state
-        .total_text_chars_seen
-        .saturating_sub(state.last_preview_emit_chars_seen);
-    unseen_chars >= emit_stride
-}
-
-fn cli_chat_live_preview_emit_stride(render_width: usize) -> usize {
-    let doubled_width = render_width.saturating_mul(2);
-    doubled_width.clamp(
-        CLI_CHAT_LIVE_PREVIEW_MIN_EMIT_CHARS,
-        CLI_CHAT_LIVE_PREVIEW_MAX_EMIT_CHARS,
-    )
-}
-
-fn cli_chat_live_preview_char_limit(render_width: usize) -> usize {
-    let expanded_width = render_width.saturating_mul(16);
-    expanded_width.clamp(
-        CLI_CHAT_LIVE_PREVIEW_MIN_BUFFER_CHARS,
-        CLI_CHAT_LIVE_PREVIEW_MAX_BUFFER_CHARS,
-    )
-}
-
-fn cli_chat_live_tool_args_char_limit(render_width: usize) -> usize {
-    let expanded_width = render_width.saturating_mul(8);
-    expanded_width.clamp(
-        CLI_CHAT_LIVE_TOOL_ARGS_MIN_BUFFER_CHARS,
-        CLI_CHAT_LIVE_TOOL_ARGS_MAX_BUFFER_CHARS,
-    )
-}
-
-fn append_cli_chat_live_buffer(buffer: &mut String, chunk: &str, char_limit: usize) {
-    buffer.push_str(chunk);
-    trim_cli_chat_live_buffer(buffer, char_limit);
-}
-
-fn trim_cli_chat_live_buffer(buffer: &mut String, char_limit: usize) {
-    let current_char_count = buffer.chars().count();
-    if current_char_count <= char_limit {
-        return;
-    }
-
-    let retained_char_count = char_limit.saturating_sub(1);
-    let skipped_char_count = current_char_count.saturating_sub(retained_char_count);
-    let trimmed_tail = buffer.chars().skip(skipped_char_count).collect::<String>();
-
-    buffer.clear();
-    buffer.push('…');
-    buffer.push_str(trimmed_tail.as_str());
-}
-
-fn truncate_cli_chat_live_text(value: &str, char_limit: usize) -> String {
-    let mut truncated = value.to_owned();
-    trim_cli_chat_live_buffer(&mut truncated, char_limit);
-    truncated
-}
-
-fn cli_chat_live_pending_tool_call_id(index: usize) -> String {
-    format!("pending-stream-tool-{index}")
-}
-
-fn ensure_cli_chat_live_tool_state<'a>(
-    state: &'a mut CliChatLiveSurfaceState,
-    tool_call_id: &str,
-) -> &'a mut CliChatLiveToolState {
-    let tool_call_key = tool_call_id.to_owned();
-    let entry = state.tool_states.entry(tool_call_key.clone());
-
-    match entry {
-        std::collections::btree_map::Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
-        std::collections::btree_map::Entry::Vacant(vacant_entry) => {
-            let display_order = state.next_tool_display_order;
-            let tool_state = CliChatLiveToolState::new(tool_call_key, display_order);
-            state.next_tool_display_order = state.next_tool_display_order.saturating_add(1);
-            vacant_entry.insert(tool_state)
-        }
-    }
-}
-
-fn merge_cli_chat_live_pending_tool_state(
-    state: &mut CliChatLiveSurfaceState,
-    pending_tool_call_id: &str,
-    tool_call_id: &str,
-) {
-    if pending_tool_call_id == tool_call_id {
-        return;
-    }
-
-    let pending_state = match state.tool_states.remove(pending_tool_call_id) {
-        Some(pending_state) => pending_state,
-        None => return,
-    };
-    let target_state = ensure_cli_chat_live_tool_state(state, tool_call_id);
-
-    if target_state.name.is_none() {
-        target_state.name = pending_state.name;
-    }
-    if target_state.args.is_empty() {
-        target_state.args = pending_state.args;
-    }
-    if target_state.detail.is_none() {
-        target_state.detail = pending_state.detail;
-    }
-    if target_state.status == ConversationTurnToolState::Running {
-        target_state.status = pending_state.status;
-    }
-}
-
-fn update_cli_chat_live_tool_state(
-    state: &mut CliChatLiveSurfaceState,
-    index: usize,
-    delta: &crate::acp::ToolCallDelta,
-    render_width: usize,
-) {
-    let pending_tool_call_id = cli_chat_live_pending_tool_call_id(index);
-    let tool_call_id = delta.id.clone().unwrap_or_else(|| {
-        state
-            .tool_call_index_map
-            .get(&index)
-            .cloned()
-            .unwrap_or_else(|| pending_tool_call_id.clone())
-    });
-    let args_char_limit = cli_chat_live_tool_args_char_limit(render_width);
-
-    state
-        .tool_call_index_map
-        .insert(index, tool_call_id.clone());
-    merge_cli_chat_live_pending_tool_state(
-        state,
-        pending_tool_call_id.as_str(),
-        tool_call_id.as_str(),
-    );
-
-    let tool_state = ensure_cli_chat_live_tool_state(state, tool_call_id.as_str());
-    tool_state.status = ConversationTurnToolState::Running;
-    tool_state.detail = None;
-
-    if let Some(name) = delta.name.as_ref() {
-        tool_state.name = Some(name.clone());
-    }
-
-    if let Some(args) = delta.args.as_ref() {
-        append_cli_chat_live_buffer(&mut tool_state.args, args.as_str(), args_char_limit);
-    }
-}
-
-fn apply_cli_chat_live_tool_event(
-    state: &mut CliChatLiveSurfaceState,
-    event: &ConversationTurnToolEvent,
-    render_width: usize,
-) {
-    let tool_state = ensure_cli_chat_live_tool_state(state, event.tool_call_id.as_str());
-    let detail_char_limit = cli_chat_live_tool_args_char_limit(render_width);
-
-    tool_state.name = Some(event.tool_name.clone());
-    tool_state.status = event.state;
-    tool_state.detail = event
-        .detail
-        .as_deref()
-        .map(|detail| truncate_cli_chat_live_text(detail, detail_char_limit));
-}
-
-fn reconcile_cli_chat_live_tool_states_for_phase(
-    tool_states: &mut BTreeMap<String, CliChatLiveToolState>,
-    phase: ConversationTurnPhase,
-) {
-    let fallback_status = match phase {
-        ConversationTurnPhase::RequestingFollowupProvider
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed => Some(ConversationTurnToolState::Completed),
-        ConversationTurnPhase::Failed => Some(ConversationTurnToolState::Interrupted),
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RunningTools => None,
-    };
-    let Some(fallback_status) = fallback_status else {
-        return;
-    };
-
-    for tool_state in tool_states.values_mut() {
-        if tool_state.status != ConversationTurnToolState::Running {
-            continue;
-        }
-
-        tool_state.status = fallback_status;
-        if fallback_status == ConversationTurnToolState::Interrupted && tool_state.detail.is_none()
-        {
-            tool_state.detail =
-                Some("turn failed before a terminal tool result was recorded".to_owned());
-        }
-    }
-}
-
-fn build_cli_chat_live_surface_snapshot(
-    state: &CliChatLiveSurfaceState,
-) -> Option<CliChatLiveSurfaceSnapshot> {
-    let phase_event = state.latest_phase_event.as_ref()?;
-    let draft_preview = if state.draft_preview.trim().is_empty() {
-        None
+fn build_cli_chat_message_card_title(role: &str, caption: Option<&str>) -> String {
+    let trimmed_role = role.trim();
+    let trimmed_caption = caption.map(str::trim).unwrap_or("");
+    let role_label = if trimmed_role.is_empty() {
+        "message"
     } else {
-        Some(state.draft_preview.clone())
+        trimmed_role
     };
-    let tool_activity_lines = format_cli_chat_live_tool_activity_lines(&state.tool_states);
 
-    Some(CliChatLiveSurfaceSnapshot {
-        phase: phase_event.phase,
-        provider_round: phase_event.provider_round,
-        lane: phase_event.lane,
-        tool_call_count: phase_event.tool_call_count,
-        message_count: phase_event.message_count,
-        estimated_tokens: phase_event.estimated_tokens,
-        draft_preview,
-        tool_activity_lines,
-    })
-}
-
-fn format_cli_chat_live_tool_activity_lines(
-    tool_states: &BTreeMap<String, CliChatLiveToolState>,
-) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut ordered_states = tool_states.values().collect::<Vec<_>>();
-    ordered_states.sort_by_key(|tool_state| tool_state.display_order);
-
-    for tool_state in ordered_states {
-        let status = tool_state.status.as_str().replace('_', " ");
-        let name = tool_state.name.as_deref().unwrap_or("pending");
-        let tool_call_id = tool_state.tool_call_id.as_str();
-        let tool_line = if let Some(detail) = tool_state.detail.as_deref() {
-            format!("[{status}] {name} (id={tool_call_id}) - {detail}")
-        } else {
-            format!("[{status}] {name} (id={tool_call_id})")
-        };
-        lines.push(tool_line);
-
-        if !tool_state.args.is_empty() {
-            let args_line = format!("args: {}", tool_state.args);
-            lines.push(args_line);
-        }
+    if trimmed_caption.is_empty() {
+        return role_label.to_owned();
     }
 
-    lines
+    format!("{role_label} · {trimmed_caption}")
 }
 
-fn render_cli_chat_live_surface_lines_with_width(
-    snapshot: &CliChatLiveSurfaceSnapshot,
+fn render_cli_chat_message_card_lines(
+    role: &str,
+    caption: Option<&str>,
+    rendered_message_lines: &[String],
     width: usize,
 ) -> Vec<String> {
-    let message_spec = build_cli_chat_live_surface_message_spec(snapshot);
-    render_tui_message_spec(&message_spec, width)
+    let title = build_cli_chat_message_card_title(role, caption);
+    render_cli_chat_card_lines(title.as_str(), rendered_message_lines, width)
 }
 
-fn build_cli_chat_live_surface_message_spec(
-    snapshot: &CliChatLiveSurfaceSnapshot,
-) -> TuiMessageSpec {
-    let phase_tone = cli_chat_live_surface_tone(snapshot.phase);
-    let phase_title = cli_chat_live_surface_title(snapshot.phase);
-    let phase_detail = cli_chat_live_surface_detail(snapshot);
-    let phase_section = TuiSectionSpec::Callout {
-        tone: phase_tone,
-        title: Some(phase_title.to_owned()),
-        lines: vec![phase_detail],
-    };
-    let pipeline_items = build_cli_chat_live_pipeline_items(snapshot);
-    let pipeline_section = TuiSectionSpec::Checklist {
-        title: Some("turn pipeline".to_owned()),
-        items: pipeline_items,
-    };
-    let status_items = build_cli_chat_live_status_items(snapshot);
-    let mut sections = vec![phase_section, pipeline_section];
-
-    if !status_items.is_empty() {
-        let status_section = TuiSectionSpec::KeyValues {
-            title: Some("status".to_owned()),
-            items: status_items,
-        };
-        sections.push(status_section);
-    }
-
-    if let Some(preview_section) = build_cli_chat_live_preview_section(snapshot) {
-        sections.push(preview_section);
-    }
-
-    if let Some(tool_section) = build_cli_chat_live_tool_section(snapshot) {
-        sections.push(tool_section);
-    }
-
-    TuiMessageSpec {
-        role: config::CLI_COMMAND_NAME.to_owned(),
-        caption: Some("live".to_owned()),
-        sections,
-        footer_lines: Vec::new(),
-    }
+fn render_cli_chat_message_spec_with_width(spec: &TuiMessageSpec, width: usize) -> Vec<String> {
+    let body_lines = render_tui_message_body_spec(spec, cli_chat_card_inner_width(width));
+    render_cli_chat_message_card_lines(
+        spec.role.as_str(),
+        spec.caption.as_deref(),
+        &body_lines,
+        width,
+    )
 }
 
-fn cli_chat_live_surface_tone(phase: ConversationTurnPhase) -> TuiCalloutTone {
-    match phase {
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::RequestingFollowupProvider
-        | ConversationTurnPhase::FinalizingReply => TuiCalloutTone::Info,
-        ConversationTurnPhase::Completed => TuiCalloutTone::Success,
-        ConversationTurnPhase::Failed => TuiCalloutTone::Warning,
-    }
-}
-
-fn cli_chat_live_surface_title(phase: ConversationTurnPhase) -> &'static str {
-    match phase {
-        ConversationTurnPhase::Preparing => "assembling context",
-        ConversationTurnPhase::ContextReady => "context ready",
-        ConversationTurnPhase::RequestingProvider => "querying model",
-        ConversationTurnPhase::RunningTools => "running tools",
-        ConversationTurnPhase::RequestingFollowupProvider => "requesting follow-up",
-        ConversationTurnPhase::FinalizingReply => "finalizing reply",
-        ConversationTurnPhase::Completed => "reply ready",
-        ConversationTurnPhase::Failed => "turn failed",
-    }
-}
-
-fn cli_chat_live_surface_detail(snapshot: &CliChatLiveSurfaceSnapshot) -> String {
-    match snapshot.phase {
-        ConversationTurnPhase::Preparing => {
-            "Building the session context and preparing the next provider turn.".to_owned()
-        }
-        ConversationTurnPhase::ContextReady => {
-            "Context is ready for the next provider round.".to_owned()
-        }
-        ConversationTurnPhase::RequestingProvider => {
-            let provider_round = snapshot.provider_round.unwrap_or(1);
-            format!("Requesting provider round {provider_round} and waiting for the reply.")
-        }
-        ConversationTurnPhase::RunningTools => {
-            let lane_label = snapshot
-                .lane
-                .map(format_cli_chat_live_lane)
-                .unwrap_or_else(|| "-".to_owned());
-            format!(
-                "Executing {} tool call(s) in the {lane_label} lane.",
-                snapshot.tool_call_count
-            )
-        }
-        ConversationTurnPhase::RequestingFollowupProvider => {
-            let provider_round = snapshot.provider_round.unwrap_or(1);
-            format!("Sending tool results back for provider round {provider_round}.")
-        }
-        ConversationTurnPhase::FinalizingReply => {
-            "Persisting the assistant reply and finishing after-turn work.".to_owned()
-        }
-        ConversationTurnPhase::Completed => "The assistant reply is ready.".to_owned(),
-        ConversationTurnPhase::Failed => {
-            "The turn failed before a stable reply could be finalized.".to_owned()
-        }
-    }
-}
-
-fn build_cli_chat_live_pipeline_items(
-    snapshot: &CliChatLiveSurfaceSnapshot,
-) -> Vec<TuiChecklistItemSpec> {
-    let prepare_item = TuiChecklistItemSpec {
-        status: cli_chat_live_prepare_status(snapshot.phase),
-        label: "prepare context".to_owned(),
-        detail: cli_chat_live_prepare_detail(snapshot.phase),
-    };
-    let model_item = TuiChecklistItemSpec {
-        status: cli_chat_live_model_status(snapshot.phase),
-        label: "call model".to_owned(),
-        detail: cli_chat_live_model_detail(snapshot),
-    };
-    let tools_item = TuiChecklistItemSpec {
-        status: cli_chat_live_tools_status(snapshot),
-        label: "run tools".to_owned(),
-        detail: cli_chat_live_tools_detail(snapshot),
-    };
-    let finalize_item = TuiChecklistItemSpec {
-        status: cli_chat_live_finalize_status(snapshot.phase),
-        label: "finalize reply".to_owned(),
-        detail: cli_chat_live_finalize_detail(snapshot.phase),
-    };
-
-    vec![prepare_item, model_item, tools_item, finalize_item]
-}
-
-fn cli_chat_live_prepare_status(phase: ConversationTurnPhase) -> TuiChecklistStatus {
-    match phase {
-        ConversationTurnPhase::Preparing => TuiChecklistStatus::Warn,
-        ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::RequestingFollowupProvider
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed
-        | ConversationTurnPhase::Failed => TuiChecklistStatus::Pass,
-    }
-}
-
-fn cli_chat_live_prepare_detail(phase: ConversationTurnPhase) -> String {
-    match phase {
-        ConversationTurnPhase::Preparing => "assembling the next turn context".to_owned(),
-        ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::RequestingFollowupProvider
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed
-        | ConversationTurnPhase::Failed => "context assembled".to_owned(),
-    }
-}
-
-fn cli_chat_live_model_status(phase: ConversationTurnPhase) -> TuiChecklistStatus {
-    match phase {
-        ConversationTurnPhase::Preparing | ConversationTurnPhase::ContextReady => {
-            TuiChecklistStatus::Warn
-        }
-        ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RequestingFollowupProvider => TuiChecklistStatus::Warn,
-        ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed => TuiChecklistStatus::Pass,
-        ConversationTurnPhase::Failed => TuiChecklistStatus::Fail,
-    }
-}
-
-fn cli_chat_live_model_detail(snapshot: &CliChatLiveSurfaceSnapshot) -> String {
-    match snapshot.phase {
-        ConversationTurnPhase::Preparing => "waiting for a provider round".to_owned(),
-        ConversationTurnPhase::ContextReady => "provider request is about to start".to_owned(),
-        ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RequestingFollowupProvider => {
-            let provider_round = snapshot.provider_round.unwrap_or(1);
-            format!("provider round {provider_round} in progress")
-        }
-        ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed => "provider reply resolved".to_owned(),
-        ConversationTurnPhase::Failed => "provider step did not finish cleanly".to_owned(),
-    }
-}
-
-fn cli_chat_live_tools_status(snapshot: &CliChatLiveSurfaceSnapshot) -> TuiChecklistStatus {
-    let tools_needed = snapshot.tool_call_count > 0;
-    if !tools_needed {
-        return match snapshot.phase {
-            ConversationTurnPhase::FinalizingReply
-            | ConversationTurnPhase::Completed
-            | ConversationTurnPhase::Failed => TuiChecklistStatus::Pass,
-            ConversationTurnPhase::Preparing
-            | ConversationTurnPhase::ContextReady
-            | ConversationTurnPhase::RequestingProvider
-            | ConversationTurnPhase::RunningTools
-            | ConversationTurnPhase::RequestingFollowupProvider => TuiChecklistStatus::Warn,
-        };
-    }
-
-    match snapshot.phase {
-        ConversationTurnPhase::RunningTools => TuiChecklistStatus::Warn,
-        ConversationTurnPhase::RequestingFollowupProvider
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed => TuiChecklistStatus::Pass,
-        ConversationTurnPhase::Failed => TuiChecklistStatus::Fail,
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider => TuiChecklistStatus::Warn,
-    }
-}
-
-fn cli_chat_live_tools_detail(snapshot: &CliChatLiveSurfaceSnapshot) -> String {
-    let tools_needed = snapshot.tool_call_count > 0;
-    if !tools_needed {
-        return match snapshot.phase {
-            ConversationTurnPhase::FinalizingReply | ConversationTurnPhase::Completed => {
-                "no tool calls were needed for this turn".to_owned()
+fn render_cli_chat_card_lines(title: &str, body_lines: &[String], width: usize) -> Vec<String> {
+    let inner_width = cli_chat_card_inner_width(width);
+    let mut lines = vec![format!("╭─ {title}")];
+    if body_lines.is_empty() {
+        lines.push("│".to_owned());
+    } else {
+        for line in body_lines {
+            if line.is_empty() {
+                lines.push("│".to_owned());
+            } else {
+                for wrapped_line in
+                    crate::presentation::render_wrapped_display_line(line.as_str(), inner_width)
+                {
+                    lines.push(format!("│ {wrapped_line}"));
+                }
             }
-            ConversationTurnPhase::Failed => "no tool step was completed".to_owned(),
-            ConversationTurnPhase::Preparing
-            | ConversationTurnPhase::ContextReady
-            | ConversationTurnPhase::RequestingProvider
-            | ConversationTurnPhase::RunningTools
-            | ConversationTurnPhase::RequestingFollowupProvider => {
-                "waiting to see whether tools are needed".to_owned()
-            }
-        };
-    }
-
-    let lane_label = snapshot
-        .lane
-        .map(format_cli_chat_live_lane)
-        .unwrap_or_else(|| "-".to_owned());
-    match snapshot.phase {
-        ConversationTurnPhase::RunningTools => {
-            format!(
-                "{} tool call(s) currently running in the {lane_label} lane",
-                snapshot.tool_call_count
-            )
-        }
-        ConversationTurnPhase::RequestingFollowupProvider
-        | ConversationTurnPhase::FinalizingReply
-        | ConversationTurnPhase::Completed => {
-            format!(
-                "{} tool call(s) finished in the {lane_label} lane",
-                snapshot.tool_call_count
-            )
-        }
-        ConversationTurnPhase::Failed => {
-            format!(
-                "{} tool call(s) did not converge cleanly",
-                snapshot.tool_call_count
-            )
-        }
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider => {
-            format!(
-                "{} tool call(s) are queued if the provider asks for them",
-                snapshot.tool_call_count
-            )
         }
     }
-}
 
-fn cli_chat_live_finalize_status(phase: ConversationTurnPhase) -> TuiChecklistStatus {
-    match phase {
-        ConversationTurnPhase::FinalizingReply => TuiChecklistStatus::Warn,
-        ConversationTurnPhase::Completed => TuiChecklistStatus::Pass,
-        ConversationTurnPhase::Failed => TuiChecklistStatus::Fail,
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::RequestingFollowupProvider => TuiChecklistStatus::Warn,
-    }
-}
-
-fn cli_chat_live_finalize_detail(phase: ConversationTurnPhase) -> String {
-    match phase {
-        ConversationTurnPhase::FinalizingReply => {
-            "persisting reply state and final runtime side effects".to_owned()
-        }
-        ConversationTurnPhase::Completed => "reply finalized".to_owned(),
-        ConversationTurnPhase::Failed => "reply finalization did not complete".to_owned(),
-        ConversationTurnPhase::Preparing
-        | ConversationTurnPhase::ContextReady
-        | ConversationTurnPhase::RequestingProvider
-        | ConversationTurnPhase::RunningTools
-        | ConversationTurnPhase::RequestingFollowupProvider => {
-            "waiting for a final reply".to_owned()
-        }
-    }
-}
-
-fn build_cli_chat_live_status_items(snapshot: &CliChatLiveSurfaceSnapshot) -> Vec<TuiKeyValueSpec> {
-    let mut items = Vec::new();
-
-    items.push(TuiKeyValueSpec::Plain {
-        key: "phase".to_owned(),
-        value: snapshot.phase.as_str().to_owned(),
-    });
-
-    if let Some(provider_round) = snapshot.provider_round {
-        items.push(TuiKeyValueSpec::Plain {
-            key: "round".to_owned(),
-            value: provider_round.to_string(),
-        });
-    }
-
-    if let Some(lane) = snapshot.lane {
-        items.push(TuiKeyValueSpec::Plain {
-            key: "lane".to_owned(),
-            value: format_cli_chat_live_lane(lane),
-        });
-    }
-
-    if snapshot.tool_call_count > 0 {
-        items.push(TuiKeyValueSpec::Plain {
-            key: "tool calls".to_owned(),
-            value: snapshot.tool_call_count.to_string(),
-        });
-    }
-
-    if let Some(message_count) = snapshot.message_count {
-        items.push(TuiKeyValueSpec::Plain {
-            key: "context messages".to_owned(),
-            value: message_count.to_string(),
-        });
-    }
-
-    if let Some(estimated_tokens) = snapshot.estimated_tokens {
-        items.push(TuiKeyValueSpec::Plain {
-            key: "estimated tokens".to_owned(),
-            value: estimated_tokens.to_string(),
-        });
-    }
-
-    items
-}
-
-fn format_cli_chat_live_lane(lane: ExecutionLane) -> String {
-    match lane {
-        ExecutionLane::Fast => "fast".to_owned(),
-        ExecutionLane::Safe => "safe".to_owned(),
-    }
-}
-
-fn build_cli_chat_live_preview_section(
-    snapshot: &CliChatLiveSurfaceSnapshot,
-) -> Option<TuiSectionSpec> {
-    let preview = snapshot.draft_preview.as_ref()?;
-    let preview_lines = preview
-        .lines()
-        .map(|line| line.to_owned())
-        .collect::<Vec<_>>();
-
-    Some(TuiSectionSpec::Narrative {
-        title: Some("draft preview".to_owned()),
-        lines: preview_lines,
-    })
-}
-
-fn build_cli_chat_live_tool_section(
-    snapshot: &CliChatLiveSurfaceSnapshot,
-) -> Option<TuiSectionSpec> {
-    if snapshot.tool_activity_lines.is_empty() {
-        return None;
-    }
-
-    Some(TuiSectionSpec::Narrative {
-        title: Some("tool activity".to_owned()),
-        lines: snapshot.tool_activity_lines.clone(),
-    })
+    lines.push("╰─".to_owned());
+    lines
 }
 
 fn parse_cli_chat_markdown_sections(text: &str) -> Vec<TuiSectionSpec> {
@@ -2155,7 +1150,72 @@ fn parse_cli_chat_markdown_sections(text: &str) -> Vec<TuiSectionSpec> {
         });
     }
 
+    refine_cli_chat_sections(sections)
+}
+
+fn refine_cli_chat_sections(sections: Vec<TuiSectionSpec>) -> Vec<TuiSectionSpec> {
     sections
+        .into_iter()
+        .map(|section| match section {
+            TuiSectionSpec::Narrative {
+                title: Some(title),
+                lines,
+            } if is_reasoning_section_title(title.as_str()) && !lines.is_empty() => {
+                TuiSectionSpec::Callout {
+                    tone: TuiCalloutTone::Info,
+                    title: Some("reasoning".to_owned()),
+                    lines,
+                }
+            }
+            TuiSectionSpec::Preformatted {
+                title,
+                language: Some(language),
+                lines,
+            } if is_diff_language(language.as_str()) => TuiSectionSpec::Preformatted {
+                title: Some(title.unwrap_or_else(|| "diff".to_owned())),
+                language: Some(language),
+                lines,
+            },
+            TuiSectionSpec::Narrative {
+                title: Some(title),
+                lines,
+            } if is_tool_activity_section_title(title.as_str()) && !lines.is_empty() => {
+                TuiSectionSpec::Callout {
+                    tone: TuiCalloutTone::Info,
+                    title: Some("tool activity".to_owned()),
+                    lines,
+                }
+            }
+            other @ TuiSectionSpec::Narrative { .. }
+            | other @ TuiSectionSpec::KeyValues { .. }
+            | other @ TuiSectionSpec::ActionGroup { .. }
+            | other @ TuiSectionSpec::Checklist { .. }
+            | other @ TuiSectionSpec::Callout { .. }
+            | other @ TuiSectionSpec::Preformatted { .. } => other,
+        })
+        .collect()
+}
+
+fn is_reasoning_section_title(title: &str) -> bool {
+    let normalized = title.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "reasoning" | "analysis" | "thinking" | "thought process"
+    )
+}
+
+fn is_diff_language(language: &str) -> bool {
+    matches!(
+        language.trim().to_ascii_lowercase().as_str(),
+        "diff" | "patch"
+    )
+}
+
+fn is_tool_activity_section_title(title: &str) -> bool {
+    matches!(
+        title.trim().to_ascii_lowercase().as_str(),
+        "tool activity" | "tools" | "tool calls"
+    )
 }
 
 fn push_narrative_section(
@@ -2384,202 +1444,6 @@ fn is_exit_command(config: &LoongClawConfig, input: &str) -> bool {
 }
 
 #[allow(clippy::print_stdout)] // CLI output
-fn print_help() {
-    let render_width = detect_cli_chat_render_width();
-    let rendered_lines = render_cli_chat_help_lines_with_width(render_width);
-    print_rendered_cli_chat_lines(&rendered_lines);
-}
-
-#[allow(clippy::print_stdout)] // CLI output
-async fn print_history(
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
-) -> CliResult<()> {
-    #[cfg(feature = "memory-sqlite")]
-    {
-        let history_lines = load_history_lines(session_id, limit, binding, memory_config).await?;
-        let render_width = detect_cli_chat_render_width();
-        let rendered_lines = render_cli_chat_history_lines_with_width(
-            session_id,
-            limit,
-            &history_lines,
-            render_width,
-        );
-        print_rendered_cli_chat_lines(&rendered_lines);
-        Ok(())
-    }
-
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (session_id, limit, binding);
-        let render_width = detect_cli_chat_render_width();
-        let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
-            "history",
-            "history unavailable: memory-sqlite feature disabled",
-            render_width,
-        );
-
-        print_rendered_cli_chat_lines(&rendered_lines);
-        Ok(())
-    }
-}
-
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn format_window_history_lines(turns: &[memory::WindowTurn]) -> Vec<String> {
-    if turns.is_empty() {
-        return vec!["(no history yet)".to_owned()];
-    }
-
-    turns
-        .iter()
-        .map(|turn| {
-            format!(
-                "[{}] {}: {}",
-                turn.ts.unwrap_or_default(),
-                turn.role,
-                turn.content
-            )
-        })
-        .collect()
-}
-
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn format_prompt_context_history_lines(entries: &[memory::MemoryContextEntry]) -> Vec<String> {
-    if entries.is_empty() {
-        return vec!["(no history yet)".to_owned()];
-    }
-
-    let mut lines = Vec::new();
-    for entry in entries {
-        match entry.kind {
-            memory::MemoryContextKind::Profile => {
-                lines.push("[profile]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::Summary => {
-                lines.push("[summary]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::RetrievedMemory => {
-                lines.push("[retrieved_memory]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::Turn => {
-                lines.push(format!("{}: {}", entry.role, entry.content));
-            }
-        }
-    }
-    lines
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn load_history_lines(
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
-) -> CliResult<Vec<String>> {
-    if let Some(ctx) = binding.kernel_context() {
-        let request = memory::build_window_request(session_id, limit);
-        let caps = BTreeSet::from([Capability::MemoryRead]);
-        let outcome = ctx
-            .kernel
-            .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
-            .await
-            .map_err(|error| format!("load history via kernel failed: {error}"))?;
-        if outcome.status != "ok" {
-            return Err(format!(
-                "load history via kernel returned non-ok status: {}",
-                outcome.status
-            ));
-        }
-        let turns = memory::decode_window_turns(&outcome.payload);
-        return Ok(format_window_history_lines(&turns));
-    }
-
-    let entries = memory::load_prompt_context(session_id, memory_config)
-        .map_err(|error| format!("load history failed: {error}"))?;
-    Ok(format_prompt_context_history_lines(&entries))
-}
-
-fn parse_safe_lane_summary_limit(input: &str, default_window: usize) -> CliResult<Option<usize>> {
-    parse_summary_limit(
-        input,
-        default_window,
-        &["/safe_lane_summary", "/safe-lane-summary"],
-    )
-}
-
-fn parse_fast_lane_summary_limit(input: &str, default_window: usize) -> CliResult<Option<usize>> {
-    parse_summary_limit(
-        input,
-        default_window,
-        &["/fast_lane_summary", "/fast-lane-summary"],
-    )
-}
-
-fn parse_summary_limit(
-    input: &str,
-    default_window: usize,
-    aliases: &[&str],
-) -> CliResult<Option<usize>> {
-    let Some(primary_alias) = aliases.first().copied() else {
-        return Ok(None);
-    };
-
-    let mut tokens = input.split_whitespace();
-    let Some(command) = tokens.next() else {
-        return Ok(None);
-    };
-    if !aliases.contains(&command) {
-        return Ok(None);
-    }
-
-    let usage = format!("usage: {primary_alias} [limit]");
-    let default_limit = default_window.saturating_mul(4).max(64);
-    let limit = match tokens.next() {
-        Some(raw) => raw
-            .parse::<usize>()
-            .map_err(|error| format!("invalid {primary_alias} limit `{raw}`: {error}; {usage}"))?,
-        None => default_limit,
-    };
-    if limit == 0 {
-        return Err(format!("invalid {primary_alias} limit `0`; {usage}"));
-    }
-    if tokens.next().is_some() {
-        return Err(usage);
-    }
-    Ok(Some(limit))
-}
-
-fn parse_turn_checkpoint_summary_limit(
-    input: &str,
-    default_window: usize,
-) -> CliResult<Option<usize>> {
-    parse_summary_limit(
-        input,
-        default_window,
-        &["/turn_checkpoint_summary", "/turn-checkpoint-summary"],
-    )
-}
-
-fn is_turn_checkpoint_repair_command(input: &str) -> CliResult<bool> {
-    let mut tokens = input.split_whitespace();
-    let Some(command) = tokens.next() else {
-        return Ok(false);
-    };
-    if command != "/turn_checkpoint_repair" && command != "/turn-checkpoint-repair" {
-        return Ok(false);
-    }
-    if tokens.next().is_some() {
-        return Err("usage: /turn_checkpoint_repair".to_owned());
-    }
-    Ok(true)
-}
-
-#[allow(clippy::print_stdout)] // CLI output
 async fn print_fast_lane_summary(
     session_id: &str,
     limit: usize,
@@ -2737,7 +1601,7 @@ fn render_cli_chat_feature_unavailable_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_cli_chat_feature_unavailable_message_spec(role, detail);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -2752,7 +1616,9 @@ fn build_cli_chat_feature_unavailable_message_spec(role: &str, detail: &str) -> 
         role: role.to_owned(),
         caption: Some("unavailable".to_owned()),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Feature gated in this build; /help shows the available chat surface.".to_owned(),
+        ],
     }
 }
 
@@ -2818,7 +1684,7 @@ fn render_turn_checkpoint_health_error_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_turn_checkpoint_health_error_message_spec(session_id, error);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -2846,119 +1712,25 @@ fn build_turn_checkpoint_health_error_message_spec(
         role: "checkpoint".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Durability state is unavailable until the next successful checkpoint sample."
+                .to_owned(),
+        ],
     }
 }
 
+#[cfg(test)]
 #[cfg(any(test, feature = "memory-sqlite"))]
 fn render_turn_checkpoint_startup_health_lines_with_width(
     session_id: &str,
     diagnostics: &TurnCheckpointDiagnostics,
     width: usize,
 ) -> Option<Vec<String>> {
-    let message_spec = build_turn_checkpoint_startup_health_message_spec(session_id, diagnostics)?;
-    let rendered_lines = render_tui_message_spec(&message_spec, width);
-
-    Some(rendered_lines)
-}
-
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn build_turn_checkpoint_startup_health_message_spec(
-    session_id: &str,
-    diagnostics: &TurnCheckpointDiagnostics,
-) -> Option<TuiMessageSpec> {
-    let summary = diagnostics.summary();
-    if !summary.checkpoint_durable {
-        return None;
-    }
-
-    let render_labels = TurnCheckpointSummaryRenderLabels::from_summary(summary);
-    let durability_labels = TurnCheckpointDurabilityRenderLabels::from_summary(summary);
-    let recovery_labels =
-        TurnCheckpointRecoveryRenderLabels::from_assessment(diagnostics.recovery());
-    let failure_step = format_turn_checkpoint_failure_step(summary.latest_failure_step);
-    let recovery_needed = bool_yes_no_value(summary.requires_recovery);
-    let reply_durable = bool_yes_no_value(summary.reply_durable);
-    let checkpoint_durable = bool_yes_no_value(summary.checkpoint_durable);
-    let recovery_tone = recovery_callout_tone(summary.requires_recovery);
-    let caption = format!("session={session_id}");
-    let recovery_reason = recovery_labels.reason.to_owned();
-
-    let mut sections = vec![
-        TuiSectionSpec::KeyValues {
-            title: Some("durability status".to_owned()),
-            items: vec![
-                tui_plain_item("state", render_labels.session_state.to_owned()),
-                tui_plain_item("durability", durability_labels.durability.to_owned()),
-                tui_plain_item("reply durable", reply_durable),
-                tui_plain_item("checkpoint durable", checkpoint_durable),
-            ],
-        },
-        TuiSectionSpec::Callout {
-            tone: recovery_tone,
-            title: Some("recovery".to_owned()),
-            lines: vec![
-                format!("recovery needed: {recovery_needed}"),
-                format!("action: {}", recovery_labels.action),
-                format!("source: {}", recovery_labels.source),
-                format!("reason: {recovery_reason}"),
-            ],
-        },
-        TuiSectionSpec::KeyValues {
-            title: Some("latest turn".to_owned()),
-            items: vec![
-                tui_plain_item("stage", render_labels.stage.to_owned()),
-                tui_plain_item("after turn", render_labels.after_turn.to_owned()),
-                tui_plain_item("compaction", render_labels.compaction.to_owned()),
-                tui_plain_item("lane", render_labels.lane.to_owned()),
-                tui_plain_item("result kind", render_labels.result_kind.to_owned()),
-                tui_plain_item(
-                    "persistence mode",
-                    render_labels.persistence_mode.to_owned(),
-                ),
-                tui_plain_item("identity", render_labels.identity.to_owned()),
-                tui_plain_item("failure step", failure_step.to_owned()),
-            ],
-        },
-    ];
-
-    if render_labels.safe_lane_route_decision != "-"
-        || render_labels.safe_lane_route_reason != "-"
-        || render_labels.safe_lane_route_source != "-"
-    {
-        sections.push(TuiSectionSpec::KeyValues {
-            title: Some("safe-lane route".to_owned()),
-            items: vec![
-                tui_plain_item(
-                    "decision",
-                    render_labels.safe_lane_route_decision.to_owned(),
-                ),
-                tui_plain_item("reason", render_labels.safe_lane_route_reason.to_owned()),
-                tui_plain_item("source", render_labels.safe_lane_route_source.to_owned()),
-            ],
-        });
-    }
-
-    if let Some(probe) = diagnostics.runtime_probe() {
-        let probe_lines = vec![
-            format!("action: {}", probe.action().as_str()),
-            format!("source: {}", probe.source().as_str()),
-            format!("reason: {}", probe.reason().as_str()),
-        ];
-
-        sections.push(TuiSectionSpec::Callout {
-            tone: TuiCalloutTone::Info,
-            title: Some("runtime probe".to_owned()),
-            lines: probe_lines,
-        });
-    }
-
-    Some(TuiMessageSpec {
-        role: "checkpoint".to_owned(),
-        caption: Some(caption),
-        sections,
-        footer_lines: Vec::new(),
-    })
+    operator_surfaces::render_turn_checkpoint_startup_health_lines_with_width(
+        session_id,
+        diagnostics,
+        width,
+    )
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -2969,7 +1741,7 @@ fn render_fast_lane_summary_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_fast_lane_summary_message_spec(session_id, limit, summary);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -3154,7 +1926,10 @@ fn build_fast_lane_summary_message_spec(
         role: "fast-lane".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Use /fast_lane_summary after tool-heavy turns to inspect concurrency behavior."
+                .to_owned(),
+        ],
     }
 }
 
@@ -3208,7 +1983,7 @@ fn render_safe_lane_summary_lines_with_width(
 ) -> Vec<String> {
     let message_spec =
         build_safe_lane_summary_message_spec(session_id, limit, conversation_config, summary);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -3515,7 +2290,9 @@ fn build_safe_lane_summary_message_spec(
         role: "safe-lane".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Use /safe_lane_summary when verify/replan behavior needs inspection.".to_owned(),
+        ],
     }
 }
 
@@ -3545,7 +2322,7 @@ fn render_turn_checkpoint_summary_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_turn_checkpoint_summary_message_spec(session_id, limit, diagnostics);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -3665,7 +2442,9 @@ fn build_turn_checkpoint_summary_message_spec(
         role: "checkpoint".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Use /turn_checkpoint_repair when the latest durable state needs repair.".to_owned(),
+        ],
     }
 }
 
@@ -3695,7 +2474,7 @@ fn render_turn_checkpoint_repair_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_turn_checkpoint_repair_message_spec(session_id, outcome);
-    render_tui_message_spec(&message_spec, width)
+    render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -3756,7 +2535,9 @@ fn build_turn_checkpoint_repair_message_spec(
         role: "repair".to_owned(),
         caption: Some(caption),
         sections,
-        footer_lines: Vec::new(),
+        footer_lines: vec![
+            "Re-run /status after repair to confirm the checkpoint state.".to_owned(),
+        ],
     }
 }
 
@@ -4494,6 +3275,7 @@ fn format_average(sum: u64, samples: u32) -> String {
 mod tests {
     use super::*;
     use crate::conversation::ConversationRuntimeBinding;
+    use serde_json::json;
     use std::ffi::OsStr;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -4513,7 +3295,59 @@ mod tests {
         MemoryCoreRequest, StaticPolicyEngine, VerticalPackManifest,
     };
     #[cfg(feature = "memory-sqlite")]
-    use serde_json::{Value, json};
+    use serde_json::Value;
+
+    #[cfg(feature = "memory-sqlite")]
+    fn test_config() -> LoongClawConfig {
+        let mut config = LoongClawConfig::default();
+        config.provider = crate::config::ProviderConfig::default();
+        config.audit.mode = crate::config::AuditMode::InMemory;
+        config
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn test_kernel_context_with_memory(
+        agent_id: &str,
+        memory_config: &MemoryRuntimeConfig,
+    ) -> crate::KernelContext {
+        let clock = Arc::new(FixedClock::new(1_700_000_000));
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+        let pack = VerticalPackManifest {
+            pack_id: "test-pack-memory".to_owned(),
+            domain: "testing".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
+            metadata: BTreeMap::new(),
+        };
+
+        kernel
+            .register_pack(pack)
+            .expect("register memory test pack");
+
+        let adapter = crate::memory::MvpMemoryAdapter::with_config(memory_config.clone());
+        kernel.register_core_memory_adapter(adapter);
+
+        kernel
+            .set_default_core_memory_adapter("mvp-memory")
+            .expect("set memory test adapter");
+
+        let token = kernel
+            .issue_token("test-pack-memory", agent_id, 60)
+            .expect("issue memory test token");
+
+        crate::KernelContext {
+            kernel: Arc::new(kernel),
+            token,
+        }
+    }
+
     #[test]
     fn cli_chat_options_detect_explicit_acp_requests() {
         assert!(
@@ -4617,6 +3451,7 @@ mod tests {
         cleanup_chat_test_memory(&sqlite_path);
 
         let mut config = LoongClawConfig::default();
+        config.audit.mode = crate::config::AuditMode::InMemory;
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
         crate::memory::ensure_memory_db_ready(
@@ -4626,6 +3461,16 @@ mod tests {
         .expect("initialize sqlite memory");
 
         (config, memory_config, sqlite_path)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn init_chat_test_memory_uses_in_memory_audit_mode() {
+        let (config, _memory_config, sqlite_path) = init_chat_test_memory("audit-mode");
+
+        assert_eq!(config.audit.mode, crate::config::AuditMode::InMemory);
+
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -5383,6 +4228,11 @@ mod tests {
                 session_id: "default".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "config".to_owned(),
+                compaction_enabled: true,
+                compaction_min_messages: Some(6),
+                compaction_trigger_estimated_tokens: Some(120),
+                compaction_preserve_recent_turns: 4,
+                compaction_fail_open: false,
                 acp_enabled: true,
                 dispatch_enabled: true,
                 conversation_routing: "automatic".to_owned(),
@@ -5416,16 +4266,26 @@ mod tests {
             "chat startup should keep the usage hint, but under the assistant-first opening block: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "session details"),
+            lines.iter().any(|line| line.contains("session details")),
             "chat startup should keep session/config facts in a structured key-value section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "runtime details"),
+            lines.iter().any(|line| line.contains("runtime details")),
             "chat startup should still preserve runtime context in a compact secondary section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "- session: default"),
+            lines
+                .iter()
+                .any(|line| line.contains("continuity maintenance")),
+            "chat startup should show compaction maintenance settings in a dedicated section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("- session: default")),
             "chat startup should continue to show session identity after the handoff block: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("- compaction: true")),
+            "chat startup should show whether automatic compaction is enabled: {lines:#?}"
         );
     }
 
@@ -5438,6 +4298,11 @@ mod tests {
                 session_id: "thread-42".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "env".to_owned(),
+                compaction_enabled: true,
+                compaction_min_messages: Some(6),
+                compaction_trigger_estimated_tokens: Some(120),
+                compaction_preserve_recent_turns: 4,
+                compaction_fail_open: false,
                 acp_enabled: true,
                 dispatch_enabled: true,
                 conversation_routing: "manual".to_owned(),
@@ -5453,20 +4318,77 @@ mod tests {
         );
 
         assert!(
-            lines.iter().any(|line| { line == "note: acp overrides" }),
+            lines
+                .iter()
+                .any(|line| line.contains("note: acp overrides")),
             "chat startup should group ACP overrides under a dedicated callout heading: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- bootstrap MCP servers: filesystem"),
+                .any(|line| line.contains("- bootstrap MCP servers: filesystem")),
             "chat startup should still surface the bootstrap MCP override details: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- working directory: /workspace/project"),
+                .any(|line| line.contains("- working directory: /workspace/project")),
             "chat startup should still surface the working directory override: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_status_lines_focus_on_runtime_state_without_start_here() {
+        let lines = render_cli_chat_status_lines_with_width(
+            &CliChatStartupSummary {
+                config_path: "/tmp/loongclaw.toml".to_owned(),
+                memory_label: "/tmp/loongclaw.db".to_owned(),
+                session_id: "default".to_owned(),
+                context_engine_id: "threaded".to_owned(),
+                context_engine_source: "config".to_owned(),
+                compaction_enabled: true,
+                compaction_min_messages: Some(6),
+                compaction_trigger_estimated_tokens: Some(120),
+                compaction_preserve_recent_turns: 4,
+                compaction_fail_open: false,
+                acp_enabled: true,
+                dispatch_enabled: true,
+                conversation_routing: "automatic".to_owned(),
+                allowed_channels: vec!["cli".to_owned()],
+                acp_backend_id: "builtin".to_owned(),
+                acp_backend_source: "default".to_owned(),
+                explicit_acp_request: false,
+                event_stream_enabled: false,
+                bootstrap_mcp_servers: Vec::new(),
+                working_directory: None,
+            },
+            80,
+        );
+
+        assert_eq!(lines[0], "╭─ status · session=default");
+        assert!(
+            lines.iter().any(|line| line.contains("session details")),
+            "status output should keep session facts grouped under a section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("runtime details")),
+            "status output should keep runtime facts grouped under a section: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("continuity maintenance")),
+            "status output should surface compaction maintenance settings: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("note: operator controls")),
+            "status output should include the operator control callout: {lines:#?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.starts_with("start here:")),
+            "status output should not re-render the first-turn guidance block: {lines:#?}"
         );
     }
 
@@ -5548,24 +4470,104 @@ mod tests {
         )
         .expect("startup health surface");
 
-        assert_eq!(lines[0], "checkpoint: session=session-health");
+        assert_eq!(lines[0], "╭─ checkpoint · session=session-health");
         assert!(
-            lines.iter().any(|line| line == "durability status"),
+            lines.iter().any(|line| line.contains("durability status")),
             "startup health should group durability facts under a shared key-value section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "attention: recovery"),
+            lines
+                .iter()
+                .any(|line| line.contains("attention: recovery")),
             "startup health should surface pending recovery as a warning callout: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- action: inspect_manually"),
+                .any(|line| line.contains("- action: inspect_manually")),
             "startup health should preserve the concrete recovery action in the callout: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: runtime probe"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: runtime probe")),
             "startup health should surface runtime probe context as a secondary structured callout: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_turn_checkpoint_startup_health_lines_skip_non_durable_sessions() {
+        let summary = TurnCheckpointEventSummary {
+            session_state: TurnCheckpointSessionState::NotDurable,
+            checkpoint_durable: false,
+            reply_durable: false,
+            ..TurnCheckpointEventSummary::default()
+        };
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+
+        let lines = render_turn_checkpoint_startup_health_lines_with_width(
+            "session-health",
+            &diagnostics,
+            80,
+        );
+
+        assert!(
+            lines.is_none(),
+            "startup health should stay quiet until a durable checkpoint exists"
+        );
+    }
+
+    #[test]
+    fn render_turn_checkpoint_startup_health_lines_surface_non_durable_recovery() {
+        let summary = TurnCheckpointEventSummary {
+            session_state: TurnCheckpointSessionState::NotDurable,
+            checkpoint_durable: false,
+            reply_durable: false,
+            requires_recovery: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+
+        let lines = render_turn_checkpoint_startup_health_lines_with_width(
+            "session-health",
+            &diagnostics,
+            80,
+        )
+        .expect("non-durable recovery should still render");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("recovery needed: yes")),
+            "startup health should surface non-durable recovery cases: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_turn_checkpoint_status_health_lines_surface_non_durable_sessions() {
+        let summary = TurnCheckpointEventSummary {
+            session_state: TurnCheckpointSessionState::NotDurable,
+            checkpoint_durable: false,
+            reply_durable: false,
+            ..TurnCheckpointEventSummary::default()
+        };
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+        let lines = operator_surfaces::render_turn_checkpoint_status_health_lines_with_width(
+            "session-health",
+            &diagnostics,
+            80,
+        );
+
+        assert_eq!(lines[0], "╭─ checkpoint · session=session-health");
+        assert!(
+            lines.iter().any(|line| line.contains("state: not_durable")),
+            "status health should surface non-durable sessions explicitly: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("checkpoint durable: no")),
+            "status health should surface checkpoint durability explicitly: {lines:#?}"
         );
     }
 
@@ -5613,18 +4615,20 @@ mod tests {
 
         let lines = render_fast_lane_summary_lines_with_width("session-fast", 64, &summary, 80);
 
-        assert_eq!(lines[0], "fast-lane: session=session-fast limit=64");
+        assert_eq!(lines[0], "╭─ fast-lane · session=session-fast limit=64");
         assert!(
-            lines.iter().any(|line| line == "intent mix"),
+            lines.iter().any(|line| line.contains("intent mix")),
             "fast-lane summary should promote aggregate intent counters into a titled section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "latest segments"),
+            lines.iter().any(|line| line.contains("latest segments")),
             "fast-lane summary should keep the latest segment narrative visible: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| {
-                line == "- segment 0: class=parallel_safe mode=parallel intents=2 peak=3 wall_ms=120"
+                line.contains(
+                    "- segment 0: class=parallel_safe mode=parallel intents=2 peak=3 wall_ms=120",
+                )
             }),
             "fast-lane summary should render latest segment details as readable surface lines: {lines:#?}"
         );
@@ -5673,17 +4677,19 @@ mod tests {
         let lines =
             render_safe_lane_summary_lines_with_width("session-safe", 32, &config, &summary, 80);
 
-        assert_eq!(lines[0], "safe-lane: session=session-safe limit=32");
+        assert_eq!(lines[0], "╭─ safe-lane · session=session-safe limit=32");
         assert!(
-            lines.iter().any(|line| line == "attention: health"),
+            lines.iter().any(|line| line.contains("attention: health")),
             "safe-lane summary should surface warning health as a structured callout: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "- severity: critical"),
+            lines
+                .iter()
+                .any(|line| line.contains("- severity: critical")),
             "safe-lane health callout should preserve the derived severity: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "rollups"),
+            lines.iter().any(|line| line.contains("rollups")),
             "safe-lane summary should keep the route and failure rollups in a dedicated section: {lines:#?}"
         );
     }
@@ -5720,13 +4726,15 @@ mod tests {
             80,
         );
 
-        assert_eq!(lines[0], "checkpoint: session=session-summary limit=64");
+        assert_eq!(lines[0], "╭─ checkpoint · session=session-summary limit=64");
         assert!(
-            lines.iter().any(|line| line == "summary"),
+            lines.iter().any(|line| line.contains("summary")),
             "turn checkpoint summary should group the latest durability state in a titled section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: runtime probe"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: runtime probe")),
             "turn checkpoint summary should append runtime probe context as a structured callout: {lines:#?}"
         );
     }
@@ -5751,13 +4759,15 @@ mod tests {
         );
         let lines = render_turn_checkpoint_repair_lines_with_width("session-repair", &outcome, 80);
 
-        assert_eq!(lines[0], "repair: session=session-repair");
+        assert_eq!(lines[0], "╭─ repair · session=session-repair");
         assert!(
-            lines.iter().any(|line| line == "repair status"),
+            lines.iter().any(|line| line.contains("repair status")),
             "turn checkpoint repair should group repair facts in a structured key-value section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "attention: repair result"),
+            lines
+                .iter()
+                .any(|line| line.contains("attention: repair result")),
             "manual repair outcomes should surface a warning callout: {lines:#?}"
         );
     }
@@ -5766,20 +4776,138 @@ mod tests {
     fn render_cli_chat_help_lines_promotes_commands_to_surface() {
         let lines = render_cli_chat_help_lines_with_width(72);
 
-        assert_eq!(lines[0], "chat: commands");
+        assert_eq!(lines[0], "╭─ chat · commands");
         assert!(
-            lines.iter().any(|line| line == "slash commands"),
+            lines.iter().any(|line| line.contains("slash commands")),
             "help output should keep a dedicated slash-command section: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- /history: print the current session sliding window"),
+                .any(|line| line.contains("/history: print the current session sliding window")),
             "help output should render slash commands as readable key-value rows: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: usage notes"),
+            lines.iter().any(|line| line
+                .contains("/status: show session, runtime, compaction, and durability status")),
+            "help output should surface the status command: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line
+                .contains("/compact: write a continuity-safe checkpoint into the active window")),
+            "help output should surface the manual compaction command: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("note: usage notes")),
             "help output should preserve operator guidance as a callout: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_command_usage_lines_wrap_usage_in_warning_card() {
+        let lines = render_cli_chat_command_usage_lines_with_width("usage: /history", 72);
+
+        assert_eq!(lines[0], "╭─ chat · command");
+        assert!(
+            lines.iter().any(|line| line.contains("attention: usage")),
+            "usage errors should render inside a warning pane: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("usage: /history")),
+            "usage pane should preserve the concrete command usage: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
+        let summary = CliChatStartupSummary {
+            config_path: "/tmp/loongclaw.toml".to_owned(),
+            memory_label: "window_plus_summary".to_owned(),
+            session_id: "session-status".to_owned(),
+            context_engine_id: "default".to_owned(),
+            context_engine_source: "config".to_owned(),
+            compaction_enabled: true,
+            compaction_min_messages: Some(6),
+            compaction_trigger_estimated_tokens: Some(12_000),
+            compaction_preserve_recent_turns: 4,
+            compaction_fail_open: true,
+            acp_enabled: true,
+            dispatch_enabled: true,
+            conversation_routing: "auto".to_owned(),
+            allowed_channels: vec!["cli".to_owned()],
+            acp_backend_id: "builtin".to_owned(),
+            acp_backend_source: "config".to_owned(),
+            explicit_acp_request: false,
+            event_stream_enabled: false,
+            bootstrap_mcp_servers: Vec::new(),
+            working_directory: None,
+        };
+
+        let lines = render_cli_chat_status_lines_with_width(&summary, 80);
+
+        assert_eq!(lines[0], "╭─ status · session=session-status");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("continuity maintenance")),
+            "status output should expose compaction settings as a dedicated section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("compaction: true")),
+            "status output should expose compaction enablement: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("trigger tokens: 12000")),
+            "status output should surface the compaction token trigger: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("note: operator controls")),
+            "status output should append the operator controls callout: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("checkpoint the active session window on demand")),
+            "status output should direct operators toward manual compaction: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_manual_compaction_lines_surface_structured_result() {
+        let result = ManualCompactionResult {
+            status: ManualCompactionStatus::Applied,
+            before_turns: 8,
+            after_turns: 3,
+            estimated_tokens_before: Some(1200),
+            estimated_tokens_after: Some(420),
+            summary_headline: Some("Compacted 6 earlier turns".to_owned()),
+            detail: "Compacted 6 earlier turns. Session-local recall only. It does not replace Runtime Self Context.".to_owned(),
+        };
+
+        let lines = render_manual_compaction_lines_with_width("session-compact", &result, 80);
+
+        assert_eq!(lines[0], "╭─ compact · session=session-compact");
+        assert!(
+            lines.iter().any(|line| line.contains("compaction result")),
+            "manual compaction should render a dedicated result section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("status: applied")),
+            "manual compaction should surface the applied status: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("tokens after: 420")),
+            "manual compaction should surface token estimates: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Runtime Self Context")),
+            "manual compaction should preserve the continuity boundary detail: {lines:#?}"
         );
     }
 
@@ -5791,15 +4919,15 @@ mod tests {
         ];
         let lines = render_cli_chat_history_lines_with_width("session-7", 24, &history_lines, 72);
 
-        assert_eq!(lines[0], "history: session=session-7 limit=24");
+        assert_eq!(lines[0], "╭─ history · session=session-7 limit=24");
         assert!(
-            lines.iter().any(|line| line == "sliding window"),
+            lines.iter().any(|line| line.contains("sliding window")),
             "history output should keep a dedicated window section: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "user: summarize the current repo"),
+                .any(|line| line.contains("user: summarize the current repo")),
             "history output should still surface the original transcript entries: {lines:#?}"
         );
     }
@@ -5819,33 +4947,37 @@ println!(\"{value}\");
 ```";
         let lines = render_cli_chat_assistant_lines_with_width(assistant_text, 72);
 
-        assert_eq!(lines[0], "loong: reply");
+        assert_eq!(lines[0], "╭─ loong · reply");
         assert!(
-            lines.iter().any(|line| line == "Plan"),
+            lines.iter().any(|line| line.contains("Plan")),
             "markdown headings should become section titles: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- inspect the active config"),
+                .any(|line| line.contains("- inspect the active config")),
             "markdown list items should remain visible in the narrative block: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "- compare runtime state"),
+            lines
+                .iter()
+                .any(|line| line.contains("- compare runtime state")),
             "markdown star bullets should normalize into wrapped display bullets: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "note: quoted context"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: quoted context")),
             "markdown blockquotes should render as structured callouts: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "code [rust]"),
+            lines.iter().any(|line| line.contains("code [rust]")),
             "markdown fences should render as preformatted sections: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "    let value = input.trim();"),
+                .any(|line| line.contains("let value = input.trim();")),
             "preformatted sections should keep code indentation intact: {lines:#?}"
         );
     }
@@ -5860,19 +4992,41 @@ println!(\"{value}\");
         let lines = render_cli_chat_assistant_lines_with_width(assistant_text, 72);
 
         assert!(
-            lines.iter().any(|line| line == "note: Risks"),
+            lines.iter().any(|line| line.contains("note: Risks")),
             "headings should stay attached to quoted sections instead of falling back to a generic title: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- keep credentials in env vars"),
+                .any(|line| line.contains("- keep credentials in env vars")),
             "quoted content should stay visible after preserving the heading: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "Next"),
+            lines.iter().any(|line| line.contains("Next")),
             "a trailing heading should still render even when it has no body lines yet: {lines:#?}"
         );
+    }
+
+    #[test]
+    fn parse_cli_chat_markdown_sections_promotes_reasoning_heading_to_callout() {
+        let sections = parse_cli_chat_markdown_sections(
+            "## Reasoning\nThe provider compared two options before choosing one.",
+        );
+        assert!(matches!(
+            sections.first(),
+            Some(TuiSectionSpec::Callout { title, .. }) if title.as_deref() == Some("reasoning")
+        ));
+    }
+
+    #[test]
+    fn parse_cli_chat_markdown_sections_promotes_tool_activity_heading_to_callout() {
+        let sections = parse_cli_chat_markdown_sections(
+            "## Tool Activity\nfile.read completed with 1 result line.",
+        );
+        assert!(matches!(
+            sections.first(),
+            Some(TuiSectionSpec::Callout { title, .. }) if title.as_deref() == Some("tool activity")
+        ));
     }
 
     #[test]
@@ -5918,23 +5072,24 @@ allowed_decisions: yes / auto / full / esc";
             message_count: Some(4),
             estimated_tokens: Some(128),
             draft_preview: Some("Inspecting the repo layout...".to_owned()),
-            tool_activity_lines: Vec::new(),
+            tools: Vec::new(),
         };
         let lines = render_cli_chat_live_surface_lines_with_width(&snapshot, 72);
 
-        assert_eq!(lines[0], "loong: live");
+        assert_eq!(lines[0], "╭─ loong · live · round 1 · 4 msgs · ~128 tok");
         assert!(
-            lines.iter().any(|line| line == "note: querying model"),
+            lines
+                .iter()
+                .any(|line| line.contains("note: querying model")),
             "live surface should explain the active phase through a callout: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "turn pipeline"),
+            lines.iter().any(|line| line.contains("turn pipeline")),
             "live surface should keep the pipeline checklist visible: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| {
-                line.starts_with("[WARN] call model")
-                    && line.contains("provider round 1 in progress")
+                line.contains("[WARN] call model") && line.contains("provider round 1 in progress")
             }),
             "live surface should keep the model step actively highlighted: {lines:#?}"
         );
@@ -5945,13 +5100,13 @@ allowed_decisions: yes / auto / full / esc";
             "live surface should avoid claiming streaming when the snapshot does not encode that capability: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line == "draft preview"),
+            lines.iter().any(|line| line.contains("draft preview")),
             "live surface should surface partial text as a dedicated preview block: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "Inspecting the repo layout..."),
+                .any(|line| line.contains("Inspecting the repo layout...")),
             "live surface should preserve the partial preview text: {lines:#?}"
         );
     }
@@ -5995,10 +5150,12 @@ allowed_decisions: yes / auto / full / esc";
 
         let preview_batch = batches
             .iter()
-            .find(|lines| lines.iter().any(|line| line == "draft preview"))
+            .find(|lines| lines.iter().any(|line| line.contains("draft preview")))
             .expect("preview batch");
         assert!(
-            preview_batch.iter().any(|line| line == "Draft response"),
+            preview_batch
+                .iter()
+                .any(|line| line.contains("Draft response")),
             "preview batch should include the streamed text: {preview_batch:#?}"
         );
     }
@@ -6057,7 +5214,7 @@ allowed_decisions: yes / auto / full / esc";
             .expect("captured batches lock should not be poisoned");
         let running_batch = batches
             .iter()
-            .find(|lines| lines.iter().any(|line| line == "tool activity"))
+            .find(|lines| lines.iter().any(|line| line.contains("tool activity")))
             .expect("running tool batch");
         let completed_batch = batches
             .iter()
@@ -6065,29 +5222,158 @@ allowed_decisions: yes / auto / full / esc";
             .find(|lines| {
                 lines
                     .iter()
-                    .any(|line| line == "[completed] file.read (id=call-tool-1) - ok")
+                    .any(|line| line.contains("[completed] file.read (id=call-tool-1) - ok"))
             })
             .expect("completed tool batch");
 
         assert!(
             running_batch
                 .iter()
-                .any(|line| line == "[running] file.read (id=call-tool-1)"),
+                .any(|line| line.contains("[running] file.read (id=call-tool-1)")),
             "tool batch should surface the running tool state: {running_batch:#?}"
         );
 
         assert!(
             completed_batch
                 .iter()
-                .any(|line| line == "[completed] file.read (id=call-tool-1) - ok"),
+                .any(|line| line.contains("[completed] file.read (id=call-tool-1) - ok")),
             "tool batch should surface the completed tool state: {completed_batch:#?}"
         );
         assert!(
             completed_batch
                 .iter()
-                .any(|line| line == "args: {\"path\":\"README.md\"}"),
+                .any(|line| line.contains("args: {\"path\":\"README.md\"}")),
             "tool batch should preserve streamed tool args: {completed_batch:#?}"
         );
+    }
+
+    #[test]
+    fn cli_chat_live_surface_observer_renders_runtime_output_and_file_change_updates() {
+        let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+        let render_sink: CliChatLiveSurfaceSink = {
+            let captured_batches = Arc::clone(&captured_batches);
+            Arc::new(move |lines| {
+                let mut batches = captured_batches
+                    .lock()
+                    .expect("captured batches lock should not be poisoned");
+                batches.push(lines);
+            })
+        };
+        let observer = CliChatLiveSurfaceObserver::new(72, render_sink);
+
+        observer.on_phase(ConversationTurnPhaseEvent::running_tools(
+            1,
+            ExecutionLane::Fast,
+            1,
+        ));
+        observer.on_tool(
+            ConversationTurnToolEvent::running("call-tool-2", "shell.exec")
+                .with_request_summary(Some("{\"command\":\"printf\"}".to_owned())),
+        );
+        observer.on_runtime(ConversationTurnRuntimeEvent::new(
+            "call-tool-2",
+            ToolRuntimeEvent::OutputDelta(ToolOutputDelta {
+                stream: ToolRuntimeStream::Stdout,
+                chunk: "first line\nsecond line".to_owned(),
+                total_bytes: 22,
+                total_lines: 2,
+                truncated: false,
+            }),
+        ));
+        observer.on_runtime(ConversationTurnRuntimeEvent::new(
+            "call-tool-2",
+            ToolRuntimeEvent::FileChangePreview(ToolFileChangePreview {
+                path: "src/lib.rs".to_owned(),
+                kind: ToolFileChangeKind::Edit,
+                added_lines: 2,
+                removed_lines: 1,
+                preview: Some("@@ -1,1 +1,2 @@\n-old\n+new\n+line".to_owned()),
+            }),
+        ));
+        observer.on_runtime(ConversationTurnRuntimeEvent::new(
+            "call-tool-2",
+            ToolRuntimeEvent::CommandMetrics(ToolCommandMetrics {
+                exit_code: Some(0),
+                duration_ms: 42,
+            }),
+        ));
+        observer.on_tool(ConversationTurnToolEvent::completed(
+            "call-tool-2",
+            "shell.exec",
+            Some("ok".to_owned()),
+        ));
+
+        let batches = captured_batches
+            .lock()
+            .expect("captured batches lock should not be poisoned");
+        let final_batch = batches.last().expect("final runtime batch");
+
+        assert!(
+            final_batch
+                .iter()
+                .any(|line| line.contains("stdout: 2 lines · 22 bytes")),
+            "runtime output should surface stdout counters: {final_batch:#?}"
+        );
+        assert!(
+            final_batch.iter().any(|line| line.contains("first line")),
+            "runtime output should retain stdout preview lines: {final_batch:#?}"
+        );
+        assert!(
+            final_batch
+                .iter()
+                .any(|line| line.contains("file: edit src/lib.rs (+2 / -1)")),
+            "runtime output should surface file change summaries: {final_batch:#?}"
+        );
+        assert!(
+            final_batch
+                .iter()
+                .any(|line| line.contains("metrics: 42ms · exit=0")),
+            "runtime output should surface command metrics: {final_batch:#?}"
+        );
+    }
+
+    #[test]
+    fn build_cli_chat_live_surface_snapshot_preserves_structured_tool_state() {
+        let mut state = CliChatLiveSurfaceState {
+            latest_phase_event: Some(ConversationTurnPhaseEvent::running_tools(
+                1,
+                ExecutionLane::Fast,
+                1,
+            )),
+            ..CliChatLiveSurfaceState::default()
+        };
+
+        let tool_state = ensure_cli_chat_live_tool_state(&mut state, "call-structured");
+        tool_state.name = Some("shell.exec".to_owned());
+        tool_state.request_summary = Some("{\"command\":\"printf\"}".to_owned());
+        tool_state.args = "{\"command\":\"printf\"}".to_owned();
+        tool_state.stdout = CliChatLiveOutputView {
+            text: "hello".to_owned(),
+            total_bytes: 5,
+            total_lines: 1,
+            truncated: false,
+        };
+        tool_state.duration_ms = Some(12);
+        tool_state.exit_code = Some(0);
+
+        let snapshot =
+            build_cli_chat_live_surface_snapshot(&state).expect("snapshot should be available");
+        let tool = snapshot
+            .tools
+            .first()
+            .expect("snapshot should include one tool");
+
+        assert_eq!(snapshot.tools.len(), 1);
+        assert_eq!(tool.tool_call_id, "call-structured");
+        assert_eq!(tool.name.as_deref(), Some("shell.exec"));
+        assert_eq!(
+            tool.request_summary.as_deref(),
+            Some("{\"command\":\"printf\"}")
+        );
+        assert_eq!(tool.args, "{\"command\":\"printf\"}");
+        assert_eq!(tool.stdout.text, "hello");
+        assert_eq!(tool.duration_ms, Some(12));
+        assert_eq!(tool.exit_code, Some(0));
     }
 
     #[test]
@@ -6153,15 +5439,17 @@ allowed_decisions: yes / auto / full / esc";
         let last_batch = batches.last().expect("follow-up request batch");
 
         assert!(
-            !last_batch.iter().any(|line| line == "draft preview"),
+            !last_batch.iter().any(|line| line.contains("draft preview")),
             "follow-up provider requests should reset the previous draft preview: {last_batch:#?}"
         );
         assert!(
-            !last_batch.iter().any(|line| line == "tool activity"),
+            !last_batch.iter().any(|line| line.contains("tool activity")),
             "follow-up provider requests should not reuse prior tool activity lines: {last_batch:#?}"
         );
         assert!(
-            !last_batch.iter().any(|line| line == "Draft response"),
+            !last_batch
+                .iter()
+                .any(|line| line.contains("Draft response")),
             "follow-up provider requests should not carry the previous request preview text: {last_batch:#?}"
         );
     }
@@ -6225,13 +5513,13 @@ allowed_decisions: yes / auto / full / esc";
         let last_batch = batches.last().expect("running-tools batch");
 
         assert!(
-            last_batch.iter().any(|line| line == "tool activity"),
+            last_batch.iter().any(|line| line.contains("tool activity")),
             "the tools phase should render the accumulated tool activity: {last_batch:#?}"
         );
         assert!(
             last_batch
                 .iter()
-                .any(|line| line == "[running] search (id=call_123)"),
+                .any(|line| line.contains("[running] search (id=call_123)")),
             "the tools phase should surface the streamed tool metadata: {last_batch:#?}"
         );
     }
@@ -6422,6 +5710,157 @@ allowed_decisions: yes / auto / full / esc";
         let error = is_turn_checkpoint_repair_command("/turn_checkpoint_repair now")
             .expect_err("extra args should be rejected");
         assert!(error.contains("usage"));
+    }
+
+    #[test]
+    fn is_cli_chat_status_command_accepts_exact_match_and_rejects_extra_args() {
+        assert!(is_cli_chat_status_command("/status").expect("parse"));
+        assert!(!is_cli_chat_status_command("/history").expect("parse"));
+
+        let error =
+            is_cli_chat_status_command("/status now").expect_err("extra args should be rejected");
+        assert_eq!(error, "usage: /status");
+    }
+
+    #[test]
+    fn is_manual_compaction_command_accepts_exact_match_and_rejects_extra_args() {
+        assert!(is_manual_compaction_command("/compact").expect("parse"));
+        assert!(!is_manual_compaction_command("/history").expect("parse"));
+
+        let error = is_manual_compaction_command("/compact now")
+            .expect_err("extra args should be rejected");
+        assert_eq!(error, "usage: /compact");
+    }
+
+    #[test]
+    fn help_and_history_commands_reject_extra_args() {
+        let help_error =
+            parse_exact_chat_command("/help now", &[CLI_CHAT_HELP_COMMAND], "usage: /help")
+                .expect_err("help should reject extra args");
+        assert_eq!(help_error, "usage: /help");
+
+        let history_error = parse_exact_chat_command(
+            "/history now",
+            &[CLI_CHAT_HISTORY_COMMAND],
+            "usage: /history",
+        )
+        .expect_err("history should reject extra args");
+        assert_eq!(history_error, "usage: /history");
+    }
+
+    #[test]
+    fn classify_chat_command_match_result_treats_usage_as_non_fatal() {
+        let usage_result =
+            classify_chat_command_match_result(Err("usage: /help".to_owned())).expect("classify");
+        assert_eq!(
+            usage_result,
+            ChatCommandMatchResult::UsageError("usage: /help".to_owned())
+        );
+
+        let matched_result =
+            classify_chat_command_match_result(Ok(true)).expect("classify matched");
+        assert_eq!(matched_result, ChatCommandMatchResult::Matched);
+
+        let not_matched_result =
+            classify_chat_command_match_result(Ok(false)).expect("classify non-match");
+        assert_eq!(not_matched_result, ChatCommandMatchResult::NotMatched);
+    }
+
+    #[test]
+    fn maybe_render_nonfatal_usage_error_accepts_embedded_usage_text() {
+        let error = "invalid fast lane summary limit `nope`; usage: /fast_lane_summary [limit]";
+        let usage_lines =
+            maybe_render_nonfatal_usage_error(error).expect("usage should render non-fatally");
+
+        assert!(
+            usage_lines
+                .iter()
+                .any(|line| line.contains("/fast_lane_summary [limit]")),
+            "embedded usage text should still render the usage card: {usage_lines:#?}"
+        );
+    }
+
+    #[test]
+    fn manual_compaction_status_from_report_maps_failed_open() {
+        let report = ContextCompactionReport {
+            status: TurnCheckpointProgressStatus::FailedOpen,
+            estimated_tokens_before: Some(420),
+            estimated_tokens_after: Some(420),
+        };
+
+        let status =
+            manual_compaction_status_from_report(&report).expect("failed_open should map cleanly");
+
+        assert_eq!(status, ManualCompactionStatus::FailedOpen);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn manual_compaction_result_applies_and_surfaces_continuity_checkpoint() {
+        let mut config = test_config();
+        let sqlite_path = unique_chat_sqlite_path("chat-manual-compaction");
+        cleanup_chat_test_memory(&sqlite_path);
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config.memory.sliding_window = 32;
+        config.conversation.compact_enabled = false;
+        config.conversation.compact_preserve_recent_turns = 2;
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let kernel_ctx = test_kernel_context_with_memory("chat-manual-compaction", &memory_config);
+        let session_id = "chat-manual-compaction";
+
+        for (role, content) in [
+            ("user", "ask 1"),
+            ("assistant", "reply 1"),
+            ("user", "ask 2"),
+            ("assistant", "reply 2"),
+            ("user", "ask 3"),
+            ("assistant", "reply 3"),
+            ("user", "recent ask"),
+            ("assistant", "recent reply"),
+        ] {
+            crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+                .expect("seed turns should succeed");
+        }
+
+        let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+        let turn_coordinator = ConversationTurnCoordinator::new();
+        let result = load_manual_compaction_result(&config, session_id, &turn_coordinator, binding)
+            .await
+            .expect("manual compaction should succeed");
+
+        assert_eq!(result.status, ManualCompactionStatus::Applied);
+        assert_eq!(result.before_turns, 8);
+        assert_eq!(result.after_turns, 3);
+        assert!(
+            result.estimated_tokens_before.is_some(),
+            "manual compaction should surface a before-token estimate"
+        );
+        assert!(
+            result.estimated_tokens_after.is_some(),
+            "manual compaction should surface an after-token estimate"
+        );
+        assert!(
+            result
+                .summary_headline
+                .as_deref()
+                .is_some_and(|headline| headline.contains("Compacted 6 earlier turns"))
+        );
+        assert!(
+            result.detail.contains("Runtime Self Context"),
+            "manual compaction detail should reuse the continuity boundary note"
+        );
+
+        let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+            .expect("window load should succeed");
+        assert!(
+            turns[0]
+                .content
+                .contains("Does not replace Runtime Self Context"),
+            "manual compaction should persist the continuity-aware checkpoint"
+        );
+
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     fn test_turn_checkpoint_diagnostics(

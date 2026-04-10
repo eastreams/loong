@@ -465,6 +465,10 @@ That gives LoongClaw a controlled migration path:
 - explicit by activation
 - conservative by runtime default
 
+The complementary [Plugin SDK And Ecosystem Strategy](plugin-sdk-and-ecosystem-strategy.md)
+document defines how marketplace packaging, SDK layering, and migration tooling
+should grow on top of this compatibility seam without widening the kernel.
+
 ## Future Extensions
 
 This model generalizes cleanly to other ecosystems.

@@ -269,7 +269,8 @@ pub(crate) fn apply_system_prompt_addition(
             addition,
             ContextArtifactKind::RuntimeContract,
         )
-        .with_dedupe_key("system-prompt-addition");
+        .with_dedupe_key("system-prompt-addition")
+        .with_cacheable(true);
 
         assembled.prompt_fragments.insert(0, fragment);
         sync_prompt_fragments_into_context(assembled);

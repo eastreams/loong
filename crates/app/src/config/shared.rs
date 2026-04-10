@@ -12,10 +12,12 @@ pub(super) const DEFAULT_CONFIG_FILE: &str = "config.toml";
 pub(super) const DEFAULT_SQLITE_FILE: &str = "memory.sqlite3";
 pub const CLI_COMMAND_NAME: &str = "loong";
 pub const LEGACY_CLI_COMMAND_NAME: &str = "loongclaw";
+pub const HOME_DIR_NAME: &str = ".loong";
+pub const LEGACY_HOME_DIR_NAME: &str = ".loongclaw";
 pub const PRODUCT_DISPLAY_NAME: &str = "LoongClaw";
 static ACTIVE_CLI_COMMAND_NAME: OnceLock<&'static str> = OnceLock::new();
 pub(super) const DEFAULT_FEISHU_SQLITE_FILE: &str = "feishu.sqlite3";
-pub(crate) const LOONGCLAW_HOME_ENV: &str = "LOONGCLAW_HOME";
+pub(crate) const LOONGCLAW_HOME_ENV: &str = "LOONG_HOME";
 
 fn normalize_cli_command_name(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case(LEGACY_CLI_COMMAND_NAME) {
@@ -518,7 +520,21 @@ fn resolve_loongclaw_home(
     loongclaw_home
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| resolve_user_home(home, userprofile).join(".loongclaw"))
+        .unwrap_or_else(|| resolve_user_home(home, userprofile).join(HOME_DIR_NAME))
+}
+
+/// Returns `Some(legacy_path)` if the legacy home exists but the new home does not.
+pub fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
+    let new_home = user_home.join(HOME_DIR_NAME);
+    if new_home.exists() {
+        return None;
+    }
+    let legacy_home = user_home.join(LEGACY_HOME_DIR_NAME);
+    if legacy_home.exists() {
+        Some(legacy_home)
+    } else {
+        None
+    }
 }
 
 pub(super) fn default_loongclaw_home() -> PathBuf {
@@ -951,7 +967,7 @@ mod tests {
         let resolved =
             resolve_loongclaw_home(Some(std::ffi::OsStr::new("")), Some(home.as_os_str()), None);
 
-        assert_eq!(resolved, home.join(".loongclaw"));
+        assert_eq!(resolved, home.join(".loong"));
     }
 
     #[test]
@@ -968,6 +984,72 @@ mod tests {
 
         let resolved = default_loongclaw_home();
 
-        assert_eq!(resolved, home.join(".loongclaw"));
+        assert_eq!(resolved, home.join(".loong"));
+    }
+
+    #[test]
+    fn default_loongclaw_home_reads_loong_home_env() {
+        let mut env = ScopedEnv::new();
+        let override_home = std::env::temp_dir().join("loong-home-env-test");
+        env.set(LOONGCLAW_HOME_ENV, &override_home);
+        env.remove("LOONGCLAW_HOME");
+
+        assert_eq!(default_loongclaw_home(), override_home);
+    }
+
+    #[test]
+    fn default_loongclaw_home_prefers_loong_home_over_loongclaw_home() {
+        let mut env = ScopedEnv::new();
+        let new_home = std::env::temp_dir().join("loong-home-preferred");
+        let old_home = std::env::temp_dir().join("loongclaw-home-deprecated");
+        env.set(LOONGCLAW_HOME_ENV, &new_home);
+        env.set("LOONGCLAW_HOME", &old_home);
+
+        // The active env constant reads the preferred name, so the legacy
+        // fallback stays ignored when both are present.
+        assert_eq!(default_loongclaw_home(), new_home);
+    }
+}
+
+#[cfg(test)]
+mod legacy_home_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn detect_legacy_home_finds_legacy_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join(".loongclaw");
+        fs::create_dir_all(&legacy).unwrap();
+        // .loong does NOT exist
+        let result = detect_legacy_home(temp.path());
+        assert!(
+            result.is_some(),
+            "should detect legacy home when .loongclaw exists but .loong does not"
+        );
+    }
+
+    #[test]
+    fn detect_legacy_home_no_warning_when_new_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let new_home = temp.path().join(".loong");
+        let legacy = temp.path().join(".loongclaw");
+        fs::create_dir_all(&new_home).unwrap();
+        fs::create_dir_all(&legacy).unwrap();
+        let result = detect_legacy_home(temp.path());
+        assert!(
+            result.is_none(),
+            "should not detect legacy when .loong already exists"
+        );
+    }
+
+    #[test]
+    fn detect_legacy_home_no_warning_fresh_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = detect_legacy_home(temp.path());
+        assert!(
+            result.is_none(),
+            "should not detect legacy on fresh install"
+        );
     }
 }

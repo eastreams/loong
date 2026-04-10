@@ -271,6 +271,7 @@ impl CoreToolAdapter for MockCoreTool {
     fn name(&self) -> &str {
         "core-tools"
     }
+
     async fn execute_core_tool(
         &self,
         request: ToolCoreRequest,

@@ -23,7 +23,7 @@ use crate::channel::{
         build_outbound_http_client, outbound_http_policy_from_config, validate_outbound_http_target,
     },
     process_inbound_with_provider,
-    runtime_state::ChannelOperationRuntimeTracker,
+    runtime::state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedWhatsappChannelConfig};
 
@@ -548,7 +548,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::channel::ChannelPlatform;
-    use crate::channel::runtime_state::start_channel_operation_runtime_tracker_for_test;
+    use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
     use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
 
     fn temp_webhook_test_dir(label: &str) -> PathBuf {

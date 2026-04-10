@@ -3,19 +3,26 @@ use std::ffi::OsStr;
 #[cfg(feature = "tool-shell")]
 use std::future::Future;
 #[cfg(feature = "tool-shell")]
-use std::io::ErrorKind;
-#[cfg(feature = "tool-shell")]
 use std::path::Path;
 #[cfg(feature = "tool-shell")]
 use std::process::{Output, Stdio};
 #[cfg(feature = "tool-shell")]
+use std::sync::Arc;
+#[cfg(feature = "tool-shell")]
 use std::thread;
 #[cfg(feature = "tool-shell")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(feature = "tool-shell")]
 use tokio::io::AsyncReadExt;
 #[cfg(feature = "tool-shell")]
 use tokio::process::Command;
+
+#[cfg(feature = "tool-shell")]
+use super::runtime_events::{
+    ToolCommandMetrics, ToolOutputDelta, ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream,
+};
+#[cfg(feature = "tool-shell")]
+use crate::process_launch::retry_executable_file_busy_async;
 
 #[cfg(feature = "tool-shell")]
 pub(super) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -65,12 +72,20 @@ where
 }
 
 #[cfg(feature = "tool-shell")]
-async fn read_capped<R>(mut reader: R, cap: usize, stream_name: &str) -> Result<Vec<u8>, String>
+async fn read_capped_with_runtime_events<R>(
+    mut reader: R,
+    cap: usize,
+    stream_name: &str,
+    stream: ToolRuntimeStream,
+    runtime_event_sink: Option<Arc<dyn ToolRuntimeEventSink>>,
+) -> Result<Vec<u8>, String>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut output = Vec::new();
     let mut buffer = [0_u8; 8_192];
+    let mut total_bytes = 0_usize;
+    let mut newline_count = 0_usize;
 
     loop {
         let read = reader
@@ -81,10 +96,33 @@ where
             break;
         }
 
+        total_bytes = total_bytes.saturating_add(read);
+        let chunk_bytes = buffer.get(..read).unwrap_or(buffer.as_slice());
+        let chunk_newlines = chunk_bytes.iter().filter(|byte| **byte == b'\n').count();
+        newline_count = newline_count.saturating_add(chunk_newlines);
+        let last_byte_was_newline = chunk_bytes.last().copied() == Some(b'\n');
+
         let remaining = cap.saturating_sub(output.len());
         if remaining > 0 {
             let to_copy = remaining.min(read);
-            output.extend(buffer.iter().take(to_copy).copied());
+            let retained_chunk = chunk_bytes.get(..to_copy).unwrap_or(chunk_bytes);
+            output.extend(retained_chunk.iter().copied());
+        }
+
+        let has_partial_final_line = total_bytes > 0 && !last_byte_was_newline;
+        let total_lines = newline_count + usize::from(has_partial_final_line);
+        let truncated = total_bytes > cap;
+
+        if let Some(sink) = runtime_event_sink.as_ref() {
+            let chunk_text = String::from_utf8_lossy(chunk_bytes).into_owned();
+            let event = ToolRuntimeEvent::OutputDelta(ToolOutputDelta {
+                stream,
+                chunk: chunk_text,
+                total_bytes,
+                total_lines,
+                truncated,
+            });
+            sink.emit(event);
         }
     }
 
@@ -92,42 +130,19 @@ where
 }
 
 #[cfg(feature = "tool-shell")]
-async fn retry_executable_file_busy<T, F>(mut operation: F) -> std::io::Result<T>
-where
-    F: FnMut() -> std::io::Result<T>,
-{
-    let mut attempt = 0;
-
-    loop {
-        attempt += 1;
-
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error) if should_retry_spawn_error(&error) && attempt < SPAWN_RETRY_ATTEMPTS => {
-                tokio::time::sleep(SPAWN_RETRY_DELAY).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-#[cfg(feature = "tool-shell")]
-fn should_retry_spawn_error(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::ExecutableFileBusy
-}
-
-#[cfg(feature = "tool-shell")]
-pub(super) async fn run_process_with_timeout<P, S>(
+pub(super) async fn run_process_with_timeout_with_sink<P, S>(
     program: P,
     args: &[S],
     cwd: &Path,
     timeout_ms: u64,
     error_prefix: &str,
+    runtime_event_sink: Option<Arc<dyn ToolRuntimeEventSink>>,
 ) -> Result<Output, String>
 where
     P: AsRef<OsStr>,
     S: AsRef<OsStr>,
 {
+    let started_at = Instant::now();
     let mut command = Command::new(program);
     let sanitized_env = loongclaw_contracts::sanitized_child_process_env();
 
@@ -140,9 +155,13 @@ where
     command.stdin(Stdio::null());
     command.kill_on_drop(true);
 
-    let mut child = retry_executable_file_busy(|| command.spawn())
-        .await
-        .map_err(|error| format!("{error_prefix} spawn failed: {error}"))?;
+    let mut child = retry_executable_file_busy_async(
+        || command.spawn(),
+        SPAWN_RETRY_ATTEMPTS,
+        SPAWN_RETRY_DELAY,
+    )
+    .await
+    .map_err(|error| format!("{error_prefix} spawn failed: {error}"))?;
 
     let duration = Duration::from_millis(timeout_ms.max(1));
     let stdout = child
@@ -154,12 +173,31 @@ where
         .take()
         .ok_or_else(|| format!("{error_prefix} stderr pipe missing"))?;
 
-    let stdout_task =
-        tokio::spawn(async move { read_capped(stdout, OUTPUT_CAP_BYTES, "stdout").await });
-    let stderr_task =
-        tokio::spawn(async move { read_capped(stderr, OUTPUT_CAP_BYTES, "stderr").await });
+    let metrics_runtime_event_sink = runtime_event_sink.clone();
+    let stdout_runtime_event_sink = runtime_event_sink.clone();
+    let stdout_task = tokio::spawn(async move {
+        read_capped_with_runtime_events(
+            stdout,
+            OUTPUT_CAP_BYTES,
+            "stdout",
+            ToolRuntimeStream::Stdout,
+            stdout_runtime_event_sink,
+        )
+        .await
+    });
+    let stderr_runtime_event_sink = runtime_event_sink;
+    let stderr_task = tokio::spawn(async move {
+        read_capped_with_runtime_events(
+            stderr,
+            OUTPUT_CAP_BYTES,
+            "stderr",
+            ToolRuntimeStream::Stderr,
+            stderr_runtime_event_sink,
+        )
+        .await
+    });
 
-    match tokio::time::timeout(duration, child.wait()).await {
+    let result = match tokio::time::timeout(duration, child.wait()).await {
         Ok(Ok(status)) => {
             let (stdout_result, stderr_result) = tokio::join!(stdout_task, stderr_task);
             let stdout = stdout_result
@@ -195,37 +233,58 @@ where
             let _ = tokio::join!(stdout_task, stderr_task);
             Err(format!("{error_prefix} timed out after {timeout_ms}ms"))
         }
+    };
+
+    if let Some(sink) = metrics_runtime_event_sink.as_ref() {
+        let duration_ms = started_at.elapsed().as_millis();
+        let duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
+        let exit_code = result.as_ref().ok().and_then(|output| output.status.code());
+        let metrics = ToolCommandMetrics {
+            exit_code,
+            duration_ms,
+        };
+        let event = ToolRuntimeEvent::CommandMetrics(metrics);
+        sink.emit(event);
     }
+
+    result
 }
 
 #[cfg(all(test, feature = "tool-shell"))]
 mod tests {
-    use super::{retry_executable_file_busy, should_retry_spawn_error};
     use std::io::{Error, ErrorKind};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::process_launch::{
+        retry_executable_file_busy_async, should_retry_executable_file_busy,
+    };
 
     #[test]
     fn should_retry_spawn_error_matches_executable_file_busy() {
         let busy_error = Error::from(ErrorKind::ExecutableFileBusy);
         let missing_error = Error::from(ErrorKind::NotFound);
 
-        assert!(should_retry_spawn_error(&busy_error));
-        assert!(!should_retry_spawn_error(&missing_error));
+        assert!(should_retry_executable_file_busy(&busy_error));
+        assert!(!should_retry_executable_file_busy(&missing_error));
     }
 
     #[tokio::test]
     async fn retry_executable_file_busy_retries_until_success() {
         let attempts = AtomicUsize::new(0);
 
-        let result = retry_executable_file_busy(|| {
-            let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+        let result = retry_executable_file_busy_async(
+            || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
 
-            if attempt < 2 {
-                return Err(Error::from(ErrorKind::ExecutableFileBusy));
-            }
+                if attempt < 2 {
+                    return Err(Error::from(ErrorKind::ExecutableFileBusy));
+                }
 
-            Ok("spawned")
-        })
+                Ok("spawned")
+            },
+            super::SPAWN_RETRY_ATTEMPTS,
+            super::SPAWN_RETRY_DELAY,
+        )
         .await
         .expect("executable-file-busy errors should retry");
 

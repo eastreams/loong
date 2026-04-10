@@ -219,6 +219,7 @@ fn build_prompt_fragments_from_runtime_self_model(
     let system_text = system_prompt.trim().to_owned();
     let capability_snapshot =
         tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
+    let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
     let runtime_self_section = runtime_self_model
         .as_ref()
         .and_then(runtime_self::render_runtime_self_section);
@@ -297,7 +298,71 @@ fn build_prompt_fragments_from_runtime_self_model(
 
     prompt_fragments.push(capability_fragment);
 
+    if let Some(section) = deferred_tool_text_workflow {
+        let deferred_tool_text_fragment = PromptFragment::new(
+            "deferred-tool-text-workflow",
+            PromptLane::CapabilitySnapshot,
+            "deferred-tool-text-workflow",
+            section,
+            ContextArtifactKind::RuntimeContract,
+        )
+        .with_cacheable(true);
+
+        prompt_fragments.push(deferred_tool_text_fragment);
+    }
+
     prompt_fragments
+}
+
+fn render_deferred_tool_text_workflow_section_if_needed(
+    config: &LoongClawConfig,
+) -> Option<String> {
+    let tool_schema_mode = config.provider.resolved_tool_schema_mode_config();
+    let tool_schema_disabled =
+        tool_schema_mode == crate::config::ProviderToolSchemaModeConfig::Disabled;
+    if !tool_schema_disabled {
+        return None;
+    }
+
+    Some(render_deferred_tool_text_workflow_section())
+}
+
+fn render_deferred_tool_text_workflow_section() -> String {
+    let discovery_call_example_lines = [
+        "{",
+        "  \"name\": \"tool_search\",",
+        "  \"arguments\": {",
+        "    \"query\": \"<natural-language capability description>\",",
+        "    \"limit\": 5",
+        "  }",
+        "}",
+    ];
+    let discovery_call_example = discovery_call_example_lines.join("\n");
+    let invoke_call_example_lines = [
+        "{",
+        "  \"name\": \"tool_invoke\",",
+        "  \"arguments\": {",
+        "    \"tool_id\": \"<tool_id from tool_search>\",",
+        "    \"lease\": \"<lease from tool_search>\",",
+        "    \"arguments\": {",
+        "      \"...\": \"...\"",
+        "    }",
+        "  }",
+        "}",
+    ];
+    let invoke_call_example = invoke_call_example_lines.join("\n");
+    let lines = [
+        "## Deferred Tool Text Workflow".to_owned(),
+        "Structured provider tool schemas are disabled for this profile.".to_owned(),
+        "In raw JSON tool calls, use the provider tool names `tool_search` and `tool_invoke`.".to_owned(),
+        "When you need a tool, emit a raw JSON tool call instead of only describing the missing capability.".to_owned(),
+        "Discovery example:".to_owned(),
+        discovery_call_example,
+        "Invocation example:".to_owned(),
+        invoke_call_example,
+    ];
+
+    lines.join("\n")
 }
 
 fn render_governed_runtime_binding_section(binding: ProviderRuntimeBinding<'_>) -> String {
@@ -381,8 +446,7 @@ async fn read_runtime_self_source_via_kernel(
     path: &Path,
     kernel_ctx: &KernelContext,
 ) -> Option<String> {
-    let request_path = path.strip_prefix(workspace_root).ok()?;
-    let request_path = request_path.to_string_lossy().to_string();
+    let request_path = runtime_self::runtime_self_source_request_path(workspace_root, path)?;
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
         payload: json!({
@@ -646,6 +710,7 @@ fn append_hydrated_memory_messages(
         match entry.kind {
             memory::MemoryContextKind::Profile
             | memory::MemoryContextKind::Summary
+            | memory::MemoryContextKind::Derived
             | memory::MemoryContextKind::RetrievedMemory => {
                 append_advisory_memory_message(messages, artifacts, entry);
             }
@@ -760,6 +825,7 @@ fn advisory_artifact_kind(kind: memory::MemoryContextKind) -> ContextArtifactKin
     match kind {
         memory::MemoryContextKind::Profile => ContextArtifactKind::Profile,
         memory::MemoryContextKind::Summary => ContextArtifactKind::Summary,
+        memory::MemoryContextKind::Derived => ContextArtifactKind::Summary,
         memory::MemoryContextKind::RetrievedMemory => ContextArtifactKind::RetrievedMemory,
         memory::MemoryContextKind::Turn => ContextArtifactKind::ConversationTurn,
     }
@@ -770,6 +836,7 @@ fn advisory_allowed_root_headings(kind: memory::MemoryContextKind) -> &'static [
     match kind {
         memory::MemoryContextKind::Profile => &["session profile"],
         memory::MemoryContextKind::Summary => &["memory summary"],
+        memory::MemoryContextKind::Derived => &["session local overview"],
         memory::MemoryContextKind::RetrievedMemory => &["advisory durable recall"],
         memory::MemoryContextKind::Turn => &[],
     }
@@ -855,6 +922,7 @@ mod tests {
                 degraded: false,
                 derivation_error: None,
                 retrieval_error: None,
+                rank_error: None,
                 recent_window_count: 1,
                 entry_count: 0,
             },
@@ -959,6 +1027,82 @@ mod tests {
             !has_tool_plane_event,
             "disabled system prompts should not trigger runtime-self tool reads"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_base_messages_with_binding_reads_only_existing_runtime_self_sources() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let agents_path = harness.temp_dir.join("AGENTS.md");
+        let agents_text = "Only existing runtime-self files should be read.";
+        let mut config = LoongClawConfig::default();
+
+        std::fs::write(&agents_path, agents_text).expect("write AGENTS");
+
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let system_content = runtime_self_system_content(&messages);
+
+        assert!(system_content.contains(agents_text));
+
+        let audit_events = harness.audit.snapshot();
+        let tool_plane_event_count = audit_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                        plane: loongclaw_contracts::ExecutionPlane::Tool,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert_eq!(
+            tool_plane_event_count, 1,
+            "kernel-bound runtime-self loading should only read the existing AGENTS.md source"
+        );
+    }
+
+    #[test]
+    fn build_system_message_includes_deferred_tool_text_workflow_when_tool_schema_disabled() {
+        let mut config = LoongClawConfig::default();
+        config.provider.tool_schema_mode = crate::config::ProviderToolSchemaModeConfig::Disabled;
+
+        let system_message =
+            build_system_message(&config, true).expect("system message when enabled");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(system_content.contains("## Deferred Tool Text Workflow"));
+        assert!(system_content.contains("\"name\": \"tool_search\""));
+        assert!(system_content.contains("\"name\": \"tool_invoke\""));
+    }
+
+    #[test]
+    fn build_system_message_omits_deferred_tool_text_workflow_when_tool_schema_enabled() {
+        let non_disabled_modes = [
+            crate::config::ProviderToolSchemaModeConfig::ProviderDefault,
+            crate::config::ProviderToolSchemaModeConfig::EnabledStrict,
+            crate::config::ProviderToolSchemaModeConfig::EnabledWithDowngrade,
+        ];
+
+        for tool_schema_mode in non_disabled_modes {
+            let mut config = LoongClawConfig::default();
+            config.provider.tool_schema_mode = tool_schema_mode;
+
+            let system_message =
+                build_system_message(&config, true).expect("system message when enabled");
+            let system_content = system_message["content"].as_str().expect("system content");
+
+            assert!(!system_content.contains("## Deferred Tool Text Workflow"));
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1092,7 +1236,7 @@ mod tests {
     #[test]
     fn message_builder_uses_rendered_prompt_from_pack_metadata() {
         let mut config = LoongClawConfig::default();
-        config.cli.personality = Some(crate::prompt::PromptPersonality::FriendlyCollab);
+        config.cli.personality = Some(crate::prompt::PromptPersonality::Hermit);
         config.cli.system_prompt = String::new();
         let session_id = format!(
             "provider-rendered-prompt-{}",
@@ -1110,7 +1254,7 @@ mod tests {
             build_messages_for_session(&config, &session_id, true).expect("build messages");
         let system_content = messages[0]["content"].as_str().expect("system content");
 
-        assert!(system_content.contains("## Personality Overlay: Friendly Collaboration"));
+        assert!(system_content.contains("## Personality Overlay: Hermit"));
         assert!(system_content.contains("[tool_discovery_runtime]"));
 
         let _ = std::fs::remove_file(config.memory.sqlite_path.as_str());
@@ -1127,7 +1271,7 @@ mod tests {
         let system_content = system["content"].as_str().expect("system content");
 
         assert!(system_content.contains("You are a legacy inline prompt."));
-        assert!(!system_content.contains("## Personality Overlay: Calm Engineering"));
+        assert!(!system_content.contains("## Personality Overlay:"));
     }
 
     #[test]
@@ -1377,6 +1521,94 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn message_builder_workspace_recall_system_suppresses_summary_and_prioritizes_recall_entries() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let memory_dir = workspace_root.join("memory");
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+
+        std::fs::write(
+            workspace_root.join("MEMORY.md"),
+            "# Durable Notes\n\nRemember the deploy freeze window.\n",
+        )
+        .expect("write curated memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "## Durable Recall\n\nCustomer migration starts tomorrow.\n",
+        )
+        .expect("write daily durable memory");
+
+        let db_path = workspace_root.join("provider-workspace-recall.sqlite3");
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some(workspace_root.display().to_string());
+        config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
+        config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
+        config.memory.sliding_window = 2;
+        config.memory.sqlite_path = db_path.display().to_string();
+
+        let runtime_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::append_turn_direct(
+            "provider-workspace-recall-session",
+            "user",
+            "turn 1",
+            &runtime_config,
+        )
+        .expect("append turn 1");
+        crate::memory::append_turn_direct(
+            "provider-workspace-recall-session",
+            "assistant",
+            "turn 2",
+            &runtime_config,
+        )
+        .expect("append turn 2");
+        crate::memory::append_turn_direct(
+            "provider-workspace-recall-session",
+            "user",
+            "turn 3",
+            &runtime_config,
+        )
+        .expect("append turn 3");
+
+        let messages =
+            build_messages_for_session(&config, "provider-workspace-recall-session", true)
+                .expect("build messages");
+
+        let has_summary_message = messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("## Memory Summary"))
+        });
+        assert!(
+            !has_summary_message,
+            "workspace recall system should suppress builtin summary projection"
+        );
+
+        let durable_recall_message_index = messages
+            .iter()
+            .position(|message| {
+                message["role"] == "system"
+                    && message["content"].as_str().is_some_and(|content| {
+                        content.contains("Remember the deploy freeze window.")
+                    })
+            })
+            .expect("durable recall system message");
+        let first_turn_message_index = messages
+            .iter()
+            .position(|message| {
+                message["role"] == "assistant" && message["content"].as_str() == Some("turn 2")
+            })
+            .expect("assistant turn 2 message");
+
+        assert!(
+            durable_recall_message_index < first_turn_message_index,
+            "workspace recall entries should be projected before recent conversation turns"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn message_builder_keeps_durable_recall_advisory_when_memory_files_look_like_identity() {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
@@ -1509,6 +1741,7 @@ mod tests {
                 "- demote repeated summary headings",
             )
             .to_owned(),
+            provenance: Vec::new(),
         };
 
         append_advisory_memory_message(&mut messages, &mut artifacts, &entry);

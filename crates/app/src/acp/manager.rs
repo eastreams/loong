@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use crate::CliResult;
@@ -115,12 +116,18 @@ impl AcpSessionManager {
         self.cleanup_idle_sessions(config).await?;
 
         let selection = resolve_acp_backend_selection(config);
+        let binding_scope = AcpSessionBindingScope::from_bootstrap(bootstrap);
+        let has_conversation_id = bootstrap.conversation_id.is_some();
+        let redacted_conversation_id =
+            redact_identifier_for_log(bootstrap.conversation_id.as_deref());
+        let redacted_binding_scope = redact_binding_scope_for_log(binding_scope.as_ref());
         tracing::debug!(
             target: "loongclaw.acp",
             backend_id = %selection.id,
+            has_conversation_id,
             mode = ?bootstrap.mode,
-            binding = ?AcpSessionBindingScope::from_bootstrap(bootstrap),
-            has_conversation_id = bootstrap.conversation_id.is_some(),
+            conversation_id = ?redacted_conversation_id,
+            binding = ?redacted_binding_scope,
             "ensuring ACP session"
         );
         if let Some(existing) =
@@ -141,7 +148,7 @@ impl AcpSessionManager {
         let handle = backend.ensure_session(config, bootstrap).await?;
         let mut metadata = handle.into_metadata(
             normalized_conversation_id(bootstrap.conversation_id.as_deref()),
-            AcpSessionBindingScope::from_bootstrap(bootstrap),
+            binding_scope,
             bootstrap.mode,
             AcpSessionState::Ready,
         );
@@ -186,12 +193,14 @@ impl AcpSessionManager {
             .metadata
             .get(ACP_TURN_METADATA_TRACE_ID)
             .map(String::as_str);
+        let redacted_trace_id = redact_identifier_for_log(trace_id);
+        let has_trace_id = redacted_trace_id.is_some();
         tracing::debug!(
             target: "loongclaw.acp",
             backend_id = %metadata.backend_id,
+            has_trace_id,
             input_len = request.input.chars().count(),
             sink_enabled = sink.is_some(),
-            has_trace_id = trace_id.is_some(),
             "starting ACP turn"
         );
         let backend = resolve_acp_backend(Some(metadata.backend_id.as_str()))?;
@@ -256,6 +265,7 @@ impl AcpSessionManager {
                 tracing::debug!(
                     target: "loongclaw.acp",
                     backend_id = %handle.backend_id,
+                    has_trace_id,
                     state = ?result.state,
                     stop_reason = ?result.stop_reason,
                     reported_event_count,
@@ -264,7 +274,6 @@ impl AcpSessionManager {
                     end_to_end_duration_ms,
                     execution_duration_ms,
                     queue_wait_ms,
-                    has_trace_id = trace_id.is_some(),
                     "ACP turn completed"
                 );
                 Ok(result)
@@ -278,12 +287,12 @@ impl AcpSessionManager {
                 tracing::warn!(
                     target: "loongclaw.acp",
                     backend_id = %handle.backend_id,
-                    trace_id = ?trace_id,
+                    trace_id = ?redacted_trace_id,
+                    has_trace_id,
                     end_to_end_duration_ms,
                     execution_duration_ms,
                     queue_wait_ms,
                     error = %crate::observability::summarize_error(error.as_str()),
-                    has_trace_id = trace_id.is_some(),
                     "ACP turn failed"
                 );
                 Err(error)
@@ -1082,10 +1091,51 @@ impl Drop for SessionActorGuard {
     }
 }
 
-fn normalized_conversation_id(raw: Option<&str>) -> Option<String> {
+const IDENTIFIER_FINGERPRINT_HEX_PREFIX_LEN: usize = 24;
+
+fn normalized_identifier(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_owned())
+}
+
+fn normalized_conversation_id(raw: Option<&str>) -> Option<String> {
+    normalized_identifier(raw)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RedactedBindingScopeForLog {
+    route_session_id: String,
+    channel_id: Option<String>,
+    account_id: Option<String>,
+    conversation_id: Option<String>,
+    thread_id: Option<String>,
+}
+
+fn redact_identifier_for_log(raw: Option<&str>) -> Option<String> {
+    let normalized = normalized_identifier(raw)?;
+    Some(identifier_fingerprint(normalized.as_str()))
+}
+
+fn identifier_fingerprint(raw: &str) -> String {
+    let digest = Sha256::digest(raw.as_bytes());
+    let hex = hex::encode(digest);
+    let prefix = &hex[..IDENTIFIER_FINGERPRINT_HEX_PREFIX_LEN];
+    format!("sha256:{prefix}")
+}
+
+fn redact_binding_scope_for_log(
+    binding: Option<&AcpSessionBindingScope>,
+) -> Option<RedactedBindingScopeForLog> {
+    let binding = binding?;
+
+    Some(RedactedBindingScopeForLog {
+        route_session_id: identifier_fingerprint(binding.route_session_id.as_str()),
+        channel_id: binding.channel_id.clone(),
+        account_id: redact_identifier_for_log(binding.account_id.as_deref()),
+        conversation_id: redact_identifier_for_log(binding.conversation_id.as_deref()),
+        thread_id: redact_identifier_for_log(binding.thread_id.as_deref()),
+    })
 }
 
 fn actor_key_for_bootstrap(bootstrap: &AcpSessionBootstrap) -> String {
@@ -1188,7 +1238,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     use super::super::AcpSqliteSessionStore;
-    use super::AcpSessionManager;
+    use super::{AcpSessionManager, redact_binding_scope_for_log, redact_identifier_for_log};
 
     #[derive(Default)]
     struct CountingState {
@@ -1217,6 +1267,41 @@ mod tests {
         register_acp_backend(alt_id, move || Box::new(AlternateBackend { id: alt_id }))
             .expect("register alternate ACP backend");
         shared
+    }
+
+    #[test]
+    fn redact_identifier_for_log_hashes_non_empty_values() {
+        let left = redact_identifier_for_log(Some("  conversation-42 "));
+        let right = redact_identifier_for_log(Some("conversation-42"));
+        let different = redact_identifier_for_log(Some("conversation-43"));
+
+        assert_eq!(left, right);
+        assert_ne!(left, different);
+        assert!(
+            left.as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert_eq!(redact_identifier_for_log(Some("   ")), None);
+    }
+
+    #[test]
+    fn redact_binding_scope_for_log_redacts_sensitive_identifiers() {
+        let binding = super::super::AcpSessionBindingScope {
+            route_session_id: "telegram:acct:42".to_owned(),
+            channel_id: Some("telegram".to_owned()),
+            account_id: Some("acct".to_owned()),
+            conversation_id: Some("42".to_owned()),
+            thread_id: Some("thread-1".to_owned()),
+        };
+
+        let redacted = redact_binding_scope_for_log(Some(&binding))
+            .expect("binding log redaction should return a value");
+
+        assert_eq!(redacted.channel_id.as_deref(), Some("telegram"));
+        assert_ne!(redacted.route_session_id, binding.route_session_id);
+        assert_ne!(redacted.account_id, binding.account_id);
+        assert_ne!(redacted.conversation_id, binding.conversation_id);
+        assert_ne!(redacted.thread_id, binding.thread_id);
     }
 
     struct CountingBackend {

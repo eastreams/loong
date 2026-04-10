@@ -11,6 +11,12 @@ use serde_json::{Value, json};
 
 #[cfg(feature = "tool-websearch")]
 const MAX_QUERY_LENGTH: usize = 500;
+#[cfg(feature = "tool-websearch")]
+const FIRECRAWL_SEARCH_ENDPOINT: &str = "https://api.firecrawl.dev/v2/search";
+#[cfg(feature = "tool-websearch")]
+const FIRECRAWL_SOURCE_WEB: &str = "web";
+#[cfg(feature = "tool-websearch")]
+const FIRECRAWL_MARKDOWN_SNIPPET_MAX_CHARS: usize = 800;
 
 pub(super) fn execute_web_search_tool_with_config(
     request: ToolCoreRequest,
@@ -123,6 +129,15 @@ fn execute_web_search_tool_enabled(
                     max_results,
                     config.web_search.timeout_seconds,
                     config.web_search.exa_api_key.as_deref(),
+                )
+                .await
+            }
+            crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL => {
+                search_firecrawl(
+                    query,
+                    max_results,
+                    config.web_search.timeout_seconds,
+                    config.web_search.firecrawl_api_key.as_deref(),
                 )
                 .await
             }
@@ -621,6 +636,188 @@ fn parse_exa_response(json: &Value, query: &str, max_results: usize) -> Result<V
 }
 
 #[cfg(feature = "tool-websearch")]
+async fn search_firecrawl(
+    query: &str,
+    max_results: usize,
+    timeout_seconds: u64,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
+    let trimmed_api_key = api_key.and_then(trim_non_empty);
+    let missing_api_key_message = format!(
+        "Firecrawl API key not configured. Set tools.web_search.firecrawl_api_key in config or {} environment variable.",
+        crate::config::WEB_SEARCH_FIRECRAWL_API_KEY_ENV
+    );
+    let api_key = trimmed_api_key.ok_or(missing_api_key_message)?;
+
+    let user_agent = "LoongClaw-WebSearch/0.1";
+    let private_hosts_allowed = false;
+    let client = super::web_http::build_ssrf_safe_client(
+        private_hosts_allowed,
+        timeout_seconds,
+        user_agent,
+    )?;
+
+    let content_type_header = "Content-Type";
+    let authorization_header = "Authorization";
+    let bearer_token = format!("Bearer {api_key}");
+    let request_body = json!({
+        "query": query,
+        "limit": max_results,
+        "sources": [FIRECRAWL_SOURCE_WEB],
+    });
+
+    let response = client
+        .post(FIRECRAWL_SEARCH_ENDPOINT)
+        .header(content_type_header, "application/json")
+        .header(authorization_header, bearer_token)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|error| format_request_error("Firecrawl request failed", &error))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let message = format!("Firecrawl returned status {status}");
+        return Err(message);
+    }
+
+    let parsed_json = response
+        .json()
+        .await
+        .map_err(|error| format!("Failed to parse Firecrawl response: {error}"))?;
+
+    parse_firecrawl_response(&parsed_json, query, max_results)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_firecrawl_response(
+    json: &Value,
+    query: &str,
+    max_results: usize,
+) -> Result<Value, String> {
+    let data = json.get("data");
+    let web_results = data.and_then(|value| value.get("web"));
+    let web_results = web_results.and_then(Value::as_array);
+    let results = web_results.ok_or("Invalid Firecrawl API response format")?;
+
+    let mut normalized_results = Vec::new();
+
+    for result in results.iter().take(max_results) {
+        let title = firecrawl_result_title(result);
+        let url = firecrawl_result_url(result);
+        let snippet = firecrawl_result_snippet(result);
+
+        let normalized_result = json!({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+        });
+        normalized_results.push(normalized_result);
+    }
+
+    let normalized_payload = json!({
+        "query": query,
+        "provider": "firecrawl",
+        "results": normalized_results
+    });
+
+    Ok(normalized_payload)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn firecrawl_result_title(result: &Value) -> &str {
+    let direct_title = result.get("title");
+    let direct_title = direct_title.and_then(Value::as_str);
+    if let Some(title) = direct_title {
+        return title;
+    }
+
+    let metadata = result.get("metadata");
+    let metadata = metadata.and_then(Value::as_object);
+    let metadata_title = metadata.and_then(|value| value.get("title"));
+    let metadata_title = metadata_title.and_then(Value::as_str);
+    metadata_title.unwrap_or("")
+}
+
+#[cfg(feature = "tool-websearch")]
+fn firecrawl_result_url(result: &Value) -> &str {
+    let direct_url = result.get("url");
+    let direct_url = direct_url.and_then(Value::as_str);
+    if let Some(url) = direct_url {
+        return url;
+    }
+
+    let metadata = result.get("metadata");
+    let metadata = metadata.and_then(Value::as_object);
+
+    let metadata_url = metadata.and_then(|value| value.get("url"));
+    let metadata_url = metadata_url.and_then(Value::as_str);
+    if let Some(url) = metadata_url {
+        return url;
+    }
+
+    let source_url = metadata.and_then(|value| value.get("sourceURL"));
+    let source_url = source_url.and_then(Value::as_str);
+    source_url.unwrap_or("")
+}
+
+#[cfg(feature = "tool-websearch")]
+fn firecrawl_result_snippet(result: &Value) -> String {
+    let direct_description = result.get("description");
+    let direct_description = direct_description.and_then(Value::as_str);
+    let direct_description = direct_description.and_then(trim_non_empty);
+    if let Some(description) = direct_description {
+        return description.to_owned();
+    }
+
+    let metadata = result.get("metadata");
+    let metadata = metadata.and_then(Value::as_object);
+    let metadata_description = metadata.and_then(|value| value.get("description"));
+    let metadata_description = metadata_description.and_then(Value::as_str);
+    let metadata_description = metadata_description.and_then(trim_non_empty);
+    if let Some(description) = metadata_description {
+        return description.to_owned();
+    }
+
+    let markdown = result.get("markdown");
+    let markdown = markdown.and_then(Value::as_str);
+    let markdown = markdown.unwrap_or_default();
+    compact_firecrawl_markdown_snippet(markdown)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn compact_firecrawl_markdown_snippet(markdown: &str) -> String {
+    let normalized_words = markdown.split_whitespace().collect::<Vec<_>>();
+    let normalized = normalized_words.join(" ");
+    let normalized = normalized.trim();
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    let total_chars = normalized.chars().count();
+    let mut snippet = normalized
+        .chars()
+        .take(FIRECRAWL_MARKDOWN_SNIPPET_MAX_CHARS)
+        .collect::<String>();
+
+    if total_chars > FIRECRAWL_MARKDOWN_SNIPPET_MAX_CHARS {
+        snippet.push_str("...");
+    }
+
+    snippet
+}
+
+#[cfg(feature = "tool-websearch")]
+fn trim_non_empty(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed)
+}
+
+#[cfg(feature = "tool-websearch")]
 /// Jina returns a single grounded digest, not a list of ranked result items.
 /// The runtime therefore synthesizes one result entry and ignores
 /// `_max_results`, which is kept only to align the provider function shape.
@@ -984,6 +1181,67 @@ mod tests {
     }
 
     #[test]
+    fn parse_firecrawl_response_extracts_results() {
+        let json = json!({
+            "success": true,
+            "data": {
+                "web": [{
+                    "title": "Firecrawl result",
+                    "description": "Grounded snippet",
+                    "url": "https://example.com/firecrawl",
+                    "markdown": "# ignored"
+                }]
+            }
+        });
+
+        let result = parse_firecrawl_response(&json, "test", 5).unwrap();
+        let provider = result["provider"].as_str();
+        let title = result["results"][0]["title"].as_str();
+        let url = result["results"][0]["url"].as_str();
+        let snippet = result["results"][0]["snippet"].as_str();
+
+        assert_eq!(provider, Some("firecrawl"));
+        assert_eq!(title, Some("Firecrawl result"));
+        assert_eq!(url, Some("https://example.com/firecrawl"));
+        assert_eq!(snippet, Some("Grounded snippet"));
+    }
+
+    #[test]
+    fn parse_firecrawl_response_falls_back_to_metadata_and_markdown() {
+        let json = json!({
+            "success": true,
+            "data": {
+                "web": [{
+                    "metadata": {
+                        "title": "Metadata title",
+                        "sourceURL": "https://example.com/source",
+                        "description": ""
+                    },
+                    "markdown": "line one\n\nline two"
+                }]
+            }
+        });
+
+        let result = parse_firecrawl_response(&json, "test", 5).unwrap();
+        let title = result["results"][0]["title"].as_str();
+        let url = result["results"][0]["url"].as_str();
+        let snippet = result["results"][0]["snippet"].as_str();
+
+        assert_eq!(title, Some("Metadata title"));
+        assert_eq!(url, Some("https://example.com/source"));
+        assert_eq!(snippet, Some("line one line two"));
+    }
+
+    #[test]
+    fn parse_firecrawl_response_rejects_invalid_format() {
+        let json = json!({"data": {"images": []}});
+        let error = parse_firecrawl_response(&json, "test", 5)
+            .expect_err("should reject invalid Firecrawl format");
+
+        assert!(error.contains("Invalid Firecrawl API response format"));
+    }
+
+    #[test]
     fn parse_jina_response_builds_aggregate_result() {
         let result = parse_jina_response("Result 1\nhttps://example.com", "test").unwrap();
         assert_eq!(result["provider"], "jina");
@@ -1099,6 +1357,21 @@ mod tests {
         .expect_err("should require exa API key");
         assert!(
             error.contains("Exa API key not configured"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn web_search_firecrawl_requires_api_key() {
+        let config = test_config();
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "firecrawl"})),
+            &config,
+        )
+        .expect_err("should require firecrawl API key");
+
+        assert!(
+            error.contains("Firecrawl API key not configured"),
             "unexpected error: {error}"
         );
     }

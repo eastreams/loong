@@ -48,7 +48,8 @@ mixing identity authority with transient task context.
 - When a safe workspace file root is configured and durable memory files are
   present, LoongClaw may bootstrap advisory durable recall from `MEMORY.md`,
   `memory/MEMORY.md`, and recent `memory/YYYY-MM-DD.md` logs into runtime
-  context.
+  context. Workspace memory frontmatter may further mark records as active,
+  superseded, tombstoned, or archived; inactive records must not be replayed.
 - Session-local content is never promoted into durable self-state implicitly.
 
 ## Selected Direction
@@ -91,5 +92,7 @@ Related public specs:
   advisory and do not become an identity override path.
 - Runtime durable-recall bootstrap, when enabled by workspace configuration,
   stays advisory and does not become an identity override path.
+- Session-local derived overview artifacts stay advisory and are clearly
+  distinguished from summary checkpoints and retrieved durable recall.
 - The relationship to `#421` and `#429` is explicit: retrieval may enrich
   durable context, but it must not become an identity override path.

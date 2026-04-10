@@ -619,7 +619,7 @@ fn migration_classify_current_setup_treats_prompt_and_memory_metadata_as_repaira
     config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     config.provider.api_key_env = None;
     config.provider.oauth_access_token_env = None;
-    config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+    config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
     config.cli.refresh_native_system_prompt();
     config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
     mvp::config::write(Some(path.to_string_lossy().as_ref()), &config, true)
@@ -713,7 +713,7 @@ fn migration_recommended_plan_supplements_cli_prompt_metadata_and_memory_profile
     .expect("current config candidate");
 
     let mut detected_config = mvp::config::LoongClawConfig::default();
-    detected_config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+    detected_config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
     detected_config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
     detected_config.cli.refresh_native_system_prompt();
     detected_config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
@@ -733,7 +733,7 @@ fn migration_recommended_plan_supplements_cli_prompt_metadata_and_memory_profile
 
     assert_eq!(
         recommended.config.cli.personality,
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
     assert_eq!(
         recommended.config.cli.system_prompt_addendum.as_deref(),

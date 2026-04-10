@@ -15,6 +15,22 @@ use super::{
     state::{GatewayOwnerStatus, default_gateway_runtime_state_dir, load_gateway_owner_status},
 };
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GatewayAcpSessionsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GatewayAcpStatusRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_session_id: Option<&'a str>,
+}
+
 #[derive(Debug, Clone)]
 pub struct GatewayLocalDiscovery {
     runtime_dir: PathBuf,
@@ -109,23 +125,80 @@ impl GatewayLocalClient {
     }
 
     pub async fn status(&self) -> CliResult<GatewayOwnerStatus> {
-        let path = "/api/gateway/status";
+        let path = "/v1/status";
         self.request_json(Method::GET, path).await
     }
 
     pub async fn channels(&self) -> CliResult<Value> {
-        let path = "/api/gateway/channels";
+        let path = "/v1/channels";
         self.request_json(Method::GET, path).await
     }
 
     pub async fn runtime_snapshot(&self) -> CliResult<Value> {
-        let path = "/api/gateway/runtime-snapshot";
+        let path = "/v1/runtime/snapshot";
         self.request_json(Method::GET, path).await
     }
 
     pub async fn operator_summary(&self) -> CliResult<GatewayOperatorSummaryReadModel> {
         let path = "/api/gateway/operator-summary";
         self.request_json(Method::GET, path).await
+    }
+
+    pub async fn acp_sessions(&self, request: &GatewayAcpSessionsRequest) -> CliResult<Value> {
+        let path = "/api/gateway/acp/sessions";
+        self.request_json_with_query(Method::GET, path, request)
+            .await
+    }
+
+    pub async fn acp_status(&self, request: &GatewayAcpStatusRequest<'_>) -> CliResult<Value> {
+        let path = "/api/gateway/acp/status";
+        self.request_json_with_query(Method::GET, path, request)
+            .await
+    }
+
+    pub async fn acp_observability(&self) -> CliResult<Value> {
+        let path = "/v1/acp/observability";
+        self.request_json(Method::GET, path).await
+    }
+
+    pub async fn acp_status_for_address(
+        &self,
+        session_id: &str,
+        channel_id: Option<&str>,
+        conversation_id: Option<&str>,
+        account_id: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> CliResult<Value> {
+        let path = "/v1/acp/status";
+        let query = build_gateway_acp_address_query(
+            session_id,
+            channel_id,
+            conversation_id,
+            account_id,
+            thread_id,
+        );
+        self.request_json_with_query(Method::GET, path, &query)
+            .await
+    }
+
+    pub async fn acp_dispatch(
+        &self,
+        session_id: &str,
+        channel_id: Option<&str>,
+        conversation_id: Option<&str>,
+        account_id: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> CliResult<Value> {
+        let path = "/v1/acp/dispatch";
+        let query = build_gateway_acp_address_query(
+            session_id,
+            channel_id,
+            conversation_id,
+            account_id,
+            thread_id,
+        );
+        self.request_json_with_query(Method::GET, path, &query)
+            .await
     }
 
     pub async fn stop(&self) -> CliResult<GatewayStopResponse> {
@@ -169,12 +242,58 @@ impl GatewayLocalClient {
         let method_name = method.as_str().to_owned();
         let request_builder = self.http_client.request(method, endpoint.as_str());
         let request_builder = request_builder.bearer_auth(self.discovery.bearer_token());
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), method_name.as_str(), path)
+            .await
+    }
+
+    async fn request_json_with_query<T, Q>(
+        &self,
+        method: Method,
+        path: &str,
+        query: &Q,
+    ) -> CliResult<T>
+    where
+        T: DeserializeOwned,
+        Q: Serialize + ?Sized,
+    {
+        let endpoint = self.endpoint_url(path)?;
+        let method_name = method.as_str().to_owned();
+        let request_builder = self.http_client.request(method, endpoint.as_str());
+        let request_builder = request_builder.query(query);
+        let request_builder = request_builder.bearer_auth(self.discovery.bearer_token());
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), method_name.as_str(), path)
+            .await
+    }
+
+    async fn send_gateway_request(
+        &self,
+        request_builder: reqwest::RequestBuilder,
+        endpoint: &str,
+    ) -> CliResult<Response> {
         let response = request_builder
             .send()
             .await
             .map_err(|error| format!("send gateway request failed for {endpoint}: {error}"))?;
-        let status = response.status();
+        Ok(response)
+    }
 
+    async fn decode_gateway_json_response<T>(
+        &self,
+        response: Response,
+        endpoint: &str,
+        method_name: &str,
+        path: &str,
+    ) -> CliResult<T>
+    where
+        T: DeserializeOwned,
+    {
+        let status = response.status();
         if !status.is_success() {
             let error_message = decode_gateway_error_message(response).await;
             let error = format!(
@@ -199,6 +318,48 @@ impl GatewayLocalClient {
         let endpoint = format!("{base_url}{path}");
         Ok(endpoint)
     }
+}
+
+fn build_gateway_acp_address_query(
+    session_id: &str,
+    channel_id: Option<&str>,
+    conversation_id: Option<&str>,
+    account_id: Option<&str>,
+    thread_id: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut query = Vec::new();
+    query.push(("session_id".to_owned(), session_id.to_owned()));
+
+    let channel_id = trimmed_non_empty(channel_id);
+    if let Some(channel_id) = channel_id {
+        query.push(("channel_id".to_owned(), channel_id));
+    }
+
+    let conversation_id = trimmed_non_empty(conversation_id);
+    if let Some(conversation_id) = conversation_id {
+        query.push(("conversation_id".to_owned(), conversation_id));
+    }
+
+    let account_id = trimmed_non_empty(account_id);
+    if let Some(account_id) = account_id {
+        query.push(("account_id".to_owned(), account_id));
+    }
+
+    let thread_id = trimmed_non_empty(thread_id);
+    if let Some(thread_id) = thread_id {
+        query.push(("thread_id".to_owned(), thread_id));
+    }
+
+    query
+}
+
+fn trimmed_non_empty(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
 }
 
 async fn parse_json_response(response: Response) -> CliResult<Value> {

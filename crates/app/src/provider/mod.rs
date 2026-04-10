@@ -19,6 +19,7 @@ mod catalog_executor;
 mod catalog_query_runtime;
 mod catalog_runtime;
 mod contracts;
+mod copilot_auth;
 mod failover;
 mod failover_telemetry_runtime;
 mod http_client_runtime;
@@ -41,7 +42,9 @@ mod request_session_runtime;
 mod runtime_binding;
 mod shape;
 mod transport;
+mod transport_profile_runtime;
 
+pub use copilot_auth::device_code_login as copilot_device_code_login;
 pub(crate) use failover::parse_provider_failover_snapshot_payload;
 pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;
@@ -49,6 +52,38 @@ pub use shape::{
     extract_provider_turn, extract_provider_turn_with_scope,
     extract_provider_turn_with_scope_and_messages,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderToolSchemaReadiness {
+    pub active_model: String,
+    pub structured_tool_schema_enabled: bool,
+    pub effective_tool_schema_mode: String,
+}
+
+pub fn provider_tool_schema_readiness(config: &LoongClawConfig) -> ProviderToolSchemaReadiness {
+    let provider = &config.provider;
+    let runtime_contract = provider_runtime_contract(provider);
+    let capability_profile = capability_profile_runtime::ProviderCapabilityProfile::from_provider(
+        provider,
+        runtime_contract,
+    );
+    let active_model = provider.model.clone();
+    let capability = capability_profile.resolve_for_model(active_model.as_str());
+    let effective_tool_schema_mode = match capability.tool_schema_mode {
+        contracts::ProviderToolSchemaMode::Disabled => "disabled",
+        contracts::ProviderToolSchemaMode::EnabledStrict => "enabled_strict",
+        contracts::ProviderToolSchemaMode::EnabledWithDowngradeOnUnsupported => {
+            "enabled_with_downgrade"
+        }
+    };
+    let structured_tool_schema_enabled = capability.turn_tool_schema_enabled();
+
+    ProviderToolSchemaReadiness {
+        active_model,
+        structured_tool_schema_enabled,
+        effective_tool_schema_mode: effective_tool_schema_mode.to_owned(),
+    }
+}
 
 pub fn is_auth_style_failure_message(message: &str) -> bool {
     matches!(
@@ -190,8 +225,6 @@ pub async fn request_completion(
                 model,
                 auto_model_mode,
                 auth_profile,
-                &session.endpoint,
-                &session.headers,
                 &session.request_policy,
                 &session.client,
                 &session.auth_context,
@@ -259,8 +292,6 @@ pub async fn request_turn_in_view(
                 tool_definitions.as_slice(),
                 event_sink,
                 auth_profile,
-                &session.endpoint,
-                &session.headers,
                 &session.request_policy,
                 &session.client,
                 &session.auth_context,
@@ -336,8 +367,6 @@ pub async fn request_turn_streaming_in_view(
                 auto_model_mode,
                 tool_definitions.as_slice(),
                 auth_profile,
-                &session.endpoint,
-                &session.headers,
                 &session.request_policy,
                 &session.client,
                 &session.auth_context,

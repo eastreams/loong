@@ -1,6 +1,8 @@
 use crate::config::LoongClawConfig;
 
 mod catalog;
+mod commands;
+mod core;
 #[cfg(feature = "channel-dingtalk")]
 mod dingtalk;
 #[cfg(feature = "channel-discord")]
@@ -27,7 +29,7 @@ mod nextcloud_talk;
 #[cfg(feature = "channel-nostr")]
 mod nostr;
 mod registry;
-mod runtime_state;
+mod runtime;
 pub(crate) mod sdk;
 #[cfg(feature = "channel-signal")]
 mod signal;
@@ -53,14 +55,12 @@ pub mod traits;
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
-mod turn_feedback;
 #[cfg(feature = "channel-twitch")]
 mod twitch;
 #[cfg(feature = "channel-twitch")]
 mod twitch_command;
 #[cfg(feature = "channel-webhook")]
 mod webhook;
-mod webhook_auth;
 #[cfg(feature = "channel-wecom")]
 mod wecom;
 #[cfg(feature = "channel-whatsapp")]
@@ -105,10 +105,8 @@ pub use registry::{
     resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
     resolve_channel_runtime_command_descriptor, validate_plugin_channel_bridge_manifest,
 };
-pub use runtime_state::ChannelOperationRuntime;
-use runtime_state::ChannelOperationRuntimeTracker;
-pub use sdk::{background_channel_runtime_descriptors, is_background_channel_surface_enabled};
-pub use tlon_command::run_tlon_send;
+pub use runtime::state::ChannelOperationRuntime;
+use runtime::state::ChannelOperationRuntimeTracker;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -116,7 +114,13 @@ pub use tlon_command::run_tlon_send;
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
-pub use turn_feedback::ChannelTurnFeedbackPolicy;
+pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
+pub use sdk::{
+    ChannelDescriptor, ChannelRuntimeKind, background_channel_runtime_descriptors,
+    channel_descriptor, is_background_channel_surface_enabled, service_channel_descriptors,
+};
+pub(crate) use sdk::{collect_channel_validation_issues, enabled_channel_ids};
+pub use tlon_command::run_tlon_send;
 
 mod types;
 pub use types::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
@@ -127,10 +131,9 @@ pub use types::{
     ChannelStreamingMode, FeishuChannelSendRequest,
 };
 
-mod serve_runtime;
-pub use serve_runtime::ChannelServeStopHandle;
+pub use runtime::serve::ChannelServeStopHandle;
 #[cfg(test)]
-use serve_runtime::{
+use runtime::serve::{
     with_channel_serve_runtime_in_dir, with_channel_serve_runtime_with_stop_in_dir,
 };
 
@@ -139,6 +142,8 @@ mod dispatch;
 use crate::CliResult;
 #[cfg(test)]
 use crate::conversation::ConversationIngressPrivateContext;
+#[cfg(test)]
+use commands::context::render_channel_route_notice;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -171,7 +176,7 @@ use dispatch::{ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_c
 use dispatch::{
     build_feishu_command_context, build_telegram_command_context, channel_message_ingress_context,
     process_inbound_with_runtime_and_feedback, reload_channel_turn_config,
-    render_channel_route_notice, validate_feishu_security_config, validate_matrix_security_config,
+    validate_feishu_security_config, validate_matrix_security_config,
     validate_telegram_security_config,
 };
 pub use dispatch::{
@@ -184,7 +189,7 @@ pub use dispatch::{
     run_whatsapp_send,
 };
 #[cfg(test)]
-use serve_runtime::ChannelServeRuntimeSpec;
+use runtime::serve::ChannelServeRuntimeSpec;
 #[cfg(test)]
 use types::{
     KnownChannelSessionSendTarget, parse_known_channel_session_send_target, process_channel_batch,
@@ -1192,7 +1197,7 @@ mod tests {
             9191,
             operation,
             |runtime| async move {
-                let live = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+                let live = runtime::state::load_channel_operation_runtime_for_account_from_dir(
                     runtime_dir_for_body.as_path(),
                     ChannelPlatform::Telegram,
                     "serve",
@@ -1216,7 +1221,7 @@ mod tests {
 
         assert_eq!(result, "ok");
 
-        let finished = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+        let finished = runtime::state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1259,7 +1264,7 @@ mod tests {
                     let runtime_dir_for_body = runtime_dir_for_body.clone();
                     async move {
                         let live =
-                            runtime_state::load_channel_operation_runtime_for_account_from_dir(
+                            runtime::state::load_channel_operation_runtime_for_account_from_dir(
                                 runtime_dir_for_body.as_path(),
                                 ChannelPlatform::Telegram,
                                 "serve",
@@ -1286,7 +1291,7 @@ mod tests {
             .expect("cooperative stop wrapper join should succeed")
             .expect("cooperative stop wrapper should succeed");
 
-        let finished = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+        let finished = runtime::state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1307,7 +1312,7 @@ mod tests {
     async fn with_channel_serve_runtime_rejects_duplicate_running_instance() {
         let runtime_dir = temp_runtime_dir("serve-runtime-duplicate");
         let now = now_ms_for_test();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        runtime::state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1350,7 +1355,7 @@ mod tests {
     async fn with_channel_serve_runtime_allows_takeover_when_previous_instance_is_stale() {
         let runtime_dir = temp_runtime_dir("serve-runtime-stale-takeover");
         let now = now_ms_for_test();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        runtime::state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1381,7 +1386,7 @@ mod tests {
 
         assert_eq!(result, "ok");
 
-        let runtime = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+        let runtime = runtime::state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1415,7 +1420,7 @@ mod tests {
     async fn with_channel_serve_runtime_rejects_active_legacy_owner_after_inactive_account_prune() {
         let runtime_dir = temp_runtime_dir("serve-runtime-legacy-owner");
         let now = now_ms_for_test();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        runtime::state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1429,7 +1434,7 @@ mod tests {
             Some(7001),
         )
         .expect("seed inactive account-scoped runtime state");
-        runtime_state::write_runtime_state_for_test_with_pid(
+        runtime::state::write_runtime_state_for_test_with_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",

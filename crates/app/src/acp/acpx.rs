@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -9,17 +9,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{Duration, Instant, sleep_until, timeout};
 
 use crate::CliResult;
-use crate::config::LoongClawConfig;
-use crate::process_launch::resolve_command_invocation;
+use crate::config::{AcpxMcpServerConfig, LoongClawConfig};
+use crate::process_launch::retry_executable_file_busy_async;
+#[cfg(test)]
+use crate::process_launch::retry_executable_file_busy_blocking as retry_spawn_blocking;
 
 #[cfg(test)]
-use super::acpx_mcp::{AcpxMcpServerEntry, AcpxMcpServerEnvEntry, build_mcp_proxy_agent_command};
-use super::acpx_mcp::{
-    build_mcp_proxy_agent_command_for_selection, injectable_mcp_server_count,
-    probe_mcp_proxy_support, validate_requested_mcp_servers,
+pub(crate) use super::acpx_mcp::probe_mcp_proxy_support_with_runtime;
+pub(crate) use super::acpx_mcp::{
+    AcpxMcpServerEntry, AcpxMcpServerEnvEntry, build_mcp_proxy_agent_command,
+    probe_mcp_proxy_support,
 };
 use super::backend::{
     AcpAbortSignal, AcpBackendMetadata, AcpCapability, AcpConfigPatch, AcpDoctorReport,
@@ -38,6 +40,10 @@ const ACPX_DEFAULT_QUEUE_OWNER_TTL_SECONDS: f64 = 0.1;
 const ACPX_PERMISSION_DENIED_EXIT_CODE: i32 = 5;
 const ACPX_SPAWN_RETRY_ATTEMPTS: usize = 5;
 const ACPX_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+mod command_probe;
+
+use command_probe::{CommandOutputError, wait_for_command_output};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AcpxRuntimeHandleState {
@@ -63,6 +69,7 @@ struct ResolvedAcpxProfile {
     non_interactive_permissions: String,
     timeout_seconds: Option<f64>,
     queue_owner_ttl_seconds: f64,
+    mcp_servers: BTreeMap<String, AcpxMcpServerConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,13 +119,12 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         request: &AcpSessionBootstrap,
     ) -> CliResult<AcpSessionHandle> {
         let profile = resolve_profile(config)?;
-        let selected_mcp_servers = validate_requested_mcp_servers(config, request)?;
+        let selected_mcp_servers = validate_requested_mcp_servers(config, &profile, request)?;
         let cwd =
             resolve_effective_cwd(request.working_directory.as_ref(), profile.cwd.as_deref())?;
         let agent = derive_agent_id(config, request.session_key.as_str(), &request.metadata)?;
 
         let ensure_args = build_verb_args(
-            config,
             &profile,
             config.acp.startup_timeout_ms(),
             agent.as_str(),
@@ -146,7 +152,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
 
         if !identifiers.ready() {
             let new_args = build_verb_args(
-                config,
                 &profile,
                 config.acp.startup_timeout_ms(),
                 agent.as_str(),
@@ -227,7 +232,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         let profile = resolve_profile(config)?;
         let state = resolve_handle_state(&profile, session)?;
         let prompt_args = build_prompt_args(
-            config,
             &profile,
             config.acp.startup_timeout_ms(),
             state.agent.as_str(),
@@ -261,7 +265,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         let profile = resolve_profile(config)?;
         let state = resolve_handle_state(&profile, session)?;
         let args = build_verb_args(
-            config,
             &profile,
             config.acp.startup_timeout_ms(),
             state.agent.as_str(),
@@ -291,7 +294,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         let profile = resolve_profile(config)?;
         let state = resolve_handle_state(&profile, session)?;
         let args = build_verb_args(
-            config,
             &profile,
             config.acp.startup_timeout_ms(),
             state.agent.as_str(),
@@ -325,7 +327,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         let profile = resolve_profile(config)?;
         let state = resolve_handle_state(&profile, session)?;
         let args = build_verb_args(
-            config,
             &profile,
             config.acp.startup_timeout_ms(),
             state.agent.as_str(),
@@ -391,7 +392,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         let profile = resolve_profile(config)?;
         let state = resolve_handle_state(&profile, session)?;
         let args = build_verb_args(
-            config,
             &profile,
             config.acp.startup_timeout_ms(),
             state.agent.as_str(),
@@ -431,7 +431,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         let value = normalized_non_empty(patch.value.as_str())
             .ok_or_else(|| "ACPX config option value must not be empty".to_owned())?;
         let args = build_verb_args(
-            config,
             &profile,
             config.acp.startup_timeout_ms(),
             state.agent.as_str(),
@@ -475,21 +474,11 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                     .clone()
                     .unwrap_or_else(|| ACPX_VERSION_ANY.to_owned()),
             ),
+            (
+                "mcp_server_count".to_owned(),
+                raw_profile.mcp_servers.len().to_string(),
+            ),
         ]);
-        let injectable_mcp_server_count = match injectable_mcp_server_count(config) {
-            Ok(count) => {
-                diagnostics.insert("mcp_server_count".to_owned(), count.to_string());
-                count
-            }
-            Err(error) => {
-                diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
-                diagnostics.insert("error".to_owned(), error);
-                return Ok(Some(AcpDoctorReport {
-                    healthy: false,
-                    diagnostics,
-                }));
-            }
-        };
 
         if let Some(permission_mode) = raw_profile.permission_mode() {
             diagnostics.insert("permission_mode".to_owned(), permission_mode);
@@ -518,6 +507,16 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         if let Some(cwd) = cwd.clone() {
             diagnostics.insert("cwd".to_owned(), cwd);
         }
+        if config.acp.allow_mcp_server_injection
+            && let Err(error) = crate::mcp::McpRegistry::from_config(config)
+        {
+            diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
+            diagnostics.insert("error".to_owned(), error);
+            return Ok(Some(AcpDoctorReport {
+                healthy: false,
+                diagnostics,
+            }));
+        }
         if let Err(error) = resolve_profile(config) {
             diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
             diagnostics.insert("error".to_owned(), error);
@@ -527,11 +526,12 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
             }));
         }
 
+        let probe_timeout = Duration::from_millis(config.acp.startup_timeout_ms());
         let mut mcp_proxy_ready = true;
-        if injectable_mcp_server_count == 0 {
+        if raw_profile.mcp_servers.is_empty() {
             diagnostics.insert(
                 "mcp_runtime_proxy".to_owned(),
-                "disabled_no_injectable_mcp_servers".to_owned(),
+                "disabled_no_backend_mcp_servers".to_owned(),
             );
         } else if !config.acp.allow_mcp_server_injection {
             diagnostics.insert(
@@ -539,7 +539,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                 "available_but_disabled_by_policy".to_owned(),
             );
         } else {
-            match probe_mcp_proxy_support(cwd.as_deref()).await {
+            match probe_mcp_proxy_support(cwd.as_deref(), probe_timeout).await {
                 Ok((script_path, node_version)) => {
                     diagnostics.insert(
                         "mcp_runtime_proxy".to_owned(),
@@ -570,21 +570,16 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
             }));
         }
 
-        let probe_cwd = resolve_effective_cwd(None, cwd.as_deref())?;
-        let version_args = vec!["--version".to_owned()];
-        let version_probe = run_process(
-            command.as_str(),
-            &version_args,
-            probe_cwd.as_str(),
-            config.acp.startup_timeout_ms(),
-            None,
-        )
-        .await;
+        let mut probe = Command::new(&command);
+        probe.arg("--version");
+        if let Some(cwd) = cwd {
+            probe.current_dir(cwd);
+        }
 
-        match version_probe {
+        match wait_for_command_output(&mut probe, probe_timeout).await {
             Ok(output) => {
-                let stdout = output.stdout.trim().to_owned();
-                let stderr = output.stderr.trim().to_owned();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
                 let observed = match (stdout.is_empty(), stderr.is_empty()) {
                     (false, true) => stdout,
                     (true, false) => stderr,
@@ -595,7 +590,8 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                 diagnostics.insert(
                     "exit_status".to_owned(),
                     output
-                        .exit_code
+                        .status
+                        .code()
                         .map_or_else(|| "signal".to_owned(), |code| code.to_string()),
                 );
 
@@ -605,15 +601,14 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                         value.eq_ignore_ascii_case(ACPX_VERSION_ANY) || observed.contains(value)
                     })
                     .unwrap_or(true);
-                let exited_successfully = output.exit_code == Some(0);
-                let healthy = exited_successfully && version_matches && mcp_proxy_ready;
+                let healthy = output.status.success() && version_matches && mcp_proxy_ready;
                 diagnostics.insert(
                     "status".to_owned(),
                     if !mcp_proxy_ready {
                         "mcp_proxy_unavailable".to_owned()
                     } else if healthy {
                         "ready".to_owned()
-                    } else if !exited_successfully {
+                    } else if !output.status.success() {
                         "execution_failed".to_owned()
                     } else {
                         "version_mismatch".to_owned()
@@ -625,16 +620,22 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                 }))
             }
             Err(error) => {
-                let is_missing_command = error.starts_with("acpx command not found:");
-                diagnostics.insert(
-                    "status".to_owned(),
-                    if is_missing_command {
-                        "missing_command".to_owned()
-                    } else {
-                        "spawn_failed".to_owned()
-                    },
-                );
-                diagnostics.insert("error".to_owned(), error);
+                let (status, error_message) = match error {
+                    CommandOutputError::TimedOut => {
+                        ("timed_out", "acpx version probe timed out".to_owned())
+                    }
+                    CommandOutputError::Io(error) => {
+                        let status = if error.kind() == ErrorKind::NotFound {
+                            "missing_command"
+                        } else {
+                            "spawn_failed"
+                        };
+                        let error_message = error.to_string();
+                        (status, error_message)
+                    }
+                };
+                diagnostics.insert("status".to_owned(), status.to_owned());
+                diagnostics.insert("error".to_owned(), error_message);
                 Ok(Some(AcpDoctorReport {
                     healthy: false,
                     diagnostics,
@@ -696,11 +697,52 @@ fn resolve_profile(config: &LoongClawConfig) -> CliResult<ResolvedAcpxProfile> {
         non_interactive_permissions,
         timeout_seconds,
         queue_owner_ttl_seconds,
+        mcp_servers: profile.mcp_servers,
     })
 }
 
-async fn build_verb_args<I>(
+fn validate_requested_mcp_servers(
     config: &LoongClawConfig,
+    profile: &ResolvedAcpxProfile,
+    request: &AcpSessionBootstrap,
+) -> CliResult<Vec<String>> {
+    if request.mcp_servers.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !config.acp.allow_mcp_server_injection {
+        return Err(
+            "ACPX bootstrap requested MCP server injection but acp.allow_mcp_server_injection=false"
+                .to_owned(),
+        );
+    }
+
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut missing = Vec::new();
+    for raw_name in &request.mcp_servers {
+        let Some(name) = normalized_non_empty(raw_name.as_str()) else {
+            return Err("ACPX bootstrap mcp_servers entries must not be empty".to_owned());
+        };
+        if !profile.mcp_servers.contains_key(&name) {
+            missing.push(name);
+            continue;
+        }
+        if seen.insert(name.clone()) {
+            selected.push(name);
+        }
+    }
+
+    if missing.is_empty() {
+        Ok(selected)
+    } else {
+        Err(format!(
+            "ACPX requested mcp_servers are not configured under [acp.backends.acpx.mcp_servers]: {}",
+            missing.join(", ")
+        ))
+    }
+}
+
+async fn build_verb_args<I>(
     profile: &ResolvedAcpxProfile,
     timeout_ms: u64,
     agent: &str,
@@ -712,15 +754,8 @@ async fn build_verb_args<I>(
 where
     I: IntoIterator<Item = String>,
 {
-    let raw_agent_command = resolve_raw_agent_command(
-        config,
-        profile,
-        timeout_ms,
-        agent,
-        cwd,
-        selected_mcp_servers,
-    )
-    .await?;
+    let raw_agent_command =
+        resolve_raw_agent_command(profile, timeout_ms, agent, cwd, selected_mcp_servers).await?;
     if let Some(agent_command) = raw_agent_command {
         prefix.extend(["--agent".to_owned(), agent_command]);
     } else {
@@ -731,7 +766,6 @@ where
 }
 
 async fn build_prompt_args(
-    config: &LoongClawConfig,
     profile: &ResolvedAcpxProfile,
     timeout_ms: u64,
     agent: &str,
@@ -753,7 +787,6 @@ async fn build_prompt_args(
     ]);
 
     build_verb_args(
-        config,
         profile,
         timeout_ms,
         agent,
@@ -766,7 +799,6 @@ async fn build_prompt_args(
 }
 
 async fn resolve_raw_agent_command(
-    config: &LoongClawConfig,
     profile: &ResolvedAcpxProfile,
     timeout_ms: u64,
     agent: &str,
@@ -778,11 +810,8 @@ async fn resolve_raw_agent_command(
     }
 
     let target_command = resolve_acpx_agent_command(profile, timeout_ms, cwd, agent).await?;
-    let proxy_command = build_mcp_proxy_agent_command_for_selection(
-        config,
-        target_command.as_str(),
-        selected_mcp_servers,
-    )?;
+    let mcp_servers = resolve_selected_mcp_server_entries(profile, selected_mcp_servers)?;
+    let proxy_command = build_mcp_proxy_agent_command(target_command.as_str(), &mcp_servers)?;
     Ok(Some(proxy_command))
 }
 
@@ -851,6 +880,36 @@ fn builtin_agent_command(agent: &str) -> Option<String> {
         _ => return None,
     };
     Some(command.to_owned())
+}
+
+fn resolve_selected_mcp_server_entries(
+    profile: &ResolvedAcpxProfile,
+    selected_mcp_servers: &[String],
+) -> CliResult<Vec<AcpxMcpServerEntry>> {
+    selected_mcp_servers
+        .iter()
+        .map(|name| {
+            let server = profile.mcp_servers.get(name).ok_or_else(|| {
+                format!(
+                    "ACPX requested mcp_servers are not configured under [acp.backends.acpx.mcp_servers]: {name}"
+                )
+            })?;
+            Ok(AcpxMcpServerEntry {
+                name: name.clone(),
+                command: server.command.clone(),
+                args: server.args.clone(),
+                cwd: None,
+                env: server
+                    .env
+                    .iter()
+                    .map(|(key, value)| AcpxMcpServerEnvEntry {
+                        name: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
 }
 
 fn resolve_effective_cwd(
@@ -1163,18 +1222,6 @@ async fn run_prompt_process(
     if exit_status.code().is_some_and(|code| code != 0) {
         return Err(format_exit_message(stderr.as_str(), exit_status.code()));
     }
-    if abort.as_ref().is_some_and(AcpAbortSignal::is_aborted) && !saw_done && !saw_error {
-        let done = synthetic_done_event(Some(AcpTurnStopReason::Cancelled));
-        emit_turn_event(sink, &done)?;
-        events.push(done);
-        return Ok(AcpTurnResult {
-            output_text: collect_output_text(&events),
-            state: AcpSessionState::Ready,
-            usage: collect_usage_update(&events),
-            stop_reason: Some(AcpTurnStopReason::Cancelled),
-            events,
-        });
-    }
     if !saw_done && !saw_error {
         let done = synthetic_done_event(Some(AcpTurnStopReason::Completed));
         emit_turn_event(sink, &done)?;
@@ -1306,10 +1353,9 @@ async fn spawn_acpx_child(
     pipe_stdin: bool,
 ) -> CliResult<tokio::process::Child> {
     retry_executable_file_busy(|| {
-        let invocation = resolve_command_invocation(command, args.iter().map(String::as_str));
-        let mut process = Command::new(&invocation.program);
+        let mut process = Command::new(command);
         process
-            .args(&invocation.args)
+            .args(args)
             .current_dir(cwd)
             .stdin(if pipe_stdin {
                 Stdio::piped()
@@ -1324,48 +1370,21 @@ async fn spawn_acpx_child(
     .map_err(|error| map_spawn_error(command, cwd, error))
 }
 
-async fn retry_executable_file_busy<T, F>(mut operation: F) -> std::io::Result<T>
+async fn retry_executable_file_busy<T, F>(operation: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
 {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if should_retry_spawn_error(&error) && attempt < ACPX_SPAWN_RETRY_ATTEMPTS =>
-            {
-                sleep(ACPX_SPAWN_RETRY_DELAY).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    retry_executable_file_busy_async(operation, ACPX_SPAWN_RETRY_ATTEMPTS, ACPX_SPAWN_RETRY_DELAY)
+        .await
 }
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
-fn retry_executable_file_busy_blocking<T, F>(mut operation: F) -> std::io::Result<T>
+fn retry_executable_file_busy_blocking<T, F>(operation: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
 {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if should_retry_spawn_error(&error) && attempt < ACPX_SPAWN_RETRY_ATTEMPTS =>
-            {
-                std::thread::sleep(ACPX_SPAWN_RETRY_DELAY);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-fn should_retry_spawn_error(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::ExecutableFileBusy
+    retry_spawn_blocking(operation, ACPX_SPAWN_RETRY_ATTEMPTS, ACPX_SPAWN_RETRY_DELAY)
 }
 
 fn parse_json_lines(stdout: &str) -> Vec<Value> {
@@ -1586,7 +1605,6 @@ fn now_ms() -> u64 {
 }
 
 #[cfg(test)]
-#[allow(clippy::await_holding_lock)]
 mod tests {
     use std::collections::BTreeMap;
     #[cfg(unix)]
@@ -1594,15 +1612,29 @@ mod tests {
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
     #[cfg(unix)]
+    use std::sync::OnceLock;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(unix)]
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use tokio::sync::Mutex;
 
     use super::*;
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongClawConfig};
-    #[cfg(unix)]
     use crate::test_support::ScopedEnv;
+
+    const ACPX_RUNTIME_TEST_TIMEOUT_SECONDS: f64 = 45.0;
+
+    #[cfg(unix)]
+    fn acpx_runtime_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[cfg(unix)]
+    async fn lock_acpx_runtime_tests() -> tokio::sync::MutexGuard<'static, ()> {
+        acpx_runtime_test_lock().lock().await
+    }
 
     #[cfg(unix)]
     const ACPX_FAKE_RUNTIME_STARTUP_TIMEOUT_MS: u64 = 60_000;
@@ -1621,15 +1653,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
         temp_dir
-    }
-
-    #[cfg(unix)]
-    fn acpx_test_lock() -> MutexGuard<'static, ()> {
-        static ACPX_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ACPX_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[cfg(unix)]
@@ -1704,17 +1727,20 @@ mod tests {
         body: &str,
     ) -> PathBuf {
         let script_path = temp_dir.join(script_name);
-        write_executable_script_atomically(
-            &script_path,
-            &format!(
-                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\nargs_contain() {{\n  _acpx_haystack=$1\n  _acpx_needle=$2\n  case \"$_acpx_haystack\" in\n    *\"$_acpx_needle\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  while IFS= read -r _acpx_ignored_line; do\n    :\n  done\n}}\n{}\n",
-                log_path.display(),
-                body
-            ),
-        )
-        .expect("write fake acpx script");
+        let script_source = format!(
+            "#!/bin/sh\nset -eu\n# Keep test helper scripts stable even when unrelated tests narrow PATH.\nPATH=\"$(command -p getconf PATH 2>/dev/null || printf '%s' '/usr/bin:/bin')\"\nexport PATH\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\nargs_contain() {{\n  case \"$1\" in\n    *\"$2\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  if [ ! -t 0 ]; then\n    cat >/dev/null\n  fi\n}}\n{}\n",
+            log_path.display(),
+            body
+        );
+        write_executable_script_atomically(&script_path, &script_source)
+            .expect("write fake acpx script");
         script_path
     }
+
+    #[cfg(unix)]
+    mod mcp_proxy_tests;
+    #[cfg(unix)]
+    mod path_tests;
 
     #[test]
     #[cfg(unix)]
@@ -1743,60 +1769,6 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
             .count();
         assert_eq!(staging_entries, 0, "staging files should be cleaned up");
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn fake_acpx_script_helpers_work_with_empty_path() {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let temp_dir = unique_temp_dir("loongclaw-acpx-script-builtins");
-        let log_path = temp_dir.join("calls.log");
-        let script_path = write_fake_acpx_script(
-            &temp_dir,
-            "fake-acpx",
-            &log_path,
-            r#"
-if args_contain "$*" 'prompt --session'; then
-  drain_stdin
-  echo '{"type":"text","content":"builtins ok"}'
-  echo '{"type":"done"}'
-  exit 0
-fi
-
-exit 0
-"#,
-        );
-
-        let mut command = Command::new(&script_path);
-        command
-            .args(["prompt", "--session", "sess-builtins", "--file", "-"])
-            .current_dir(&temp_dir)
-            .env("PATH", "")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = retry_executable_file_busy_blocking(|| command.spawn())
-            .expect("spawn fake acpx script");
-        let mut stdin = child.stdin.take().expect("fake acpx stdin");
-        stdin
-            .write_all(b"payload without trailing newline")
-            .expect("write fake acpx stdin");
-        drop(stdin);
-
-        let output = child.wait_with_output().expect("wait for fake acpx script");
-        assert!(output.status.success(), "fake acpx script should succeed");
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("{\"type\":\"text\",\"content\":\"builtins ok\"}"),
-            "expected built-in helper response in stdout: {stdout}"
-        );
-        assert!(
-            stdout.contains("{\"type\":\"done\"}"),
-            "expected done event in stdout: {stdout}"
-        );
     }
 
     #[tokio::test]
@@ -1896,13 +1868,6 @@ exit 0
 
     #[cfg(unix)]
     fn fake_acpx_config(script_path: &Path, cwd: &Path) -> LoongClawConfig {
-        let command = script_path.display().to_string();
-        let working_directory = cwd.display().to_string();
-        let expected_version = "0.1.16".to_owned();
-        let permission_mode = "approve-reads".to_owned();
-        let non_interactive_permissions = "fail".to_owned();
-        let timeout_seconds = 12.5;
-        let queue_owner_ttl_seconds = 0.25;
         let startup_timeout_ms = ACPX_FAKE_RUNTIME_STARTUP_TIMEOUT_MS;
 
         LoongClawConfig {
@@ -1911,13 +1876,13 @@ exit 0
                 allow_mcp_server_injection: false,
                 backends: AcpBackendProfilesConfig {
                     acpx: Some(AcpxBackendConfig {
-                        command: Some(command),
-                        expected_version: Some(expected_version),
-                        cwd: Some(working_directory),
-                        permission_mode: Some(permission_mode),
-                        non_interactive_permissions: Some(non_interactive_permissions),
-                        timeout_seconds: Some(timeout_seconds),
-                        queue_owner_ttl_seconds: Some(queue_owner_ttl_seconds),
+                        command: Some(script_path.display().to_string()),
+                        expected_version: Some("0.1.16".to_owned()),
+                        cwd: Some(cwd.display().to_string()),
+                        permission_mode: Some("approve-reads".to_owned()),
+                        non_interactive_permissions: Some("fail".to_owned()),
+                        timeout_seconds: Some(ACPX_RUNTIME_TEST_TIMEOUT_SECONDS),
+                        queue_owner_ttl_seconds: Some(0.25),
                         ..AcpxBackendConfig::default()
                     }),
                 },
@@ -2017,7 +1982,7 @@ exit 0
     #[tokio::test]
     #[cfg(unix)]
     async fn doctor_accepts_fake_version_command() {
-        let _guard = acpx_test_lock();
+        let _env = crate::test_support::ScopedEnv::new();
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe");
         let script_path = temp_dir.join("fake-acpx");
         write_executable_script_atomically(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
@@ -2089,7 +2054,7 @@ exit 0
     #[tokio::test]
     #[cfg(unix)]
     async fn doctor_accepts_path_discovered_fake_version_command() {
-        let _guard = acpx_test_lock();
+        let _guard = lock_acpx_runtime_tests().await;
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe-path");
         let bin_dir = temp_dir.join("bin");
         let script_path = bin_dir.join("fake-acpx");
@@ -2135,51 +2100,12 @@ exit 0
         assert_eq!(report.diagnostics.get("status"), Some(&"ready".to_owned()));
     }
 
-    #[test]
-    fn build_mcp_proxy_agent_command_preserves_server_cwd() {
-        fn decode_quoted_command_part(value: &str) -> String {
-            let trimmed = value.trim();
-            let quoted = trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2;
-            if !quoted {
-                return trimmed.to_owned();
-            }
-
-            let inner = &trimmed[1..trimmed.len() - 1];
-            let unescaped_backslashes = inner.replace("\\\\", "\\");
-            unescaped_backslashes.replace("\\\"", "\"")
-        }
-
-        let server = AcpxMcpServerEntry {
-            name: "docs".to_owned(),
-            command: "uvx".to_owned(),
-            args: vec!["context7-mcp".to_owned()],
-            env: vec![AcpxMcpServerEnvEntry {
-                name: "API_TOKEN".to_owned(),
-                value: "secret".to_owned(),
-            }],
-            cwd: Some("/workspace/docs".to_owned()),
-        };
-
-        let command = build_mcp_proxy_agent_command("npx @zed-industries/codex-acp", &[server])
-            .expect("proxy command");
-        let payload_marker = "--payload-file ";
-        let payload_index = command.find(payload_marker).expect("payload marker");
-        let payload_path = &command[payload_index + payload_marker.len()..];
-        let payload_path = decode_quoted_command_part(payload_path);
-        let payload_bytes = std::fs::read(payload_path).expect("read payload file");
-        let payload: Value = serde_json::from_slice(&payload_bytes).expect("parse payload");
-
-        assert_eq!(
-            payload["mcpServers"][0]["cwd"],
-            Value::String("/workspace/docs".to_owned())
-        );
-    }
-
     #[tokio::test]
     #[cfg(unix)]
     #[allow(clippy::await_holding_lock)]
     async fn runtime_backend_uses_agent_proxy_when_mcp_servers_requested() {
-        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+        let _lock = lock_acpx_runtime_tests().await;
+        let _env = crate::test_support::ScopedEnv::new();
         let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-proxy");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
@@ -2230,12 +2156,9 @@ exit 0
             non_interactive_permissions: Some("fail".to_owned()),
             timeout_seconds: Some(12.5),
             queue_owner_ttl_seconds: Some(0.25),
-            ..AcpxBackendConfig::default()
-        });
-        config.mcp.servers = BTreeMap::from([(
-            "filesystem".to_owned(),
-            crate::mcp::McpServerConfig {
-                transport: crate::mcp::McpServerTransportConfig::Stdio {
+            mcp_servers: BTreeMap::from([(
+                "filesystem".to_owned(),
+                crate::config::AcpxMcpServerConfig {
                     command: "npx".to_owned(),
                     args: vec![
                         "-y".to_owned(),
@@ -2243,16 +2166,10 @@ exit 0
                         temp_dir.display().to_string(),
                     ],
                     env: BTreeMap::from([("ROOT".to_owned(), temp_dir.display().to_string())]),
-                    cwd: None,
                 },
-                enabled: true,
-                required: false,
-                startup_timeout_ms: None,
-                tool_timeout_ms: None,
-                enabled_tools: Vec::new(),
-                disabled_tools: Vec::new(),
-            },
-        )]);
+            )]),
+            ..AcpxBackendConfig::default()
+        });
 
         let backend = AcpxCliProbeBackend;
         let bootstrap = AcpSessionBootstrap {
@@ -2315,7 +2232,6 @@ exit 0
     #[tokio::test]
     #[cfg(unix)]
     async fn ensure_session_rejects_unknown_requested_mcp_server_names() {
-        let _guard = acpx_test_lock();
         let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-unknown");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
@@ -2326,23 +2242,17 @@ exit 0
         );
         let mut config = fake_acpx_config(&script_path, &temp_dir);
         config.acp.allow_mcp_server_injection = true;
-        config.mcp.servers = BTreeMap::from([(
-            "filesystem".to_owned(),
-            crate::mcp::McpServerConfig {
-                transport: crate::mcp::McpServerTransportConfig::Stdio {
+        config.acp.backends.acpx = Some(AcpxBackendConfig {
+            mcp_servers: BTreeMap::from([(
+                "filesystem".to_owned(),
+                crate::config::AcpxMcpServerConfig {
                     command: "npx".to_owned(),
                     args: vec!["@modelcontextprotocol/server-filesystem".to_owned()],
                     env: BTreeMap::new(),
-                    cwd: None,
                 },
-                enabled: true,
-                required: false,
-                startup_timeout_ms: None,
-                tool_timeout_ms: None,
-                enabled_tools: Vec::new(),
-                disabled_tools: Vec::new(),
-            },
-        )]);
+            )]),
+            ..AcpxBackendConfig::default()
+        });
 
         let backend = AcpxCliProbeBackend;
         let error = backend
@@ -2363,64 +2273,8 @@ exit 0
             .expect_err("unknown MCP server should fail");
 
         assert!(
-            error.contains("missing") && error.contains("shared MCP registry"),
+            error.contains("missing") && error.contains("mcp_servers"),
             "expected missing MCP server validation error, got: {error}"
-        );
-    }
-
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn ensure_session_rejects_streamable_http_requested_mcp_server() {
-        let _guard = acpx_test_lock();
-        let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-http");
-        let log_path = temp_dir.join("calls.log");
-        let script_path = write_fake_acpx_script(
-            &temp_dir,
-            "fake-acpx",
-            &log_path,
-            "echo '{\"acpxSessionId\":\"unused\"}'\n",
-        );
-        let mut config = fake_acpx_config(&script_path, &temp_dir);
-        config.acp.allow_mcp_server_injection = true;
-        config.mcp.servers = BTreeMap::from([(
-            "remote".to_owned(),
-            crate::mcp::McpServerConfig {
-                transport: crate::mcp::McpServerTransportConfig::StreamableHttp {
-                    url: "https://mcp.example.com".to_owned(),
-                    bearer_token_env_var: Some("MCP_TOKEN".to_owned()),
-                    http_headers: BTreeMap::new(),
-                    env_http_headers: BTreeMap::new(),
-                },
-                enabled: true,
-                required: false,
-                startup_timeout_ms: None,
-                tool_timeout_ms: None,
-                enabled_tools: Vec::new(),
-                disabled_tools: Vec::new(),
-            },
-        )]);
-
-        let backend = AcpxCliProbeBackend;
-        let error = backend
-            .ensure_session(
-                &config,
-                &AcpSessionBootstrap {
-                    session_key: "session-http-mcp".to_owned(),
-                    conversation_id: None,
-                    binding: None,
-                    working_directory: Some(temp_dir),
-                    initial_prompt: None,
-                    mode: Some(AcpSessionMode::Interactive),
-                    mcp_servers: vec!["remote".to_owned()],
-                    metadata: BTreeMap::new(),
-                },
-            )
-            .await
-            .expect_err("streamable_http MCP server should fail ACPX injection");
-
-        assert!(
-            error.contains("streamable_http") && error.contains("remote"),
-            "expected unsupported transport error, got: {error}"
         );
     }
 
@@ -2428,7 +2282,8 @@ exit 0
     #[cfg(unix)]
     #[allow(clippy::await_holding_lock)]
     async fn runtime_backend_executes_session_turn_and_controls() {
-        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+        let _lock = lock_acpx_runtime_tests().await;
+        let _env = crate::test_support::ScopedEnv::new();
         let temp_dir = unique_temp_dir("loongclaw-acpx-runtime");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
@@ -2614,7 +2469,8 @@ exit 0
     #[cfg(unix)]
     #[allow(clippy::await_holding_lock)]
     async fn runtime_backend_supports_local_abort_for_running_prompt() {
-        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+        let _lock = lock_acpx_runtime_tests().await;
+        let _env = crate::test_support::ScopedEnv::new();
         let temp_dir = unique_temp_dir("loongclaw-acpx-abort");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
@@ -2717,7 +2573,8 @@ exit 0
     #[cfg(unix)]
     #[allow(clippy::await_holding_lock)]
     async fn ensure_session_falls_back_to_sessions_new_when_ensure_has_no_identifiers() {
-        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+        let _lock = lock_acpx_runtime_tests().await;
+        let _env = crate::test_support::ScopedEnv::new();
         let temp_dir = unique_temp_dir("loongclaw-acpx-fallback");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(

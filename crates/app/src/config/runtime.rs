@@ -5,6 +5,9 @@ use std::{
     path::PathBuf,
 };
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
@@ -34,13 +37,35 @@ use super::{
         format_config_validation_issues,
     },
     tools::{
-        DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, ToolConfig,
-        WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_JINA_API_KEY_ENV,
-        WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
-        WEB_SEARCH_PROVIDER_VALID_VALUES, WEB_SEARCH_TAVILY_API_KEY_ENV,
+        DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, RuntimePluginsConfig, ToolConfig,
+        WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
+        WEB_SEARCH_JINA_API_KEY_ENV, WEB_SEARCH_JINA_AUTH_TOKEN_ENV,
+        WEB_SEARCH_PERPLEXITY_API_KEY_ENV, WEB_SEARCH_PROVIDER_VALID_VALUES,
+        WEB_SEARCH_TAVILY_API_KEY_ENV,
     },
 };
 use crate::secrets::{canonicalize_env_secret_reference, secret_ref_env_name};
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CONFIG_WRITE_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub struct ScopedTestConfigWriteFailure;
+
+#[cfg(test)]
+impl Drop for ScopedTestConfigWriteFailure {
+    fn drop(&mut self) {
+        TEST_CONFIG_WRITE_FAILURE.with(|flag| flag.set(false));
+    }
+}
+
+#[cfg(test)]
+pub fn inject_test_config_write_failure() -> ScopedTestConfigWriteFailure {
+    TEST_CONFIG_WRITE_FAILURE.with(|flag| flag.set(true));
+    ScopedTestConfigWriteFailure
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigValidationDiagnostic {
@@ -152,6 +177,8 @@ pub struct LoongClawConfig {
     pub tools: ToolConfig,
     #[serde(default)]
     pub external_skills: ExternalSkillsConfig,
+    #[serde(default)]
+    pub runtime_plugins: RuntimePluginsConfig,
     #[serde(default)]
     pub mcp: McpConfig,
     #[serde(default)]
@@ -1546,10 +1573,11 @@ impl LoongClawConfig {
         if let Some(report) = selection_report {
             issues.extend(report.validation_issues());
         }
-        issues.extend(super::channels::collect_channel_validation_issues(self));
+        issues.extend(crate::channel::collect_channel_validation_issues(self));
         issues.extend(self.feishu_integration.validate());
         issues.extend(self.memory.validate());
         issues.extend(self.tools.validate());
+        issues.extend(self.runtime_plugins.validate());
         issues
     }
 
@@ -1595,11 +1623,11 @@ impl LoongClawConfig {
     }
 
     pub fn enabled_channel_ids(&self) -> Vec<String> {
-        super::channels::enabled_channel_ids(self)
+        crate::channel::enabled_channel_ids(self, None)
     }
 
     pub fn enabled_service_channel_ids(&self) -> Vec<String> {
-        super::channels::enabled_service_channel_ids(self)
+        crate::channel::enabled_channel_ids(self, Some(crate::channel::ChannelRuntimeKind::Service))
     }
 
     pub fn active_provider_id(&self) -> Option<&str> {
@@ -2095,6 +2123,13 @@ pub fn write(path: Option<&str>, config: &LoongClawConfig, force: bool) -> CliRe
     }
 
     let encoded = encode_toml_config(config)?;
+    #[cfg(any(test, debug_assertions))]
+    if config_write_failure_injected(&output_path) {
+        return Err(format!(
+            "failed to write config file {}: injected test failure",
+            output_path.display()
+        ));
+    }
     fs::write(&output_path, encoded).map_err(|error| {
         format!(
             "failed to write config file {}: {error}",
@@ -2114,6 +2149,22 @@ pub fn default_config_path() -> PathBuf {
 
 pub fn default_loongclaw_home() -> PathBuf {
     shared_default_loongclaw_home()
+}
+
+#[cfg(any(test, debug_assertions))]
+fn config_write_failure_injected(output_path: &Path) -> bool {
+    #[cfg(test)]
+    if TEST_CONFIG_WRITE_FAILURE.with(Cell::get) {
+        return true;
+    }
+
+    let configured_path = std::env::var_os("LOONGCLAW_TEST_FAIL_CONFIG_WRITE_PATH");
+    let Some(configured_path) = configured_path else {
+        return false;
+    };
+
+    let configured_path = PathBuf::from(configured_path);
+    configured_path == output_path
 }
 
 #[cfg(feature = "config-toml")]
@@ -2167,6 +2218,7 @@ fn template_web_search_usage_comment() -> String {
 # - Tavily credentials can use `tools.web_search.tavily_api_key = \"${{{WEB_SEARCH_TAVILY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_TAVILY_API_KEY_ENV}` environment variable.\n\
 # - Perplexity credentials can use `tools.web_search.perplexity_api_key = \"${{{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}` environment variable.\n\
 # - Exa credentials can use `tools.web_search.exa_api_key = \"${{{WEB_SEARCH_EXA_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_EXA_API_KEY_ENV}` environment variable.\n\
+# - Firecrawl credentials can use `tools.web_search.firecrawl_api_key = \"${{{WEB_SEARCH_FIRECRAWL_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_FIRECRAWL_API_KEY_ENV}` environment variable.\n\
 # - Jina credentials can use `tools.web_search.jina_api_key = \"${{{WEB_SEARCH_JINA_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_JINA_API_KEY_ENV}` / `{WEB_SEARCH_JINA_AUTH_TOKEN_ENV}` environment variable.\n\
 \n"
     )
@@ -2285,6 +2337,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains(WEB_SEARCH_TAVILY_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_PERPLEXITY_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_EXA_API_KEY_ENV));
+        assert!(raw.contains(WEB_SEARCH_FIRECRAWL_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
 
@@ -2668,7 +2721,7 @@ api_key_env = "{secret}"
         let path_string = path.display().to_string();
         let mut config = LoongClawConfig::default();
         config.cli.prompt_pack_id = Some("loongclaw-core-v1".to_owned());
-        config.cli.personality = Some(crate::prompt::PromptPersonality::AutonomousExecutor);
+        config.cli.personality = Some(crate::prompt::PromptPersonality::CyberRadical);
 
         write(Some(&path_string), &config, true).expect("config write should pass");
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
@@ -2679,7 +2732,53 @@ api_key_env = "{secret}"
         );
         assert_eq!(
             loaded.cli.personality,
-            Some(crate::prompt::PromptPersonality::AutonomousExecutor)
+            Some(crate::prompt::PromptPersonality::CyberRadical)
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn load_accepts_legacy_prompt_personality_ids() {
+        let path = unique_config_path("loongclaw-legacy-prompt-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.cli.prompt_pack_id = Some("loongclaw-core-v1".to_owned());
+        config.cli.personality = Some(crate::prompt::PromptPersonality::Hermit);
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read config text");
+        let serialized_personality = "personality = \"hermit\"";
+        let legacy_personality = "personality = \"friendly_collab\"";
+        let fixture_contains_serialized_personality = raw.contains(serialized_personality);
+
+        assert!(
+            fixture_contains_serialized_personality,
+            "serialized personality fixture changed unexpectedly: {raw}"
+        );
+
+        let legacy_raw = raw.replacen(serialized_personality, legacy_personality, 1);
+        let replacement_happened = legacy_raw != raw;
+        let legacy_personality_written = legacy_raw.contains(legacy_personality);
+
+        assert!(
+            replacement_happened,
+            "fixture rewrite failed; serialized personality format changed"
+        );
+        assert!(
+            legacy_personality_written,
+            "fixture rewrite did not persist the legacy personality alias"
+        );
+
+        fs::write(&path, legacy_raw).expect("write legacy config text");
+
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+
+        assert_eq!(
+            loaded.cli.personality,
+            Some(crate::prompt::PromptPersonality::Hermit)
         );
 
         let _ = fs::remove_file(path);

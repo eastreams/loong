@@ -370,6 +370,7 @@ install_web_search_provider_display_name() {
     brave) printf 'Brave Search\n' ;;
     perplexity) printf 'Perplexity Search\n' ;;
     exa) printf 'Exa\n' ;;
+    firecrawl) printf 'Firecrawl Search\n' ;;
     jina) printf 'Jina Search\n' ;;
     *) printf '%s\n' "${provider}" ;;
   esac
@@ -455,6 +456,9 @@ install_web_search_provider_has_ready_credential() {
     exa)
       install_env_has_non_empty_value "EXA_API_KEY"
       ;;
+    firecrawl)
+      install_env_has_non_empty_value "FIRECRAWL_API_KEY"
+      ;;
     jina)
       install_env_has_non_empty_value "JINA_API_KEY" \
         || install_env_has_non_empty_value "JINA_AUTH_TOKEN"
@@ -470,7 +474,7 @@ recommend_onboard_web_search_provider_from_credentials() {
   local ready_count=0
   local provider=""
 
-  for provider in brave tavily perplexity exa jina; do
+  for provider in brave tavily perplexity exa firecrawl jina; do
     if ! install_web_search_provider_has_ready_credential "$provider"; then
       continue
     fi
@@ -553,6 +557,7 @@ run_guided_onboarding() {
   local selected_provider
   local provider_source
   local recommendation
+  local onboard_status
 
   if [[ -n "${LOONGCLAW_WEB_SEARCH_PROVIDER:-}" ]]; then
     selected_provider="${LOONGCLAW_WEB_SEARCH_PROVIDER}"
@@ -568,7 +573,8 @@ run_guided_onboarding() {
       "$(install_web_search_provider_display_name "${selected_provider}")" \
       "$(format_install_web_search_provider_source "${provider_source}")"
     "${prefix}/${bin_name}" onboard --web-search-provider "${selected_provider}"
-    return 0
+    onboard_status="$?"
+    return "${onboard_status}"
   fi
 
   "${prefix}/${bin_name}" onboard
@@ -854,17 +860,58 @@ fi
 printf '==> Installed loong to %s\n' "${prefix}/${bin_name}"
 printf '==> Installed compatible loongclaw command to %s\n' "${prefix}/${legacy_bin_name}"
 
-if [[ "${run_onboard}" -eq 1 ]]; then
-  printf '==> Running guided onboarding\n'
-  run_guided_onboarding
-fi
+should_print_source_hint=0
 
 case ":${PATH}:" in
   *":${prefix}:"*)
     ;;
   *)
-    printf '\nAdd to PATH if needed:\n  export PATH="%s:$PATH"\n' "${prefix}"
+    path_line="export PATH=\"${prefix}:\$PATH\""
+    # Pick the rc file for the user's current shell
+    case "${SHELL:-}" in
+      */zsh)  rc_file="${HOME}/.zshrc" ;;
+      */bash) rc_file="${HOME}/.bashrc" ;;
+      *)      rc_file="" ;;
+    esac
+    if [[ -n "${rc_file}" ]]; then
+      if [[ ! -f "${rc_file}" ]]; then
+        touch "${rc_file}"
+      fi
+      if ! grep -qF "${path_line}" "${rc_file}"; then
+        # Ensure existing content ends with a newline before appending
+        if [[ -s "${rc_file}" ]] && [[ "$(tail -c 1 "${rc_file}" | wc -l)" -eq 0 ]]; then
+          printf '\n' >> "${rc_file}"
+        fi
+        printf '\n# Added by Loong installer\n%s\n' "${path_line}" >> "${rc_file}"
+        printf '==> Added %s to PATH in %s\n' "${prefix}" "${rc_file}"
+      else
+        printf '==> PATH entry already present in %s\n' "${rc_file}"
+      fi
+      should_print_source_hint=1
+    else
+      printf '\nAdd to PATH if needed:\n  export PATH="%s:$PATH"\n' "${prefix}"
+    fi
+    # Make loong available for the onboarding step below
+    export PATH="${prefix}:${PATH}"
     ;;
 esac
+
+if [[ "${should_print_source_hint}" -eq 1 ]]; then
+  printf '\n'
+  printf 'Note: if loong is not found after this script exits, run:\n'
+  printf '  source "%s"\n' "${rc_file}"
+  printf 'or open a new terminal.\n'
+fi
+
+if [[ "${run_onboard}" -eq 1 ]]; then
+  printf '\n==> Running guided onboarding\n'
+  if run_guided_onboarding; then
+    :
+  else
+    onboard_status="$?"
+    printf '==> Onboarding exited with code %s\n' "${onboard_status}"
+    printf "==> You can run 'loong onboard' later to complete setup\n"
+  fi
+fi
 
 printf '\nDone. Try:\n  loong --help\n'

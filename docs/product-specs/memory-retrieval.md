@@ -15,6 +15,8 @@ channel.
       instead of being permanently fixed to session-local summary only.
 - [ ] Retrieved artifacts surface provenance that is meaningful to operators,
       including where the result came from and why it was injected.
+- [ ] Workspace-document retrieval honors explicit record-status metadata so
+      inactive records are filtered before ranking or operator inspection.
 - [ ] The first slice includes a local text-search path before any
       embedding-dependent retrieval becomes required.
 - [ ] Retrieved memory remains advisory and does not override runtime self,

@@ -10,6 +10,10 @@ mod runtime;
 mod shared;
 mod tools;
 
+#[allow(unused_imports)]
+pub use crate::channel::{ChannelDescriptor, ChannelRuntimeKind};
+#[allow(unused_imports)]
+pub use crate::channel::{channel_descriptor, service_channel_descriptors};
 pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
@@ -22,28 +26,28 @@ pub use channels::bridge::{
 #[allow(unused_imports)]
 pub use channels::{
     ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelAcpConfig,
-    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource, ChannelDescriptor,
-    ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig, DingtalkAccountConfig,
-    DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig, EmailAccountConfig,
-    EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode,
-    FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig,
-    ImessageChannelConfig, IrcAccountConfig, IrcChannelConfig, LineAccountConfig,
-    LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig,
-    MattermostChannelConfig, NextcloudTalkAccountConfig, NextcloudTalkChannelConfig,
-    NostrAccountConfig, NostrChannelConfig, ResolvedDingtalkChannelConfig,
-    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
-    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
-    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
-    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
-    ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig,
-    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
-    SignalAccountConfig, SignalChannelConfig, SlackAccountConfig, SlackChannelConfig,
-    SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig,
-    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig,
-    TlonChannelConfig, TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig,
-    WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig,
-    WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
+    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
+    ChannelResolvedAccountRoute, CliChannelConfig, DingtalkAccountConfig, DingtalkChannelConfig,
+    DiscordAccountConfig, DiscordChannelConfig, EmailAccountConfig, EmailChannelConfig,
+    FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
+    GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig, ImessageChannelConfig,
+    IrcAccountConfig, IrcChannelConfig, LineAccountConfig, LineChannelConfig, MatrixAccountConfig,
+    MatrixChannelConfig, MattermostAccountConfig, MattermostChannelConfig,
+    NextcloudTalkAccountConfig, NextcloudTalkChannelConfig, NostrAccountConfig, NostrChannelConfig,
+    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
+    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
+    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
+    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
+    ResolvedNostrChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
+    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
+    ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
+    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SignalAccountConfig,
+    SignalChannelConfig, SlackAccountConfig, SlackChannelConfig, SynologyChatAccountConfig,
+    SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig, TelegramAccountConfig,
+    TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig, TlonChannelConfig,
+    TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig, WebhookChannelConfig,
+    WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig, WhatsappAccountConfig,
+    WhatsappChannelConfig,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
@@ -79,6 +83,9 @@ pub use memory::{
 };
 #[allow(unused_imports)]
 pub use outbound_http::OutboundHttpConfig;
+pub(crate) use provider::{
+    ANTHROPIC_DEFAULT_HEADERS, GITHUB_COPILOT_DEFAULT_HEADERS, GITHUB_COPILOT_USER_AGENT,
+};
 #[allow(unused_imports)]
 pub use provider::{
     ModelCatalogProbeRecovery, PROVIDER_DESCRIPTOR_SCHEMA_VERSION, ProviderAuthScheme,
@@ -90,6 +97,8 @@ pub use provider::{
     ProviderTransportPolicy, ProviderTransportReadiness, ProviderTransportReadinessLevel,
     ProviderWireApi, ReasoningEffort, parse_provider_kind_id,
 };
+#[cfg(test)]
+pub(crate) use runtime::inject_test_config_write_failure;
 #[allow(unused_imports)]
 pub use runtime::{
     AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
@@ -107,8 +116,9 @@ pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_chann
 pub(crate) use shared::ConfigValidationIssue;
 #[allow(unused_imports)]
 pub use shared::{
-    CLI_COMMAND_NAME, LEGACY_CLI_COMMAND_NAME, PRODUCT_DISPLAY_NAME, active_cli_command_name,
-    detect_invoked_cli_command_name, detect_invoked_cli_command_name_from_arg0, expand_path,
+    CLI_COMMAND_NAME, HOME_DIR_NAME, LEGACY_CLI_COMMAND_NAME, LEGACY_HOME_DIR_NAME,
+    PRODUCT_DISPLAY_NAME, active_cli_command_name, detect_invoked_cli_command_name,
+    detect_invoked_cli_command_name_from_arg0, detect_legacy_home, expand_path,
     set_active_cli_command_name,
 };
 #[allow(unused_imports)]
@@ -120,17 +130,18 @@ pub use tools::{
     DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS, DEFAULT_SHELL_ALLOW, DEFAULT_WEB_FETCH_MAX_BYTES,
     DEFAULT_WEB_FETCH_MAX_REDIRECTS, DEFAULT_WEB_FETCH_TIMEOUT_SECONDS,
     DEFAULT_WEB_SEARCH_MAX_RESULTS, DEFAULT_WEB_SEARCH_PROVIDER,
-    DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, ExternalSkillsConfig, GovernedToolApprovalConfig,
-    GovernedToolApprovalMode, MAX_BROWSER_MAX_LINKS, MAX_BROWSER_MAX_SESSIONS,
-    MAX_BROWSER_MAX_TEXT_CHARS, MAX_RUNTIME_SELF_MAX_SOURCE_CHARS,
-    MAX_RUNTIME_SELF_MAX_TOTAL_CHARS, MAX_WEB_FETCH_MAX_BYTES, RuntimeSelfToolConfig,
-    SessionVisibility, ToolConfig, ToolConsentConfig, ToolConsentMode,
-    WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_JINA_API_KEY_ENV,
-    WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV, WEB_SEARCH_PROVIDER_BRAVE,
-    WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_EXA, WEB_SEARCH_PROVIDER_JINA,
-    WEB_SEARCH_PROVIDER_PERPLEXITY, WEB_SEARCH_PROVIDER_TAVILY, WEB_SEARCH_PROVIDER_VALID_VALUES,
-    WEB_SEARCH_TAVILY_API_KEY_ENV, WebSearchProviderDescriptor, WebSearchToolConfig, WebToolConfig,
-    normalize_web_search_provider, parse_autonomy_profile, web_search_provider_api_key_env_names,
+    DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, DelegateToolConfig, ExternalSkillsConfig,
+    GovernedToolApprovalConfig, GovernedToolApprovalMode, MAX_BROWSER_MAX_LINKS,
+    MAX_BROWSER_MAX_SESSIONS, MAX_BROWSER_MAX_TEXT_CHARS, MAX_RUNTIME_SELF_MAX_SOURCE_CHARS,
+    MAX_RUNTIME_SELF_MAX_TOTAL_CHARS, MAX_WEB_FETCH_MAX_BYTES, RuntimePluginsConfig,
+    RuntimeSelfToolConfig, SessionVisibility, ToolConfig, ToolConsentConfig, ToolConsentMode,
+    WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
+    WEB_SEARCH_JINA_API_KEY_ENV, WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
+    WEB_SEARCH_PROVIDER_BRAVE, WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_EXA,
+    WEB_SEARCH_PROVIDER_FIRECRAWL, WEB_SEARCH_PROVIDER_JINA, WEB_SEARCH_PROVIDER_PERPLEXITY,
+    WEB_SEARCH_PROVIDER_TAVILY, WEB_SEARCH_PROVIDER_VALID_VALUES, WEB_SEARCH_TAVILY_API_KEY_ENV,
+    WebSearchProviderDescriptor, WebSearchToolConfig, WebToolConfig, normalize_web_search_provider,
+    parse_autonomy_profile, web_search_provider_api_key_env_names,
     web_search_provider_default_api_key_env, web_search_provider_descriptor,
     web_search_provider_descriptors,
 };
@@ -457,6 +468,7 @@ mod tests {
                 "deepseek",
                 "fireworks",
                 "gemini",
+                "github-copilot",
                 "groq",
                 "kimi",
                 "kimi_coding",
@@ -468,6 +480,8 @@ mod tests {
                 "nvidia",
                 "ollama",
                 "openai",
+                "opencode_go",
+                "opencode_zen",
                 "openrouter",
                 "perplexity",
                 "qianfan",
@@ -484,6 +498,7 @@ mod tests {
                 "volcengine",
                 "volcengine_coding",
                 "xai",
+                "xiaomi",
                 "zai",
                 "zhipu"
             ]
@@ -520,6 +535,14 @@ mod tests {
                 "https://api.openai.com/v1/chat/completions",
             ),
             (
+                ProviderKind::OpencodeGo,
+                "https://opencode.ai/zen/go/v1/chat/completions",
+            ),
+            (
+                ProviderKind::OpencodeZen,
+                "https://opencode.ai/zen/v1/chat/completions",
+            ),
+            (
                 ProviderKind::Openrouter,
                 "https://openrouter.ai/api/v1/chat/completions",
             ),
@@ -528,6 +551,10 @@ mod tests {
                 "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
             ),
             (ProviderKind::Xai, "https://api.x.ai/v1/chat/completions"),
+            (
+                ProviderKind::Xiaomi,
+                "https://api.xiaomimimo.com/v1/chat/completions",
+            ),
             (
                 ProviderKind::Zai,
                 "https://api.z.ai/api/paas/v4/chat/completions",
@@ -552,6 +579,9 @@ mod tests {
             (ProviderKind::Kimi, Some("MOONSHOT_API_KEY")),
             (ProviderKind::Minimax, Some("MINIMAX_API_KEY")),
             (ProviderKind::Openai, Some("OPENAI_API_KEY")),
+            (ProviderKind::OpencodeGo, Some("OPENCODE_API_KEY")),
+            (ProviderKind::OpencodeZen, Some("OPENCODE_API_KEY")),
+            (ProviderKind::Xiaomi, Some("XIAOMI_API_KEY")),
         ];
         for (kind, expected) in cases {
             let config = ProviderConfig {
@@ -1271,6 +1301,34 @@ kind = "volcengine_coding"
     }
 
     #[test]
+    fn opencode_zen_warns_when_given_go_model_prefix() {
+        let config = ProviderConfig {
+            kind: ProviderKind::OpencodeZen,
+            model: "opencode-go/glm-5.1".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        let hint = config
+            .configuration_hint()
+            .expect("opencode_zen should warn about Go-prefixed models");
+        assert!(hint.contains("opencode_go"));
+    }
+
+    #[test]
+    fn opencode_go_warns_when_pointed_at_zen_base_url() {
+        let config = ProviderConfig {
+            kind: ProviderKind::OpencodeGo,
+            base_url: "https://opencode.ai/zen/v1".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        let hint = config
+            .configuration_hint()
+            .expect("opencode_go should warn about the wrong base url root");
+        assert!(hint.contains("opencode_zen"));
+    }
+
+    #[test]
     fn bedrock_uses_region_template_endpoints() {
         let config = ProviderConfig {
             kind: ProviderKind::Bedrock,
@@ -1434,6 +1492,14 @@ kind = "volcengine_coding"
             (
                 ProviderKind::VolcengineCoding,
                 "https://ark.cn-beijing.volces.com/api/coding/v3/models",
+            ),
+            (
+                ProviderKind::OpencodeGo,
+                "https://opencode.ai/zen/go/v1/models",
+            ),
+            (
+                ProviderKind::OpencodeZen,
+                "https://opencode.ai/zen/v1/models",
             ),
         ];
 
@@ -2439,6 +2505,14 @@ safe_lane_health_replan_warn_threshold = 0.55
             (ProviderKind::Ollama, "http://127.0.0.1:11434/v1/models"),
             (ProviderKind::Openai, "https://api.openai.com/v1/models"),
             (
+                ProviderKind::OpencodeGo,
+                "https://opencode.ai/zen/go/v1/models",
+            ),
+            (
+                ProviderKind::OpencodeZen,
+                "https://opencode.ai/zen/v1/models",
+            ),
+            (
                 ProviderKind::Openrouter,
                 "https://openrouter.ai/api/v1/models",
             ),
@@ -2447,6 +2521,7 @@ safe_lane_health_replan_warn_threshold = 0.55
                 "https://ark.cn-beijing.volces.com/api/v3/models",
             ),
             (ProviderKind::Xai, "https://api.x.ai/v1/language-models"),
+            (ProviderKind::Xiaomi, "https://api.xiaomimimo.com/v1/models"),
             (ProviderKind::Zai, "https://api.z.ai/api/paas/v4/models"),
             (
                 ProviderKind::Zhipu,

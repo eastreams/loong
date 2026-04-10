@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
+default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-http", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
 channel-cli = []
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "dep:prost", "dep:rustls", "dep:tokio-tungstenite", "feishu-integration"]
@@ -43,6 +43,7 @@ feishu-integration = ["dep:rusqlite"]
 tool-shell = []
 tool-file = []
 tool-browser = ["dep:scraper"]
+tool-http = []
 tool-webfetch = []
 tool-websearch = []
 test-support = []
@@ -69,7 +70,7 @@ subtle = "2.6"
 flate2.workspace = true
 tar.workspace = true
 tokio.workspace = true
-lettre = { version = "0.11.20", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.21", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 futures-util.workspace = true
 base64.workspace = true
 bech32.workspace = true
@@ -88,7 +89,7 @@ tempfile = "3"
 which.workspace = true
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 tree-sitter-bash = "0.25"
 starlark = "0.13"
 # Kept unconditional because conversation/turn_shared.rs uses Regex to strip

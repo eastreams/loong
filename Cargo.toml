@@ -39,18 +39,18 @@ flate2 = "1"
 tar = "0.4.45"
 rand = "0.10"
 regex = "1.12.3"
-wasmparser = "0.245"
+wasmparser = "0.246"
 base64 = "0.22"
 bech32 = "0.11"
 ed25519-dalek = "2.2"
 secp256k1 = "0.31"
-wasmtime = { version = "43.0.0", default-features = false, features = ["std", "runtime", "cranelift"] }
+wasmtime = { version = "43.0.1", default-features = false, features = ["std", "runtime", "cranelift"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 which = "8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"

@@ -33,6 +33,11 @@ pub enum PluginBridgeKind {
 
 impl PluginBridgeKind {
     #[must_use]
+    pub fn parse_label(raw: &str) -> Option<Self> {
+        parse_bridge_kind(raw)
+    }
+
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::HttpJson => "http_json",

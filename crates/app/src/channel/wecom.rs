@@ -16,7 +16,7 @@ use super::{
     CHANNEL_OPERATION_SERVE_ID, ChannelDelivery, ChannelDeliveryResource, ChannelInboundMessage,
     ChannelOperationRuntimeTracker, ChannelOutboundTarget, ChannelOutboundTargetKind,
     ChannelPlatform, ChannelServeStopHandle, ChannelSession, ChannelTurnFeedbackPolicy,
-    process_inbound_with_provider, runtime_state,
+    process_inbound_with_provider, runtime::state,
 };
 
 const WECOM_SUBSCRIBE_CMD: &str = "aibot_subscribe";
@@ -723,8 +723,8 @@ fn resolve_wecom_connection_config(
 
 async fn acquire_wecom_connection_owner(
     resolved: &ResolvedWecomChannelConfig,
-) -> CliResult<runtime_state::ChannelOperationExclusiveGuard> {
-    runtime_state::ChannelOperationExclusiveGuard::acquire(
+) -> CliResult<state::ChannelOperationExclusiveGuard> {
+    state::ChannelOperationExclusiveGuard::acquire(
         ChannelPlatform::Wecom,
         WECOM_CONNECTION_OWNER_OPERATION_ID,
         resolved.account.id.as_str(),
@@ -734,16 +734,16 @@ async fn acquire_wecom_connection_owner(
 }
 
 fn ensure_wecom_send_runtime_is_exclusive(resolved: &ResolvedWecomChannelConfig) -> CliResult<()> {
-    let runtime_dir = runtime_state::default_channel_runtime_state_dir();
+    let runtime_dir = state::default_channel_runtime_state_dir();
     let now_ms = current_time_ms();
-    runtime_state::prune_inactive_channel_operation_runtime_files_for_account_from_dir(
+    state::prune_inactive_channel_operation_runtime_files_for_account_from_dir(
         runtime_dir.as_path(),
         ChannelPlatform::Wecom,
         CHANNEL_OPERATION_SERVE_ID,
         Some(resolved.account.id.as_str()),
         now_ms,
     )?;
-    let runtime = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+    let runtime = state::load_channel_operation_runtime_for_account_from_dir(
         runtime_dir.as_path(),
         ChannelPlatform::Wecom,
         CHANNEL_OPERATION_SERVE_ID,
@@ -1404,11 +1404,11 @@ mod tests {
             .expect("resolve wecom account");
         env.set("HOME", &temp_home);
         env.set("USERPROFILE", &temp_home);
-        let runtime_dir = runtime_state::default_channel_runtime_state_dir();
+        let runtime_dir = state::default_channel_runtime_state_dir();
 
         std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
 
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Wecom,
             CHANNEL_OPERATION_SERVE_ID,
@@ -1423,7 +1423,7 @@ mod tests {
         )
         .expect("seed wecom serve runtime");
 
-        let _owner_guard = runtime_state::ChannelOperationExclusiveGuard::acquire(
+        let _owner_guard = state::ChannelOperationExclusiveGuard::acquire(
             ChannelPlatform::Wecom,
             WECOM_CONNECTION_OWNER_OPERATION_ID,
             resolved.account.id.as_str(),
