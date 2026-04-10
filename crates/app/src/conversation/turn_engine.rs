@@ -43,7 +43,7 @@ use super::autonomy_policy::{
     AUTONOMY_POLICY_SOURCE, AutonomyTurnBudgetState, PolicyDecision, PolicyDecisionInput,
     evaluate_policy, render_reason,
 };
-use super::runtime::{DefaultConversationRuntime, SessionContext};
+use super::runtime::{SessionContext, load_default_conversation_runtime};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_result_compaction::compact_tool_search_payload_summary;
 use super::turn_observer::{ConversationTurnObserverHandle, ConversationTurnRuntimeEvent};
@@ -1716,7 +1716,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 .app_config
                 .as_ref()
                 .ok_or_else(|| "session_continue_not_configured".to_owned())?;
-            let runtime = DefaultConversationRuntime::from_config_or_env(app_config.as_ref())?;
+            let runtime = load_default_conversation_runtime(app_config.as_ref())?;
             return crate::tools::continue_session_with_runtime(
                 request.payload,
                 &session_context.session_id,

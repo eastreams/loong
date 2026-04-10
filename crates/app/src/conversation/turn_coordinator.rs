@@ -53,7 +53,7 @@ use super::analytics::{
 use super::announce::DelegateAnnounceSettings;
 #[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
-use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
+use super::context_engine::AssembledConversationContext;
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
     enqueue_delegate_result_announce_with_memory_config,
@@ -80,7 +80,8 @@ use super::plan_verifier::{
     PlanVerificationReport, verify_output,
 };
 use super::runtime::{
-    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
+    AsyncDelegateSpawnRequest, BoxedDefaultConversationRuntime, ConversationRuntime,
+    SessionContext, load_default_conversation_runtime,
 };
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::safe_lane_failure::{
@@ -1117,7 +1118,7 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.compact_session_with_runtime(config, session_id, &runtime, binding)
             .await
     }
@@ -1228,7 +1229,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id(session_id);
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             &address,
@@ -1269,7 +1270,7 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.repair_turn_checkpoint_tail_with_runtime(config, session_id, &runtime, binding)
             .await
     }
@@ -1298,7 +1299,7 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config,
             session_id,
@@ -1328,7 +1329,7 @@ impl ConversationTurnCoordinator {
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config, session_id, limit, &runtime, binding,
         )
@@ -1359,7 +1360,7 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
             session_id,
@@ -1396,7 +1397,7 @@ impl ConversationTurnCoordinator {
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config, session_id, limit, &runtime, binding,
         )
@@ -1495,7 +1496,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
@@ -1518,7 +1519,7 @@ impl ConversationTurnCoordinator {
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
@@ -1609,11 +1610,11 @@ impl ConversationTurnCoordinator {
     fn build_default_runtime_or_observe_failure(
         config: &LoongClawConfig,
         observer: Option<&ConversationTurnObserverHandle>,
-    ) -> CliResult<DefaultConversationRuntime<Box<dyn ConversationContextEngine>>> {
+    ) -> CliResult<BoxedDefaultConversationRuntime> {
         // Keep runtime-construction failures visible to the turn observer so
         // operator surfaces receive the same failed phase signal as execution
         // errors later in the turn pipeline.
-        let runtime_result = DefaultConversationRuntime::from_config_or_env(config);
+        let runtime_result = load_default_conversation_runtime(config);
         let runtime = match runtime_result {
             Ok(runtime) => runtime,
             Err(error) => {

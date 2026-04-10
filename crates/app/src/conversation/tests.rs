@@ -19,7 +19,7 @@ use super::super::config::{
     AuditMode, AutonomyProfile, LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
 };
 use super::persistence::format_provider_error_reply;
-use super::runtime::DefaultConversationRuntime;
+use super::runtime::{DefaultConversationRuntime, load_default_conversation_runtime};
 use super::*;
 use crate::CliResult;
 use crate::KernelContext;
@@ -2334,8 +2334,8 @@ async fn default_runtime_prefers_configured_context_engine_when_env_not_set() {
     let mut config = test_config();
     config.conversation.context_engine = Some("stub-config".to_owned());
 
-    let runtime = DefaultConversationRuntime::from_config_or_env(&config)
-        .expect("resolve context engine from config");
+    let runtime =
+        load_default_conversation_runtime(&config).expect("resolve context engine from config");
     let binding = ConversationRuntimeBinding::direct();
     let tool_view = runtime
         .tool_view(&config, "session-config", binding)
@@ -4569,7 +4569,7 @@ async fn default_runtime_prefers_env_context_engine_over_config() {
     let mut config = test_config();
     config.conversation.context_engine = Some("stub-config-env-priority".to_owned());
 
-    let runtime = DefaultConversationRuntime::from_config_or_env(&config)
+    let runtime = load_default_conversation_runtime(&config)
         .expect("resolve context engine from env override");
     let binding = ConversationRuntimeBinding::direct();
     let tool_view = runtime

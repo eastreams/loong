@@ -27,8 +27,8 @@ use crate::session::repository::{FinalizeSessionTerminalRequest, SessionReposito
 use super::announce::{DelegateAnnounceSettings, enqueue_delegate_result_announce};
 #[cfg(feature = "memory-sqlite")]
 use super::runtime::{
-    AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime,
-    DefaultConversationRuntime, SessionContext,
+    AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime, SessionContext,
+    load_default_conversation_runtime,
 };
 #[cfg(feature = "memory-sqlite")]
 use super::runtime_binding::ConversationRuntimeBinding;
@@ -155,7 +155,7 @@ pub(crate) fn spawn_async_delegate_detached(
             announce_settings.clone(),
         );
 
-        let runtime = DefaultConversationRuntime::from_config_or_env(config.as_ref());
+        let runtime = load_default_conversation_runtime(config.as_ref());
         match runtime {
             Ok(runtime) => {
                 emit_async_delegate_child_terminal_event(
