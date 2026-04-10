@@ -170,7 +170,6 @@ use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 pub(super) use super::commands::{
     ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command,
 };
-pub(super) use super::commands::context::ChannelResolvedRuntimeAccount;
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
