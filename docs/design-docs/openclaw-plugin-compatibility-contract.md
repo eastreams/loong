@@ -484,7 +484,8 @@ It should not require a new execution architecture.
 
 Examples of future growth:
 
-- marketplace importers for third-party plugin registries
+- marketplace importers for third-party plugin registries, aligned with the
+  [Plugin Marketplace And Interface Contract](plugin-marketplace-contract.md)
 - richer shim families for OpenClaw modern and legacy packages
 - signed compatibility bundles
 - dialect-specific migration CLIs that emit native `loongclaw.plugin.json`

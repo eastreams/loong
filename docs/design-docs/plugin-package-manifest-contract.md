@@ -217,7 +217,9 @@ This contract does not:
 - switch LoongClaw to untrusted in-process native plugins by default
 - replace kernel registry or policy ownership with plugin-owned runtime policy
 - force every plugin onto the same runtime bridge
-- solve marketplace distribution, signing, or supply-chain trust by itself
+- solve marketplace distribution, signing, or supply-chain trust by itself; the
+  complementary [Plugin Marketplace And Interface Contract](plugin-marketplace-contract.md)
+  defines the listing and catalog layer above this package contract
 - replace the existing source-marker intake path in one breaking step
 
 Those concerns are follow-on work. This contract exists so those later steps
@@ -236,7 +238,7 @@ Recommended filename:
 The manifest is the source of truth for:
 
 - canonical `plugin_id`
-- version and display metadata
+- version and baseline package-authored display metadata
 - provided runtime surfaces
 - bridge/runtime metadata
 - declared `trust_tier` classification metadata for operator-visible policy and review

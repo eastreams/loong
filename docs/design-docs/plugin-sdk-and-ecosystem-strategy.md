@@ -341,11 +341,19 @@ It is a compatibility lane, not the preferred authoring target.
 ## Marketplace Contract Strategy
 
 LoongClaw should define one explicit marketplace contract that is separate from
-`loongclaw.plugin.json`.
+`loongclaw.plugin.json`. The complementary
+[Plugin Marketplace And Interface Contract](plugin-marketplace-contract.md)
+document defines that catalog layer in detail.
+
+A marketplace catalog should answer:
+
+- `marketplace_id`
+- catalog provenance
+- marketplace display metadata
 
 A marketplace entry should answer:
 
-- `marketplace_id`
+- `plugin_id`
 - package source and provenance
 - install policy
 - auth policy
