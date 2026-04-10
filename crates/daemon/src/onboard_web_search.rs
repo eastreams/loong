@@ -607,6 +607,8 @@ mod tests {
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
+        let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
 
         let recommendation = resolve_web_search_provider_recommendation(&options, &config)
             .await

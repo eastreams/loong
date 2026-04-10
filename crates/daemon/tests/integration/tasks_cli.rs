@@ -534,6 +534,20 @@ async fn execute_tasks_command_list_returns_visible_background_tasks() {
         execution.payload["tasks"][0]["workflow"]["binding"]["mode"],
         "advisory_only"
     );
+    assert_eq!(
+        execution.payload["tasks"][0]["task_status"]["kind"],
+        "approval_pending"
+    );
+    let rendered =
+        loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks list");
+    assert!(
+        rendered.contains("status=approval_pending"),
+        "list render should surface derived task status: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_phase=execute"),
+        "list render should surface workflow phase: {rendered}"
+    );
 }
 
 #[tokio::test]
@@ -577,6 +591,14 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         "delegate:task-1"
     );
     assert_eq!(
+        execution.payload["task"]["task_status"]["kind"],
+        "approval_pending"
+    );
+    assert_eq!(
+        execution.payload["task"]["task_status"]["next_action"],
+        "resolve_request"
+    );
+    assert_eq!(
         execution.payload["task"]["tool_policy"]["effective_tool_ids"][0],
         "file.read"
     );
@@ -586,6 +608,14 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert!(
         rendered.contains("approval_requests: 1"),
         "status render should surface approval count: {rendered}"
+    );
+    assert!(
+        rendered.contains("task_status: approval_pending"),
+        "status render should surface derived task status: {rendered}"
+    );
+    assert!(
+        rendered.contains("task_next_action: resolve_request"),
+        "status render should surface next action: {rendered}"
     );
     assert!(
         rendered.contains("workflow_phase: execute"),
@@ -642,6 +672,7 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
         execution.payload["task"]["session"]["kind"],
         "delegate_child"
     );
+    assert_eq!(execution.payload["task"]["task_status"]["status"], "queued");
     assert!(task_id.starts_with("delegate:"));
     assert_eq!(recipes.len(), 3);
     assert!(
@@ -657,6 +688,16 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
             .expect("next steps array")
             .len(),
         3
+    );
+    let rendered = loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution)
+        .expect("render tasks create");
+    assert!(
+        rendered.contains("task_status: queued"),
+        "create render should surface derived task status: {rendered}"
+    );
+    assert!(
+        rendered.contains("task_next_action: wait"),
+        "create render should surface next action: {rendered}"
     );
 
     let repo = load_session_repository(&config_path);
@@ -965,6 +1006,20 @@ async fn execute_tasks_command_events_and_wait_surface_incremental_payloads() {
     assert_eq!(wait_execution.payload["wait_status"], "timeout");
     assert_eq!(wait_execution.payload["events"], json!([]));
     assert_eq!(wait_execution.payload["task"]["task_id"], "delegate:task-1");
+    assert_eq!(
+        wait_execution.payload["task"]["task_status"]["status"],
+        "approval_pending"
+    );
+    let rendered = loongclaw_daemon::tasks_cli::render_tasks_cli_text(&wait_execution)
+        .expect("render tasks wait");
+    assert!(
+        rendered.contains("task_status: approval_pending"),
+        "wait render should surface derived task status: {rendered}"
+    );
+    assert!(
+        rendered.contains("task_next_action: resolve_request"),
+        "wait render should surface next action: {rendered}"
+    );
 }
 
 #[tokio::test]

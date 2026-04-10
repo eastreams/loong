@@ -944,6 +944,14 @@ fn build_task_detail(
         .get("recent_events")
         .cloned()
         .unwrap_or_else(|| json!([]));
+    let task_status = build_task_status_payload(
+        &session,
+        &delegate,
+        &approval_requests,
+        &approval_attention_summary,
+        &tool_policy,
+        &recent_events,
+    );
 
     let detail = json!({
         "task_id": task_id,
@@ -973,6 +981,7 @@ fn build_task_detail(
         "recovery": recovery,
         "terminal_outcome": terminal_outcome,
         "recent_events": recent_events,
+        "task_status": task_status,
     });
     Ok(detail)
 }
@@ -995,6 +1004,7 @@ fn build_best_effort_task_detail(
 }
 
 fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
+    let task_status = unknown_task_status_payload();
     json!({
         "task_id": task_id,
         "session_id": task_id,
@@ -1012,6 +1022,7 @@ fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
             "requests": [],
         },
         "tool_policy": Value::Null,
+        "task_status": task_status,
     })
 }
 
@@ -1075,6 +1086,278 @@ fn parse_task_state_filter(raw_state: &str) -> CliResult<mvp::session::repositor
 struct TaskStatusSummary {
     is_background_task: bool,
     is_overdue: bool,
+}
+
+fn build_task_status_payload(
+    session: &Value,
+    delegate: &Value,
+    approval_requests: &Value,
+    approval_attention_summary: &Value,
+    tool_policy: &Value,
+    recent_events: &Value,
+) -> Value {
+    let session_state = session
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let phase = delegate
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let staleness_state = delegate
+        .get("staleness")
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str);
+    let cancellation_state = delegate
+        .get("cancellation")
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str);
+    let approval_attention_count = approval_attention_summary
+        .get("needs_attention_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let has_approval_attention = approval_attention_count > 0;
+    let approval_primary_action = primary_approval_action(approval_requests).map(ToOwned::to_owned);
+    let recovered = recent_events_contains_kind(recent_events, "delegate_recovery_applied");
+    let tool_narrowing_active = task_tool_narrowing_active(tool_policy);
+    let kind = derive_task_status_kind(
+        session_state,
+        phase,
+        staleness_state,
+        cancellation_state,
+        has_approval_attention,
+    );
+    let display = render_task_status_display(kind, recovered);
+    let blocked = task_status_is_blocked(kind);
+    let terminal = task_status_is_terminal(kind);
+    let status = kind;
+    let needs_attention = task_status_needs_attention(kind, approval_primary_action.as_deref());
+    let next_action = task_status_next_action(kind, approval_primary_action.as_deref());
+    let signals = build_task_status_signals(
+        kind,
+        recovered,
+        tool_narrowing_active,
+        has_approval_attention,
+        staleness_state,
+        cancellation_state,
+    );
+
+    json!({
+        "status": status,
+        "kind": kind,
+        "display": display,
+        "blocked": blocked,
+        "terminal": terminal,
+        "needs_attention": needs_attention,
+        "next_action": next_action,
+        "approval_primary_action": approval_primary_action,
+        "recovered": recovered,
+        "tool_narrowing_active": tool_narrowing_active,
+        "signals": signals,
+    })
+}
+
+fn unknown_task_status_payload() -> Value {
+    json!({
+        "status": "unknown",
+        "kind": "unknown",
+        "display": "unknown",
+        "blocked": false,
+        "terminal": false,
+        "needs_attention": false,
+        "next_action": "status",
+        "approval_primary_action": Value::Null,
+        "recovered": false,
+        "tool_narrowing_active": false,
+        "signals": [],
+    })
+}
+
+fn derive_task_status_kind(
+    session_state: &str,
+    phase: &str,
+    staleness_state: Option<&str>,
+    cancellation_state: Option<&str>,
+    has_approval_attention: bool,
+) -> &'static str {
+    if session_state == "completed" {
+        return "completed";
+    }
+
+    if session_state == "failed" {
+        return "failed";
+    }
+
+    if session_state == "timed_out" {
+        return "timed_out";
+    }
+
+    let is_overdue = staleness_state == Some("overdue");
+    if is_overdue {
+        return "overdue";
+    }
+
+    let cancel_requested = cancellation_state == Some("requested");
+    if cancel_requested {
+        return "cancel_requested";
+    }
+
+    if has_approval_attention {
+        return "approval_pending";
+    }
+
+    if session_state == "running" {
+        return "running";
+    }
+
+    let queued_state = session_state == "ready";
+    let queued_phase = phase == "queued";
+    if queued_state || queued_phase {
+        return "queued";
+    }
+
+    "unknown"
+}
+
+fn render_task_status_display(kind: &str, recovered: bool) -> String {
+    let base = kind.to_owned();
+    if !recovered {
+        return base;
+    }
+
+    let display = format!("{base} (recovered)");
+    display
+}
+
+fn task_status_is_blocked(kind: &str) -> bool {
+    matches!(kind, "approval_pending" | "overdue")
+}
+
+fn task_status_is_terminal(kind: &str) -> bool {
+    matches!(kind, "completed" | "failed" | "timed_out")
+}
+
+fn task_status_needs_attention(kind: &str, approval_primary_action: Option<&str>) -> bool {
+    let status_requires_attention = matches!(
+        kind,
+        "approval_pending" | "overdue" | "failed" | "timed_out"
+    );
+    if status_requires_attention {
+        return true;
+    }
+
+    approval_primary_action.is_some()
+}
+
+fn task_status_next_action(kind: &str, approval_primary_action: Option<&str>) -> String {
+    if let Some(approval_primary_action) = approval_primary_action {
+        let next_action = approval_primary_action.to_owned();
+        return next_action;
+    }
+
+    match kind {
+        "approval_pending" => "status".to_owned(),
+        "overdue" => "recover".to_owned(),
+        "queued" => "wait".to_owned(),
+        "running" => "wait".to_owned(),
+        "cancel_requested" => "wait".to_owned(),
+        "completed" => "events".to_owned(),
+        "failed" => "events".to_owned(),
+        "timed_out" => "events".to_owned(),
+        _ => "status".to_owned(),
+    }
+}
+
+fn build_task_status_signals(
+    kind: &str,
+    recovered: bool,
+    tool_narrowing_active: bool,
+    has_approval_attention: bool,
+    staleness_state: Option<&str>,
+    cancellation_state: Option<&str>,
+) -> Vec<String> {
+    let mut signals = Vec::new();
+
+    if has_approval_attention {
+        signals.push("approval_pending".to_owned());
+    }
+
+    if staleness_state == Some("overdue") {
+        signals.push("overdue".to_owned());
+    }
+
+    if cancellation_state == Some("requested") {
+        signals.push("cancel_requested".to_owned());
+    }
+
+    if recovered {
+        signals.push("recovered".to_owned());
+    }
+
+    if tool_narrowing_active {
+        signals.push("tool_narrowing_active".to_owned());
+    }
+
+    let terminal = task_status_is_terminal(kind);
+    if terminal {
+        signals.push("terminal".to_owned());
+    }
+
+    signals
+}
+
+fn recent_events_contains_kind(recent_events: &Value, expected_kind: &str) -> bool {
+    let Some(events) = recent_events.as_array() else {
+        return false;
+    };
+
+    for event in events {
+        let event_kind = event
+            .get("event_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let matches_kind = event_kind == expected_kind;
+        if matches_kind {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn primary_approval_action(approval_requests: &Value) -> Option<&str> {
+    let requests = approval_requests.as_array()?;
+
+    for request in requests {
+        let action = request
+            .get("attention")
+            .and_then(|value| value.get("primary_action"))
+            .and_then(Value::as_str);
+        if action.is_some() {
+            return action;
+        }
+    }
+
+    None
+}
+
+fn task_tool_narrowing_active(tool_policy: &Value) -> bool {
+    let effective_tool_ids = tool_policy
+        .get("effective_tool_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let base_tool_ids = tool_policy
+        .get("base_tool_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let runtime_narrowing = tool_policy.get("effective_runtime_narrowing");
+    let runtime_narrowing = runtime_narrowing.cloned().unwrap_or(Value::Null);
+    let tool_ids_changed = effective_tool_ids != base_tool_ids;
+    let runtime_narrowing_active = !runtime_narrowing.is_null();
+
+    tool_ids_changed || runtime_narrowing_active
 }
 
 fn load_task_status_payload(
@@ -1403,6 +1686,18 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .get("phase")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let task_status = task
+        .get("task_status")
+        .cloned()
+        .unwrap_or_else(unknown_task_status_payload);
+    let status_display = task_status
+        .get("display")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let blocked = task_status
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let workflow_phase = task
         .get("workflow")
         .and_then(|value| value.get("phase"))
@@ -1415,8 +1710,13 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .and_then(|value| value.get("needs_attention_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let signals = task_status
+        .get("signals")
+        .and_then(Value::as_array)
+        .map(|values| render_string_array(values))
+        .unwrap_or_else(|| "-".to_owned());
     let line = format!(
-        "{task_id} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={label} approval_attention={approval_attention}"
+        "{task_id} status={status_display} blocked={blocked} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={label} approval_attention={approval_attention} signals={signals}"
     );
     Ok(line)
 }
@@ -1427,6 +1727,31 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .get("scope_session_id")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let task_status = task
+        .get("task_status")
+        .cloned()
+        .unwrap_or_else(unknown_task_status_payload);
+    let task_status_display = task_status
+        .get("display")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let blocked = task_status
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let needs_attention = task_status
+        .get("needs_attention")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let next_action = task_status
+        .get("next_action")
+        .and_then(Value::as_str)
+        .unwrap_or("status");
+    let task_signals = task_status
+        .get("signals")
+        .and_then(Value::as_array)
+        .map(|values| render_string_array(values))
+        .unwrap_or_else(|| "-".to_owned());
     let label = task.get("label").and_then(Value::as_str).unwrap_or("-");
     let state = task
         .get("session_state")
@@ -1529,6 +1854,11 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("task_id: {task_id}"));
     lines.push(format!("scope_session_id: {scope_session_id}"));
     lines.push(format!("label: {label}"));
+    lines.push(format!("task_status: {task_status_display}"));
+    lines.push(format!("task_blocked: {blocked}"));
+    lines.push(format!("task_needs_attention: {needs_attention}"));
+    lines.push(format!("task_next_action: {next_action}"));
+    lines.push(format!("task_signals: {task_signals}"));
     lines.push(format!("state: {state}"));
     lines.push(format!("workflow_id: {workflow_id}"));
     lines.push(format!("workflow_phase: {workflow_phase}"));
@@ -1579,4 +1909,183 @@ fn render_string_array(values: &[Value]) -> String {
         return "-".to_owned();
     }
     items.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_task_payload(
+        session_state: &str,
+        phase: &str,
+        approval_primary_action: Option<&str>,
+        tool_narrowing_active: bool,
+        recovered: bool,
+        staleness_state: Option<&str>,
+    ) -> Value {
+        let approval_requests = approval_primary_action
+            .map(|primary_action| {
+                vec![json!({
+                    "attention": {
+                        "primary_action": primary_action,
+                    },
+                })]
+            })
+            .unwrap_or_default();
+        let approval_summary = json!({
+            "needs_attention_count": u64::from(approval_primary_action.is_some()),
+        });
+        let tool_policy = if tool_narrowing_active {
+            json!({
+                "base_tool_ids": ["file.read", "web.fetch"],
+                "effective_tool_ids": ["file.read"],
+                "effective_runtime_narrowing": {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"],
+                    },
+                },
+            })
+        } else {
+            json!({
+                "base_tool_ids": ["file.read"],
+                "effective_tool_ids": ["file.read"],
+                "effective_runtime_narrowing": Value::Null,
+            })
+        };
+        let recent_events = if recovered {
+            json!([
+                {
+                    "event_kind": "delegate_recovery_applied",
+                }
+            ])
+        } else {
+            json!([])
+        };
+        let delegate = json!({
+            "phase": phase,
+            "staleness": staleness_state.map(|value| {
+                json!({
+                    "state": value,
+                })
+            }),
+            "cancellation": Value::Null,
+        });
+        let session = json!({
+            "state": session_state,
+        });
+        let task_status = build_task_status_payload(
+            &session,
+            &delegate,
+            &json!(approval_requests),
+            &approval_summary,
+            &tool_policy,
+            &recent_events,
+        );
+
+        json!({
+            "task_id": "delegate:task-1",
+            "scope_session_id": "ops-root",
+            "label": "Release Check",
+            "session_state": session_state,
+            "phase": phase,
+            "timeout_seconds": 60,
+            "last_error": Value::Null,
+            "approval": {
+                "matched_count": approval_requests.len(),
+                "attention_summary": approval_summary,
+            },
+            "tool_policy": tool_policy,
+            "task_status": task_status,
+        })
+    }
+
+    #[test]
+    fn build_task_status_payload_uses_approval_action_and_tool_narrowing_signal() {
+        let task = build_task_payload(
+            "ready",
+            "queued",
+            Some("resolve_request"),
+            true,
+            false,
+            None,
+        );
+        let task_status = &task["task_status"];
+
+        assert_eq!(task_status["kind"], "approval_pending");
+        assert_eq!(task_status["blocked"], true);
+        assert_eq!(task_status["status"], "approval_pending");
+        assert_eq!(task_status["needs_attention"], true);
+        assert_eq!(task_status["next_action"], "resolve_request");
+        assert_eq!(task_status["tool_narrowing_active"], true);
+        assert!(
+            task_status["signals"]
+                .as_array()
+                .expect("signals array")
+                .iter()
+                .any(|value| value == "tool_narrowing_active"),
+            "signals should include narrowing"
+        );
+    }
+
+    #[test]
+    fn build_task_status_payload_marks_failed_task_as_recovered_when_event_present() {
+        let task = build_task_payload("failed", "failed", None, false, true, None);
+        let task_status = &task["task_status"];
+
+        assert_eq!(task_status["status"], "failed");
+        assert_eq!(task_status["kind"], "failed");
+        assert_eq!(task_status["display"], "failed (recovered)");
+        assert_eq!(task_status["needs_attention"], true);
+        assert_eq!(task_status["recovered"], true);
+        assert_eq!(task_status["next_action"], "events");
+    }
+
+    #[test]
+    fn build_task_status_payload_marks_overdue_task_recoverable() {
+        let task = build_task_payload("running", "running", None, false, false, Some("overdue"));
+        let task_status = &task["task_status"];
+
+        assert_eq!(task_status["kind"], "overdue");
+        assert_eq!(task_status["blocked"], true);
+        assert_eq!(task_status["status"], "overdue");
+        assert_eq!(task_status["needs_attention"], true);
+        assert_eq!(task_status["next_action"], "recover");
+    }
+
+    #[test]
+    fn render_task_detail_lines_surface_task_status_summary() {
+        let task = build_task_payload(
+            "ready",
+            "queued",
+            Some("resolve_request"),
+            true,
+            false,
+            None,
+        );
+        let rendered = render_task_detail_lines(&task).expect("render task detail");
+        let joined = rendered.join("\n");
+
+        assert!(joined.contains("task_status: approval_pending"));
+        assert!(joined.contains("task_blocked: true"));
+        assert!(joined.contains("task_needs_attention: true"));
+        assert!(joined.contains("task_next_action: resolve_request"));
+        assert!(joined.contains("task_signals: approval_pending, tool_narrowing_active"));
+    }
+
+    #[test]
+    fn render_task_brief_line_prefers_derived_task_status_summary() {
+        let task = build_task_payload(
+            "ready",
+            "queued",
+            Some("resolve_request"),
+            false,
+            false,
+            None,
+        );
+        let rendered = render_task_brief_line(&task).expect("render task brief");
+
+        assert!(rendered.contains("status=approval_pending"));
+        assert!(rendered.contains("blocked=true"));
+        assert!(rendered.contains("signals=approval_pending"));
+    }
 }
