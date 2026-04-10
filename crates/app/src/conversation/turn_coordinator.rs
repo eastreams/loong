@@ -94,7 +94,8 @@ use super::session_history::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentOwnerKind,
+    ConstrainedSubagentTerminalReason,
 };
 use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
 use super::trust_projection::{
@@ -4295,6 +4296,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                     let execution_policy = DelegateChildExecutionPolicy {
                         isolation: delegate_policy.isolation,
                         profile: delegate_policy.profile,
+                        owner_kind: None,
                         timeout_seconds: delegate_policy.timeout_seconds,
                         allow_shell_in_child: delegate_policy.allow_shell_in_child,
                         child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -4374,6 +4376,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
+        ConstrainedSubagentOwnerKind::AsyncDelegateSpawner,
         binding,
     )
     .await?;
@@ -4414,6 +4417,7 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
+        ConstrainedSubagentOwnerKind::BackgroundTaskHost,
         binding,
     )
     .await?;
@@ -4472,6 +4476,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     session_context: &SessionContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
+    owner_kind: ConstrainedSubagentOwnerKind,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
@@ -4498,6 +4503,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                 let execution_policy = DelegateChildExecutionPolicy {
                     isolation: delegate_policy.isolation,
                     profile: delegate_policy.profile,
+                    owner_kind: Some(owner_kind),
                     timeout_seconds: delegate_policy.timeout_seconds,
                     allow_shell_in_child: delegate_policy.allow_shell_in_child,
                     child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -7584,6 +7590,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -7716,6 +7723,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,

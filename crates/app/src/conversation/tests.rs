@@ -3018,6 +3018,7 @@ fn session_context_keeps_execution_and_contract_in_sync_when_child_contract_is_o
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 3,
         active_children: 0,
@@ -3085,6 +3086,7 @@ fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 3,
         active_children: 0,
@@ -3137,6 +3139,7 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 3,
         active_children: 0,
@@ -13785,6 +13788,7 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 2,
         active_children: 0,
@@ -13907,6 +13911,7 @@ async fn continue_session_with_runtime_preserves_prior_terminal_outcome_when_res
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 2,
         active_children: 0,
@@ -14002,6 +14007,7 @@ async fn continue_session_with_runtime_backfills_profile_from_older_delegate_anc
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 2,
         active_children: 0,
@@ -14139,6 +14145,7 @@ async fn continue_session_with_runtime_rejects_failed_delegate_child() {
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 2,
         active_children: 0,
@@ -14211,6 +14218,7 @@ async fn continue_session_with_runtime_rejects_archived_delegate_child() {
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 2,
         active_children: 0,
@@ -14292,6 +14300,7 @@ async fn continue_session_with_runtime_rejects_invalid_timeout_override() {
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 2,
         active_children: 0,
@@ -14367,6 +14376,7 @@ async fn continue_session_with_runtime_caps_timeout_override_and_persists_contra
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
         isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        owner_kind: None,
         depth: 1,
         max_depth: 2,
         active_children: 0,
@@ -24090,6 +24100,13 @@ async fn handle_turn_with_runtime_delegate_async_preserves_kernel_binding_in_spa
     assert!(
         Arc::ptr_eq(&child_kernel_ctx.kernel, &expected_kernel_ctx.kernel),
         "spawned child should inherit the same kernel instance"
+    );
+    assert_eq!(
+        spawn_request
+            .execution
+            .owner_kind
+            .map(crate::conversation::ConstrainedSubagentOwnerKind::as_str),
+        Some("async_delegate_spawner")
     );
 
     release_notify.notify_waiters();

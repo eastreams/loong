@@ -773,6 +773,11 @@ fn build_task_detail(
     let session_state = session.get("state").cloned().unwrap_or(Value::Null);
     let phase = delegate.get("phase").cloned().unwrap_or(Value::Null);
     let mode = delegate.get("mode").cloned().unwrap_or(Value::Null);
+    let owner_kind = delegate
+        .get("execution")
+        .and_then(|value| value.get("owner_kind"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let timeout_seconds = delegate
         .get("timeout_seconds")
         .cloned()
@@ -842,6 +847,7 @@ fn build_task_detail(
         "session_state": session_state,
         "phase": phase,
         "mode": mode,
+        "owner_kind": owner_kind,
         "timeout_seconds": timeout_seconds,
         "workflow": workflow,
         "created_at": created_at,
@@ -893,6 +899,7 @@ fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
         "label": Value::Null,
         "session_state": Value::Null,
         "phase": Value::Null,
+        "owner_kind": Value::Null,
         "timeout_seconds": Value::Null,
         "workflow": Value::Null,
         "last_error": Value::Null,
@@ -1688,13 +1695,17 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .and_then(|value| value.get("needs_attention_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let owner_kind = task
+        .get("owner_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let signals = task_status
         .get("signals")
         .and_then(Value::as_array)
         .map(|values| render_string_array(values))
         .unwrap_or_else(|| "-".to_owned());
     let line = format!(
-        "{task_id} status={status_display} blocked={blocked} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={label} approval_attention={approval_attention} signals={signals}"
+        "{task_id} status={status_display} blocked={blocked} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={label} owner_kind={owner_kind} approval_attention={approval_attention} signals={signals}"
     );
     Ok(line)
 }
@@ -1737,6 +1748,10 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .unwrap_or("unknown");
     let phase = task
         .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let owner_kind = task
+        .get("owner_kind")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let workflow_id = task
@@ -1858,6 +1873,7 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         "workflow_workspace_root: {workflow_workspace_root}"
     ));
     lines.push(format!("phase: {phase}"));
+    lines.push(format!("owner_kind: {owner_kind}"));
     lines.push(format!("timeout_seconds: {timeout_seconds}"));
     lines.push(format!("last_error: {last_error}"));
     lines.push(format!("approval_requests: {approval_total}"));

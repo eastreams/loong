@@ -3365,6 +3365,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: crate::conversation::ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 2,
             active_children: 0,

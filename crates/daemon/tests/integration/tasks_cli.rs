@@ -675,6 +675,10 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
     assert_eq!(execution.payload["task"]["label"], "Release Check");
     assert_eq!(execution.payload["task"]["timeout_seconds"], 45);
     assert_eq!(
+        execution.payload["task"]["owner_kind"],
+        "background_task_host"
+    );
+    assert_eq!(
         execution.payload["task"]["session"]["kind"],
         "delegate_child"
     );
@@ -729,6 +733,13 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
     assert_eq!(
         child_session.kind,
         mvp::session::repository::SessionKind::DelegateChild
+    );
+
+    let rendered = loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution)
+        .expect("render tasks create");
+    assert!(
+        rendered.contains("owner_kind: background_task_host"),
+        "tasks create render should surface owner kind: {rendered}"
     );
 }
 

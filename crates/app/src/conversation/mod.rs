@@ -110,9 +110,9 @@ pub use subagent::{
     ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
     ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
     ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,
-    ConstrainedSubagentMode, ConstrainedSubagentProfile, ConstrainedSubagentRole,
-    ConstrainedSubagentRuntimeBinding, ConstrainedSubagentTerminalReason, DelegateBuiltinProfile,
-    coordination_actions_for_subagent_handle, subagent_surface_fields,
+    ConstrainedSubagentMode, ConstrainedSubagentOwnerKind, ConstrainedSubagentProfile,
+    ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding, ConstrainedSubagentTerminalReason,
+    DelegateBuiltinProfile, coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;
