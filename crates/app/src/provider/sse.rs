@@ -17,6 +17,7 @@ pub(super) enum SseLine {
     Retry { timeout_ms: u64 },
     Comment,
     Empty,
+    Ignored,
 }
 
 pub(super) fn parse_sse_line(line: &str) -> SseLine {
@@ -41,7 +42,7 @@ pub(super) fn parse_sse_line(line: &str) -> SseLine {
             content: rest.strip_prefix(' ').unwrap_or(rest).to_owned(),
         };
     }
-    SseLine::Empty
+    SseLine::Ignored
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,7 +117,7 @@ impl SseDecoder {
             SseLine::Data { content } => {
                 self.data_lines.push(content);
             }
-            SseLine::Retry { .. } | SseLine::Comment => {}
+            SseLine::Retry { .. } | SseLine::Comment | SseLine::Ignored => {}
             SseLine::Empty => {
                 self.flush_event(messages)?;
             }
@@ -279,6 +280,18 @@ mod tests {
 
     #[allow(clippy::wildcard_enum_match_arm)]
     #[test]
+    fn sse_line_parser_ignores_unknown_fields_without_flushing() {
+        let parsed = parse_sse_line("id: evt_123");
+        match parsed {
+            SseLine::Ignored => {}
+            other => {
+                panic!("expected SseLine::Ignored, got {:?}", other)
+            }
+        }
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
     fn sse_line_parser_data_field_without_json_value() {
         let line = "data:";
         let parsed = parse_sse_line(line);
@@ -362,5 +375,20 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0]["type"], "text_delta");
         assert_eq!(second[0]["text"], "hello");
+    }
+
+    #[test]
+    fn sse_decoder_ignores_unknown_fields_between_data_lines() {
+        let mut decoder = SseDecoder::default();
+
+        let messages = decoder
+            .push_chunk(
+                b"event: content_block_delta\ndata: {\"type\":\"text_delta\",\nid: evt_123\ndata: \"text\":\"Hello\"}\n\n",
+            )
+            .expect("decoder should ignore unknown fields");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["type"], "text_delta");
+        assert_eq!(messages[0]["text"], "Hello");
     }
 }

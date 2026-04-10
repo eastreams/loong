@@ -1563,7 +1563,10 @@ mod tests {
             .expect_err("malformed SSE should fail");
 
         assert_eq!(error.reason, ProviderFailoverReason::ResponseShapeInvalid);
-        assert_eq!(error.snapshot.stage, ProviderFailoverStage::ResponseDecode);
+        assert_eq!(
+            error.snapshot.stage,
+            ProviderFailoverStage::ResponseShapeInvalid
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

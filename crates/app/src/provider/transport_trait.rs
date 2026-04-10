@@ -113,7 +113,7 @@ impl TransportError {
         Self {
             kind: TransportErrorKind::Other,
             reason: ProviderFailoverReason::ResponseShapeInvalid,
-            stage: ProviderFailoverStage::ResponseDecode,
+            stage: ProviderFailoverStage::ResponseShapeInvalid,
             message: message.into(),
         }
     }
