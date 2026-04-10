@@ -48,6 +48,20 @@ pub(super) fn resolve_provider_auth_profiles(
     profiles
 }
 
+pub(super) fn auth_profile_supports_scheme(
+    profile: &ProviderAuthProfile,
+    auth_scheme: ProviderAuthScheme,
+) -> bool {
+    match auth_scheme {
+        ProviderAuthScheme::Bearer => {
+            profile.authorization_secret.is_some() || profile.api_key_secret.is_some()
+        }
+        ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => {
+            profile.api_key_secret.is_some()
+        }
+    }
+}
+
 fn anonymous_auth_profile() -> ProviderAuthProfile {
     ProviderAuthProfile {
         id: "anonymous".to_owned(),
@@ -171,6 +185,29 @@ mod tests {
             profiles[0].auth_cache_key.as_deref(),
             Some("x-api-key:anthropic-secret")
         );
+    }
+
+    #[test]
+    fn auth_profile_supports_scheme_requires_api_key_for_x_api_key_routes() {
+        let oauth_only_profile = ProviderAuthProfile {
+            id: "oauth:test".to_owned(),
+            authorization_secret: Some("oauth-only".to_owned()),
+            api_key_secret: None,
+            auth_cache_key: Some("bearer:oauth-only".to_owned()),
+        };
+
+        assert!(auth_profile_supports_scheme(
+            &oauth_only_profile,
+            ProviderAuthScheme::Bearer
+        ));
+        assert!(!auth_profile_supports_scheme(
+            &oauth_only_profile,
+            ProviderAuthScheme::XApiKey
+        ));
+        assert!(!auth_profile_supports_scheme(
+            &oauth_only_profile,
+            ProviderAuthScheme::XGoogApiKey
+        ));
     }
 
     #[test]

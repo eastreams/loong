@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::config::{LoongClawConfig, ProviderConfig};
 
-use super::auth_profile_runtime::ProviderAuthProfile;
+use super::auth_profile_runtime::{ProviderAuthProfile, auth_profile_supports_scheme};
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
     ProviderApiError, provider_runtime_contract_for_route, should_disable_tool_schema_for_error,
@@ -30,8 +30,6 @@ pub(super) async fn request_completion_with_model(
     model: String,
     auto_model_mode: bool,
     auth_profile: ProviderAuthProfile,
-    _endpoint: &str,
-    _headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
     auth_context: &super::transport::RequestAuthContext,
@@ -60,8 +58,6 @@ pub(super) async fn request_turn_with_model(
     auto_model_mode: bool,
     tool_definitions: &[Value],
     auth_profile: ProviderAuthProfile,
-    _endpoint: &str,
-    _headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
     auth_context: &super::transport::RequestAuthContext,
@@ -120,6 +116,15 @@ async fn request_completion_with_provider(
             ProviderCapabilityProfile::from_provider(&current_provider, runtime_contract);
         let request_model = transport_profile.request_model;
         let capability = capability_profile.resolve_for_model(request_model.as_str());
+        let request_auth_scheme = transport_profile.auth_scheme;
+
+        ensure_auth_profile_supports_route(
+            auth_profile,
+            request_auth_scheme,
+            request_model.as_str(),
+            auto_model_mode,
+        )?;
+
         let request_headers =
             super::transport::build_request_headers_without_provider_auth_for_transport(
                 &current_provider,
@@ -148,7 +153,7 @@ async fn request_completion_with_provider(
             capability,
             auto_model_mode,
             auth_profile,
-            request_auth_scheme: transport_profile.auth_scheme,
+            request_auth_scheme,
             endpoint: transport_profile.endpoint.as_str(),
             headers: &request_headers,
             request_policy,
@@ -175,7 +180,11 @@ async fn request_completion_with_provider(
         .await
         {
             Err(error)
-                if should_retry_with_chat_completions_fallback(&current_provider, &error) =>
+                if should_retry_with_chat_completions_fallback(
+                    &current_provider,
+                    transport_profile.transport_mode,
+                    &error,
+                ) =>
             {
                 if let Some(fallback_provider) = current_provider.responses_fallback_provider() {
                     current_provider = fallback_provider;
@@ -228,6 +237,15 @@ async fn request_turn_with_provider(
             ProviderCapabilityProfile::from_provider(&current_provider, runtime_contract);
         let request_model = transport_profile.request_model;
         let capability = capability_profile.resolve_for_model(request_model.as_str());
+        let request_auth_scheme = transport_profile.auth_scheme;
+
+        ensure_auth_profile_supports_route(
+            auth_profile,
+            request_auth_scheme,
+            request_model.as_str(),
+            auto_model_mode,
+        )?;
+
         let include_tool_schema =
             AtomicBool::new(capability.turn_tool_schema_enabled() && !tool_definitions.is_empty());
         let request_headers =
@@ -258,7 +276,7 @@ async fn request_turn_with_provider(
             capability,
             auto_model_mode,
             auth_profile,
-            request_auth_scheme: transport_profile.auth_scheme,
+            request_auth_scheme,
             endpoint: transport_profile.endpoint.as_str(),
             headers: &request_headers,
             request_policy,
@@ -304,7 +322,11 @@ async fn request_turn_with_provider(
         .await
         {
             Err(error)
-                if should_retry_with_chat_completions_fallback(&current_provider, &error) =>
+                if should_retry_with_chat_completions_fallback(
+                    &current_provider,
+                    transport_profile.transport_mode,
+                    &error,
+                ) =>
             {
                 if let Some(fallback_provider) = current_provider.responses_fallback_provider() {
                     current_provider = fallback_provider;
@@ -358,6 +380,15 @@ pub(super) async fn request_turn_streaming(
             ProviderCapabilityProfile::from_provider(&current_provider, runtime_contract);
         let request_model = transport_profile.request_model;
         let capability = capability_profile.resolve_for_model(request_model.as_str());
+        let request_auth_scheme = transport_profile.auth_scheme;
+
+        ensure_auth_profile_supports_route(
+            auth_profile,
+            request_auth_scheme,
+            request_model.as_str(),
+            auto_model_mode,
+        )?;
+
         let include_tool_schema =
             AtomicBool::new(capability.turn_tool_schema_enabled() && !tool_definitions.is_empty());
         let request_headers =
@@ -388,7 +419,7 @@ pub(super) async fn request_turn_streaming(
             capability,
             auto_model_mode,
             auth_profile,
-            request_auth_scheme: transport_profile.auth_scheme,
+            request_auth_scheme,
             endpoint: transport_profile.endpoint.as_str(),
             headers: &request_headers,
             request_policy,
@@ -429,7 +460,11 @@ pub(super) async fn request_turn_streaming(
         .await
         {
             Err(error)
-                if should_retry_with_chat_completions_fallback(&current_provider, &error) =>
+                if should_retry_with_chat_completions_fallback(
+                    &current_provider,
+                    transport_profile.transport_mode,
+                    &error,
+                ) =>
             {
                 if let Some(fallback_provider) = current_provider.responses_fallback_provider() {
                     current_provider = fallback_provider;
@@ -452,8 +487,6 @@ pub(super) async fn request_turn_streaming_with_model(
     auto_model_mode: bool,
     tool_definitions: &[Value],
     auth_profile: ProviderAuthProfile,
-    _endpoint: &str,
-    _headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
     auth_context: &super::transport::RequestAuthContext,
@@ -486,8 +519,13 @@ fn resolve_request_transport_profile(
 
 fn should_retry_with_chat_completions_fallback(
     provider: &ProviderConfig,
+    transport_mode: super::contracts::ProviderTransportMode,
     error: &ModelRequestError,
 ) -> bool {
+    if transport_mode != super::contracts::ProviderTransportMode::Responses {
+        return false;
+    }
+
     let Some(status_code) = error.snapshot.status_code else {
         return false;
     };
@@ -495,6 +533,47 @@ fn should_retry_with_chat_completions_fallback(
         return false;
     };
     should_fallback_responses_to_chat_completions(provider, status_code, api_error)
+}
+
+#[allow(clippy::result_large_err)]
+fn ensure_auth_profile_supports_route(
+    auth_profile: &ProviderAuthProfile,
+    request_auth_scheme: crate::config::ProviderAuthScheme,
+    request_model: &str,
+    auto_model_mode: bool,
+) -> Result<(), ModelRequestError> {
+    if request_auth_scheme == crate::config::ProviderAuthScheme::Bearer {
+        return Ok(());
+    }
+
+    if auth_profile_supports_scheme(auth_profile, request_auth_scheme) {
+        return Ok(());
+    }
+
+    let missing_secret_kind = match request_auth_scheme {
+        crate::config::ProviderAuthScheme::Bearer => "bearer",
+        crate::config::ProviderAuthScheme::XApiKey => "x-api-key",
+        crate::config::ProviderAuthScheme::XGoogApiKey => "x-goog-api-key",
+    };
+
+    let message = format!(
+        "provider auth profile `{}` cannot satisfy the routed `{}` auth requirement for model `{}`; trying the next available auth profile",
+        auth_profile.id, missing_secret_kind, request_model
+    );
+
+    let error = build_model_request_error(
+        message,
+        auto_model_mode,
+        ProviderFailoverReason::AuthRejected,
+        ProviderFailoverStage::TransportFailure,
+        request_model,
+        1,
+        1,
+        None,
+        None,
+    );
+
+    Err(error)
 }
 
 fn should_fallback_responses_to_chat_completions(

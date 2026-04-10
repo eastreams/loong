@@ -428,10 +428,18 @@ fn adapt_messages_for_google(messages: &[Value]) -> (Option<String>, Vec<Value>)
                 }
             }
             "user" => {
-                append_google_message(&mut adapted, "user", google_message_parts(message));
+                append_google_message(
+                    &mut adapted,
+                    "user",
+                    google_message_parts(message, messages),
+                );
             }
             "assistant" => {
-                append_google_message(&mut adapted, "model", google_message_parts(message));
+                append_google_message(
+                    &mut adapted,
+                    "model",
+                    google_message_parts(message, messages),
+                );
             }
             "tool" => {
                 let tool_call_id = message
@@ -499,9 +507,9 @@ fn append_google_message(adapted: &mut Vec<Value>, role: &str, mut parts: Vec<Va
     }));
 }
 
-fn google_message_parts(message: &Value) -> Vec<Value> {
+fn google_message_parts(message: &Value, messages: &[Value]) -> Vec<Value> {
     let content = message.get("content").unwrap_or(&Value::Null);
-    let mut parts = google_content_parts(content);
+    let mut parts = google_content_parts(content, messages);
 
     if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
         for tool_call in tool_calls {
@@ -514,7 +522,7 @@ fn google_message_parts(message: &Value) -> Vec<Value> {
     parts
 }
 
-fn google_content_parts(content: &Value) -> Vec<Value> {
+fn google_content_parts(content: &Value, messages: &[Value]) -> Vec<Value> {
     if let Some(text) = content.as_str().and_then(normalize_text) {
         return vec![google_text_part(text)];
     }
@@ -522,7 +530,7 @@ fn google_content_parts(content: &Value) -> Vec<Value> {
     if let Some(items) = content.as_array() {
         let mut parts = Vec::new();
         for item in items {
-            if let Some(part) = google_content_part(item) {
+            if let Some(part) = google_content_part(item, messages) {
                 parts.push(part);
             }
         }
@@ -538,7 +546,7 @@ fn google_content_parts(content: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn google_content_part(value: &Value) -> Option<Value> {
+fn google_content_part(value: &Value, messages: &[Value]) -> Option<Value> {
     if let Some(text) = value.as_str().and_then(normalize_text) {
         return Some(google_text_part(text));
     }
@@ -558,6 +566,9 @@ fn google_content_part(value: &Value) -> Option<Value> {
         }
         if kind == "tool_use" {
             return google_function_call_part_from_native(value);
+        }
+        if kind == "tool_result" {
+            return google_function_response_part_from_native(messages, value);
         }
     }
 
@@ -603,7 +614,27 @@ fn google_function_call_part_from_native(value: &Value) -> Option<Value> {
     }))
 }
 
+fn google_function_response_part_from_native(messages: &[Value], value: &Value) -> Option<Value> {
+    let name = resolve_google_tool_name_for_native_result(messages, value)?;
+    let response_source = value
+        .get("result")
+        .or_else(|| value.get("content"))
+        .unwrap_or(&Value::Null);
+    let response = google_tool_response_payload(response_source);
+
+    Some(json!({
+        "functionResponse": {
+            "name": name,
+            "response": response,
+        }
+    }))
+}
+
 fn google_tool_response_payload(content: &Value) -> Value {
+    if content.is_object() || content.is_array() {
+        return content.clone();
+    }
+
     let Some(text) = content_as_text(content) else {
         return json!({
             "result": ""
@@ -643,6 +674,44 @@ fn resolve_google_tool_name_for_result<'a>(
                 let name = function.get("name").and_then(Value::as_str)?;
                 return Some(name);
             }
+        }
+    }
+
+    None
+}
+
+fn resolve_google_tool_name_for_native_result(messages: &[Value], value: &Value) -> Option<String> {
+    if let Some(name) = value.get("name").and_then(Value::as_str) {
+        return Some(name.to_owned());
+    }
+
+    let tool_use_id = value
+        .get("tool_use_id")
+        .or_else(|| value.get("id"))
+        .and_then(Value::as_str)?;
+
+    for message in messages.iter().rev() {
+        let Some(content) = message.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for item in content.iter().rev() {
+            let kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
+            if kind != "tool_use" {
+                continue;
+            }
+
+            let current_id = item
+                .get("id")
+                .or_else(|| item.get("tool_use_id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if current_id != tool_use_id {
+                continue;
+            }
+
+            let name = item.get("name").and_then(Value::as_str)?;
+            return Some(name.to_owned());
         }
     }
 
