@@ -392,7 +392,9 @@ LoongClaw is governance-heavy.
 Some listings may be valid and curated while still requiring explicit operator
 consent before installation.
 That nuance should live in the marketplace contract instead of being treated as
-an implementation detail.
+an implementation detail. Marketplace install policy, review status, or
+default-bundle placement never grants eligibility for the native host-extension
+ABI lane; that lane requires separate host approval for native packages.
 
 ## Authentication Policy Vocabulary
 

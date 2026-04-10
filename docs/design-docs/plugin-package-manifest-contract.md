@@ -413,7 +413,11 @@ current bootstrap policy keeps `allow_native_ffi_auto_apply` disabled by
 default, because direct FFI bindings weaken the runtime isolation boundary that
 WASM, process bridge, MCP, ACP, and policy-allowed HTTP JSON preserve. Native
 FFI can remain an explicit operator-controlled opt-in for trusted cases, but it
-should not be the default target for third-party plugin packages.
+should not be the default target for third-party plugin packages. Any future
+`NativeFfi`-style in-process surface belongs to the separate native
+host-extension ABI lane and therefore requires native-package status plus
+separate host approval; compatibility-origin packages and marketplace review
+alone are not sufficient.
 
 It should explicitly reject the assumption that third-party plugins should run
 in-process with the daemon by default.
@@ -516,7 +520,10 @@ Those RFCs define execution and authoring surfaces. This document defines the
 package metadata and ownership contract they should target. The complementary
 [Plugin SDK And Ecosystem Strategy](plugin-sdk-and-ecosystem-strategy.md)
 document defines how SDK layering, marketplace packaging, and migration tooling
-should build on this contract instead of inventing a parallel metadata model.
+should build on this contract instead of inventing a parallel metadata model,
+and the [Plugin SDK Boundary Contract](plugin-sdk-boundary-contract.md)
+document defines how future SDK layers stay separate from host-governance and
+marketplace authority.
 
 It also supports the broader goals in `#292` without forcing the current
 registry-first design to regress into a plugin-owned runtime model.

@@ -49,7 +49,7 @@ It should not become:
 
 ## Executive Summary
 
-The mature ecosystem shape has four layers:
+The mature ecosystem shape has five layers:
 
 1. **Native package contract**
    - one stable host-facing plugin contract
@@ -270,11 +270,15 @@ package truly needs:
 This lane should remain smaller and more controlled than OpenClaw's broad
 in-process registration surface. It should be trusted, narrow, and non-default,
 with explicit operator intent before any package gains deeper host authority.
+This lane is for separately host-approved native packages, not for direct
+compatibility-origin intake or marketplace-review status alone.
 
 ## SDK Family Strategy
 
 LoongClaw should not ship one giant plugin SDK.
-It should ship a family of SDK layers.
+It should ship a family of SDK layers. The complementary
+[Plugin SDK Boundary Contract](plugin-sdk-boundary-contract.md) document defines
+how those layers stay separate from package, marketplace, and governance truth.
 
 The layer names below are illustrative, not a locked future crate or package
 layout. The architectural commitment is to keep contract, runtime-helper, and
@@ -286,7 +290,7 @@ and activation contracts.
 
 Purpose:
 
-- expose the stable package, bridge, setup, diagnostics, and governance types
+- expose the stable package, bridge, setup, diagnostics, and governance-result schema types
 - let external tooling reuse one schema surface
 
 Primary consumers:

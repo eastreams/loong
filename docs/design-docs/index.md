@@ -13,6 +13,7 @@ Catalog of design documents and architectural decisions.
 | [Layered Kernel Design](layered-kernel-design.md) | L0-L9 kernel layer specification and boundary rules | Living |
 | [Plugin Package Manifest Contract](plugin-package-manifest-contract.md) | Manifest-first plugin metadata, setup surface, and slot ownership contract | Active |
 | [Plugin Marketplace And Interface Contract](plugin-marketplace-contract.md) | Catalog listing, install/auth policy, interface metadata, and marketplace/package precedence rules | Active |
+| [Plugin SDK Boundary Contract](plugin-sdk-boundary-contract.md) | Contract/runtime/compatibility SDK layering and host-extension boundary rules | Active |
 | [Plugin SDK And Ecosystem Strategy](plugin-sdk-and-ecosystem-strategy.md) | Native SDK layering, marketplace boundaries, migration lanes, and ecosystem maturity model | Active |
 | [OpenClaw Plugin Compatibility Contract](openclaw-plugin-compatibility-contract.md) | Foreign dialect normalization, compatibility-mode gating, and polyglot plugin strategy | Active |
 | [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
