@@ -1,4 +1,5 @@
 import { apiGetData, type ApiRequestOptions } from "../../../lib/api/client";
+import type { ProviderCatalogItem } from "../../onboarding/provider/providerCatalog";
 
 const DASHBOARD_READ_TIMEOUT_MS = 15_000;
 
@@ -41,6 +42,8 @@ export interface DashboardConfigSnapshot {
   activeProvider: string | null;
   lastProvider: string | null;
   model: string;
+  providerBaseUrl: string;
+  providerEndpointExplicit: boolean;
   endpoint: string;
   apiKeyConfigured: boolean;
   apiKeyMasked: string | null;
@@ -97,6 +100,10 @@ export interface DashboardProviderItem {
   defaultForKind: boolean;
 }
 
+interface ProviderCatalogResponse {
+  items: ProviderCatalogItem[];
+}
+
 interface DashboardProvidersResponse {
   activeProvider: string | null;
   items: DashboardProviderItem[];
@@ -122,6 +129,14 @@ export const dashboardApi = {
       "/api/dashboard/providers",
       withDefaultTimeout(request),
     );
+  },
+
+  async loadProviderCatalog(request?: ApiRequestOptions): Promise<ProviderCatalogItem[]> {
+    const response = await apiGetData<ProviderCatalogResponse>(
+      "/api/providers/catalog",
+      withDefaultTimeout(request),
+    );
+    return response.items;
   },
 
   async loadRuntime(request?: ApiRequestOptions): Promise<DashboardRuntime> {

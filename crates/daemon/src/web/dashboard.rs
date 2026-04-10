@@ -30,6 +30,16 @@ pub(super) async fn dashboard_providers(
     }))
 }
 
+pub(super) async fn provider_catalog()
+-> Result<Json<ApiEnvelope<ProviderCatalogPayload>>, WebApiError> {
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: ProviderCatalogPayload {
+            items: build_provider_catalog_items(),
+        },
+    }))
+}
+
 pub(super) async fn dashboard_runtime(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardRuntimePayload>>, WebApiError> {
@@ -112,6 +122,15 @@ pub(super) async fn dashboard_config(
             active_provider: snapshot.config.active_provider_id().map(str::to_owned),
             last_provider: snapshot.config.last_provider.clone(),
             model: snapshot.config.provider.model.clone(),
+            provider_base_url: snapshot.config.provider.resolved_base_url(),
+            provider_endpoint_explicit: snapshot.config.provider.endpoint_explicit
+                && snapshot
+                    .config
+                    .provider
+                    .endpoint
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty()),
             endpoint: snapshot.config.provider.endpoint(),
             api_key_configured: active_provider
                 .as_ref()

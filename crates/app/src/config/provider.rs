@@ -49,6 +49,21 @@ pub struct ProviderProfile {
     pub feature_family: ProviderFeatureFamily,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCatalogEntry {
+    pub kind: String,
+    pub display_name: String,
+    pub default_base_url: String,
+    pub default_chat_path: String,
+    pub default_models_path: Option<String>,
+    pub auth_scheme: String,
+    pub protocol_family: String,
+    pub feature_family: String,
+    pub is_coding_variant: bool,
+    pub aliases: Vec<String>,
+    pub configuration_hint: Option<String>,
+}
+
 impl ProviderProfile {
     pub fn alternative_auth_configuration_hint(self) -> Option<&'static str> {
         let kind = self.kind;
@@ -2018,7 +2033,7 @@ impl ProviderConfig {
             || contains_template_placeholder(resolved_base_url.as_str())
     }
 
-    pub fn configuration_hint(&self) -> Option<String> {
+    pub fn kind_route_mismatch_hint(&self) -> Option<String> {
         if self.kind == ProviderKind::Byteplus && self.uses_byteplus_coding_plan_path() {
             return Some(
                 "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
@@ -2048,6 +2063,14 @@ impl ProviderConfig {
                 "volcengine_coding must use the dedicated Volcengine Coding Plan path under `/api/coding/v3`; do not point it at the Anthropic-compatible `/api/coding` or generic `/api/v3` Ark endpoints because that bypasses Coding Plan quota and can incur standard charges"
                     .to_owned(),
             );
+        }
+
+        None
+    }
+
+    pub fn configuration_hint(&self) -> Option<String> {
+        if let Some(hint) = self.kind_route_mismatch_hint() {
+            return Some(hint);
         }
         if let Some(hint) = self.opencode_configuration_hint() {
             return Some(hint);
@@ -2569,6 +2592,28 @@ fn is_provider_managed_oauth_access_token_env_name(env_name: &str) -> bool {
     })
 }
 
+fn default_models_path_for_kind(kind: ProviderKind) -> Option<String> {
+    let profile = kind.profile();
+    if let Some(path) = profile.models_path {
+        return Some(path.to_owned());
+    }
+
+    let provider = ProviderConfig::fresh_for_kind(kind);
+    let base_url = provider.resolved_base_url();
+    let models_endpoint = provider.models_endpoint();
+    models_endpoint
+        .strip_prefix(base_url.as_str())
+        .map(str::to_owned)
+}
+
+pub fn provider_catalog_entries() -> Vec<ProviderCatalogEntry> {
+    ProviderKind::all_sorted()
+        .iter()
+        .copied()
+        .map(ProviderKind::catalog_entry)
+        .collect()
+}
+
 fn maybe_normalize_custom_chat_path(kind: ProviderKind, base_url: &str, path: &str) -> String {
     let normalized = normalize_api_path(path);
     if kind != ProviderKind::Custom {
@@ -2769,6 +2814,37 @@ impl ProviderKind {
 
     pub fn feature_family(self) -> ProviderFeatureFamily {
         self.profile().feature_family
+    }
+
+    pub const fn is_coding_variant(self) -> bool {
+        matches!(
+            self,
+            ProviderKind::BailianCoding
+                | ProviderKind::ByteplusCoding
+                | ProviderKind::KimiCoding
+                | ProviderKind::VolcengineCoding
+        )
+    }
+
+    pub fn catalog_entry(self) -> ProviderCatalogEntry {
+        let profile = self.profile();
+        ProviderCatalogEntry {
+            kind: self.as_str().to_owned(),
+            display_name: self.display_name().to_owned(),
+            default_base_url: profile.base_url.to_owned(),
+            default_chat_path: profile.chat_completions_path.to_owned(),
+            default_models_path: default_models_path_for_kind(self),
+            auth_scheme: self.auth_scheme().as_str().to_owned(),
+            protocol_family: self.protocol_family().as_str().to_owned(),
+            feature_family: self.feature_family().as_str().to_owned(),
+            is_coding_variant: self.is_coding_variant(),
+            aliases: profile
+                .aliases
+                .iter()
+                .map(|alias| (*alias).to_owned())
+                .collect(),
+            configuration_hint: self.configuration_hint().map(str::to_owned),
+        }
     }
 
     pub fn default_headers(self) -> &'static [(&'static str, &'static str)] {

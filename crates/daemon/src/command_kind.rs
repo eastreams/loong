@@ -86,6 +86,7 @@ impl Commands {
             Self::Gateway { .. } => "gateway",
             Self::Feishu { .. } => "feishu",
             Self::Completions { .. } => "completions",
+            Self::Web { .. } => "web",
             Self::WorkUnit { .. } => "work_unit",
         }
     }

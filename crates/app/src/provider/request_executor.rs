@@ -531,25 +531,28 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
-            |error| {
-                build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                        model = runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                )
-            },
-        )?;
+        transport::apply_auth_profile_headers(
+            &mut headers,
+            Some(runtime.auth_profile),
+            runtime.request_auth_scheme,
+        )
+        .map_err(|error| {
+            build_model_request_error(
+                format!(
+                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                    model = runtime.model,
+                    max_attempts = runtime.request_policy.max_attempts
+                ),
+                false,
+                ProviderFailoverReason::TransportFailure,
+                ProviderFailoverStage::TransportFailure,
+                runtime.model,
+                attempt,
+                runtime.request_policy.max_attempts,
+                None,
+                None,
+            )
+        })?;
         let req = runtime
             .client
             .post(request_endpoint.as_str())

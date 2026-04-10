@@ -14,6 +14,7 @@ pub(super) struct OnboardStatusPayload {
     active_model: String,
     provider_base_url: String,
     provider_endpoint: String,
+    provider_endpoint_explicit: bool,
     api_key_configured: bool,
     personality: String,
     memory_profile: String,
@@ -248,6 +249,10 @@ fn apply_provider_request_to_config(
         provider.set_models_endpoint(None);
     }
 
+    if let Some(hint) = provider.kind_route_mismatch_hint() {
+        return Err(WebApiError::bad_request(hint));
+    }
+
     if let Some(api_key) = request
         .api_key
         .as_deref()
@@ -270,6 +275,54 @@ fn apply_provider_request_to_config(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn apply_provider_request_rejects_volcengine_coding_route_on_standard_kind() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let request = OnboardProviderWriteRequest {
+            kind: "volcengine".to_owned(),
+            model: "ark-code-latest".to_owned(),
+            base_url_or_endpoint: "https://ark.cn-beijing.volces.com/api/coding/v3".to_owned(),
+            api_key: None,
+        };
+
+        let error = apply_provider_request_to_config(&mut config, &request)
+            .expect_err("volcengine should reject coding-plan routes");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(
+            error
+                .message
+                .contains("switch to `kind = \"volcengine_coding\"`"),
+            "expected a clear kind-switch hint, got: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn apply_provider_request_accepts_volcengine_coding_route_on_coding_kind() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let request = OnboardProviderWriteRequest {
+            kind: "volcengine_coding".to_owned(),
+            model: "ark-code-latest".to_owned(),
+            base_url_or_endpoint: "https://ark.cn-beijing.volces.com/api/coding/v3".to_owned(),
+            api_key: None,
+        };
+
+        apply_provider_request_to_config(&mut config, &request)
+            .expect("volcengine_coding should accept the coding-plan route");
+
+        assert_eq!(
+            config.provider.endpoint(),
+            "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions"
+        );
+    }
 }
 
 pub(super) async fn onboard_preferences(
@@ -480,6 +533,7 @@ async fn build_onboard_status_payload(
         active_model: String::new(),
         provider_base_url: String::new(),
         provider_endpoint: String::new(),
+        provider_endpoint_explicit: false,
         api_key_configured: false,
         personality: "calm_engineering".to_owned(),
         memory_profile: "window_only".to_owned(),
@@ -504,6 +558,14 @@ async fn build_onboard_status_payload(
             payload.active_model = snapshot.config.provider.model.clone();
             payload.provider_base_url = snapshot.config.provider.resolved_base_url();
             payload.provider_endpoint = snapshot.config.provider.endpoint();
+            payload.provider_endpoint_explicit = snapshot.config.provider.endpoint_explicit
+                && snapshot
+                    .config
+                    .provider
+                    .endpoint
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty());
             payload.provider_configured = provider_is_configured(&snapshot.config);
             payload.personality = crate::onboard_cli::prompt_personality_id(
                 snapshot.config.cli.resolved_personality(),
@@ -599,6 +661,18 @@ fn build_provider_probe_headers(
             })?;
             headers.insert(
                 reqwest::header::HeaderName::from_static("x-api-key"),
+                header_value,
+            );
+        }
+        mvp::config::ProviderAuthScheme::XGoogApiKey => {
+            let Some(secret) = provider.resolved_auth_secret() else {
+                return Ok(headers);
+            };
+            let header_value = HeaderValue::from_str(secret.as_str()).map_err(|error| {
+                WebApiError::internal(format!("build provider probe headers failed: {error}"))
+            })?;
+            headers.insert(
+                reqwest::header::HeaderName::from_static("x-goog-api-key"),
                 header_value,
             );
         }

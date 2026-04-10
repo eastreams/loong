@@ -65,6 +65,7 @@ pub(super) async fn run_web_serve(
             "/onboard/provider/apply",
             post(onboarding::onboard_provider_apply),
         )
+        .route("/providers/catalog", get(provider_catalog))
         .route(
             "/onboard/preferences",
             post(onboarding::onboard_preferences),

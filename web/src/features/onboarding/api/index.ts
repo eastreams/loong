@@ -5,6 +5,7 @@ import {
   type ApiRequestOptions,
 } from "../../../lib/api/client";
 import type { ApiEnvelope } from "../../../lib/api/types";
+import type { ProviderCatalogItem } from "../provider/providerCatalog";
 
 const ONBOARDING_READ_TIMEOUT_MS = 10_000;
 const ONBOARDING_WRITE_TIMEOUT_MS = 30_000;
@@ -52,6 +53,7 @@ export interface OnboardingStatus {
   activeModel: string;
   providerBaseUrl: string;
   providerEndpoint: string;
+  providerEndpointExplicit: boolean;
   apiKeyConfigured: boolean;
   personality: string;
   memoryProfile: string;
@@ -68,6 +70,10 @@ export interface OnboardingValidationResult {
   credentialStatus: string;
   credentialStatusCode: number | null;
   status: OnboardingStatus;
+}
+
+interface ProviderCatalogResponse {
+  items: ProviderCatalogItem[];
 }
 
 interface OnboardingPairingResult {
@@ -99,6 +105,14 @@ export const onboardingApi = {
       "/api/onboard/status",
       withDefaultTimeout(request, ONBOARDING_READ_TIMEOUT_MS),
     );
+  },
+
+  async loadProviderCatalog(request?: ApiRequestOptions): Promise<ProviderCatalogItem[]> {
+    const response = await apiGetData<ProviderCatalogResponse>(
+      "/api/providers/catalog",
+      withDefaultTimeout(request, ONBOARDING_READ_TIMEOUT_MS),
+    );
+    return response.items;
   },
 
   async saveProvider(

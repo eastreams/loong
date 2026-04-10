@@ -172,6 +172,7 @@
     "activeProvider": "Active provider",
     "model": "Model",
     "endpoint": "API endpoint",
+    "catalogLoadFailed": "Provider list failed to load, so only the current selection is shown. Your local Web API probably does not expose `/api/providers/catalog` yet.",
     "apiKey": "API key",
     "apiKeyPlaceholder": "Enter API key",
     "apiKeyPlaceholderConfigured": "Enter a new API key (optional)",

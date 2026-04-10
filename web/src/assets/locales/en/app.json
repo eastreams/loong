@@ -18,9 +18,9 @@
                },
     "auth":  {
                  "bannerTitle":  "Unlock local API",
-                 "bannerBody":  "Local token file: {{tokenPath}}. Paste the token value here.",
+                 "bannerBody":  "If auto pairing does not finish, read the local token from {{tokenPath}} and paste it here. If you provide it through an environment variable, make sure {{tokenEnv}} points to the latest value.",
                  "invalidTitle":  "Stored token was rejected",
-                 "invalidBody":  "The current token was rejected. Read the latest token from {{tokenPath}} and try again.",
+                 "invalidBody":  "The current token was rejected. Read the latest token from {{tokenPath}} and try again. If you use an environment variable, make sure {{tokenEnv}} has been updated.",
                  "sessionTitle":  "Refresh local session",
                  "sessionBody":  "This same-origin Web page uses a local session cookie. Reload the page to establish a fresh local session.",
                  "sessionInvalidTitle":  "Local session expired",
@@ -34,7 +34,7 @@
                        "eyebrow":  "Onboard",
                        "loadingTitle":  "Checking local setup",
                        "loadingBody":  "Trying local runtime, token pairing, config, and provider readiness.",
-                       "tokenPairingAutoInProgress":  "Trying lightweight auto pairing now. If you already have the local token, you can still paste it below.",
+                       "tokenPairingAutoInProgress":  "Trying lightweight auto pairing now. If it still does not finish after a few seconds, copy the local token from {{tokenPath}} and paste it below.",
                        "panelEyebrow":  "Entry check",
                        "panelTitle":  "Ready-to-enter status",
                        "summary":  {
@@ -74,6 +74,7 @@
                                     "baseUrlOrEndpoint":  "Base URL / endpoint",
                                     "baseUrlOrEndpointPlaceholder":  "e.g. https://ark.cn-beijing.volces.com",
                                     "baseUrlOrEndpointHelper":  "Paste a base URL or a full chat endpoint override. Leave it blank to use the provider default.",
+                                    "catalogLoadFailed":  "Provider list failed to load, so only the current selection is shown. This usually means the local Web API does not expose `/api/providers/catalog` yet.",
                                     "apiKey":  "API key",
                                     "apiKeyPlaceholder":  "Paste provider API key",
                                     "apiKeyPlaceholderConfigured":  "Leave blank to keep the current key",

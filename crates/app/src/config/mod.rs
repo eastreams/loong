@@ -89,13 +89,14 @@ pub(crate) use provider::{
 #[allow(unused_imports)]
 pub use provider::{
     ModelCatalogProbeRecovery, PROVIDER_DESCRIPTOR_SCHEMA_VERSION, ProviderAuthScheme,
-    ProviderConfig, ProviderDescriptorAuth, ProviderDescriptorDocument, ProviderDescriptorFeature,
-    ProviderDescriptorHeader, ProviderDescriptorRegionEndpoint, ProviderDescriptorRegionVariant,
-    ProviderDescriptorSchema, ProviderFeatureFamily, ProviderKind, ProviderProfileConfig,
-    ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind, ProviderProtocolFamily,
-    ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ProviderTransportFallback,
-    ProviderTransportPolicy, ProviderTransportReadiness, ProviderTransportReadinessLevel,
-    ProviderWireApi, ReasoningEffort, parse_provider_kind_id,
+    ProviderCatalogEntry, ProviderConfig, ProviderDescriptorAuth, ProviderDescriptorDocument,
+    ProviderDescriptorFeature, ProviderDescriptorHeader, ProviderDescriptorRegionEndpoint,
+    ProviderDescriptorRegionVariant, ProviderDescriptorSchema, ProviderFeatureFamily, ProviderKind,
+    ProviderProfileConfig, ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind,
+    ProviderProtocolFamily, ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig,
+    ProviderTransportFallback, ProviderTransportPolicy, ProviderTransportReadiness,
+    ProviderTransportReadinessLevel, ProviderWireApi, ReasoningEffort, parse_provider_kind_id,
+    provider_catalog_entries,
 };
 #[cfg(test)]
 pub(crate) use runtime::inject_test_config_write_failure;

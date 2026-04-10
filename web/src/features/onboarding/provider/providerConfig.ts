@@ -1,21 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
-import { ApiRequestError } from "../../lib/api/client";
+import { ApiRequestError } from "../../../lib/api/client";
 import type {
   SaveOnboardingPreferencesRequest,
   SaveOnboardingProviderRequest,
-} from "./api";
-
-
-export const PROVIDER_KIND_SUGGESTIONS = [
-  "openai",
-  "volcengine",
-  "deepseek",
-  "anthropic",
-  "openrouter",
-  "ollama",
-  "lmstudio",
-] as const;
+} from "../api";
+import type { ProviderCatalogItem } from "./providerCatalog";
 
 export const PERSONALITY_OPTIONS = [
   "calm_engineering",
@@ -23,12 +13,20 @@ export const PERSONALITY_OPTIONS = [
   "autonomous_executor",
 ] as const;
 
+const PERSONALITY_UI_ALIAS_MAP: Record<string, string> = {
+  calm_engineering: "calm_engineering",
+  classicist: "calm_engineering",
+  friendly_collab: "friendly_collab",
+  hermit: "friendly_collab",
+  autonomous_executor: "autonomous_executor",
+  pragmatist: "autonomous_executor",
+};
+
 export const MEMORY_PROFILE_OPTIONS = [
   "window_only",
   "window_plus_summary",
   "profile_plus_window",
 ] as const;
-
 
 export interface ProviderConfigFormSource {
   kind: string;
@@ -41,8 +39,59 @@ interface FormResetOptions {
   force?: boolean;
 }
 
-export function useProviderConfigForm(source: ProviderConfigFormSource) {
+function defaultRouteForKind(
+  kind: string,
+  catalog: ProviderCatalogItem[],
+): string | null {
+  const value = catalog.find((entry) => entry.kind === kind)?.defaultBaseUrl ?? "";
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function shouldAutoReplaceRouteOnKindSwitch(params: {
+  currentRoute: string;
+  currentKind: string;
+  sourceRoute: string;
+  nextKind: string;
+  catalog: ProviderCatalogItem[];
+}): boolean {
+  const {
+    currentRoute,
+    currentKind,
+    sourceRoute,
+    nextKind,
+    catalog,
+  } = params;
+  const normalizedCurrentRoute = currentRoute.trim();
+  if (!normalizedCurrentRoute) {
+    return true;
+  }
+
+  const normalizedSourceRoute = sourceRoute.trim();
+  if (normalizedCurrentRoute === normalizedSourceRoute) {
+    return true;
+  }
+
+  const currentDefaultRoute = defaultRouteForKind(currentKind, catalog);
+  if (currentDefaultRoute && normalizedCurrentRoute === currentDefaultRoute) {
+    return true;
+  }
+
+  const nextDefaultRoute = defaultRouteForKind(nextKind, catalog);
+  if (nextDefaultRoute && normalizedCurrentRoute === nextDefaultRoute) {
+    return true;
+  }
+
+  return false;
+}
+
+
+export function useProviderConfigForm(
+  source: ProviderConfigFormSource,
+  providerCatalog: ProviderCatalogItem[] = [],
+) {
   const sourceRef = useRef(source);
+  const catalogRef = useRef(providerCatalog);
   const [kind, setKind] = useState(source.kind);
   const [model, setModel] = useState(source.model);
   const [baseUrlOrEndpoint, setBaseUrlOrEndpoint] = useState(source.baseUrlOrEndpoint);
@@ -56,6 +105,10 @@ export function useProviderConfigForm(source: ProviderConfigFormSource) {
   const kindDirtyRef = useRef(false);
   const modelDirtyRef = useRef(false);
   const baseUrlDirtyRef = useRef(false);
+
+  useEffect(() => {
+    catalogRef.current = providerCatalog;
+  }, [providerCatalog]);
 
   function updateApiKeyDirty(nextDirty: boolean) {
     apiKeyDirtyRef.current = nextDirty;
@@ -115,16 +168,26 @@ export function useProviderConfigForm(source: ProviderConfigFormSource) {
     resetFromSource(source);
   }, [source.baseUrlOrEndpoint, source.kind, source.model]);
 
-  function setKindWithRouteReset(nextKind: string) {
-    setKind(nextKind);
-    updateKindDirty(nextKind !== sourceRef.current.kind);
-    setBaseUrlOrEndpoint((current) => {
-      const nextValue =
-        current === sourceRef.current.baseUrlOrEndpoint ? "" : current;
-      updateBaseUrlDirty(nextValue !== sourceRef.current.baseUrlOrEndpoint);
-      return nextValue;
+function setKindWithRouteReset(nextKind: string) {
+  const currentKind = kind;
+  setKind(nextKind);
+  updateKindDirty(nextKind !== sourceRef.current.kind);
+  const defaultRoute = defaultRouteForKind(nextKind, catalogRef.current);
+  setBaseUrlOrEndpoint((current) => {
+    const shouldReplaceRoute = shouldAutoReplaceRouteOnKindSwitch({
+      currentRoute: current,
+      currentKind,
+      sourceRoute: sourceRef.current.baseUrlOrEndpoint,
+      nextKind,
+      catalog: catalogRef.current,
     });
-  }
+    const nextValue =
+      defaultRoute && shouldReplaceRoute ? defaultRoute : current;
+    updateBaseUrlDirty(nextValue !== sourceRef.current.baseUrlOrEndpoint);
+    return nextValue;
+  });
+}
+
 
   function setModelValue(nextModel: string) {
     setModel(nextModel);
@@ -196,9 +259,16 @@ export interface PreferencesFormSource {
   promptAddendum: string;
 }
 
+export function normalizePersonalityForUi(personality: string): string {
+  const normalized = personality.trim();
+  return PERSONALITY_UI_ALIAS_MAP[normalized] ?? normalized;
+}
+
 export function usePreferencesForm(source: PreferencesFormSource) {
   const sourceRef = useRef(source);
-  const [personality, setPersonality] = useState(source.personality);
+  const [personality, setPersonality] = useState(
+    normalizePersonalityForUi(source.personality),
+  );
   const [memoryProfile, setMemoryProfile] = useState(source.memoryProfile);
   const [promptAddendum, setPromptAddendum] = useState(source.promptAddendum);
   const [personalityDirty, setPersonalityDirty] = useState(false);
@@ -230,9 +300,10 @@ export function usePreferencesForm(source: PreferencesFormSource) {
   ) {
     const force = options?.force ?? false;
     sourceRef.current = nextSource;
+    const nextPersonality = normalizePersonalityForUi(nextSource.personality);
 
     if (force || !personalityDirtyRef.current) {
-      setPersonality(nextSource.personality);
+      setPersonality(nextPersonality);
       if (force) {
         updatePersonalityDirty(false);
       }
@@ -259,7 +330,9 @@ export function usePreferencesForm(source: PreferencesFormSource) {
 
   function setPersonalityValue(nextPersonality: string) {
     setPersonality(nextPersonality);
-    updatePersonalityDirty(nextPersonality !== sourceRef.current.personality);
+    updatePersonalityDirty(
+      nextPersonality !== normalizePersonalityForUi(sourceRef.current.personality),
+    );
   }
 
   function setMemoryProfileValue(nextMemoryProfile: string) {
@@ -305,7 +378,6 @@ export function buildPreferencesSavePayload(input: {
 }
 
 export function readProviderValidationFailure(
-
   credentialStatus: string,
   t: TFunction,
 ): string {

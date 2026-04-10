@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { TFunction } from "i18next";
 import { ApiRequestError } from "../../../lib/api/client";
+import { resolveTokenHintEnv, resolveTokenHintPath } from "../../../lib/auth/tokenHint";
 import { onboardingApi } from "../../onboarding/api";
 import {
   buildPreferencesSavePayload,
@@ -9,7 +10,7 @@ import {
   readProviderValidationFailure,
   usePreferencesForm,
   useProviderConfigForm,
-} from "../../onboarding/providerConfig";
+} from "../../onboarding/provider/providerConfig";
 import {
   dashboardApi,
   type DashboardConnectivity,
@@ -67,8 +68,8 @@ function readDashboardError(
     return authMode === "same_origin_session"
       ? t("auth.sessionInvalidBody")
       : t("auth.invalidBody", {
-          tokenPath: tokenPath ?? "",
-          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+          tokenPath: resolveTokenHintPath(tokenPath),
+          tokenEnv: resolveTokenHintEnv(tokenEnv),
         });
   }
 
@@ -121,7 +122,9 @@ export function useDashboardData({
     return {
       kind: snapshot.config.activeProvider ?? snapshot.config.lastProvider ?? "",
       model: snapshot.config.model ?? "",
-      baseUrlOrEndpoint: snapshot.config.endpoint ?? "",
+      baseUrlOrEndpoint: snapshot.config.providerEndpointExplicit
+        ? snapshot.config.endpoint ?? ""
+        : snapshot.config.providerBaseUrl ?? "",
       apiKeyConfigured: snapshot.config.apiKeyConfigured ?? false,
     };
   }

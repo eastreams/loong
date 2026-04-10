@@ -7,7 +7,8 @@ use crate::config::{LoongClawConfig, ProviderConfig};
 use super::auth_profile_runtime::{ProviderAuthProfile, auth_profile_supports_scheme};
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
-    ProviderApiError, provider_runtime_contract_for_route, should_disable_tool_schema_for_error,
+    ProviderApiError, ProviderTransportMode, provider_runtime_contract_for_route,
+    should_disable_tool_schema_for_error,
 };
 use super::failover::{
     ModelRequestError, ProviderFailoverReason, ProviderFailoverStage, build_model_request_error,
@@ -319,7 +320,11 @@ async fn request_turn_with_provider(
             .await
             {
                 Err(error)
-                    if should_retry_with_chat_completions_fallback(&current_provider, &error) =>
+                    if should_retry_with_chat_completions_fallback(
+                        &current_provider,
+                        transport_profile.transport_mode,
+                        &error,
+                    ) =>
                 {
                     if let Some(fallback_provider) = current_provider.responses_fallback_provider()
                     {

@@ -18,9 +18,9 @@
                },
     "auth":  {
                  "bannerTitle":  "解锁本地 API",
-                 "bannerBody":  "本地 token 文件位置：{{tokenPath}}。把里面的 token 粘贴到这里即可。",
+                 "bannerBody":  "如果自动配对没有完成，请到 {{tokenPath}} 读取本地 token 并粘贴到这里；如果你通过环境变量提供 token，也请确认 {{tokenEnv}} 指向的是最新值。",
                  "invalidTitle":  "当前 token 已被拒绝",
-                 "invalidBody":  "当前 token 无效，请到 {{tokenPath}} 读取最新 token 后重试。",
+                 "invalidBody":  "当前 token 无效。请到 {{tokenPath}} 读取最新 token 后重试；如果你走环境变量，也请确认 {{tokenEnv}} 已更新。",
                  "sessionTitle":  "刷新本地会话",
                  "sessionBody":  "这个同源 Web 页面会使用本地 session cookie。刷新页面即可重新建立本地会话。",
                  "sessionInvalidTitle":  "本地会话已失效",
@@ -34,7 +34,7 @@
                        "eyebrow":  "引导",
                        "loadingTitle":  "正在检查本地环境",
                        "loadingBody":  "正在检查 runtime、token 配对、配置文件和 provider 可用性。",
-                       "tokenPairingAutoInProgress":  "正在尝试自动配对；如果你手头已有本地 token，也可以直接在下面粘贴。",
+                       "tokenPairingAutoInProgress":  "正在尝试自动配对。如果几秒后仍未完成，请到 {{tokenPath}} 复制本地 token 并粘贴到下面。",
                        "panelEyebrow":  "进入前检查",
                        "panelTitle":  "进入前状态确认",
                        "summary":  {
@@ -74,6 +74,7 @@
                                     "baseUrlOrEndpoint":  "Base URL / Endpoint",
                                     "baseUrlOrEndpointPlaceholder":  "例如 https://ark.cn-beijing.volces.com",
                                     "baseUrlOrEndpointHelper":  "这里既可以填 base URL，也可以填完整 chat endpoint；留空则回到该 provider 的默认值。",
+                                    "catalogLoadFailed":  "Provider 列表加载失败，当前只显示已选项。通常说明本地 Web API 还没有暴露 `/api/providers/catalog`。",
                                     "apiKey":  "API Key",
                                     "apiKeyPlaceholder":  "粘贴 provider API key",
                                     "apiKeyPlaceholderConfigured":  "留空可继续沿用当前 key",

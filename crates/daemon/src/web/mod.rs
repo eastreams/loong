@@ -62,7 +62,7 @@ use chat::{
 };
 use dashboard::{
     dashboard_config, dashboard_connectivity, dashboard_providers, dashboard_runtime,
-    dashboard_summary, dashboard_tools,
+    dashboard_summary, dashboard_tools, provider_catalog,
 };
 use debug_console::{dashboard_debug_console, record_debug_operation};
 use install::{
@@ -201,7 +201,10 @@ fn upsert_debug_tool_activity(
     activities: &mut Vec<DebugToolActivity>,
     activity: DebugToolActivity,
 ) {
-    if let Some(index) = activities.iter().position(|existing| existing.id == activity.id) {
+    if let Some(index) = activities
+        .iter()
+        .position(|existing| existing.id == activity.id)
+    {
         activities.remove(index);
     }
     activities.push(activity);
@@ -225,7 +228,10 @@ fn classify_failure(code: &str, message: &str) -> (&'static str, &'static str) {
         || normalized.contains("unavailable")
         || normalized.contains("not ready")
     {
-        ("runtime", "check runtime readiness and companion availability")
+        (
+            "runtime",
+            "check runtime readiness and companion availability",
+        )
     } else if normalized.contains("provider") || normalized.contains("credential") {
         ("provider", "check provider endpoint and credentials")
     } else {
@@ -322,6 +328,12 @@ struct DashboardProvidersPayload {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ProviderCatalogPayload {
+    items: Vec<ProviderCatalogItemPayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DashboardRuntimePayload {
     status: &'static str,
     source: &'static str,
@@ -356,6 +368,8 @@ struct DashboardConfigPayload {
     active_provider: Option<String>,
     last_provider: Option<String>,
     model: String,
+    provider_base_url: String,
+    provider_endpoint_explicit: bool,
     endpoint: String,
     api_key_configured: bool,
     api_key_masked: Option<String>,
@@ -496,6 +510,21 @@ struct ProviderItemPayload {
     api_key_configured: bool,
     api_key_masked: Option<String>,
     default_for_kind: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderCatalogItemPayload {
+    kind: String,
+    display_name: String,
+    default_base_url: String,
+    default_chat_path: String,
+    default_models_path: Option<String>,
+    auth_scheme: String,
+    feature_family: String,
+    is_coding_variant: bool,
+    aliases: Vec<String>,
+    configuration_hint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -994,12 +1023,26 @@ fn build_provider_items(config: &mvp::config::LoongClawConfig) -> Vec<ProviderIt
         .collect()
 }
 
+fn build_provider_catalog_items() -> Vec<ProviderCatalogItemPayload> {
+    mvp::config::provider_catalog_entries()
+        .into_iter()
+        .map(|entry| ProviderCatalogItemPayload {
+            kind: entry.kind,
+            display_name: entry.display_name,
+            default_base_url: entry.default_base_url,
+            default_chat_path: entry.default_chat_path,
+            default_models_path: entry.default_models_path,
+            auth_scheme: entry.auth_scheme,
+            feature_family: entry.feature_family,
+            is_coding_variant: entry.is_coding_variant,
+            aliases: entry.aliases,
+            configuration_hint: entry.configuration_hint,
+        })
+        .collect()
+}
+
 fn prompt_personality_id(personality: mvp::prompt::PromptPersonality) -> &'static str {
-    match personality {
-        mvp::prompt::PromptPersonality::CalmEngineering => "calm_engineering",
-        mvp::prompt::PromptPersonality::FriendlyCollab => "friendly_collab",
-        mvp::prompt::PromptPersonality::AutonomousExecutor => "autonomous_executor",
-    }
+    crate::onboard_cli::prompt_personality_id(personality)
 }
 
 fn provider_item_from_parts(
@@ -1008,6 +1051,12 @@ fn provider_item_from_parts(
     enabled: bool,
     default_for_kind: bool,
 ) -> ProviderItemPayload {
+    let default_profile_id = provider.inferred_profile_id();
+    let label = if id == default_profile_id {
+        provider.kind.display_name().to_owned()
+    } else {
+        format!("{} ({id})", provider.kind.display_name())
+    };
     let api_key_value = provider
         .api_key
         .as_ref()
@@ -1021,7 +1070,7 @@ fn provider_item_from_parts(
         .filter(|value| !value.is_empty());
 
     ProviderItemPayload {
-        label: id.clone(),
+        label,
         id,
         enabled,
         model: provider.model.clone(),
