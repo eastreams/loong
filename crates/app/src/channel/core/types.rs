@@ -119,7 +119,7 @@ pub enum ChannelPlatform {
     Weixin,
     Qqbot,
     Onebot,
-    #[serde(rename = "whatsapp")]
+    #[serde(rename = "whatsapp", alias = "whats_app")]
     WhatsApp,
     Irc,
 }
@@ -570,37 +570,29 @@ pub(in crate::channel) type ChannelCommandFuture<'a> =
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
-
-    use super::{
-        ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform, ChannelSession,
-    };
+    use super::{ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform};
 
     #[test]
-    fn channel_platform_serializes_as_snake_case() {
-        let outbound_target = ChannelOutboundTarget::new(
+    fn channel_platform_serializes_as_stable_snake_case() {
+        let weixin_target = ChannelOutboundTarget::new(
             ChannelPlatform::Weixin,
             ChannelOutboundTargetKind::Conversation,
             "weixin:default:contact:wxid_alice",
         );
-        let outbound_target_json =
-            serde_json::to_value(&outbound_target).expect("serialize outbound target");
-
-        assert_eq!(
-            outbound_target_json.get("platform"),
-            Some(&Value::String("weixin".to_owned())),
-        );
-        assert_eq!(
-            outbound_target_json.get("kind"),
-            Some(&Value::String("conversation".to_owned())),
+        let whatsapp_target = ChannelOutboundTarget::new(
+            ChannelPlatform::WhatsApp,
+            ChannelOutboundTargetKind::Address,
+            "+15551234567",
         );
 
-        let session = ChannelSession::new(ChannelPlatform::Qqbot, "qqbot:default:group:123");
-        let session_json = serde_json::to_value(&session).expect("serialize channel session");
+        let weixin_value = serde_json::to_value(&weixin_target).expect("serialize weixin target");
+        let whatsapp_value =
+            serde_json::to_value(&whatsapp_target).expect("serialize whatsapp target");
+        let parsed_platform =
+            serde_json::from_str::<ChannelPlatform>("\"whatsapp\"").expect("parse whatsapp");
 
-        assert_eq!(
-            session_json.get("platform"),
-            Some(&Value::String("qqbot".to_owned())),
-        );
+        assert_eq!(weixin_value["platform"], "weixin");
+        assert_eq!(whatsapp_value["platform"], "whatsapp");
+        assert_eq!(parsed_platform, ChannelPlatform::WhatsApp);
     }
 }

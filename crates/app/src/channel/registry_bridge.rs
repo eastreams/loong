@@ -448,9 +448,7 @@ fn managed_bridge_operation_status(
     operation: ChannelCatalogOperation,
     _required_runtime_operations: &[&str],
 ) -> ChannelOperationStatus {
-    let detail =
-        "managed bridge runtime is unavailable in this feature set; enable channel-plugin-bridge"
-            .to_owned();
+    let detail = "managed bridge runtime is unavailable in this feature set; enable channel-plugin-bridge (managed bridge runtime is disabled)".to_owned();
     unsupported_operation(operation, detail)
 }
 

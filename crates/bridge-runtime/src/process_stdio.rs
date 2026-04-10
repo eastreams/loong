@@ -15,6 +15,7 @@ use crate::protocol::{
     authorize_connector_protocol_context, parse_process_timeout_ms, process_stdio_runtime_evidence,
 };
 
+const DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT: &str = "stdin/stdout::invoke";
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const STDERR_READ_CHUNK_BYTES: usize = 4 * 1024;
 
@@ -42,11 +43,11 @@ pub async fn execute_process_stdio_bridge_call(
         });
     }
 
-    let program = provider.metadata.get("command").cloned();
+    let program = resolved_process_stdio_program(provider);
     let Some(program) = program else {
         return Err(BridgeExecutionFailure {
             blocked: true,
-            reason: "process_stdio execution requires provider metadata.command".to_owned(),
+            reason: "process_stdio execution requires provider metadata.command or provider metadata.entrypoint".to_owned(),
             runtime_evidence: Value::Null,
         });
     };
@@ -178,12 +179,12 @@ pub async fn run_process_stdio_json_line_exchange(
     let stderr_task = tokio::spawn(async move {
         let mut bytes = Vec::new();
         if let Some(mut stderr_pipe) = stderr {
-            let mut chunk = [0_u8; STDERR_READ_CHUNK_BYTES];
             loop {
                 if bytes.len() >= MAX_STDERR_BYTES {
                     break;
                 }
 
+                let mut chunk = [0_u8; STDERR_READ_CHUNK_BYTES];
                 let read_result = stderr_pipe.read(&mut chunk).await;
                 let read = match read_result {
                     Ok(read) => read,
@@ -319,6 +320,42 @@ pub async fn run_process_stdio_json_line_exchange(
         response_method: response.method,
         response_id: response.id,
     })
+}
+
+fn resolved_process_stdio_program(provider: &kernel::ProviderConfig) -> Option<String> {
+    let command = non_empty_provider_metadata_value(provider, "command");
+    if command.is_some() {
+        return command;
+    }
+
+    let entrypoint = non_empty_provider_metadata_value(provider, "entrypoint");
+    if let Some(entrypoint) = entrypoint {
+        if entrypoint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT {
+            return Some(entrypoint);
+        }
+    }
+
+    let entrypoint_hint = non_empty_provider_metadata_value(provider, "entrypoint_hint");
+    if let Some(entrypoint_hint) = entrypoint_hint {
+        if entrypoint_hint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT {
+            return Some(entrypoint_hint);
+        }
+    }
+
+    None
+}
+
+fn non_empty_provider_metadata_value(
+    provider: &kernel::ProviderConfig,
+    key: &str,
+) -> Option<String> {
+    let value = provider.metadata.get(key)?;
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_value.to_owned())
 }
 
 fn remaining_phase_timeout(

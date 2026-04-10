@@ -20,6 +20,7 @@ pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION: &str = "send_mes
 pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION: &str = "receive_batch";
 pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION: &str = "ack_inbound";
 pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION: &str = "complete_batch";
+const DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT: &str = "stdin/stdout::invoke";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ManagedPluginBridgeRuntimeBinding {
@@ -605,16 +606,17 @@ fn validate_binding_execution_requirements(
         return Ok(());
     }
 
-    let command = plugin.metadata.get("command");
+    let command = resolved_process_stdio_command(plugin);
     let Some(command) = command else {
         return Err(format!(
-            "managed bridge runtime plugin {} requires provider metadata.command for process_stdio execution",
+            "managed bridge runtime plugin {} requires provider metadata.command or metadata.entrypoint for process_stdio execution",
             plugin.plugin_id
         ));
     };
 
     let normalized_allowed_commands = config.runtime_plugins.normalized_allowed_process_commands();
-    let command_is_allowed = process_command_is_allowed(command, &normalized_allowed_commands);
+    let command_is_allowed =
+        process_command_is_allowed(command.as_str(), &normalized_allowed_commands);
     if command_is_allowed {
         return Ok(());
     }
@@ -623,6 +625,41 @@ fn validate_binding_execution_requirements(
         "managed bridge runtime plugin {} uses process command `{}` that is not allowlisted in runtime_plugins.allowed_process_commands",
         plugin.plugin_id, command,
     ))
+}
+
+fn resolved_process_stdio_command(plugin: &PluginIR) -> Option<String> {
+    let explicit_command = non_empty_metadata_value(&plugin.metadata, "command");
+    if explicit_command.is_some() {
+        return explicit_command;
+    }
+
+    let explicit_entrypoint = non_empty_metadata_value(&plugin.metadata, "entrypoint");
+    if explicit_entrypoint.is_some() {
+        return explicit_entrypoint;
+    }
+
+    let runtime_entrypoint = plugin.runtime.entrypoint_hint.trim();
+    if runtime_entrypoint.is_empty() {
+        return None;
+    }
+    if runtime_entrypoint == DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT {
+        return None;
+    }
+
+    Some(runtime_entrypoint.to_owned())
+}
+
+fn non_empty_metadata_value(
+    metadata: &std::collections::BTreeMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    let value = metadata.get(key)?;
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_value.to_owned())
 }
 
 fn process_command_is_allowed(command: &str, allowed_commands: &[String]) -> bool {
@@ -804,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_managed_bridge_runtime_binding_rejects_process_command_path_spoofing() {
+    fn resolve_managed_bridge_runtime_binding_accepts_entrypoint_when_command_is_missing() {
         let root = TempDir::new().expect("create runtime plugin root");
         let mut manifest = sample_manifest(
             "qqbot-bridge-runtime",
@@ -812,9 +849,10 @@ mod tests {
             "process_stdio",
             vec![CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
         );
+        manifest.metadata.remove("command");
         manifest
             .metadata
-            .insert("command".to_owned(), "/tmp/node".to_owned());
+            .insert("entrypoint".to_owned(), "node".to_owned());
         write_manifest(root.path(), "qqbot-bridge-runtime", &manifest);
 
         let mut config = LoongClawConfig::default();
@@ -828,9 +866,21 @@ mod tests {
             "client-secret".to_owned(),
         ));
 
-        let error = resolve_managed_plugin_bridge_runtime_binding(&config, "qqbot", None)
-            .expect_err("path-spoofed process command should be rejected");
+        let binding = resolve_managed_plugin_bridge_runtime_binding(&config, "qqbot", None)
+            .expect("entrypoint-backed process bridge should resolve");
 
-        assert!(error.contains("runtime_plugins.allowed_process_commands"));
+        assert_eq!(binding.plugin.plugin_id, "qqbot-bridge-runtime");
+    }
+
+    #[test]
+    fn process_command_is_allowed_rejects_path_spoofing() {
+        let allowed_commands = vec!["python3".to_owned()];
+
+        assert!(process_command_is_allowed("python3", &allowed_commands));
+        assert!(!process_command_is_allowed(
+            "/tmp/python3",
+            &allowed_commands
+        ));
+        assert!(!process_command_is_allowed("./python3", &allowed_commands));
     }
 }
