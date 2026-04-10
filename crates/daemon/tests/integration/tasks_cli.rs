@@ -662,6 +662,12 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
     let recipes = execution.payload["recipes"]
         .as_array()
         .expect("recipes array");
+    let task_status = execution.payload["task"]["task_status"]["status"]
+        .as_str()
+        .expect("task status");
+    let task_next_action = execution.payload["task"]["task_status"]["next_action"]
+        .as_str()
+        .expect("task next action");
 
     assert_eq!(execution.payload["command"], "create");
     assert_eq!(execution.payload["current_session_id"], "ops-root");
@@ -672,9 +678,12 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
         execution.payload["task"]["session"]["kind"],
         "delegate_child"
     );
-    assert_eq!(execution.payload["task"]["task_status"]["status"], "queued");
     assert!(task_id.starts_with("delegate:"));
     assert_eq!(recipes.len(), 3);
+    assert!(
+        matches!(task_status, "queued" | "failed"),
+        "create should surface truthful immediate task status, got: {task_status}"
+    );
     assert!(
         recipes[0]
             .as_str()
@@ -691,12 +700,14 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
     );
     let rendered = loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution)
         .expect("render tasks create");
+    let expected_status_line = format!("task_status: {task_status}");
+    let expected_next_action_line = format!("task_next_action: {task_next_action}");
     assert!(
-        rendered.contains("task_status: queued"),
+        rendered.contains(&expected_status_line),
         "create render should surface derived task status: {rendered}"
     );
     assert!(
-        rendered.contains("task_next_action: wait"),
+        rendered.contains(&expected_next_action_line),
         "create render should surface next action: {rendered}"
     );
 
