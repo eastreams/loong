@@ -3,7 +3,9 @@ use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
-use super::tool_input_contract::render_tool_input_repair_guidance;
+use super::tool_input_contract::{
+    render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
+};
 use super::tool_result_compaction::compact_tool_search_payload_summary_str;
 use super::turn_engine::{
     ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolBatchExecutionIntentStatus,
@@ -1921,7 +1923,14 @@ fn render_tool_failure_repair_guidance(
         return shell_guidance;
     }
 
-    render_tool_input_repair_guidance(tool_name, request_summary_request)
+    let guidance_from_request =
+        render_tool_input_repair_guidance(tool_name, request_summary_request);
+
+    if guidance_from_request.is_some() {
+        return guidance_from_request;
+    }
+
+    render_tool_input_repair_guidance_from_reason(tool_name, tool_failure_reason)
 }
 
 fn render_shell_failure_repair_guidance(
@@ -3122,6 +3131,35 @@ mod tests {
         assert!(user_prompt.contains("Repair guidance for file.read"));
         assert!(user_prompt.contains("Add required field `payload.path` as a string."));
         assert!(user_prompt.contains("Expected payload shape: path:string,max_bytes?:integer."));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_uses_failure_reason_when_shell_summary_redacts_args_type() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
+                .to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"echo"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "run echo safely",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("Set `payload.args` to an array value."));
+        assert!(user_prompt.contains(
+            "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
+        ));
     }
 
     #[test]

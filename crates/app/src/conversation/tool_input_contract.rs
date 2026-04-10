@@ -63,9 +63,30 @@ pub(crate) fn render_tool_input_repair_guidance(
     let descriptor = catalog.resolve(tool_name)?;
     let request_value = request_summary?;
     let issue = detect_tool_input_contract_issue(descriptor, request_value)?;
-    Some(render_repair_guidance_for_issue(
+    Some(render_tool_input_repair_guidance_for_issue(
         tool_name, descriptor, &issue,
     ))
+}
+
+pub(crate) fn render_tool_input_repair_guidance_from_reason(
+    tool_name: &str,
+    tool_failure_reason: &str,
+) -> Option<String> {
+    let catalog = tools::tool_catalog();
+    let descriptor = catalog.resolve(tool_name)?;
+    render_tool_input_repair_guidance_from_reason_with_descriptor(
+        tool_name,
+        descriptor,
+        tool_failure_reason,
+    )
+}
+
+fn render_tool_input_repair_guidance_for_issue(
+    tool_name: &str,
+    descriptor: &tools::ToolDescriptor,
+    issue: &ToolInputContractIssue,
+) -> String {
+    render_repair_guidance_for_issue(tool_name, descriptor, issue)
 }
 
 fn effective_payload_for_descriptor(
@@ -84,16 +105,155 @@ fn effective_payload_for_descriptor(
         return None;
     }
 
-    let resolved = tools::resolve_tool_invoke_request(request).ok()?;
-    let (_, inner_request) = resolved;
-    let inner_tool_name = inner_request.tool_name.as_str();
+    let request_object = request.payload.as_object()?;
+    let inner_tool_name = request_object
+        .get("tool_id")
+        .or_else(|| request_object.get("tool_name"))
+        .and_then(Value::as_str)
+        .map(tools::canonical_tool_name)?;
 
     if inner_tool_name != descriptor_tool_name {
         return None;
     }
 
-    let payload = inner_request.payload;
+    let payload = request_object
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     Some(payload)
+}
+
+fn render_tool_input_repair_guidance_from_reason_with_descriptor(
+    tool_name: &str,
+    descriptor: &tools::ToolDescriptor,
+    tool_failure_reason: &str,
+) -> Option<String> {
+    let issue = parse_tool_input_contract_issue_from_reason(descriptor, tool_failure_reason)?;
+    let guidance = render_tool_input_repair_guidance_for_issue(tool_name, descriptor, &issue);
+    Some(guidance)
+}
+
+fn strip_tool_input_reason_prefix(reason: &str) -> &str {
+    let trimmed_reason = reason.trim();
+    let tool_preflight_prefix = "tool_preflight_denied: tool input needs repair: ";
+
+    if let Some(stripped_reason) = trimmed_reason.strip_prefix(tool_preflight_prefix) {
+        return stripped_reason;
+    }
+
+    let followup_prefix = "tool input needs repair: ";
+    let stripped_followup_reason = trimmed_reason.strip_prefix(followup_prefix);
+    stripped_followup_reason.unwrap_or(trimmed_reason)
+}
+
+fn parse_tool_input_contract_issue_from_reason(
+    descriptor: &tools::ToolDescriptor,
+    tool_failure_reason: &str,
+) -> Option<ToolInputContractIssue> {
+    let tool_name = descriptor.name;
+    let reason = strip_tool_input_reason_prefix(tool_failure_reason);
+    let object_reason = format!("{tool_name} payload must be an object");
+
+    if reason == object_reason {
+        return Some(ToolInputContractIssue::PayloadMustBeObject);
+    }
+
+    let prefix = format!("{tool_name} payload.");
+    let suffix = reason.strip_prefix(prefix.as_str())?;
+    let missing_issue = parse_missing_required_field_issue(descriptor, suffix);
+
+    if missing_issue.is_some() {
+        return missing_issue;
+    }
+
+    parse_invalid_field_type_issue(descriptor, suffix)
+}
+
+fn parse_missing_required_field_issue(
+    descriptor: &tools::ToolDescriptor,
+    reason_suffix: &str,
+) -> Option<ToolInputContractIssue> {
+    let split = reason_suffix.split_once(" is required")?;
+    let field_name = split.0;
+    let type_suffix = split.1;
+    let field = descriptor_required_field_name(descriptor, field_name)?;
+    let expected_type = expected_type_for_field(descriptor, field);
+    let has_type_suffix = !type_suffix.is_empty();
+
+    if has_type_suffix {
+        let parsed_type = type_suffix.strip_prefix(" (")?;
+        let parsed_type = parsed_type.strip_suffix(')')?;
+        let expected_type_matches = expected_type == Some(parsed_type);
+
+        if !expected_type_matches {
+            return None;
+        }
+    }
+
+    let issue = ToolInputContractIssue::MissingRequiredField {
+        field,
+        expected_type,
+    };
+    Some(issue)
+}
+
+fn parse_invalid_field_type_issue(
+    descriptor: &tools::ToolDescriptor,
+    reason_suffix: &str,
+) -> Option<ToolInputContractIssue> {
+    let split = reason_suffix.split_once(" must be ")?;
+    let field_name = split.0;
+    let expected_type = split.1;
+    let field = descriptor_parameter_field_name(descriptor, field_name)?;
+    let descriptor_expected_type = expected_type_for_field(descriptor, field)?;
+    let expected_type_matches = descriptor_expected_type == expected_type;
+
+    if !expected_type_matches {
+        return None;
+    }
+
+    let issue = ToolInputContractIssue::InvalidFieldType {
+        field,
+        expected_type: descriptor_expected_type,
+    };
+    Some(issue)
+}
+
+fn descriptor_required_field_name(
+    descriptor: &tools::ToolDescriptor,
+    field_name: &str,
+) -> Option<&'static str> {
+    for required_field in descriptor.required_fields() {
+        let is_match = *required_field == field_name;
+
+        if is_match {
+            return Some(*required_field);
+        }
+    }
+
+    None
+}
+
+fn descriptor_parameter_field_name(
+    descriptor: &tools::ToolDescriptor,
+    field_name: &str,
+) -> Option<&'static str> {
+    for (candidate_field_name, _) in descriptor.parameter_types() {
+        let is_match = *candidate_field_name == field_name;
+
+        if is_match {
+            return Some(*candidate_field_name);
+        }
+    }
+
+    None
+}
+
+fn indefinite_article(expected_type: &str) -> &'static str {
+    match expected_type {
+        "array" | "integer" | "object" => "an",
+        _ => "a",
+    }
 }
 
 fn detect_tool_input_contract_issue(
@@ -208,7 +368,10 @@ fn render_repair_guidance_for_issue(
         } => {
             let field_path = format!("payload.{field}");
             let expected_suffix = expected_type
-                .map(|value| format!(" as a {value}"))
+                .map(|value| {
+                    let article = indefinite_article(value);
+                    format!(" as {article} {value}")
+                })
                 .unwrap_or_default();
             let line = format!("Add required field `{field_path}`{expected_suffix}.");
             lines.push(line);
@@ -218,7 +381,8 @@ fn render_repair_guidance_for_issue(
             expected_type,
         } => {
             let field_path = format!("payload.{field}");
-            let line = format!("Set `{field_path}` to a {expected_type} value.");
+            let article = indefinite_article(expected_type);
+            let line = format!("Set `{field_path}` to {article} {expected_type} value.");
             lines.push(line);
         }
     }
@@ -239,7 +403,7 @@ fn render_repair_guidance_for_issue(
 mod tests {
     use super::{
         ToolInputContractIssue, detect_repairable_tool_request_issue,
-        render_tool_input_repair_guidance,
+        render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
     };
     use crate::tools;
     use loongclaw_contracts::ToolCoreRequest;
@@ -307,5 +471,39 @@ mod tests {
                 expected_type: "string",
             })
         );
+    }
+
+    #[test]
+    fn detect_repairable_tool_request_issue_marks_scalar_tool_invoke_arguments_repairable() {
+        let descriptor = tools::tool_catalog()
+            .resolve("file.read")
+            .expect("file.read descriptor");
+        let request = ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "file.read",
+                "lease": "lease-a",
+                "arguments": "README.md"
+            }),
+        };
+
+        let issue = detect_repairable_tool_request_issue(descriptor, &request);
+
+        assert_eq!(issue, Some(ToolInputContractIssue::PayloadMustBeObject));
+    }
+
+    #[test]
+    fn render_tool_input_repair_guidance_from_reason_preserves_array_type_guidance() {
+        let guidance = render_tool_input_repair_guidance_from_reason(
+            "shell.exec",
+            "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array",
+        )
+        .expect("guidance");
+
+        assert!(guidance.contains("Repair guidance for shell.exec:"));
+        assert!(guidance.contains("Set `payload.args` to an array value."));
+        assert!(guidance.contains(
+            "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
+        ));
     }
 }
