@@ -10,6 +10,7 @@ Product specs describe **what** the product does from the user's perspective, no
 
 - [Installation](installation.md)
 - [Onboarding](onboarding.md)
+- [Configuration Schema](config-schema.md)
 - [One-Shot Ask](one-shot-ask.md)
 - [Doctor](doctor.md)
 - [Browser Automation](browser-automation.md)
