@@ -20,7 +20,11 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{process_id}-{seed}-{nanos}"))
 }
 
-fn write_status_config(root: &Path, acp_enabled: bool) -> PathBuf {
+fn write_status_config(
+    root: &Path,
+    acp_enabled: bool,
+    tool_schema_mode: mvp::config::ProviderToolSchemaModeConfig,
+) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
 
     let sqlite_path = root.join("memory.sqlite3");
@@ -35,6 +39,7 @@ fn write_status_config(root: &Path, acp_enabled: bool) -> PathBuf {
                 kind: mvp::config::ProviderKind::Openai,
                 model: "gpt-4.1-mini".to_owned(),
                 api_key: Some(SecretRef::Inline("demo-token".to_owned())),
+                tool_schema_mode,
                 ..Default::default()
             },
         },
@@ -119,7 +124,11 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
     let root = unique_temp_dir("loongclaw-status-cli-json");
     let home_root = root.join("home");
     fs::create_dir_all(&home_root).expect("create home root");
-    let config_path = write_status_config(&root, true);
+    let config_path = write_status_config(
+        &root,
+        true,
+        mvp::config::ProviderToolSchemaModeConfig::EnabledWithDowngrade,
+    );
     let output =
         run_status_cli_process(&config_path, &home_root, &["--json"], "run status CLI json");
 
@@ -137,6 +146,14 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
 
     assert_eq!(payload["schema"]["surface"], "status");
     assert_eq!(payload["gateway"]["owner"]["phase"], "stopped");
+    assert_eq!(
+        payload["gateway"]["runtime"]["tool_calling"]["availability"],
+        "ready"
+    );
+    assert_eq!(
+        payload["gateway"]["runtime"]["tool_calling"]["structured_tool_schema_enabled"],
+        true
+    );
     assert_eq!(payload["acp"]["enabled"], true);
     let acp_availability = payload["acp"]["availability"]
         .as_str()
@@ -179,7 +196,11 @@ fn status_cli_text_surfaces_section_summaries_and_recipes() {
     let root = unique_temp_dir("loongclaw-status-cli-text");
     let home_root = root.join("home");
     fs::create_dir_all(&home_root).expect("create home root");
-    let config_path = write_status_config(&root, false);
+    let config_path = write_status_config(
+        &root,
+        false,
+        mvp::config::ProviderToolSchemaModeConfig::Disabled,
+    );
     let output = run_status_cli_process(&config_path, &home_root, &[], "run status CLI text");
 
     if !output.status.success() {
@@ -194,6 +215,8 @@ fn status_cli_text_surfaces_section_summaries_and_recipes() {
     let stdout = render_output(&output.stdout);
 
     assert!(stdout.contains("gateway phase=stopped"));
+    assert!(stdout.contains("tool_calling availability=degraded"));
+    assert!(stdout.contains("structured_tool_schema_enabled=false"));
     assert!(stdout.contains("acp enabled=false availability=disabled"));
     assert!(stdout.contains("work_units availability="));
     assert!(stdout.contains("recipes:"));

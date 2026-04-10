@@ -82,9 +82,7 @@ pub fn run_memory_context_benchmark_cli(
     Err("benchmark-memory-context requires the daemon `memory-sqlite` feature".to_owned())
 }
 
-pub use base64;
-pub use kernel;
-pub use sha2;
+pub use {base64, kernel, sha2};
 
 pub mod audit_cli;
 mod browser_companion_diagnostics;
@@ -144,6 +142,7 @@ pub mod supervisor;
 mod task_execution;
 pub mod tasks_cli;
 mod tlon_cli;
+mod tool_calling_readiness;
 pub mod trajectory_cli;
 pub mod work_unit_cli;
 
@@ -176,6 +175,9 @@ use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
+use tool_calling_readiness::{
+    RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state,
+};
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
     TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
@@ -2338,6 +2340,7 @@ pub struct RuntimeSnapshotCliState {
     pub visible_tool_names: Vec<String>,
     pub capability_snapshot: String,
     pub capability_snapshot_sha256: String,
+    pub tool_calling: RuntimeSnapshotToolCallingState,
     pub runtime_plugins: RuntimeSnapshotRuntimePluginsState,
     pub external_skills: RuntimeSnapshotExternalSkillsState,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
@@ -2592,9 +2595,11 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         .tool_names()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    let visible_tool_count = visible_tool_names.len();
     let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
         runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
+    let tool_calling = collect_runtime_snapshot_tool_calling_state(config, visible_tool_count);
     let runtime_plugins = collect_runtime_snapshot_runtime_plugins_state(config);
     let restore_spec = build_runtime_snapshot_restore_spec(config, &external_skills);
 
@@ -2611,6 +2616,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         visible_tool_names,
         capability_snapshot,
         capability_snapshot_sha256,
+        tool_calling,
         runtime_plugins,
         external_skills,
         restore_spec,
