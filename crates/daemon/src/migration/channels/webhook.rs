@@ -181,24 +181,44 @@ fn preview_detail(
     config: &mvp::config::LoongClawConfig,
     credential_state: ChannelCredentialState,
 ) -> String {
-    match (config.webhook.enabled, credential_state) {
-        (true, ChannelCredentialState::Ready) => {
-            "enabled · endpoint delivery and signed serve credentials resolved".to_owned()
-        }
-        (false, ChannelCredentialState::Ready) => {
+    let send_ready = webhook_send_credentials_ready(config);
+    let serve_ready = webhook_serve_credentials_ready(config);
+    let webhook_enabled = config.webhook.enabled;
+
+    match credential_state {
+        ChannelCredentialState::Ready if send_ready && serve_ready => {
+            if webhook_enabled {
+                return "enabled · endpoint delivery and signed serve credentials resolved"
+                    .to_owned();
+            }
+
             "endpoint delivery and signed serve credentials resolved · can enable during onboarding"
                 .to_owned()
         }
-        (true, ChannelCredentialState::Partial) => {
+        ChannelCredentialState::Ready if send_ready => {
+            if webhook_enabled {
+                return "enabled · endpoint delivery credentials resolved; signing_secret can still be added for signed serve".to_owned();
+            }
+
+            "endpoint delivery credentials resolved · can enable now, and signing_secret can be added later for signed serve".to_owned()
+        }
+        ChannelCredentialState::Ready => {
+            if webhook_enabled {
+                return "enabled · signed serve credential resolved; endpoint_url can still be added for outbound delivery".to_owned();
+            }
+
+            "signed serve credential resolved · can enable now, and endpoint_url can be added later for outbound delivery".to_owned()
+        }
+        ChannelCredentialState::Partial if webhook_enabled => {
             "enabled · endpoint_url or signing_secret missing".to_owned()
         }
-        (false, ChannelCredentialState::Partial) => {
+        ChannelCredentialState::Partial => {
             "configured · endpoint_url or signing_secret missing".to_owned()
         }
-        (true, ChannelCredentialState::Missing) => {
+        ChannelCredentialState::Missing if webhook_enabled => {
             "enabled · endpoint_url or signing_secret missing".to_owned()
         }
-        (false, ChannelCredentialState::Missing) => "configured but disabled".to_owned(),
+        ChannelCredentialState::Missing => "configured but disabled".to_owned(),
     }
 }
 

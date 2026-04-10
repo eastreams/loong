@@ -274,9 +274,11 @@ use super::types::{
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
+    feature = "channel-webhook",
 ))]
 use super::types::{
     ChannelResolvedAcpTurnHints, KnownChannelSessionSendTarget,
@@ -3263,6 +3265,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -3445,6 +3448,7 @@ pub(super) fn reload_channel_turn_config(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -3628,6 +3632,7 @@ fn normalized_channel_delivery_resource(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",

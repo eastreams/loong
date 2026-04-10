@@ -67,6 +67,21 @@ struct LineServeState {
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
+enum LineServeError {
+    Validation(String),
+    Internal(String),
+}
+
+impl LineServeError {
+    fn validation(message: impl Into<String>) -> Self {
+        Self::Validation(message.into())
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+}
+
 impl LineServeState {
     fn new(
         config: &LoongClawConfig,
@@ -408,7 +423,9 @@ async fn process_line_event(
     let message = event
         .get("message")
         .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| LineServeError::validation("line webhook message event missing message object"))?;
+        .ok_or_else(|| {
+            LineServeError::validation("line webhook message event missing message object")
+        })?;
     let message_type = message
         .get("type")
         .and_then(serde_json::Value::as_str)
@@ -603,6 +620,7 @@ mod tests {
     use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
     use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
     use axum::body::to_bytes;
+    use axum::http::HeaderValue;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_resolved_line_config() -> ResolvedLineChannelConfig {
@@ -697,5 +715,45 @@ mod tests {
             payload,
             serde_json::json!({ "error": "invalid X-Line-Signature header" })
         );
+    }
+
+    #[tokio::test]
+    async fn line_webhook_handler_rejects_invalid_payloads_as_bad_requests() {
+        let state = build_test_serve_state().await;
+        let body = Bytes::from_static(br#"{"events":"bad"}"#);
+        let signature = build_line_signature("line-channel-secret", body.as_ref())
+            .expect("build line signature");
+        let mut headers = HeaderMap::new();
+        let signature_header = HeaderValue::from_str(signature.as_str()).expect("signature header");
+        headers.insert(LINE_SIGNATURE_HEADER, signature_header);
+
+        let response = line_webhook_handler(State(state), headers, body)
+            .await
+            .into_response();
+        let status = response.status();
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn resolve_line_conversation_id_prefers_group_then_room_then_user() {
+        let source = serde_json::json!({
+            "groupId": "group-1",
+            "roomId": "room-1",
+            "userId": "user-1"
+        });
+        let source = source.as_object().expect("line source object");
+        let conversation_id = resolve_line_conversation_id(source).expect("line conversation id");
+
+        assert_eq!(conversation_id, "group-1");
+
+        let source = serde_json::json!({
+            "roomId": "room-2",
+            "userId": "user-2"
+        });
+        let source = source.as_object().expect("line source object");
+        let conversation_id = resolve_line_conversation_id(source).expect("line conversation id");
+
+        assert_eq!(conversation_id, "room-2");
     }
 }

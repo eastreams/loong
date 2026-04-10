@@ -1975,6 +1975,68 @@ fn channel_registry_apply_selected_channels_merges_wecom_config() {
 }
 
 #[test]
+fn channel_registry_apply_selected_channels_merges_line_accounts() {
+    let mut target = mvp::config::LoongClawConfig::default();
+    target.line.channel_secret_env = Some("TARGET_LINE_SECRET".to_owned());
+
+    let mut source = mvp::config::LoongClawConfig::default();
+    source.line.enabled = true;
+    source.line.default_account = Some("support".to_owned());
+    source.line.channel_access_token_env = Some("SOURCE_LINE_ACCESS_TOKEN".to_owned());
+    source.line.channel_secret_env = Some("SOURCE_LINE_SECRET".to_owned());
+    source.line.accounts.insert(
+        "support".to_owned(),
+        mvp::config::LineAccountConfig {
+            api_base_url: Some("https://api.line.example.test".to_owned()),
+            ..Default::default()
+        },
+    );
+
+    let changed = loongclaw_daemon::migration::channels::apply_selected_channels(
+        &mut target,
+        &source,
+        &["line"],
+    );
+
+    assert!(changed);
+    assert!(target.line.enabled);
+    assert_eq!(target.line.default_account.as_deref(), Some("support"));
+    assert_eq!(
+        target.line.channel_access_token_env.as_deref(),
+        Some("SOURCE_LINE_ACCESS_TOKEN")
+    );
+    assert_eq!(
+        target.line.channel_secret_env.as_deref(),
+        Some("TARGET_LINE_SECRET")
+    );
+    assert_eq!(
+        target
+            .line
+            .accounts
+            .get("support")
+            .and_then(|account| account.api_base_url.as_deref()),
+        Some("https://api.line.example.test")
+    );
+}
+
+#[test]
+fn resolve_channel_import_readiness_treats_serve_only_webhook_as_ready() {
+    let _env = MigrationEnvironmentGuard::set(&[("WEBHOOK_SIGNING_SECRET", None)]);
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.webhook.signing_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "webhook-signing-secret".to_owned(),
+    ));
+
+    let readiness = loongclaw_daemon::migration::channels::resolve_import_readiness(&config);
+    let webhook_state = readiness.state("webhook");
+
+    assert_eq!(
+        webhook_state,
+        loongclaw_daemon::migration::ChannelCredentialState::Ready
+    );
+}
+
+#[test]
 fn resolve_channel_import_readiness_reports_partial_wecom_channel_credentials() {
     let _env = MigrationEnvironmentGuard::set(&[("WECOM_BOT_ID", None), ("WECOM_SECRET", None)]);
 

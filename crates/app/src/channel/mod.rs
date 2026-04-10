@@ -127,7 +127,8 @@ pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
 pub use sdk::{
