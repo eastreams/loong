@@ -38,7 +38,7 @@ pub(super) fn parse_sse_line(line: &str) -> SseLine {
     }
     if let Some(rest) = line.strip_prefix("data:") {
         return SseLine::Data {
-            content: rest.trim().to_owned(),
+            content: rest.strip_prefix(' ').unwrap_or(rest).to_owned(),
         };
     }
     SseLine::Empty

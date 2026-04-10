@@ -193,6 +193,7 @@ mod tests {
     use super::*;
     use crate::config::ProviderConfig;
     use crate::provider::contracts::ProviderToolSchemaMode;
+    use crate::provider::transport_trait::TransportErrorKind;
 
     #[test]
     fn classify_model_status_failure_reason_prioritizes_status_over_error_text() {
@@ -474,5 +475,50 @@ mod tests {
                 case.name, case.status_code, case.api_error
             );
         }
+    }
+
+    #[test]
+    fn plan_transport_error_retry_only_retries_transient_transport_kinds() {
+        let provider = ProviderConfig::default();
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let backoff_ms = request_policy.initial_backoff_ms;
+
+        let retryable_kinds = [
+            TransportErrorKind::Timeout,
+            TransportErrorKind::Connect,
+            TransportErrorKind::Request,
+        ];
+
+        for kind in retryable_kinds {
+            let error = TransportError::new(kind, "transient");
+            assert_eq!(
+                plan_transport_error_retry(1, &request_policy, &error, backoff_ms),
+                Some((
+                    backoff_ms.min(request_policy.max_backoff_ms),
+                    policy::next_backoff_ms(
+                        backoff_ms.min(request_policy.max_backoff_ms),
+                        request_policy.max_backoff_ms,
+                    ),
+                )),
+                "expected retry for transport kind {kind:?}"
+            );
+        }
+
+        let other_error = TransportError::new(TransportErrorKind::Other, "non-retryable");
+        assert_eq!(
+            plan_transport_error_retry(1, &request_policy, &other_error, backoff_ms),
+            None
+        );
+
+        let timeout_error = TransportError::new(TransportErrorKind::Timeout, "timeout");
+        assert_eq!(
+            plan_transport_error_retry(
+                request_policy.max_attempts,
+                &request_policy,
+                &timeout_error,
+                backoff_ms,
+            ),
+            None
+        );
     }
 }

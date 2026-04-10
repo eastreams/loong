@@ -36,7 +36,6 @@ pub(super) struct TransportRequest {
     pub(super) url: String,
     pub(super) headers: HeaderMap,
     pub(super) body: Vec<u8>,
-    pub(super) auth: Option<PreparedTransportAuth>,
 }
 
 #[derive(Debug)]

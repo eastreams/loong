@@ -1334,8 +1334,16 @@ mod tests {
     async fn execute_model_request_uses_mock_transport_without_http() {
         use crate::provider::mock_transport::MockTransport;
         use crate::provider::transport_trait::TransportResponse;
+        use loongclaw_contracts::SecretRef;
 
-        let provider = ProviderConfig::default();
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Openai,
+            api_key: Some(SecretRef::Inline("mock-transport-secret".to_owned())),
+            api_key_env: None,
+            oauth_access_token: None,
+            oauth_access_token_env: None,
+            ..ProviderConfig::default()
+        };
         let runtime_contract = provider_runtime_contract(&provider);
         let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
         let headers = reqwest::header::HeaderMap::new();
@@ -1394,6 +1402,13 @@ mod tests {
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(recorded_requests[0].method, reqwest::Method::POST);
+        assert_eq!(
+            recorded_requests[0]
+                .headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer mock-transport-secret")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
