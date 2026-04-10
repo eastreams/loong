@@ -6,15 +6,12 @@ use std::{
     ffi::OsString,
     future::Future,
     path::{Path, PathBuf},
-    sync::{OnceLock, mpsc},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::mpsc,
+    time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 #[cfg(test)]
 use tool_search::searchable_entry_from_provider_definition;
 use tool_search::{
@@ -24,7 +21,6 @@ use tool_search::{
 
 use crate::KernelContext;
 use crate::config::ToolConfig;
-use crate::crypto::timing_safe_eq;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 pub(crate) mod approval;
@@ -68,6 +64,7 @@ mod session_search;
 mod shell;
 pub mod shell_policy_ext;
 mod shell_request_prep;
+mod tool_lease_authority;
 mod tool_search;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
@@ -1317,17 +1314,6 @@ pub fn tool_parameter_schema_types() -> BTreeMap<String, BTreeMap<String, &'stat
     tools_by_name
 }
 
-const TOOL_LEASE_TTL_SECONDS: u64 = 300;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ToolLeaseClaims {
-    tool_id: String,
-    catalog_digest: String,
-    expires_at_unix: u64,
-    token_id: Option<String>,
-    session_id: Option<String>,
-    turn_id: Option<String>,
-}
 fn execute_tool_search_tool_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
@@ -1378,7 +1364,8 @@ fn execute_tool_search_tool_with_config(
     let mut diagnostics_reason = None;
     let results: Vec<Value> = if let Some(entry) = exact_match_entry {
         let why = Vec::new();
-        vec![tool_search_result_entry_json(&entry, why, payload)]
+        let entry_json = tool_search_result_entry_json(&entry, why, payload)?;
+        vec![entry_json]
     } else if let Some(query) = query.as_deref() {
         let ranking = rank_searchable_entries(searchable_entries, query, limit);
         diagnostics_reason = ranking.diagnostics_reason;
@@ -1391,7 +1378,7 @@ fn execute_tool_search_tool_with_config(
 
                 tool_search_result_entry_json(&entry, why, payload)
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         let ranking = rank_searchable_entries(searchable_entries, "", limit);
         diagnostics_reason = ranking.diagnostics_reason;
@@ -1404,7 +1391,7 @@ fn execute_tool_search_tool_with_config(
 
                 tool_search_result_entry_json(&entry, why, payload)
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?
     };
     let diagnostics = tool_search_diagnostics_json(
         requested_exact_tool_id.as_deref(),
@@ -1436,8 +1423,9 @@ fn tool_search_result_entry_json(
     entry: &SearchableToolEntry,
     why: Vec<String>,
     payload: &serde_json::Map<String, Value>,
-) -> Value {
-    json!({
+) -> Result<Value, String> {
+    let lease = tool_lease_authority::issue_tool_lease(entry.canonical_name.as_str(), payload)?;
+    let entry_json = json!({
         "tool_id": entry.canonical_name,
         "summary": entry.summary,
         "search_hint": entry.search_hint,
@@ -1447,8 +1435,9 @@ fn tool_search_result_entry_json(
         "schema_preview": entry.schema_preview,
         "tags": entry.tags,
         "why": why,
-        "lease": issue_tool_lease(entry.canonical_name.as_str(), payload),
-    })
+        "lease": lease,
+    });
+    Ok(entry_json)
 }
 
 fn tool_search_diagnostics_json(
@@ -1625,7 +1614,7 @@ pub(crate) fn resolve_tool_invoke_request(
             resolved_tool_name
         ));
     }
-    validate_tool_lease(resolved_tool_name, lease, payload)?;
+    tool_lease_authority::validate_tool_lease(resolved_tool_name, lease, payload)?;
 
     Ok((
         resolved,
@@ -1658,22 +1647,6 @@ fn execute_tool_invoke_tool_with_config(
     }
 }
 
-fn issue_tool_lease(tool_id: &str, payload: &serde_json::Map<String, Value>) -> String {
-    let binding = extract_tool_lease_binding(payload);
-    let claims = ToolLeaseClaims {
-        tool_id: tool_id.to_owned(),
-        catalog_digest: tool_catalog_digest(),
-        expires_at_unix: now_unix_seconds().saturating_add(TOOL_LEASE_TTL_SECONDS),
-        token_id: binding.token_id,
-        session_id: binding.session_id,
-        turn_id: binding.turn_id,
-    };
-    let claims_bytes = serde_json::to_vec(&claims).unwrap_or_default();
-    let encoded_claims = URL_SAFE_NO_PAD.encode(claims_bytes);
-    let signature = sign_tool_lease(encoded_claims.as_str());
-    format!("{encoded_claims}.{signature}")
-}
-
 #[allow(dead_code)]
 pub(crate) fn bridge_provider_tool_call_with_scope(
     tool_name: &str,
@@ -1690,7 +1663,14 @@ pub(crate) fn bridge_provider_tool_call_with_scope(
     }
     let mut lease_payload = serde_json::Map::new();
     inject_tool_lease_binding(&mut lease_payload, None, session_id, turn_id);
-    let lease = issue_tool_lease(entry.canonical_name, &lease_payload);
+    let lease_result = tool_lease_authority::issue_tool_lease(entry.canonical_name, &lease_payload);
+    let lease = match lease_result {
+        Ok(lease) => lease,
+        Err(error) => {
+            let invalid_lease = format!("tool-lease-error:{error}");
+            invalid_lease
+        }
+    };
     let mut outer_payload = serde_json::Map::new();
     outer_payload.insert("tool_id".to_owned(), json!(entry.canonical_name));
     outer_payload.insert("lease".to_owned(), json!(lease));
@@ -1720,110 +1700,6 @@ pub(crate) fn synthesize_test_provider_tool_call_with_scope(
     bridge_provider_tool_call_with_scope(tool_name, args_json, session_id, turn_id)
 }
 
-fn validate_tool_lease(
-    expected_tool_id: &str,
-    lease: &str,
-    payload: &serde_json::Map<String, Value>,
-) -> Result<(), String> {
-    let Some((encoded_claims, signature)) = lease.split_once('.') else {
-        return Err("invalid_tool_lease: malformed lease".to_owned());
-    };
-    let expected_signature = sign_tool_lease(encoded_claims);
-    if !timing_safe_eq(expected_signature.as_bytes(), signature.as_bytes()) {
-        return Err("invalid_tool_lease: signature mismatch".to_owned());
-    }
-    let claims_bytes = URL_SAFE_NO_PAD
-        .decode(encoded_claims)
-        .map_err(|error| format!("invalid_tool_lease: claims decode failed: {error}"))?;
-    let claims: ToolLeaseClaims = serde_json::from_slice(&claims_bytes)
-        .map_err(|error| format!("invalid_tool_lease: claims parse failed: {error}"))?;
-    if claims.tool_id != expected_tool_id {
-        return Err("invalid_tool_lease: tool mismatch".to_owned());
-    }
-    if claims.catalog_digest != tool_catalog_digest() {
-        return Err("invalid_tool_lease: catalog mismatch".to_owned());
-    }
-    if claims.expires_at_unix <= now_unix_seconds() {
-        return Err("invalid_tool_lease: expired lease".to_owned());
-    }
-    let binding = extract_tool_lease_binding(payload);
-    if claims.token_id.is_some() && claims.token_id != binding.token_id {
-        return Err("invalid_tool_lease: token mismatch".to_owned());
-    }
-    if claims.session_id.is_some() && claims.session_id != binding.session_id {
-        return Err("invalid_tool_lease: session mismatch".to_owned());
-    }
-    if claims.turn_id.is_some() && claims.turn_id != binding.turn_id {
-        return Err("invalid_tool_lease: turn mismatch".to_owned());
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, Default)]
-struct ToolLeaseBinding {
-    token_id: Option<String>,
-    session_id: Option<String>,
-    turn_id: Option<String>,
-}
-
-fn extract_tool_lease_binding(payload: &serde_json::Map<String, Value>) -> ToolLeaseBinding {
-    ToolLeaseBinding {
-        token_id: payload
-            .get(TOOL_LEASE_TOKEN_ID_FIELD)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        session_id: payload
-            .get(TOOL_LEASE_SESSION_ID_FIELD)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        turn_id: payload
-            .get(TOOL_LEASE_TURN_ID_FIELD)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-    }
-}
-
-fn sign_tool_lease(encoded_claims: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(tool_lease_secret().as_bytes());
-    hasher.update(b":");
-    hasher.update(encoded_claims.as_bytes());
-    let digest = hasher.finalize();
-    hex::encode(digest)
-}
-
-fn tool_catalog_digest() -> String {
-    catalog::stable_tool_catalog_digest().to_owned()
-}
-
-fn tool_lease_secret() -> &'static str {
-    static SECRET: OnceLock<String> = OnceLock::new();
-    SECRET.get_or_init(|| {
-        // Use RandomState for OS-level entropy rather than deterministic PID+timestamp.
-        // RandomState is seeded from the OS CSPRNG on most platforms.
-        use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hasher};
-        let random_state = RandomState::new();
-        let mut hasher = random_state.build_hasher();
-        hasher.write_u64(std::process::id() as u64);
-        hasher.write_u64(now_unix_seconds());
-        let entropy = hasher.finish();
-        let seed = format!(
-            "tool-lease:{entropy:x}:{:x}",
-            random_state.build_hasher().finish()
-        );
-        let digest = Sha256::digest(seed.as_bytes());
-        hex::encode(digest)
-    })
-}
-
-fn now_unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
 fn tool_function_name(tool: &Value) -> &str {
     tool.get("function")
         .and_then(|value| value.get("name"))
@@ -1835,6 +1711,8 @@ fn tool_function_name(tool: &Value) -> &str {
 mod tests {
     use super::*;
     use crate::test_support::{ScopedEnv, unique_temp_dir};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use std::path::{Path, PathBuf};
     use std::sync::{MutexGuard, OnceLock};
 
@@ -4236,11 +4114,11 @@ mod tests {
         let claims_bytes = URL_SAFE_NO_PAD
             .decode(encoded_claims)
             .expect("decode claims");
-        let claims: ToolLeaseClaims = serde_json::from_slice(&claims_bytes).expect("parse claims");
-        let expected_digest = tool_catalog_digest();
-        let repeated_digest = tool_catalog_digest();
+        let claims: Value = serde_json::from_slice(&claims_bytes).expect("parse claims");
+        let expected_digest = tool_lease_authority::tool_catalog_digest();
+        let repeated_digest = tool_lease_authority::tool_catalog_digest();
 
-        assert_eq!(claims.catalog_digest, expected_digest);
+        assert_eq!(claims["catalog_digest"], json!(expected_digest));
         assert_eq!(repeated_digest, expected_digest);
 
         std::fs::remove_dir_all(&root).ok();
