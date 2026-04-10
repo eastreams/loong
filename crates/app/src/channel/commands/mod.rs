@@ -5,6 +5,7 @@ mod serve;
 pub(super) use context::ChannelCommandContext;
 pub(super) use send::{ChannelSendCommandSpec, run_channel_send_command};
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
