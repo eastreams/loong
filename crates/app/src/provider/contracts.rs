@@ -321,7 +321,7 @@ fn provider_payload_adaptation_contract(
             }
         }
         ProviderFeatureFamily::Google => ProviderPayloadAdaptationContract {
-            token_field_progression: token_field_progression(default_token_field),
+            token_field_progression: google_token_field_progression(),
             reasoning_field_progression: reasoning_field_progression(default_reasoning_field),
             temperature_field_progression: temperature_field_progression(default_temperature_field),
             unsupported_parameter_message_fragments:
@@ -445,6 +445,15 @@ fn token_field_progression(default_field: TokenLimitField) -> [TokenLimitField; 
             TokenLimitField::Omit,
         ],
     }
+}
+
+fn google_token_field_progression() -> [TokenLimitField; 4] {
+    [
+        TokenLimitField::MaxOutputTokens,
+        TokenLimitField::Omit,
+        TokenLimitField::Omit,
+        TokenLimitField::Omit,
+    ]
 }
 
 fn reasoning_field_progression(default_field: ReasoningField) -> [ReasoningField; 3] {

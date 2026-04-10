@@ -3155,7 +3155,7 @@ const PROVIDER_PROFILES: [ProviderProfile; 45] = [
         models_path: Some("/v1/models"),
         protocol_family: ProviderProtocolFamily::AnthropicMessages,
         auth_scheme: ProviderAuthScheme::XApiKey,
-        default_headers: &[("anthropic-version", "2023-06-01")],
+        default_headers: &ANTHROPIC_DEFAULT_HEADERS,
         default_api_key_env: Some("ANTHROPIC_API_KEY"),
         api_key_env_aliases: &[],
         default_user_agent: None,

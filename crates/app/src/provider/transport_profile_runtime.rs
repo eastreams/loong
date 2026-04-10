@@ -178,11 +178,13 @@ fn normalize_opencode_model(kind: ProviderKind, raw_model: &str) -> CliResult<St
     } else {
         "opencode-go/"
     };
-    let normalized_model = lowered_model
-        .strip_prefix(own_prefix)
-        .unwrap_or(trimmed_model)
-        .trim()
-        .to_owned();
+    let without_prefix = if lowered_model.starts_with(own_prefix) {
+        let prefix_len = own_prefix.len();
+        trimmed_model.get(prefix_len..).unwrap_or_default()
+    } else {
+        trimmed_model
+    };
+    let normalized_model = without_prefix.trim().to_owned();
     if normalized_model.is_empty() {
         return Err(format!(
             "{} model id is empty after removing the copied `{}` prefix",
@@ -227,7 +229,7 @@ mod tests {
     #[test]
     fn opencode_zen_routes_claude_models_to_messages() {
         let provider = ProviderConfig::fresh_for_kind(ProviderKind::OpencodeZen);
-        let profile = resolve_provider_request_transport_profile(&provider, "claude-sonnet-4.6")
+        let profile = resolve_provider_request_transport_profile(&provider, "claude-sonnet-4-6")
             .expect("transport profile");
 
         assert_eq!(profile.endpoint, "https://opencode.ai/zen/v1/messages");
@@ -294,5 +296,14 @@ mod tests {
             .expect_err("cross-provider model prefix should fail");
 
         assert!(error.contains("kind = \"opencode_go\""));
+    }
+
+    #[test]
+    fn opencode_model_normalization_preserves_original_model_casing() {
+        let provider = ProviderConfig::fresh_for_kind(ProviderKind::OpencodeZen);
+        let profile = resolve_provider_request_transport_profile(&provider, "opencode/GPT-5.4")
+            .expect("transport profile");
+
+        assert_eq!(profile.request_model, "GPT-5.4");
     }
 }

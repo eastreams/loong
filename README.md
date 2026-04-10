@@ -530,7 +530,7 @@ LoongClaw treats these as native providers and routes models by OpenCode product
   - `minimax-*` → Anthropic Messages
   - everything else → OpenAI Chat Completions
 
-Use bare model ids in LoongClaw (`gpt-5.4`, `claude-sonnet-4.6`, `glm-5.1`). If you paste copied OpenCode ids such as `opencode/gpt-5.4` or `opencode-go/glm-5.1`, LoongClaw strips the prefix automatically.
+Use bare model ids in LoongClaw (`gpt-5.4`, `claude-sonnet-4-6`, `glm-5.1`). LoongClaw strips only the matching OpenCode namespace prefix for the active provider, so `opencode/gpt-5.4` is normalized under `opencode_zen` and `opencode-go/glm-5.1` is normalized under `opencode_go`. Cross-provider prefixes are rejected with guidance to switch provider kinds or remove the copied prefix.
 
 Feishu channel example (webhook mode):
 
