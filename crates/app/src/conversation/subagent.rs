@@ -21,6 +21,22 @@ pub enum ConstrainedSubagentIsolation {
     Worktree,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstrainedSubagentOwnerKind {
+    AsyncDelegateSpawner,
+    BackgroundTaskHost,
+}
+
+impl ConstrainedSubagentOwnerKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AsyncDelegateSpawner => "async_delegate_spawner",
+            Self::BackgroundTaskHost => "background_task_host",
+        }
+    }
+}
+
 impl ConstrainedSubagentIsolation {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -467,6 +483,8 @@ pub struct ConstrainedSubagentExecution {
     pub mode: ConstrainedSubagentMode,
     #[serde(default)]
     pub isolation: ConstrainedSubagentIsolation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_kind: Option<ConstrainedSubagentOwnerKind>,
     pub depth: usize,
     pub max_depth: usize,
     pub active_children: usize,
@@ -598,6 +616,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: ConstrainedSubagentIsolation::Shared,
+            owner_kind: Some(ConstrainedSubagentOwnerKind::BackgroundTaskHost),
             depth: 1,
             max_depth: 2,
             active_children: 0,
@@ -629,6 +648,12 @@ mod tests {
             ConstrainedSubagentExecution::profile_from_event_payload(&payload),
             Some(DelegateBuiltinProfile::Research)
         );
+        assert_eq!(
+            ConstrainedSubagentExecution::from_event_payload(&payload)
+                .and_then(|execution| execution.owner_kind)
+                .map(ConstrainedSubagentOwnerKind::as_str),
+            Some("background_task_host")
+        );
     }
 
     #[test]
@@ -636,6 +661,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Inline,
             isolation: ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 2,
             active_children: 0,
@@ -692,6 +718,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 3,
             active_children: 0,
@@ -728,6 +755,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Inline,
             isolation: ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 2,
             max_depth: 3,
             active_children: 1,

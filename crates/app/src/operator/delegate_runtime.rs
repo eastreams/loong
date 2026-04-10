@@ -5,8 +5,9 @@ use serde_json::{Value, json};
 use crate::config::LoongClawConfig;
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
-    ConstrainedSubagentIsolation, ConstrainedSubagentMode, ConstrainedSubagentProfile,
-    ConstrainedSubagentTerminalReason, ConversationRuntimeBinding, DelegateBuiltinProfile,
+    ConstrainedSubagentIsolation, ConstrainedSubagentMode, ConstrainedSubagentOwnerKind,
+    ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason, ConversationRuntimeBinding,
+    DelegateBuiltinProfile,
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
@@ -36,6 +37,7 @@ pub(crate) struct DelegateChildLifecycleSeed {
 pub(crate) struct DelegateChildExecutionPolicy {
     pub isolation: ConstrainedSubagentIsolation,
     pub profile: Option<DelegateBuiltinProfile>,
+    pub owner_kind: Option<ConstrainedSubagentOwnerKind>,
     pub timeout_seconds: u64,
     pub allow_shell_in_child: bool,
     pub child_tool_allowlist: Vec<String>,
@@ -168,6 +170,7 @@ fn build_delegate_child_execution(
     ConstrainedSubagentExecution {
         mode,
         isolation: execution_policy.isolation,
+        owner_kind: execution_policy.owner_kind,
         depth: next_child_depth,
         max_depth: config.tools.delegate.max_depth,
         active_children,
@@ -712,6 +715,7 @@ mod tests {
         let execution_policy = DelegateChildExecutionPolicy {
             isolation: ConstrainedSubagentIsolation::Shared,
             profile: None,
+            owner_kind: None,
             timeout_seconds: 42,
             allow_shell_in_child: false,
             child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
@@ -746,6 +750,7 @@ mod tests {
         let execution_policy = DelegateChildExecutionPolicy {
             isolation: ConstrainedSubagentIsolation::Shared,
             profile: None,
+            owner_kind: None,
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
@@ -881,6 +886,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: ConstrainedSubagentIsolation::default(),
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,

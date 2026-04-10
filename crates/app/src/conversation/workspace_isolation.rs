@@ -461,6 +461,7 @@ mod tests {
         let clean_execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Inline,
             isolation: ConstrainedSubagentIsolation::Worktree,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -491,6 +492,7 @@ mod tests {
         let dirty_execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Inline,
             isolation: ConstrainedSubagentIsolation::Worktree,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
