@@ -858,6 +858,43 @@ pub struct DefaultConversationRuntime<E = DefaultContextEngine> {
     turn_middlewares: Vec<Box<dyn ConversationTurnMiddleware>>,
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[derive(Clone)]
+pub struct HostedConversationRuntime<R> {
+    inner: R,
+    async_delegate_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
+    background_task_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl<R> HostedConversationRuntime<R> {
+    pub fn new(inner: R) -> Self {
+        Self {
+            inner,
+            async_delegate_spawner_override: None,
+            background_task_spawner_override: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_async_delegate_spawner(
+        mut self,
+        async_delegate_spawner: Arc<dyn AsyncDelegateSpawner>,
+    ) -> Self {
+        self.async_delegate_spawner_override = Some(async_delegate_spawner);
+        self
+    }
+
+    #[must_use]
+    pub fn with_background_task_spawner(
+        mut self,
+        background_task_spawner: Arc<dyn AsyncDelegateSpawner>,
+    ) -> Self {
+        self.background_task_spawner_override = Some(background_task_spawner);
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextEngineSelectionSource {
     Env,
@@ -1432,6 +1469,197 @@ pub trait ConversationRuntime: Send + Sync {
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl<R> ConversationRuntime for HostedConversationRuntime<R>
+where
+    R: ConversationRuntime,
+{
+    fn session_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<SessionContext> {
+        self.inner.session_context(config, session_id, binding)
+    }
+
+    fn tool_view(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ToolView> {
+        self.inner.tool_view(config, session_id, binding)
+    }
+
+    fn async_delegate_spawner(
+        &self,
+        config: &LoongClawConfig,
+    ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
+        let override_spawner = self.async_delegate_spawner_override.clone();
+        match override_spawner {
+            Some(override_spawner) => Some(override_spawner),
+            None => self.inner.async_delegate_spawner(config),
+        }
+    }
+
+    fn background_task_spawner(
+        &self,
+        config: &LoongClawConfig,
+    ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
+        let override_spawner = self.background_task_spawner_override.clone();
+        match override_spawner {
+            Some(override_spawner) => Some(override_spawner),
+            None => self.inner.background_task_spawner(config),
+        }
+    }
+
+    async fn bootstrap(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<ContextEngineBootstrapResult> {
+        self.inner.bootstrap(config, session_id, kernel_ctx).await
+    }
+
+    async fn ingest(
+        &self,
+        session_id: &str,
+        message: &Value,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<ContextEngineIngestResult> {
+        self.inner.ingest(session_id, message, kernel_ctx).await
+    }
+
+    async fn build_messages(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        include_system_prompt: bool,
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<Vec<Value>> {
+        self.inner
+            .build_messages(
+                config,
+                session_id,
+                include_system_prompt,
+                tool_view,
+                binding,
+            )
+            .await
+    }
+
+    async fn request_completion(
+        &self,
+        config: &LoongClawConfig,
+        messages: &[Value],
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<String> {
+        self.inner
+            .request_completion(config, messages, binding)
+            .await
+    }
+
+    async fn request_turn(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ProviderTurn> {
+        self.inner
+            .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .await
+    }
+
+    async fn request_turn_streaming(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+    ) -> CliResult<ProviderTurn> {
+        self.inner
+            .request_turn_streaming(
+                config, session_id, turn_id, messages, tool_view, binding, on_token,
+            )
+            .await
+    }
+
+    async fn persist_turn(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<()> {
+        self.inner
+            .persist_turn(session_id, role, content, binding)
+            .await
+    }
+
+    async fn after_turn(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        assistant_reply: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .after_turn(
+                session_id,
+                user_input,
+                assistant_reply,
+                messages,
+                kernel_ctx,
+            )
+            .await
+    }
+
+    async fn compact_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .compact_context(config, session_id, messages, kernel_ctx)
+            .await
+    }
+
+    async fn prepare_subagent_spawn(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
+            .await
+    }
+
+    async fn on_subagent_ended(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
+            .await
+    }
+}
+
 #[async_trait]
 impl<E> ConversationRuntime for DefaultConversationRuntime<E>
 where
@@ -1835,6 +2063,109 @@ fn normalize_turn_middleware_ids(ids: Vec<String>) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::test_support::TurnTestHarness;
+    #[cfg(feature = "memory-sqlite")]
+    use std::sync::Arc;
+
+    #[cfg(feature = "memory-sqlite")]
+    #[derive(Clone)]
+    struct NoopTestSpawner;
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl AsyncDelegateSpawner for NoopTestSpawner {
+        async fn spawn(&self, _request: AsyncDelegateSpawnRequest) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    struct SpawnerAwareRuntime {
+        async_delegate_spawner: Option<Arc<dyn AsyncDelegateSpawner>>,
+        background_task_spawner: Option<Arc<dyn AsyncDelegateSpawner>>,
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ConversationRuntime for SpawnerAwareRuntime {
+        fn tool_view(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ToolView> {
+            let tool_view = crate::tools::runtime_tool_view();
+            Ok(tool_view)
+        }
+
+        fn async_delegate_spawner(
+            &self,
+            _config: &LoongClawConfig,
+        ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
+            self.async_delegate_spawner.clone()
+        }
+
+        fn background_task_spawner(
+            &self,
+            _config: &LoongClawConfig,
+        ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
+            self.background_task_spawner.clone()
+        }
+
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(Vec::new())
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok(String::new())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            Ok(ProviderTurn::default())
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            Ok(ProviderTurn::default())
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn provider_runtime_binding_maps_direct_conversation_binding_to_advisory_only() {
@@ -1852,6 +2183,35 @@ mod tests {
             provider_runtime_binding(ConversationRuntimeBinding::kernel(&harness.kernel_ctx)),
             provider::ProviderRuntimeBinding::Kernel(kernel_ctx)
                 if std::ptr::eq(kernel_ctx, &harness.kernel_ctx)
+        ));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hosted_runtime_overrides_background_task_spawner_without_changing_async_delegate_spawner() {
+        let config = LoongClawConfig::default();
+        let inner_async_spawner: Arc<dyn AsyncDelegateSpawner> = Arc::new(NoopTestSpawner);
+        let inner_background_spawner: Arc<dyn AsyncDelegateSpawner> = Arc::new(NoopTestSpawner);
+        let override_background_spawner: Arc<dyn AsyncDelegateSpawner> = Arc::new(NoopTestSpawner);
+        let inner_runtime = SpawnerAwareRuntime {
+            async_delegate_spawner: Some(inner_async_spawner.clone()),
+            background_task_spawner: Some(inner_background_spawner),
+        };
+
+        let hosted_runtime = HostedConversationRuntime::new(inner_runtime)
+            .with_background_task_spawner(override_background_spawner.clone());
+
+        let resolved_async_spawner = hosted_runtime
+            .async_delegate_spawner(&config)
+            .expect("async delegate spawner");
+        let resolved_background_spawner = hosted_runtime
+            .background_task_spawner(&config)
+            .expect("background task spawner");
+
+        assert!(Arc::ptr_eq(&resolved_async_spawner, &inner_async_spawner));
+        assert!(Arc::ptr_eq(
+            &resolved_background_spawner,
+            &override_background_spawner
         ));
     }
 }

@@ -79,129 +79,6 @@ pub struct TasksCommandExecution {
 }
 
 #[cfg(feature = "memory-sqlite")]
-struct DetachedTasksRuntime {
-    inner: mvp::conversation::DefaultConversationRuntime<
-        Box<dyn mvp::conversation::ConversationContextEngine>,
-    >,
-    background_task_spawner: Arc<dyn mvp::conversation::AsyncDelegateSpawner>,
-}
-
-#[cfg(feature = "memory-sqlite")]
-impl DetachedTasksRuntime {
-    fn from_config(config: &mvp::config::LoongClawConfig) -> CliResult<Self> {
-        let inner = mvp::conversation::DefaultConversationRuntime::from_config_or_env(config)?;
-        let background_task_spawner = Arc::new(DetachedTasksSpawner);
-
-        Ok(Self {
-            inner,
-            background_task_spawner,
-        })
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-#[async_trait]
-impl mvp::conversation::ConversationRuntime for DetachedTasksRuntime {
-    fn session_context(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<mvp::conversation::SessionContext> {
-        self.inner.session_context(config, session_id, binding)
-    }
-
-    fn tool_view(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<mvp::tools::ToolView> {
-        self.inner.tool_view(config, session_id, binding)
-    }
-
-    fn background_task_spawner(
-        &self,
-        _config: &mvp::config::LoongClawConfig,
-    ) -> Option<Arc<dyn mvp::conversation::AsyncDelegateSpawner>> {
-        Some(self.background_task_spawner.clone())
-    }
-
-    async fn build_messages(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        include_system_prompt: bool,
-        tool_view: &mvp::tools::ToolView,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Vec<Value>> {
-        self.inner
-            .build_messages(
-                config,
-                session_id,
-                include_system_prompt,
-                tool_view,
-                binding,
-            )
-            .await
-    }
-
-    async fn request_completion(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        messages: &[Value],
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        self.inner
-            .request_completion(config, messages, binding)
-            .await
-    }
-
-    async fn request_turn(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        turn_id: &str,
-        messages: &[Value],
-        tool_view: &mvp::tools::ToolView,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<mvp::conversation::ProviderTurn> {
-        self.inner
-            .request_turn(config, session_id, turn_id, messages, tool_view, binding)
-            .await
-    }
-
-    async fn request_turn_streaming(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        turn_id: &str,
-        messages: &[Value],
-        tool_view: &mvp::tools::ToolView,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-        on_token: mvp::provider::StreamingTokenCallback,
-    ) -> CliResult<mvp::conversation::ProviderTurn> {
-        self.inner
-            .request_turn_streaming(
-                config, session_id, turn_id, messages, tool_view, binding, on_token,
-            )
-            .await
-    }
-
-    async fn persist_turn(
-        &self,
-        session_id: &str,
-        role: &str,
-        content: &str,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<()> {
-        self.inner
-            .persist_turn(session_id, role, content, binding)
-            .await
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
 #[derive(Clone)]
 struct DetachedTasksSpawner;
 
@@ -398,7 +275,11 @@ fn build_tasks_create_runtime(
     // conversation runtime.
     #[cfg(feature = "memory-sqlite")]
     {
-        let runtime = DetachedTasksRuntime::from_config(config)?;
+        let inner_runtime =
+            mvp::conversation::DefaultConversationRuntime::from_config_or_env(config)?;
+        let background_task_spawner = Arc::new(DetachedTasksSpawner);
+        let runtime = mvp::conversation::HostedConversationRuntime::new(inner_runtime)
+            .with_background_task_spawner(background_task_spawner);
         Ok(runtime)
     }
 
