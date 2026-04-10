@@ -3103,12 +3103,22 @@ pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> 
         return false;
     }
 
-    let normalized = program.trim().to_ascii_lowercase();
+    let trimmed_program = program.trim();
+    let normalized = trimmed_program.to_ascii_lowercase();
     if allowed.contains(&normalized) {
         return true;
     }
 
-    Path::new(program)
+    let program_path = Path::new(trimmed_program);
+    let has_path_component = program_path.is_absolute()
+        || program_path
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty());
+    if has_path_component {
+        return false;
+    }
+
+    program_path
         .file_name()
         .and_then(|name| name.to_str())
         .map(|name| allowed.contains(&name.to_ascii_lowercase()))

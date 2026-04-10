@@ -48,13 +48,22 @@ pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> 
         return false;
     }
 
-    let normalized_program = program.trim().to_ascii_lowercase();
+    let trimmed_program = program.trim();
+    let normalized_program = trimmed_program.to_ascii_lowercase();
     let direct_match = allowed.contains(&normalized_program);
     if direct_match {
         return true;
     }
 
-    let program_path = Path::new(program);
+    let program_path = Path::new(trimmed_program);
+    let has_path_component = program_path.is_absolute()
+        || program_path
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty());
+    if has_path_component {
+        return false;
+    }
+
     let file_name = program_path.file_name();
     let file_name = file_name.and_then(|name| name.to_str());
     let Some(file_name) = file_name else {
@@ -63,4 +72,23 @@ pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> 
 
     let normalized_file_name = file_name.to_ascii_lowercase();
     allowed.contains(&normalized_file_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::is_process_command_allowed;
+
+    #[test]
+    fn process_command_allowlist_rejects_path_spoofing() {
+        let allowed_commands = BTreeSet::from(["python3".to_owned()]);
+
+        assert!(is_process_command_allowed("python3", &allowed_commands));
+        assert!(!is_process_command_allowed(
+            "/tmp/python3",
+            &allowed_commands,
+        ));
+        assert!(!is_process_command_allowed("./python3", &allowed_commands,));
+    }
 }

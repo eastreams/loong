@@ -626,13 +626,22 @@ fn validate_binding_execution_requirements(
 }
 
 fn process_command_is_allowed(command: &str, allowed_commands: &[String]) -> bool {
-    let normalized_command = command.trim().to_ascii_lowercase();
+    let trimmed_command = command.trim();
+    let normalized_command = trimmed_command.to_ascii_lowercase();
     let direct_match = allowed_commands.contains(&normalized_command);
     if direct_match {
         return true;
     }
 
-    let command_path = std::path::Path::new(command);
+    let command_path = std::path::Path::new(trimmed_command);
+    let has_path_component = command_path.is_absolute()
+        || command_path
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty());
+    if has_path_component {
+        return false;
+    }
+
     let file_name = command_path.file_name();
     let file_name = file_name.and_then(|name| name.to_str());
     let Some(file_name) = file_name else {
@@ -790,6 +799,37 @@ mod tests {
 
         let error = resolve_managed_plugin_bridge_runtime_binding(&config, "qqbot", None)
             .expect_err("process_stdio binding should require allowlisted command");
+
+        assert!(error.contains("runtime_plugins.allowed_process_commands"));
+    }
+
+    #[test]
+    fn resolve_managed_bridge_runtime_binding_rejects_process_command_path_spoofing() {
+        let root = TempDir::new().expect("create runtime plugin root");
+        let mut manifest = sample_manifest(
+            "qqbot-bridge-runtime",
+            "qqbot",
+            "process_stdio",
+            vec![CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+        );
+        manifest
+            .metadata
+            .insert("command".to_owned(), "/tmp/node".to_owned());
+        write_manifest(root.path(), "qqbot-bridge-runtime", &manifest);
+
+        let mut config = LoongClawConfig::default();
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![root.path().display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
+        config.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
+        config.qqbot.enabled = true;
+        config.qqbot.app_id = Some(loongclaw_contracts::SecretRef::Inline("10001".to_owned()));
+        config.qqbot.client_secret = Some(loongclaw_contracts::SecretRef::Inline(
+            "client-secret".to_owned(),
+        ));
+
+        let error = resolve_managed_plugin_bridge_runtime_binding(&config, "qqbot", None)
+            .expect_err("path-spoofed process command should be rejected");
 
         assert!(error.contains("runtime_plugins.allowed_process_commands"));
     }
