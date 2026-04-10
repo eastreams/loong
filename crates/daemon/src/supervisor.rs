@@ -648,17 +648,14 @@ impl SupervisorRuntimeHooks {
             let channel_id = runtime_descriptor.channel_id;
             let runner: BackgroundChannelRunner = Arc::new(
                 move |request: BackgroundChannelRunnerRequest| -> BoxedSupervisorFuture {
-                    Box::pin(async move {
-                        mvp::channel::run_background_channel_with_stop(
-                            channel_id,
-                            request.resolved_path,
-                            request.config,
-                            request.account_id.as_deref(),
-                            request.stop,
-                            request.initialize_runtime_environment,
-                        )
-                        .await
-                    })
+                    mvp::channel::run_background_channel_with_stop(
+                        channel_id,
+                        request.resolved_path,
+                        request.config,
+                        request.account_id,
+                        request.stop,
+                        request.initialize_runtime_environment,
+                    )
                 },
             );
             runners.insert(channel_id, runner);

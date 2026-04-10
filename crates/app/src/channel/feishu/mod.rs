@@ -132,7 +132,7 @@ pub(super) async fn run_feishu_channel(
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     if resolved.mode == crate::config::FeishuChannelServeMode::Websocket {
-        return websocket::run_feishu_websocket_channel(
+        return Box::pin(websocket::run_feishu_websocket_channel(
             config,
             resolved,
             resolved_path,
@@ -141,7 +141,7 @@ pub(super) async fn run_feishu_channel(
             kernel_ctx,
             runtime,
             stop,
-        )
+        ))
         .await;
     }
 
