@@ -108,19 +108,15 @@ pub(crate) fn spawn_detached_delegate_child_process(
 
             if let Some(exit_status) = startup_status {
                 let stderr = read_detached_delegate_child_stderr(&mut child);
-                let status_code = exit_status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "signal".to_owned());
-                let detail = if stderr.trim().is_empty() {
-                    "(empty stderr)".to_owned()
-                } else {
-                    stderr.trim().to_owned()
-                };
                 remove_detached_delegate_child_payload_file(payload_path.as_path());
-                return Err(format!(
-                    "delegate_async_process_spawn_failed: detached delegate child exited during startup with status {status_code}: {detail}"
-                ));
+                let startup_failure =
+                    detached_delegate_child_startup_failure(&exit_status, stderr.as_str());
+
+                if let Some(startup_failure) = startup_failure {
+                    return Err(startup_failure);
+                }
+
+                return Ok(());
             }
 
             Ok(())
@@ -144,6 +140,33 @@ fn read_detached_delegate_child_stderr(child: &mut std::process::Child) -> Strin
     let _ = stderr.read_to_string(&mut buffer);
 
     buffer
+}
+
+fn detached_delegate_child_startup_failure(
+    exit_status: &std::process::ExitStatus,
+    stderr: &str,
+) -> Option<String> {
+    let exited_successfully = exit_status.success();
+
+    if exited_successfully {
+        return None;
+    }
+
+    let status_code = exit_status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "signal".to_owned());
+    let trimmed_stderr = stderr.trim();
+    let detail = if trimmed_stderr.is_empty() {
+        "(empty stderr)".to_owned()
+    } else {
+        trimmed_stderr.to_owned()
+    };
+    let failure = format!(
+        "delegate_async_process_spawn_failed: detached delegate child exited during startup with status {status_code}: {detail}"
+    );
+
+    Some(failure)
 }
 
 pub async fn run_detached_delegate_child_cli(
@@ -274,5 +297,54 @@ fn owned_binding_from_detached_payload(
             let owned_binding = mvp::conversation::OwnedConversationRuntimeBinding::direct();
             Ok(owned_binding)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detached_delegate_child_startup_failure;
+
+    #[cfg(unix)]
+    fn exit_status_for(command: &str) -> std::process::ExitStatus {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .status()
+            .expect("spawn shell command")
+    }
+
+    #[cfg(windows)]
+    fn exit_status_for(command: &str) -> std::process::ExitStatus {
+        std::process::Command::new("cmd")
+            .args(["/C", command])
+            .status()
+            .expect("spawn cmd command")
+    }
+
+    #[test]
+    fn detached_delegate_child_startup_failure_ignores_fast_success_with_warning_stderr() {
+        #[cfg(unix)]
+        let exit_status = exit_status_for("exit 0");
+        #[cfg(windows)]
+        let exit_status = exit_status_for("exit 0");
+
+        let warning_output = "WARN optional runtime-self source missing";
+        let failure = detached_delegate_child_startup_failure(&exit_status, warning_output);
+
+        assert_eq!(failure, None);
+    }
+
+    #[test]
+    fn detached_delegate_child_startup_failure_surfaces_non_zero_exit() {
+        #[cfg(unix)]
+        let exit_status = exit_status_for("exit 7");
+        #[cfg(windows)]
+        let exit_status = exit_status_for("exit 7");
+
+        let failure = detached_delegate_child_startup_failure(&exit_status, "spawn failure");
+
+        let failure = failure.expect("non-zero exit should be reported");
+        assert!(failure.contains("status 7"), "failure={failure}");
+        assert!(failure.contains("spawn failure"), "failure={failure}");
     }
 }
