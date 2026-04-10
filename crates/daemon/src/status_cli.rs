@@ -131,13 +131,7 @@ async fn collect_status_cli_acp_read_model(
     let manager = match manager_result {
         Ok(manager) => manager,
         Err(error) => {
-            return StatusCliAcpReadModel {
-                enabled,
-                availability: "unavailable".to_owned(),
-                error: Some(error),
-                persisted_session_count,
-                observability: None,
-            };
+            return build_unavailable_acp_read_model(enabled, error, persisted_session_count);
         }
     };
 
@@ -145,13 +139,7 @@ async fn collect_status_cli_acp_read_model(
     let snapshot = match snapshot_result {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            return StatusCliAcpReadModel {
-                enabled,
-                availability: "unavailable".to_owned(),
-                error: Some(error),
-                persisted_session_count,
-                observability: None,
-            };
+            return build_unavailable_acp_read_model(enabled, error, persisted_session_count);
         }
     };
 
@@ -163,6 +151,20 @@ async fn collect_status_cli_acp_read_model(
         error: None,
         persisted_session_count,
         observability: Some(observability),
+    }
+}
+
+fn build_unavailable_acp_read_model(
+    enabled: bool,
+    error: String,
+    persisted_session_count: Option<usize>,
+) -> StatusCliAcpReadModel {
+    StatusCliAcpReadModel {
+        enabled,
+        availability: "unavailable".to_owned(),
+        error: Some(error),
+        persisted_session_count,
+        observability: None,
     }
 }
 
@@ -277,6 +279,7 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let active_provider_label_option = runtime.active_provider_label.as_deref();
     let active_provider_label = active_provider_label_option.unwrap_or("-");
     let capability_snapshot_sha256 = runtime.capability_snapshot_sha256.as_str();
+    let tool_calling = &runtime.tool_calling;
 
     let mut lines = Vec::new();
     lines.push(format!("config={}", status.config));
@@ -314,6 +317,14 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         active_provider_label,
         runtime.visible_tool_count,
         capability_snapshot_sha256,
+    ));
+    lines.push(format!(
+        "tool_calling availability={} structured_tool_schema_enabled={} mode={} active_model={} reason={}",
+        tool_calling.availability,
+        tool_calling.structured_tool_schema_enabled,
+        tool_calling.effective_tool_schema_mode,
+        tool_calling.active_model,
+        tool_calling.reason,
     ));
     lines.push(render_status_cli_acp_text(&status.acp));
     lines.push(render_status_cli_work_units_text(&status.work_units));
@@ -451,6 +462,15 @@ mod tests {
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
+                tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
+                    availability: "ready".to_owned(),
+                    structured_tool_schema_enabled: true,
+                    effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
+                    active_model: "gpt-4.1-mini".to_owned(),
+                    reason:
+                        "provider turns include structured tool definitions for the active model"
+                            .to_owned(),
+                },
             },
         };
         let status = StatusCliReadModel {
@@ -489,6 +509,7 @@ mod tests {
         let rendered = render_status_cli_text(&status);
 
         assert!(rendered.contains("gateway phase=running"));
+        assert!(rendered.contains("tool_calling availability=ready"));
         assert!(rendered.contains("acp enabled=false availability=disabled"));
         assert!(rendered.contains("work_units availability=available total_count=0"));
         assert!(rendered.contains("recipes:\n- loong gateway status"));

@@ -82,6 +82,48 @@ fn next_model_cooldown_test_namespace() -> String {
     format!("model-cooldown-test-{seed}")
 }
 
+#[test]
+fn provider_tool_schema_readiness_reports_default_structured_mode() {
+    let config = LoongClawConfig::default();
+
+    let readiness = provider_tool_schema_readiness(&config);
+
+    assert_eq!(readiness.active_model, config.provider.model);
+    assert!(readiness.structured_tool_schema_enabled);
+    assert_eq!(
+        readiness.effective_tool_schema_mode,
+        "enabled_with_downgrade"
+    );
+}
+
+#[test]
+fn provider_tool_schema_readiness_honors_disabled_mode_and_model_hints() {
+    let disabled_config = LoongClawConfig {
+        provider: ProviderConfig {
+            tool_schema_mode: crate::config::ProviderToolSchemaModeConfig::Disabled,
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+    let disabled_readiness = provider_tool_schema_readiness(&disabled_config);
+
+    assert!(!disabled_readiness.structured_tool_schema_enabled);
+    assert_eq!(disabled_readiness.effective_tool_schema_mode, "disabled");
+
+    let hinted_config = LoongClawConfig {
+        provider: ProviderConfig {
+            model: "gpt-no-tools-preview".to_owned(),
+            tool_schema_disabled_model_hints: vec!["no-tools".to_owned()],
+            ..ProviderConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+    let hinted_readiness = provider_tool_schema_readiness(&hinted_config);
+
+    assert!(!hinted_readiness.structured_tool_schema_enabled);
+    assert_eq!(hinted_readiness.effective_tool_schema_mode, "disabled");
+}
+
 fn next_temp_path(prefix: &str, extension: &str) -> PathBuf {
     static NEXT_TEMP_PATH_SEED: AtomicUsize = AtomicUsize::new(1);
     let seed = NEXT_TEMP_PATH_SEED.fetch_add(1, Ordering::Relaxed);
