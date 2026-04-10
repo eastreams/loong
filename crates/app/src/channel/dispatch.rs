@@ -168,8 +168,7 @@ use crate::conversation::{
 use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
 pub(super) use super::commands::{
-    ChannelCommandContext, ChannelResolvedRuntimeAccount, ChannelSendCommandSpec,
-    run_channel_send_command,
+    ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command,
 };
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -208,7 +207,6 @@ use super::nextcloud_talk;
 use super::nostr;
 use super::registry::{
     CHANNEL_OPERATION_SERVE_ID, FEISHU_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_COMMAND_FAMILY_DESCRIPTOR,
 };
 use super::runtime::serve::{
     ChannelServeRuntimeSpec, ChannelServeStopHandle, with_channel_serve_runtime_with_stop,
