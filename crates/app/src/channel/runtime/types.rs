@@ -14,6 +14,8 @@ use async_trait::async_trait;
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-signal",
+    feature = "channel-slack",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]

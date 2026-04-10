@@ -14,6 +14,15 @@ use super::state;
 use super::state::ChannelOperationRuntimeTracker;
 use crate::CliResult;
 
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 #[derive(Debug, Clone, Copy)]
 /// Identifies the per-account singleton runtime slot for a `serve` operation.
 pub(in crate::channel) struct ChannelServeRuntimeSpec<'a> {
@@ -46,6 +55,15 @@ impl ChannelServeStopHandle {
         self.requested.load(Ordering::SeqCst)
     }
 
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-line",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp",
+        feature = "channel-webhook"
+    ))]
     pub(in crate::channel) async fn wait(&self) {
         if self.is_requested() {
             return;
@@ -59,6 +77,15 @@ impl ChannelServeStopHandle {
     }
 }
 
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 pub(in crate::channel) fn channel_runtime_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -66,6 +93,15 @@ pub(in crate::channel) fn channel_runtime_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 pub(in crate::channel) fn ensure_channel_operation_runtime_slot_available_in_dir(
     runtime_dir: &std::path::Path,
     spec: ChannelServeRuntimeSpec<'_>,
@@ -110,6 +146,15 @@ pub(in crate::channel) fn ensure_channel_operation_runtime_slot_available_in_dir
 /// The helper prunes stale runtime state, rejects duplicate active serve loops
 /// for the same platform/operation/account triple, starts a tracker before
 /// invoking `run`, and always attempts shutdown bookkeeping afterward.
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 pub(in crate::channel) async fn with_channel_serve_runtime<T, F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     run: F,
@@ -138,6 +183,15 @@ where
 
 /// Variant of `with_channel_serve_runtime` that forwards a cooperative stop
 /// handle into the serve loop.
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 pub(in crate::channel) async fn with_channel_serve_runtime_with_stop<F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     stop: ChannelServeStopHandle,

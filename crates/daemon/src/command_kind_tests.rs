@@ -50,7 +50,7 @@ fn command_kind_for_logging_uses_stable_variant_names() {
         Commands::LineServe {
             config: None,
             account: None,
-            bind: "127.0.0.1:9998".to_owned(),
+            bind: Some("127.0.0.1:9998".to_owned()),
             path: None,
         }
         .command_kind_for_logging(),
@@ -60,7 +60,7 @@ fn command_kind_for_logging_uses_stable_variant_names() {
         Commands::WebhookServe {
             config: None,
             account: None,
-            bind: "127.0.0.1:9999".to_owned(),
+            bind: Some("127.0.0.1:9999".to_owned()),
             path: None,
         }
         .command_kind_for_logging(),

@@ -63,6 +63,21 @@ struct WebhookServeState {
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
+enum WebhookServeError {
+    Validation(String),
+    Internal(String),
+}
+
+impl WebhookServeError {
+    fn validation(message: impl Into<String>) -> Self {
+        Self::Validation(message.into())
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+}
+
 impl WebhookServeState {
     fn new(
         config: &LoongClawConfig,
@@ -462,14 +477,12 @@ async fn process_webhook_request(
     state: &WebhookServeState,
     body: Bytes,
 ) -> Result<Response, WebhookServeError> {
-    let inbound_message =
-        build_webhook_inbound_message(state, body.as_ref()).map_err(WebhookServeError::Validation)?;
+    let inbound_message = build_webhook_inbound_message(state, body.as_ref())
+        .map_err(WebhookServeError::validation)?;
 
-    state
-        .runtime
-        .mark_run_start()
-        .await
-        .map_err(|error| WebhookServeError::Internal(format!("webhook runtime start failed: {error}")))?;
+    state.runtime.mark_run_start().await.map_err(|error| {
+        WebhookServeError::internal(format!("webhook runtime start failed: {error}"))
+    })?;
 
     let process_result = async {
         let reply = process_inbound_with_provider(
@@ -480,9 +493,9 @@ async fn process_webhook_request(
             ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await
-        .map_err(WebhookServeError::Internal)?;
+        .map_err(WebhookServeError::internal)?;
 
-        build_webhook_inline_response(state, reply.as_str()).map_err(WebhookServeError::Internal)
+        build_webhook_inline_response(state, reply.as_str()).map_err(WebhookServeError::internal)
     }
     .await;
 
@@ -839,5 +852,26 @@ mod tests {
             payload,
             serde_json::json!({ "error": "invalid auth header" })
         );
+    }
+
+    #[tokio::test]
+    async fn webhook_serve_handler_rejects_invalid_payloads_as_bad_requests() {
+        let state = build_test_serve_state(Some("signing-secret"), None).await;
+        let body = Bytes::from_static(br#"not-json"#);
+        let signature = build_webhook_signature_hex("signing-secret", body.as_ref())
+            .expect("build webhook test signature");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            WEBHOOK_SIGNATURE_HEADER,
+            HeaderValue::from_str(format!("{WEBHOOK_SIGNATURE_PREFIX}{signature}").as_str())
+                .expect("signature header value"),
+        );
+
+        let response = webhook_serve_handler(State(state), headers, body)
+            .await
+            .into_response();
+        let status = response.status();
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

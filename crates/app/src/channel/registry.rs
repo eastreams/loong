@@ -4428,9 +4428,6 @@ fn build_webhook_snapshot_for_account(
     );
 
     let mut serve_issues = Vec::new();
-    if let Some(error) = auth_error {
-        serve_issues.push(error);
-    }
     if resolved.signing_secret().is_none() {
         serve_issues.push("signing_secret is missing".to_owned());
     }
@@ -8665,7 +8662,8 @@ mod tests {
                 "enabled": true,
                 "endpoint_url": "https://hooks.example.test/send",
                 "auth_token": "token-123",
-                "auth_token_prefix": "Bearer\n"
+                "auth_token_prefix": "Bearer\n",
+                "signing_secret": "signing-secret"
             }
         }))
         .expect("deserialize generic webhook config");
@@ -8677,6 +8675,9 @@ mod tests {
         let send = webhook
             .operation(CHANNEL_OPERATION_SEND_ID)
             .expect("webhook send operation");
+        let serve = webhook
+            .operation(CHANNEL_OPERATION_SERVE_ID)
+            .expect("webhook serve operation");
 
         assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
         assert!(
@@ -8686,6 +8687,7 @@ mod tests {
             "unexpected issues: {:?}",
             send.issues
         );
+        assert_eq!(serve.health, ChannelOperationHealth::Ready);
     }
 
     #[test]
@@ -8922,7 +8924,7 @@ mod tests {
             .expect("line surface");
         assert_eq!(
             line.catalog.implementation_status,
-            ChannelCatalogImplementationStatus::ConfigBacked
+            ChannelCatalogImplementationStatus::RuntimeBacked
         );
         assert_eq!(line.configured_accounts.len(), 1);
         assert_eq!(
@@ -9513,13 +9515,21 @@ mod tests {
         let serve = line.operation("serve").expect("line serve operation");
 
         assert_eq!(send.health, ChannelOperationHealth::Ready);
-        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert_eq!(serve.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue == "channel_secret is missing"),
+            "unexpected serve issues: {:?}",
+            serve.issues
+        );
         assert_eq!(
             line.api_base_url.as_deref(),
             Some("https://api.line.me/v2/bot")
         );
         assert!(send.runtime.is_none());
-        assert!(serve.runtime.is_none());
+        assert!(serve.runtime.is_some());
     }
 
     #[test]

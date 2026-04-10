@@ -861,7 +861,7 @@ async fn main() {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once: false,
-                    bind_override: Some(bind.as_str()),
+                    bind_override: bind.as_deref(),
                     path_override: path.as_deref(),
                 },
             )
@@ -939,7 +939,7 @@ async fn main() {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once: false,
-                    bind_override: Some(bind.as_str()),
+                    bind_override: bind.as_deref(),
                     path_override: path.as_deref(),
                 },
             )

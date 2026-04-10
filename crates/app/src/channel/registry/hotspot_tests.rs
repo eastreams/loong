@@ -473,7 +473,7 @@ fn channel_inventory_exposes_grouped_channel_surfaces() {
         .expect("line surface");
     assert_eq!(
         line.catalog.implementation_status,
-        ChannelCatalogImplementationStatus::ConfigBacked
+        ChannelCatalogImplementationStatus::RuntimeBacked
     );
     assert_eq!(line.configured_accounts.len(), 1);
     assert_eq!(

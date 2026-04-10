@@ -95,6 +95,7 @@ mod channel_resolution;
 #[cfg(test)]
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
+mod channel_serve_cli;
 mod cli_handoff;
 mod cli_json;
 mod command_kind;
@@ -210,6 +211,9 @@ pub use trajectory_cli::{
 )]
 #[doc(hidden)]
 pub mod test_support;
+pub use channel_serve_cli::{
+    FEISHU_SERVE_CLI_SPEC, LINE_SERVE_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC, WHATSAPP_SERVE_CLI_SPEC,
+};
 
 pub const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
 pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
@@ -1224,7 +1228,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
-        bind: String,
+        bind: Option<String>,
         #[arg(long)]
         path: Option<String>,
     },
@@ -1286,7 +1290,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
-        bind: String,
+        bind: Option<String>,
         #[arg(long)]
         path: Option<String>,
     },
@@ -4731,11 +4735,6 @@ pub const LINE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_line_send_cli_impl,
 };
 
-pub const LINE_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::LINE_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_line_serve_cli_impl,
-};
-
 pub const WHATSAPP_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_whatsapp_send_cli_impl,
@@ -4806,11 +4805,6 @@ pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     run: run_telegram_serve_cli_impl,
 };
 
-pub const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_feishu_serve_cli_impl,
-};
-
 pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     run: run_matrix_serve_cli_impl,
@@ -4819,16 +4813,6 @@ pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
 pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::WECOM_COMMAND_FAMILY_DESCRIPTOR,
     run: run_wecom_serve_cli_impl,
-};
-
-pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_whatsapp_serve_cli_impl,
-};
-
-pub const WEBHOOK_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WEBHOOK_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_webhook_serve_cli_impl,
 };
 
 pub async fn run_channel_send_cli(
@@ -4980,21 +4964,6 @@ pub fn run_line_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommand
             args.target_kind,
             args.text,
         )
-        .await
-    })
-}
-
-pub fn run_line_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    Box::pin(async move {
-        if args.once {
-            return Err("`--once` is not supported for line callback serve commands".to_owned());
-        }
-        with_graceful_shutdown(mvp::channel::run_line_channel(
-            args.config_path,
-            args.account,
-            args.bind_override,
-            args.path_override,
-        ))
         .await
     })
 }
@@ -5434,18 +5403,6 @@ pub fn parse_nostr_send_target_kind(
     parse_channel_send_target_kind(NOSTR_SEND_CLI_SPEC, raw)
 }
 
-pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    Box::pin(async move {
-        with_graceful_shutdown(mvp::channel::run_feishu_channel(
-            args.config_path,
-            args.account,
-            args.bind_override,
-            args.path_override,
-        ))
-        .await
-    })
-}
-
 pub fn run_matrix_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = (args.bind_override, args.path_override);
@@ -5468,34 +5425,6 @@ pub fn run_wecom_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliComm
         with_graceful_shutdown(mvp::channel::run_wecom_channel(
             args.config_path,
             args.account,
-        ))
-        .await
-    })
-}
-
-pub fn run_whatsapp_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    Box::pin(async move {
-        let _ = args.once;
-        with_graceful_shutdown(mvp::channel::run_whatsapp_channel(
-            args.config_path,
-            args.account,
-            args.bind_override,
-            args.path_override,
-        ))
-        .await
-    })
-}
-
-pub fn run_webhook_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    Box::pin(async move {
-        if args.once {
-            return Err("`--once` is not supported for webhook callback serve commands".to_owned());
-        }
-        with_graceful_shutdown(mvp::channel::run_webhook_channel(
-            args.config_path,
-            args.account,
-            args.bind_override,
-            args.path_override,
         ))
         .await
     })

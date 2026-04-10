@@ -280,11 +280,15 @@ fn merge_line_config(
         target.api_base_url = source.api_base_url.clone();
         changed = true;
     }
-    for (account_key, source_account) in &source.accounts {
-        if target.accounts.contains_key(account_key) {
+    for (account_id, source_account) in &source.accounts {
+        let target_has_account = target.accounts.contains_key(account_id);
+        if target_has_account {
             continue;
         }
-        target.accounts.insert(account_key.clone(), source_account.clone());
+
+        target
+            .accounts
+            .insert(account_id.clone(), source_account.clone());
         changed = true;
     }
 
