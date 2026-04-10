@@ -2902,46 +2902,37 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
             }
         };
 
-        let preflight = match effective_execution_kind {
-            ToolExecutionKind::Core => {
-                if self.binding.kernel_context().is_none() {
-                    let turn_result =
-                        TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
-                    let denial_decision = ToolDecisionTelemetry::deny(
-                        effective_tool_name.as_str(),
-                        "no_kernel_context",
-                        "no_kernel_context",
-                    );
-
-                    return Err(PreparedToolIntentFailure {
-                        intent: effective_intent,
-                        turn_result,
-                        decision: denial_decision,
-                    });
-                }
-
-                self.app_dispatcher
-                    .preflight_tool_execution_with_binding(
-                        self.session_context,
-                        &effective_intent,
-                        effective_request,
-                        &descriptor,
-                        self.binding,
-                    )
-                    .await
-            }
-            ToolExecutionKind::App => {
-                self.app_dispatcher
-                    .preflight_tool_execution_with_binding(
-                        self.session_context,
-                        &effective_intent,
-                        effective_request,
-                        &descriptor,
-                        self.binding,
-                    )
-                    .await
-            }
+        let requires_kernel_binding = match effective_execution_kind {
+            ToolExecutionKind::Core => true,
+            ToolExecutionKind::App => descriptor.requires_kernel_binding(),
         };
+        let has_kernel_context = self.binding.kernel_context().is_some();
+
+        if requires_kernel_binding && !has_kernel_context {
+            let turn_result = TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
+            let denial_decision = ToolDecisionTelemetry::deny(
+                effective_tool_name.as_str(),
+                "no_kernel_context",
+                "no_kernel_context",
+            );
+
+            return Err(PreparedToolIntentFailure {
+                intent: effective_intent,
+                turn_result,
+                decision: denial_decision,
+            });
+        }
+
+        let preflight = self
+            .app_dispatcher
+            .preflight_tool_execution_with_binding(
+                self.session_context,
+                &effective_intent,
+                effective_request,
+                &descriptor,
+                self.binding,
+            )
+            .await;
 
         let (effective_request, trusted_preflight_context) = match preflight {
             Ok(ToolExecutionPreflight::Ready {
