@@ -1468,6 +1468,7 @@ mod tests {
         assert_eq!(AUTONOMY_PROFILE_VALID_VALUES, valid_values);
     }
 
+    #[cfg(feature = "tool-websearch")]
     #[test]
     fn normalize_web_search_provider_canonicalizes_aliases() {
         assert_eq!(

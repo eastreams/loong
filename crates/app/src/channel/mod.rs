@@ -161,6 +161,8 @@ use commands::context::render_channel_route_notice;
     feature = "channel-whatsapp",
 ))]
 pub(crate) use dispatch::process_inbound_with_provider;
+#[cfg(all(test, feature = "config-toml"))]
+use dispatch::reload_channel_turn_config;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -196,10 +198,7 @@ use dispatch::{build_telegram_command_context, validate_telegram_security_config
         feature = "channel-whatsapp"
     )
 ))]
-use dispatch::{
-    channel_message_ingress_context, process_inbound_with_runtime_and_feedback,
-    reload_channel_turn_config,
-};
+use dispatch::{channel_message_ingress_context, process_inbound_with_runtime_and_feedback};
 pub use dispatch::{
     load_channel_operation_runtime_for_account_from_dir_for_test, run_background_channel_with_stop,
     run_dingtalk_send, run_discord_send, run_email_send, run_feishu_channel, run_feishu_send,
