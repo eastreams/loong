@@ -34,6 +34,17 @@ pub use loongclaw_spec::spec_execution::*;
 pub use loongclaw_spec::spec_runtime::*;
 pub use loongclaw_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
 
+pub use self::channel_cli_specs::{
+    DINGTALK_SEND_CLI_SPEC, DISCORD_SEND_CLI_SPEC, EMAIL_SEND_CLI_SPEC, FEISHU_SEND_CLI_SPEC,
+    FEISHU_SERVE_CLI_SPEC, GOOGLE_CHAT_SEND_CLI_SPEC, IMESSAGE_SEND_CLI_SPEC, IRC_SEND_CLI_SPEC,
+    LINE_SEND_CLI_SPEC, MATRIX_SEND_CLI_SPEC, MATRIX_SERVE_CLI_SPEC, MATTERMOST_SEND_CLI_SPEC,
+    NEXTCLOUD_TALK_SEND_CLI_SPEC, NOSTR_SEND_CLI_SPEC, ONEBOT_SEND_CLI_SPEC, ONEBOT_SERVE_CLI_SPEC,
+    QQBOT_SEND_CLI_SPEC, QQBOT_SERVE_CLI_SPEC, SIGNAL_SEND_CLI_SPEC, SLACK_SEND_CLI_SPEC,
+    SYNOLOGY_CHAT_SEND_CLI_SPEC, TEAMS_SEND_CLI_SPEC, TELEGRAM_SEND_CLI_SPEC,
+    TELEGRAM_SERVE_CLI_SPEC, TWITCH_SEND_CLI_SPEC, WEBHOOK_SEND_CLI_SPEC, WECOM_SEND_CLI_SPEC,
+    WECOM_SERVE_CLI_SPEC, WEIXIN_SEND_CLI_SPEC, WEIXIN_SERVE_CLI_SPEC, WHATSAPP_SEND_CLI_SPEC,
+    WHATSAPP_SERVE_CLI_SPEC,
+};
 pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
@@ -98,6 +109,7 @@ mod browser_companion_diagnostics;
 pub mod browser_preview;
 mod channel_access_policy_render;
 mod channel_bridge_render;
+mod channel_cli_specs;
 mod channel_resolution;
 #[cfg(test)]
 mod channel_send_cli_tests;
@@ -4927,164 +4939,7 @@ pub async fn wait_for_shutdown_signal() -> CliResult<()> {
     wait_for_shutdown_reason().await.map(|_| ())
 }
 
-pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_telegram_send_cli_impl,
-};
 
-pub const FEISHU_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_feishu_send_cli_impl,
-};
-
-pub const MATRIX_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_matrix_send_cli_impl,
-};
-
-pub const WECOM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_wecom_send_cli_impl,
-};
-
-pub const WEIXIN_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_weixin_send_cli_impl,
-};
-
-pub const QQBOT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_qqbot_send_cli_impl,
-};
-
-pub const ONEBOT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_onebot_send_cli_impl,
-};
-
-pub const DISCORD_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_discord_send_cli_impl,
-};
-
-pub const DINGTALK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_dingtalk_send_cli_impl,
-};
-
-pub const SLACK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_slack_send_cli_impl,
-};
-
-pub const LINE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_line_send_cli_impl,
-};
-
-pub const WHATSAPP_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_whatsapp_send_cli_impl,
-};
-
-pub const EMAIL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_email_send_cli_impl,
-};
-
-pub const WEBHOOK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_webhook_send_cli_impl,
-};
-
-pub const GOOGLE_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_google_chat_send_cli_impl,
-};
-
-pub const TEAMS_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_teams_send_cli_impl,
-};
-
-pub const SIGNAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_signal_send_cli_impl,
-};
-
-pub const TWITCH_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_twitch_send_cli_impl,
-};
-
-pub const MATTERMOST_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_mattermost_send_cli_impl,
-};
-
-pub const NEXTCLOUD_TALK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_nextcloud_talk_send_cli_impl,
-};
-
-pub const SYNOLOGY_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_synology_chat_send_cli_impl,
-};
-
-pub const IRC_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_irc_send_cli_impl,
-};
-
-pub const IMESSAGE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_imessage_send_cli_impl,
-};
-
-pub const NOSTR_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_nostr_send_cli_impl,
-};
-
-pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_telegram_serve_cli_impl,
-};
-
-pub const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_feishu_serve_cli_impl,
-};
-pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_matrix_serve_cli_impl,
-};
-
-pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_wecom_serve_cli_impl,
-};
-
-pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_whatsapp_serve_cli_impl,
-};
-
-pub const WEIXIN_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_weixin_serve_cli_impl,
-};
-
-pub const QQBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_qqbot_serve_cli_impl,
-};
-
-pub const ONEBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_onebot_serve_cli_impl,
-};
 pub async fn run_channel_send_cli(
     spec: ChannelSendCliSpec,
     args: ChannelSendCliArgs<'_>,
