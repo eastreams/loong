@@ -2596,6 +2596,49 @@ async fn request_turn_streaming_rejects_unsupported_transport_modes() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn sibling_provider_tests_can_inject_mock_transport_into_dispatch_layer() {
+    let config = LoongClawConfig::default();
+    let provider = config.provider.clone();
+    let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+    let auth_context = transport::RequestAuthContext::default();
+    let auth_profiles = resolve_provider_auth_profiles(&provider);
+    let auth_profile = auth_profiles.first().expect("auth profile");
+    let transport = mock_transport::MockTransport::with_execute_responses([Ok(
+        transport_trait::TransportResponse {
+            status: reqwest::StatusCode::OK,
+            headers: reqwest::header::HeaderMap::new(),
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "content": "sibling dispatch mock"
+                    }
+                }]
+            }),
+        },
+    )]);
+
+    let result = request_dispatch_runtime::request_completion_with_provider_transport(
+        &config,
+        &provider,
+        &[json!({
+            "role": "user",
+            "content": "ping"
+        })],
+        "gpt-5.4",
+        false,
+        auth_profile,
+        &auth_context,
+        &request_policy,
+        &transport,
+    )
+    .await
+    .expect("dispatch helper should accept mock transport from sibling tests");
+
+    assert_eq!(result, "sibling dispatch mock");
+    assert_eq!(transport.requests().len(), 1);
+}
+
 #[test]
 fn plain_kimi_completion_body_skips_kimi_extra_body() {
     let mut config = test_config(ProviderConfig {

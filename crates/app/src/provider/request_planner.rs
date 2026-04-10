@@ -6,6 +6,7 @@ use super::{
     },
     failover::ProviderFailoverReason,
     policy,
+    transport_trait::TransportError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +40,7 @@ pub(super) fn plan_status_retry(
 pub(super) fn plan_transport_error_retry(
     attempt: usize,
     request_policy: &policy::ProviderRequestPolicy,
-    error: &reqwest::Error,
+    error: &TransportError,
     backoff_ms: u64,
 ) -> Option<(u64, u64)> {
     if attempt >= request_policy.max_attempts || !policy::should_retry_error(error) {

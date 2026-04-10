@@ -22,6 +22,7 @@ use super::request_payload_runtime::{
 };
 use super::shape;
 use super::transport_profile_runtime::resolve_provider_request_transport_profile;
+use super::transport_trait::ProviderTransport;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn request_completion_with_model(
@@ -91,6 +92,33 @@ async fn request_completion_with_provider(
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
 ) -> Result<String, ModelRequestError> {
+    let transport = super::transport::ReqwestTransport::new(client.clone(), auth_context.clone());
+    request_completion_with_provider_transport(
+        base_config,
+        request_provider,
+        messages,
+        model,
+        auto_model_mode,
+        auth_profile,
+        auth_context,
+        request_policy,
+        &transport,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn request_completion_with_provider_transport(
+    base_config: &LoongClawConfig,
+    request_provider: &ProviderConfig,
+    messages: &[Value],
+    model: &str,
+    auto_model_mode: bool,
+    auth_profile: &ProviderAuthProfile,
+    auth_context: &super::transport::RequestAuthContext,
+    request_policy: &policy::ProviderRequestPolicy,
+    transport: &dyn ProviderTransport,
+) -> Result<String, ModelRequestError> {
     let mut current_provider = request_provider.clone();
     loop {
         let transport_profile = resolve_request_transport_profile(&current_provider, model)
@@ -157,7 +185,7 @@ async fn request_completion_with_provider(
             endpoint: transport_profile.endpoint.as_str(),
             headers: &request_headers,
             request_policy,
-            client,
+            transport,
             auth_context,
         };
 
@@ -211,6 +239,39 @@ async fn request_turn_with_provider(
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
+) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
+    let transport = super::transport::ReqwestTransport::new(client.clone(), auth_context.clone());
+    request_turn_with_provider_transport(
+        base_config,
+        request_provider,
+        session_id,
+        turn_id,
+        messages,
+        model,
+        auto_model_mode,
+        tool_definitions,
+        auth_profile,
+        auth_context,
+        request_policy,
+        &transport,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn request_turn_with_provider_transport(
+    base_config: &LoongClawConfig,
+    request_provider: &ProviderConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    model: &str,
+    auto_model_mode: bool,
+    tool_definitions: &[Value],
+    auth_profile: &ProviderAuthProfile,
+    auth_context: &super::transport::RequestAuthContext,
+    request_policy: &policy::ProviderRequestPolicy,
+    transport: &dyn ProviderTransport,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let mut current_provider = request_provider.clone();
     loop {
@@ -280,7 +341,7 @@ async fn request_turn_with_provider(
             endpoint: transport_profile.endpoint.as_str(),
             headers: &request_headers,
             request_policy,
-            client,
+            transport,
             auth_context,
         };
 
@@ -355,6 +416,41 @@ pub(super) async fn request_turn_streaming(
     client: &reqwest::Client,
     on_token: super::request_executor::StreamingTokenCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
+    let transport = super::transport::ReqwestTransport::new(client.clone(), auth_context.clone());
+    request_turn_streaming_with_transport(
+        base_config,
+        request_provider,
+        session_id,
+        turn_id,
+        messages,
+        model,
+        auto_model_mode,
+        tool_definitions,
+        auth_profile,
+        auth_context,
+        request_policy,
+        &transport,
+        on_token,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn request_turn_streaming_with_transport(
+    base_config: &LoongClawConfig,
+    request_provider: &ProviderConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    model: &str,
+    auto_model_mode: bool,
+    tool_definitions: &[Value],
+    auth_profile: &ProviderAuthProfile,
+    auth_context: &super::transport::RequestAuthContext,
+    request_policy: &policy::ProviderRequestPolicy,
+    transport: &dyn ProviderTransport,
+    on_token: super::request_executor::StreamingTokenCallback,
+) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let mut current_provider = request_provider.clone();
     loop {
         let transport_profile = resolve_request_transport_profile(&current_provider, model)
@@ -423,7 +519,7 @@ pub(super) async fn request_turn_streaming(
             endpoint: transport_profile.endpoint.as_str(),
             headers: &request_headers,
             request_policy,
-            client,
+            transport,
             auth_context,
         };
 
@@ -643,4 +739,55 @@ fn should_fallback_responses_to_chat_completions(
         || rejects_responses_input
         || requires_messages
         || textual_messages_hint
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::auth_profile_runtime::resolve_provider_auth_profiles;
+    use crate::provider::mock_transport::MockTransport;
+    use crate::provider::transport::RequestAuthContext;
+    use crate::provider::transport_trait::TransportResponse;
+    use serde_json::json;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_completion_with_provider_uses_injected_transport() {
+        let config = LoongClawConfig::default();
+        let provider = config.provider.clone();
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let auth_context = RequestAuthContext::default();
+        let auth_profiles = resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_execute_responses([Ok(TransportResponse {
+            status: reqwest::StatusCode::OK,
+            headers: reqwest::header::HeaderMap::new(),
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "content": "dispatch mocked completion"
+                    }
+                }]
+            }),
+        })]);
+
+        let result = request_completion_with_provider_transport(
+            &config,
+            &provider,
+            &[json!({
+                "role": "user",
+                "content": "ping"
+            })],
+            "gpt-5.4",
+            false,
+            auth_profile,
+            &auth_context,
+            &request_policy,
+            &transport,
+        )
+        .await
+        .expect("dispatch should use injected transport");
+
+        assert_eq!(result, "dispatch mocked completion");
+        assert_eq!(transport.requests().len(), 1);
+    }
 }
