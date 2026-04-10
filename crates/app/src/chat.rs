@@ -98,7 +98,7 @@ use super::session::LATEST_SESSION_SELECTOR;
 use super::session::latest_resumable_root_session_id;
 use super::tui_surface::{
     TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec, TuiHeaderStyle,
-    TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec, render_tui_message_spec,
+    TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec, render_tui_message_body_spec,
     render_tui_screen_spec,
 };
 
@@ -777,69 +777,106 @@ async fn process_cli_chat_input(
         }
         ChatCommandMatchResult::NotMatched => {}
     }
-    if let Some(limit) = parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window)?
-    {
-        #[cfg(feature = "memory-sqlite")]
-        print_fast_lane_summary(
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_fast_lane_summary(
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+    let fast_lane_limit_result =
+        parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window);
+    match fast_lane_limit_result {
+        Ok(Some(limit)) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_fast_lane_summary(
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_fast_lane_summary(
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
+                print_rendered_cli_chat_lines(&usage_lines);
+                return Ok(CliChatLoopControl::Continue);
+            }
+
+            return Err(error);
+        }
     }
-    if let Some(limit) = parse_safe_lane_summary_limit(input, runtime.config.memory.sliding_window)?
-    {
-        #[cfg(feature = "memory-sqlite")]
-        print_safe_lane_summary(
-            &runtime.session_id,
-            limit,
-            &runtime.config.conversation,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_safe_lane_summary(
-            &runtime.session_id,
-            limit,
-            &runtime.config.conversation,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+
+    let safe_lane_limit_result =
+        parse_safe_lane_summary_limit(input, runtime.config.memory.sliding_window);
+    match safe_lane_limit_result {
+        Ok(Some(limit)) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_safe_lane_summary(
+                &runtime.session_id,
+                limit,
+                &runtime.config.conversation,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_safe_lane_summary(
+                &runtime.session_id,
+                limit,
+                &runtime.config.conversation,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
+                print_rendered_cli_chat_lines(&usage_lines);
+                return Ok(CliChatLoopControl::Continue);
+            }
+
+            return Err(error);
+        }
     }
-    if let Some(limit) =
-        parse_turn_checkpoint_summary_limit(input, runtime.config.memory.sliding_window)?
-    {
-        #[cfg(feature = "memory-sqlite")]
-        print_turn_checkpoint_summary(
-            &runtime.turn_coordinator,
-            &runtime.config,
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_turn_checkpoint_summary(
-            &runtime.turn_coordinator,
-            &runtime.config,
-            &runtime.session_id,
-            limit,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+
+    let turn_checkpoint_limit_result =
+        parse_turn_checkpoint_summary_limit(input, runtime.config.memory.sliding_window);
+    match turn_checkpoint_limit_result {
+        Ok(Some(limit)) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_turn_checkpoint_summary(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_turn_checkpoint_summary(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                limit,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
+                print_rendered_cli_chat_lines(&usage_lines);
+                return Ok(CliChatLoopControl::Continue);
+            }
+
+            return Err(error);
+        }
     }
     match classify_chat_command_match_result(is_turn_checkpoint_repair_command(input))? {
         ChatCommandMatchResult::Matched => {
@@ -916,6 +953,18 @@ fn render_cli_chat_command_usage_lines_with_width(usage: &str, width: usize) -> 
     };
 
     render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+fn maybe_render_nonfatal_usage_error(error: &str) -> Option<Vec<String>> {
+    let usage_error = error.contains("usage:");
+    if !usage_error {
+        return None;
+    }
+
+    let render_width = detect_cli_chat_render_width();
+    let usage_lines = render_cli_chat_command_usage_lines_with_width(error, render_width);
+
+    Some(usage_lines)
 }
 
 fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec {
@@ -1039,7 +1088,7 @@ fn render_cli_chat_message_card_lines(
 }
 
 fn render_cli_chat_message_spec_with_width(spec: &TuiMessageSpec, width: usize) -> Vec<String> {
-    let body_lines = render_tui_message_spec(spec, cli_chat_card_inner_width(width));
+    let body_lines = render_tui_message_body_spec(spec, cli_chat_card_inner_width(width));
     render_cli_chat_message_card_lines(
         spec.role.as_str(),
         spec.caption.as_deref(),
@@ -1051,12 +1100,10 @@ fn render_cli_chat_message_spec_with_width(spec: &TuiMessageSpec, width: usize) 
 fn render_cli_chat_card_lines(title: &str, body_lines: &[String], width: usize) -> Vec<String> {
     let inner_width = cli_chat_card_inner_width(width);
     let mut lines = vec![format!("╭─ {title}")];
-    let content_lines = body_lines.get(1..).unwrap_or(&[]);
-
-    if content_lines.is_empty() {
+    if body_lines.is_empty() {
         lines.push("│".to_owned());
     } else {
-        for line in content_lines {
+        for line in body_lines {
             if line.is_empty() {
                 lines.push("│".to_owned());
             } else {
@@ -1530,7 +1577,7 @@ fn render_cli_chat_live_surface_lines_with_width(
     width: usize,
 ) -> Vec<String> {
     let message_spec = build_cli_chat_live_surface_message_spec(snapshot);
-    let body_lines = render_tui_message_spec(&message_spec, cli_chat_card_inner_width(width));
+    let body_lines = render_tui_message_body_spec(&message_spec, cli_chat_card_inner_width(width));
     let title = build_cli_chat_live_surface_card_title(snapshot);
     render_cli_chat_card_lines(title.as_str(), &body_lines, width)
 }
@@ -6509,6 +6556,20 @@ allowed_decisions: yes / auto / full / esc";
         let not_matched_result =
             classify_chat_command_match_result(Ok(false)).expect("classify non-match");
         assert_eq!(not_matched_result, ChatCommandMatchResult::NotMatched);
+    }
+
+    #[test]
+    fn maybe_render_nonfatal_usage_error_accepts_embedded_usage_text() {
+        let error = "invalid fast lane summary limit `nope`; usage: /fast_lane_summary [limit]";
+        let usage_lines =
+            maybe_render_nonfatal_usage_error(error).expect("usage should render non-fatally");
+
+        assert!(
+            usage_lines
+                .iter()
+                .any(|line| line.contains("/fast_lane_summary [limit]")),
+            "embedded usage text should still render the usage card: {usage_lines:#?}"
+        );
     }
 
     #[test]
