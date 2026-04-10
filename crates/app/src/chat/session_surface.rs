@@ -2311,9 +2311,7 @@ fn sanitize_session_id_for_export(session_id: &str) -> String {
 
 fn loongclaw_exports_dir() -> PathBuf {
     let loongclaw_home = crate::config::default_loongclaw_home();
-    let exports_dir = loongclaw_home.join("exports");
-
-    exports_dir
+    loongclaw_home.join("exports")
 }
 
 fn ensure_parent_directory_exists(path: &Path) -> CliResult<()> {
@@ -2537,10 +2535,7 @@ fn viewport_start_for_scroll_offset(
 
     let max_scroll_offset = total_lines.saturating_sub(viewport_height);
     let clamped_scroll_offset = min(scroll_offset, max_scroll_offset);
-    let viewport_start =
-        total_lines.saturating_sub(viewport_height.saturating_add(clamped_scroll_offset));
-
-    viewport_start
+    total_lines.saturating_sub(viewport_height.saturating_add(clamped_scroll_offset))
 }
 
 fn scroll_offset_for_viewport_start(
@@ -2554,10 +2549,7 @@ fn scroll_offset_for_viewport_start(
 
     let max_viewport_start = total_lines.saturating_sub(viewport_height);
     let clamped_viewport_start = min(viewport_start, max_viewport_start);
-    let scroll_offset =
-        total_lines.saturating_sub(viewport_height.saturating_add(clamped_viewport_start));
-
-    scroll_offset
+    total_lines.saturating_sub(viewport_height.saturating_add(clamped_viewport_start))
 }
 
 fn align_scroll_offset_to_selected_entry(
