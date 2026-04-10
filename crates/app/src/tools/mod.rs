@@ -1793,9 +1793,7 @@ fn sign_tool_lease(encoded_claims: &str) -> String {
 }
 
 fn tool_catalog_digest() -> String {
-    let payload = serde_json::to_vec(&catalog::all_tool_catalog()).unwrap_or_default();
-    let digest = Sha256::digest(payload);
-    hex::encode(digest)
+    catalog::stable_tool_catalog_digest().to_owned()
 }
 
 fn tool_lease_secret() -> &'static str {
@@ -4291,6 +4289,42 @@ mod tests {
         assert_eq!(outcome.payload["content"], "tool invoke fixture");
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn discovered_tool_lease_uses_current_catalog_digest() {
+        let root = unique_tool_temp_dir("loongclaw-tool-lease-digest");
+        let config = test_tool_runtime_config(root.clone());
+        let search = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({"query": "read file"}),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let lease = search.payload["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .find(|entry| entry["tool_id"] == "file.read")
+            .and_then(|entry| entry["lease"].as_str())
+            .expect("file.read lease");
+        let lease_parts = lease.split_once('.').expect("lease separator");
+        let encoded_claims = lease_parts.0;
+        let claims_bytes = URL_SAFE_NO_PAD
+            .decode(encoded_claims)
+            .expect("decode claims");
+        let claims: ToolLeaseClaims = serde_json::from_slice(&claims_bytes).expect("parse claims");
+        let expected_digest = tool_catalog_digest();
+        let repeated_digest = tool_catalog_digest();
+
+        assert_eq!(claims.catalog_digest, expected_digest);
+        assert_eq!(repeated_digest, expected_digest);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[cfg(feature = "tool-file")]

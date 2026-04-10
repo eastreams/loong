@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(feature = "tool-file"))]
 use std::path::Path;
@@ -6,6 +7,7 @@ use std::sync::OnceLock;
 use loongclaw_kernel::ToolConcurrencyClass;
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::Digest;
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ToolConfig;
@@ -393,6 +395,18 @@ impl ToolView {
 #[derive(Debug, Clone)]
 pub struct ToolCatalog {
     descriptors: Vec<ToolDescriptor>,
+    descriptor_indices: BTreeMap<&'static str, usize>,
+    resolved_name_indices: BTreeMap<&'static str, usize>,
+    all_entries: Box<[ToolCatalogEntry]>,
+    provider_core_entries: Box<[ToolCatalogEntry]>,
+    discoverable_entries: Box<[ToolCatalogEntry]>,
+    catalog_digest: String,
+}
+
+struct ToolCatalogEntryCaches {
+    all_entries: Box<[ToolCatalogEntry]>,
+    provider_core_entries: Box<[ToolCatalogEntry]>,
+    discoverable_entries: Box<[ToolCatalogEntry]>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -431,19 +445,33 @@ const fn runtime_messaging_tool_availability() -> ToolAvailability {
 
 impl ToolCatalog {
     pub fn descriptor(&self, tool_name: &str) -> Option<&ToolDescriptor> {
-        self.descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == tool_name)
+        let index = self.descriptor_indices.get(tool_name)?;
+        self.descriptors.get(*index)
     }
 
     pub fn resolve(&self, raw_tool_name: &str) -> Option<&ToolDescriptor> {
-        self.descriptors
-            .iter()
-            .find(|descriptor| descriptor.matches_name(raw_tool_name))
+        let index = self.resolved_name_indices.get(raw_tool_name)?;
+        self.descriptors.get(*index)
     }
 
     pub fn descriptors(&self) -> &[ToolDescriptor] {
         &self.descriptors
+    }
+
+    fn all_entries(&self) -> &[ToolCatalogEntry] {
+        &self.all_entries
+    }
+
+    fn provider_core_entries(&self) -> &[ToolCatalogEntry] {
+        &self.provider_core_entries
+    }
+
+    fn discoverable_entries(&self) -> &[ToolCatalogEntry] {
+        &self.discoverable_entries
+    }
+
+    fn catalog_digest(&self) -> &str {
+        self.catalog_digest.as_str()
     }
 }
 
@@ -1639,7 +1667,89 @@ fn build_tool_catalog() -> ToolCatalog {
 
     annotate_tool_concurrency_classes(&mut descriptors);
     descriptors.sort_by(|left, right| left.name.cmp(right.name));
-    ToolCatalog { descriptors }
+
+    let descriptor_indices = build_descriptor_indices(descriptors.as_slice());
+    let resolved_name_indices = build_resolved_name_indices(descriptors.as_slice());
+    let entry_caches = build_tool_catalog_entry_caches(descriptors.as_slice());
+    let all_entries = entry_caches.all_entries;
+    let provider_core_entries = entry_caches.provider_core_entries;
+    let discoverable_entries = entry_caches.discoverable_entries;
+    let catalog_digest = build_tool_catalog_digest(all_entries.as_ref());
+
+    ToolCatalog {
+        descriptors,
+        descriptor_indices,
+        resolved_name_indices,
+        all_entries,
+        provider_core_entries,
+        discoverable_entries,
+        catalog_digest,
+    }
+}
+
+fn build_descriptor_indices(descriptors: &[ToolDescriptor]) -> BTreeMap<&'static str, usize> {
+    let mut descriptor_indices = BTreeMap::new();
+
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        descriptor_indices.insert(descriptor.name, index);
+    }
+
+    descriptor_indices
+}
+
+fn build_resolved_name_indices(descriptors: &[ToolDescriptor]) -> BTreeMap<&'static str, usize> {
+    let mut resolved_name_indices = BTreeMap::new();
+
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        resolved_name_indices
+            .entry(descriptor.name)
+            .or_insert(index);
+        resolved_name_indices
+            .entry(descriptor.provider_name)
+            .or_insert(index);
+
+        for alias in descriptor.aliases {
+            resolved_name_indices.entry(*alias).or_insert(index);
+        }
+    }
+
+    resolved_name_indices
+}
+
+fn build_tool_catalog_entry_caches(descriptors: &[ToolDescriptor]) -> ToolCatalogEntryCaches {
+    let mut all_entries = Vec::new();
+    let mut provider_core_entries = Vec::new();
+    let mut discoverable_entries = Vec::new();
+
+    for descriptor in descriptors {
+        let entry = descriptor_to_entry(descriptor);
+
+        if descriptor.is_provider_core() {
+            provider_core_entries.push(entry);
+        }
+
+        if descriptor.is_discoverable() {
+            discoverable_entries.push(entry);
+        }
+
+        all_entries.push(entry);
+    }
+
+    ToolCatalogEntryCaches {
+        all_entries: all_entries.into_boxed_slice(),
+        provider_core_entries: provider_core_entries.into_boxed_slice(),
+        discoverable_entries: discoverable_entries.into_boxed_slice(),
+    }
+}
+
+fn build_tool_catalog_digest(entries: &[ToolCatalogEntry]) -> String {
+    let payload = serde_json::to_vec(entries).unwrap_or_default();
+    let digest = sha2::Sha256::digest(payload);
+    hex::encode(digest)
+}
+
+pub(crate) fn stable_tool_catalog_digest() -> &'static str {
+    tool_catalog().catalog_digest()
 }
 
 pub fn tool_catalog() -> &'static ToolCatalog {
@@ -1866,33 +1976,24 @@ fn tool_visibility_gate_enabled_for_delegate_child(
 }
 
 pub fn provider_core_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .filter(|descriptor| descriptor.is_provider_core())
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().provider_core_entries().to_vec()
 }
 
 pub fn discoverable_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .filter(|descriptor| descriptor.is_discoverable())
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().discoverable_entries().to_vec()
 }
 
 pub fn all_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().all_entries().to_vec()
 }
 
 pub fn find_tool_catalog_entry(name: &str) -> Option<ToolCatalogEntry> {
-    tool_catalog().resolve(name).map(descriptor_to_entry)
+    let catalog = tool_catalog();
+    let descriptor = catalog.resolve(name)?;
+    let index = catalog.descriptor_indices.get(descriptor.name)?;
+    let entry = catalog.all_entries().get(*index)?;
+
+    Some(*entry)
 }
 
 fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
@@ -5201,6 +5302,80 @@ mod tests {
         let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
         assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
         assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
+    }
+
+    #[test]
+    fn tool_catalog_resolve_preserves_canonical_provider_and_alias_lookup() {
+        let catalog = tool_catalog();
+
+        let canonical = catalog.resolve("tool.search").expect("canonical lookup");
+        let provider_name = catalog.resolve("tool_search").expect("provider lookup");
+        let alias = catalog.resolve("shell").expect("alias lookup");
+
+        assert_eq!(canonical.name, "tool.search");
+        assert_eq!(provider_name.name, "tool.search");
+        assert_eq!(alias.name, "shell.exec");
+    }
+
+    #[test]
+    fn cached_catalog_entry_partitions_match_descriptor_filters() {
+        let catalog = tool_catalog();
+
+        let expected_all_entries = descriptor_identity_list(catalog.descriptors().iter());
+        let expected_provider_core_entries = descriptor_identity_list(
+            catalog
+                .descriptors()
+                .iter()
+                .filter(|descriptor| descriptor.is_provider_core()),
+        );
+        let expected_discoverable_entries = descriptor_identity_list(
+            catalog
+                .descriptors()
+                .iter()
+                .filter(|descriptor| descriptor.is_discoverable()),
+        );
+
+        let actual_all_entries = entry_identity_list(all_tool_catalog().iter());
+        let actual_provider_core_entries = entry_identity_list(provider_core_tool_catalog().iter());
+        let actual_discoverable_entries = entry_identity_list(discoverable_tool_catalog().iter());
+
+        assert_eq!(actual_all_entries, expected_all_entries);
+        assert_eq!(actual_provider_core_entries, expected_provider_core_entries);
+        assert_eq!(actual_discoverable_entries, expected_discoverable_entries);
+    }
+
+    fn descriptor_identity_list<'a>(
+        descriptors: impl Iterator<Item = &'a ToolDescriptor>,
+    ) -> Vec<(&'static str, &'static str, ToolExposureClass)> {
+        let mut identities = Vec::new();
+
+        for descriptor in descriptors {
+            let identity = (
+                descriptor.name,
+                descriptor.provider_name,
+                descriptor.exposure,
+            );
+            identities.push(identity);
+        }
+
+        identities
+    }
+
+    fn entry_identity_list<'a>(
+        entries: impl Iterator<Item = &'a ToolCatalogEntry>,
+    ) -> Vec<(&'static str, &'static str, ToolExposureClass)> {
+        let mut identities = Vec::new();
+
+        for entry in entries {
+            let identity = (
+                entry.canonical_name,
+                entry.provider_function_name,
+                entry.exposure,
+            );
+            identities.push(identity);
+        }
+
+        identities
     }
 
     #[cfg(feature = "feishu-integration")]
