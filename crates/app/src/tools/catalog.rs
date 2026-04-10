@@ -522,6 +522,7 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "session_tool_policy_clear"
         | "session_recover"
         | "sessions_send"
+        | "http.request"
         | "file.write"
         | "file.edit"
         | "shell.exec"
@@ -1586,7 +1587,8 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "http.request",
             provider_name: "http_request",
             aliases: &["http_request"],
-            description: "Send a bounded HTTP request with status, headers, and response text output",
+            description:
+                "Send a bounded HTTP request with status, headers, and text or binary body output",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -4058,7 +4060,7 @@ fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
         }
         "tool.invoke" => "invoke a discovered non-core tool with a valid short-lived lease",
         "http.request" => {
-            "send a raw http request, inspect status and headers, fetch an api response"
+            "send a bounded http request, inspect status and headers, fetch text or binary responses"
         }
         "file.read" => "read a workspace file, inspect file contents, open a repo text file",
         "glob.search" => {
@@ -5177,6 +5179,20 @@ mod tests {
             delegate_async.concurrency_class,
             ToolConcurrencyClass::Mutating
         );
+
+        #[cfg(feature = "tool-http")]
+        {
+            let http_request =
+                find_tool_catalog_entry("http.request").expect("http.request catalog entry");
+            assert_eq!(
+                http_request.scheduling_class,
+                ToolSchedulingClass::SerialOnly
+            );
+            assert_eq!(
+                http_request.concurrency_class,
+                ToolConcurrencyClass::Mutating
+            );
+        }
 
         let file_write = find_tool_catalog_entry("file.write").expect("file.write catalog entry");
         assert_eq!(file_write.scheduling_class, ToolSchedulingClass::SerialOnly);

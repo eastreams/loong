@@ -364,7 +364,8 @@ const SEARCH_CONCEPT_DEFINITIONS: &[SearchConceptDefinition] = &[
             "current directory",
             "current folder",
             "dir",
-            "tree",
+            "directory tree",
+            "folder tree",
             "carpeta",
             "repertoire",
             "dossier",
@@ -2259,6 +2260,14 @@ mod tests {
 
         assert!(!version_query.concepts.contains("file"));
         assert!(!numeric_query.concepts.contains("file"));
+    }
+
+    #[test]
+    fn structural_query_hints_do_not_treat_generic_tree_queries_as_directories() {
+        let query = SearchQuery::new("binary tree traversal");
+
+        assert!(!query.concepts.contains("directory"));
+        assert!(!query.categories.contains("workspace"));
     }
 
     #[test]

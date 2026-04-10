@@ -1087,13 +1087,22 @@ mod tests {
 
     #[test]
     fn build_system_message_omits_deferred_tool_text_workflow_when_tool_schema_enabled() {
-        let config = LoongClawConfig::default();
+        let non_disabled_modes = [
+            crate::config::ProviderToolSchemaModeConfig::ProviderDefault,
+            crate::config::ProviderToolSchemaModeConfig::EnabledStrict,
+            crate::config::ProviderToolSchemaModeConfig::EnabledWithDowngrade,
+        ];
 
-        let system_message =
-            build_system_message(&config, true).expect("system message when enabled");
-        let system_content = system_message["content"].as_str().expect("system content");
+        for tool_schema_mode in non_disabled_modes {
+            let mut config = LoongClawConfig::default();
+            config.provider.tool_schema_mode = tool_schema_mode;
 
-        assert!(!system_content.contains("## Deferred Tool Text Workflow"));
+            let system_message =
+                build_system_message(&config, true).expect("system message when enabled");
+            let system_content = system_message["content"].as_str().expect("system content");
+
+            assert!(!system_content.contains("## Deferred Tool Text Workflow"));
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

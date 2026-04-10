@@ -7,7 +7,7 @@ use std::{
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-file")]
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 #[cfg(feature = "tool-file")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-file")]
@@ -422,7 +422,8 @@ pub(super) fn execute_content_search_tool_with_config(
 
                 let file_bytes = fs::read(&child_path)
                     .map_err(|error| format!("failed to read {}: {error}", child_path.display()))?;
-                let limited_bytes = if file_bytes.len() > max_bytes_per_file {
+                let file_was_truncated = file_bytes.len() > max_bytes_per_file;
+                let limited_bytes = if file_was_truncated {
                     file_bytes
                         .get(..max_bytes_per_file)
                         .unwrap_or(file_bytes.as_slice())
@@ -445,7 +446,7 @@ pub(super) fn execute_content_search_tool_with_config(
                     "column": line_info.column,
                     "match_text": &file_text[byte_start..byte_end],
                     "snippet": snippet,
-                    "truncated_file": limited_bytes.len() == max_bytes_per_file,
+                    "truncated_file": file_was_truncated,
                 }));
 
                 if matches.len() >= max_results {
@@ -548,10 +549,11 @@ fn optional_u64_field(
         return Ok(default_value);
     };
 
-    let parsed_value = value
+    let parsed_value_u64 = value
         .as_u64()
-        .ok_or_else(|| format!("{tool_name} payload.{field} must be an integer"))?
-        as usize;
+        .ok_or_else(|| format!("{tool_name} payload.{field} must be an integer"))?;
+    let parsed_value = usize::try_from(parsed_value_u64)
+        .map_err(|error| format!("{tool_name} payload.{field} is out of range: {error}"))?;
 
     if parsed_value < minimum || parsed_value > maximum {
         return Err(format!(
@@ -595,10 +597,13 @@ fn find_content_match(content: &str, query: &str, case_sensitive: bool) -> Optio
         return Some((byte_start, byte_end));
     }
 
-    let lowercase_content = content.to_lowercase();
-    let lowercase_query = query.to_lowercase();
-    let byte_start = lowercase_content.find(lowercase_query.as_str())?;
-    let byte_end = byte_start + lowercase_query.len();
+    let escaped_query = regex::escape(query);
+    let mut regex_builder = RegexBuilder::new(escaped_query.as_str());
+    regex_builder.case_insensitive(true);
+    let regex = regex_builder.build().ok()?;
+    let matched_range = regex.find(content)?;
+    let byte_start = matched_range.start();
+    let byte_end = matched_range.end();
     Some((byte_start, byte_end))
 }
 
@@ -1304,6 +1309,65 @@ mod tests {
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0]["path"], "a.txt");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn content_search_does_not_mark_exact_limit_files_as_truncated() {
+        let base = unique_temp_dir("loongclaw-content-search-exact-limit");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("exact.txt"), "hello").expect("write exact-limit file");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "content.search".to_owned(),
+            payload: json!({
+                "query": "hello",
+                "max_bytes_per_file": 5
+            }),
+        };
+        let outcome = execute_content_search_tool_with_config(request, &config)
+            .expect("content search succeeds");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
+        let first = matches.first().expect("first match");
+
+        assert_eq!(first["truncated_file"], false);
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn content_search_handles_unicode_case_insensitive_matches() {
+        let base = unique_temp_dir("loongclaw-content-search-unicode");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("city.txt"), "Key value\n").expect("write city");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "content.search".to_owned(),
+            payload: json!({
+                "query": "key",
+                "case_sensitive": false
+            }),
+        };
+        let outcome = execute_content_search_tool_with_config(request, &config)
+            .expect("content search succeeds");
+        let matches = outcome.payload["matches"]
+            .as_array()
+            .expect("matches array");
+        let first = matches.first().expect("first match");
+
+        assert_eq!(first["path"], "city.txt");
+        assert_eq!(first["match_text"], "Key");
         let _ = fs::remove_dir_all(base);
     }
 }
