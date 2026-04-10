@@ -73,6 +73,26 @@ fn sample_grant(account_id: &str, now_s: i64) -> mvp::channel::feishu::api::Feis
     }
 }
 
+fn sample_grant_covering_default_coarse_capabilities(
+    account_id: &str,
+    now_s: i64,
+) -> mvp::channel::feishu::api::FeishuGrant {
+    let mut grant = sample_grant(account_id, now_s);
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+        "offline_access",
+        "docx:document:readonly",
+        "docx:document",
+        "im:message:readonly",
+        "im:message.group_msg",
+        "search:message",
+        "im:message",
+        "im:message:send_as_bot",
+        "im:message:send",
+        "calendar:calendar:readonly",
+    ]);
+    grant
+}
+
 #[test]
 fn doctor_reports_missing_feishu_grant_when_channel_is_enabled() {
     let temp_dir = temp_doctor_feishu_dir("missing-grant");
@@ -105,7 +125,10 @@ fn doctor_reports_feishu_grant_freshness_when_valid_grant_exists() {
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
-        .save_grant(&sample_grant("feishu_main", now_s))
+        .save_grant(&sample_grant_covering_default_coarse_capabilities(
+            "feishu_main",
+            now_s,
+        ))
         .expect("seed feishu grant");
     let mut fixes = Vec::new();
 
@@ -233,14 +256,19 @@ fn doctor_warns_when_config_requires_bitable_scope_but_grant_lacks_it() {
     let config = sample_feishu_config_with_capabilities(
         &temp_dir,
         mvp::config::FeishuCapabilityConfig {
+            docs: true,
+            messages: true,
+            calendar: true,
             bitable: true,
-            ..mvp::config::FeishuCapabilityConfig::default()
         },
     );
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
-        .save_grant(&sample_grant("feishu_main", now_s))
+        .save_grant(&sample_grant_covering_default_coarse_capabilities(
+            "feishu_main",
+            now_s,
+        ))
         .expect("seed feishu grant");
     let mut fixes = Vec::new();
 
@@ -255,6 +283,11 @@ fn doctor_warns_when_config_requires_bitable_scope_but_grant_lacks_it() {
         loongclaw_daemon::doctor_cli::DoctorCheckLevel::Warn
     );
     assert!(scope_check.detail.contains("bitable:app"));
+    assert!(scope_check.detail.contains("base:table:read"));
+    assert!(scope_check.detail.contains("base:record:create"));
+    assert!(scope_check.detail.contains("base:record:retrieve"));
+    assert!(scope_check.detail.contains("base:record:write"));
+    assert!(scope_check.detail.contains("drive:drive:readonly"));
     assert!(
         scope_check
             .detail
@@ -282,7 +315,10 @@ fn doctor_ignores_legacy_bitable_default_scope_when_capability_block_is_explicit
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
-        .save_grant(&sample_grant("feishu_main", now_s))
+        .save_grant(&sample_grant_covering_default_coarse_capabilities(
+            "feishu_main",
+            now_s,
+        ))
         .expect("seed feishu grant");
     let mut fixes = Vec::new();
 

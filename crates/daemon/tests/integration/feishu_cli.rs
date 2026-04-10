@@ -200,6 +200,29 @@ fn sample_grant(
     }
 }
 
+fn sample_grant_covering_default_coarse_capabilities(
+    account_id: &str,
+    open_id: &str,
+    access_token: &str,
+    refresh_token: &str,
+    now_s: i64,
+) -> mvp::channel::feishu::api::FeishuGrant {
+    let mut grant = sample_grant(account_id, open_id, access_token, refresh_token, now_s);
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+        "offline_access",
+        "docx:document:readonly",
+        "docx:document",
+        "im:message:readonly",
+        "im:message.group_msg",
+        "search:message",
+        "im:message",
+        "im:message:send_as_bot",
+        "im:message:send",
+        "calendar:calendar:readonly",
+    ]);
+    grant
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MockRequest {
     method: String,
@@ -3959,8 +3982,10 @@ async fn feishu_auth_start_uses_config_derived_bitable_scope_without_manual_scop
     let config_path = write_sample_feishu_config_with_capabilities(
         &temp_dir,
         mvp::config::FeishuCapabilityConfig {
+            docs: true,
+            messages: true,
+            calendar: true,
             bitable: true,
-            ..mvp::config::FeishuCapabilityConfig::default()
         },
     );
     let args = loongclaw_daemon::feishu_cli::FeishuAuthStartArgs {
@@ -3987,6 +4012,20 @@ async fn feishu_auth_start_uses_config_derived_bitable_scope_without_manual_scop
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     assert!(scopes.contains(&"bitable:app"));
+    assert!(scopes.contains(&"base:table:read"));
+    assert!(scopes.contains(&"base:record:create"));
+    assert!(scopes.contains(&"base:record:retrieve"));
+    assert!(scopes.contains(&"base:record:write"));
+    assert!(scopes.contains(&"drive:drive:readonly"));
+    assert_eq!(
+        payload["capabilities"]
+            .as_array()
+            .expect("capabilities array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>(),
+        vec!["docs", "messages", "calendar", "bitable"]
+    );
 }
 
 #[tokio::test]
@@ -4032,11 +4071,14 @@ async fn feishu_auth_start_prefers_explicit_default_capability_block_over_legacy
     assert!(!scopes.contains(&"bitable:app"));
     assert!(scopes.contains(&"offline_access"));
     assert!(scopes.contains(&"docx:document:readonly"));
-    assert!(
+    assert_eq!(
         payload["capabilities"]
             .as_array()
             .expect("capabilities array")
-            .is_empty()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>(),
+        vec!["docs", "messages", "calendar"]
     );
 }
 
@@ -4470,7 +4512,7 @@ async fn feishu_auth_list_reports_multiple_grants_for_account() {
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
 
-    let mut first = sample_grant(
+    let mut first = sample_grant_covering_default_coarse_capabilities(
         "feishu_main",
         "ou_123",
         "u-token-1",
@@ -4483,7 +4525,13 @@ async fn feishu_auth_list_reports_multiple_grants_for_account() {
     first.refreshed_at_s = now_s - 60;
     store.save_grant(&first).expect("seed first grant");
 
-    let mut second = sample_grant("feishu_main", "ou_456", "u-token-2", "r-token-2", now_s);
+    let mut second = sample_grant_covering_default_coarse_capabilities(
+        "feishu_main",
+        "ou_456",
+        "u-token-2",
+        "r-token-2",
+        now_s,
+    );
     second.principal.name = Some("Bob".to_owned());
     second.refreshed_at_s = now_s;
     store.save_grant(&second).expect("seed second grant");
@@ -5184,8 +5232,10 @@ async fn feishu_auth_status_reports_missing_config_derived_bitable_scope() {
     let config_path = write_sample_feishu_config_with_capabilities(
         &temp_dir,
         mvp::config::FeishuCapabilityConfig {
+            docs: true,
+            messages: true,
+            calendar: true,
             bitable: true,
-            ..mvp::config::FeishuCapabilityConfig::default()
         },
     );
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
@@ -5228,7 +5278,17 @@ async fn feishu_auth_status_reports_missing_config_derived_bitable_scope() {
         .collect::<Vec<_>>();
 
     assert!(required_scopes.contains(&"bitable:app"));
+    assert!(required_scopes.contains(&"base:table:read"));
+    assert!(required_scopes.contains(&"base:record:create"));
+    assert!(required_scopes.contains(&"base:record:retrieve"));
+    assert!(required_scopes.contains(&"base:record:write"));
+    assert!(required_scopes.contains(&"drive:drive:readonly"));
     assert!(missing_scopes.contains(&"bitable:app"));
+    assert!(missing_scopes.contains(&"base:table:read"));
+    assert!(missing_scopes.contains(&"base:record:create"));
+    assert!(missing_scopes.contains(&"base:record:retrieve"));
+    assert!(missing_scopes.contains(&"base:record:write"));
+    assert!(missing_scopes.contains(&"drive:drive:readonly"));
 }
 
 #[tokio::test]

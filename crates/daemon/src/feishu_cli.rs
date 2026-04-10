@@ -7,10 +7,10 @@ use loongclaw_spec::CliResult;
 use serde_json::{Value, json};
 
 use crate::feishu_support::{
-    FeishuAuthCapability, FeishuDaemonContext, build_account_recommendations,
-    build_grant_recommendations, build_pkce_pair, feishu_auth_start_command_hint,
-    generate_oauth_state, load_feishu_daemon_context, normalized_auth_start_capabilities,
-    unix_ts_now,
+    FeishuAuthCapability, FeishuConfiguredCapability, FeishuDaemonContext,
+    build_account_recommendations, build_grant_recommendations, build_pkce_pair,
+    configured_capabilities_from_config, feishu_auth_start_command_hint, generate_oauth_state,
+    load_feishu_daemon_context, normalized_auth_start_capabilities, unix_ts_now,
 };
 
 const DEFAULT_FEISHU_REDIRECT_URI: &str = "http://127.0.0.1:34819/callback";
@@ -1056,6 +1056,22 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
     let capabilities =
         normalized_auth_start_capabilities(&args.capabilities, args.include_message_write);
     let scopes = context.required_scopes(&args.scopes, &capabilities, args.include_message_write);
+    let reported_capabilities = if capabilities.is_empty()
+        && context
+            .config
+            .feishu_integration
+            .has_explicit_capability_config()
+    {
+        configured_capabilities_from_config(&context.config.feishu_integration)
+            .into_iter()
+            .map(FeishuConfiguredCapability::as_config_key)
+            .collect::<Vec<_>>()
+    } else {
+        capabilities
+            .iter()
+            .map(|capability| capability.as_cli_value())
+            .collect::<Vec<_>>()
+    };
     let state = generate_oauth_state();
     let (code_verifier, code_challenge) = build_pkce_pair();
     let now_s = unix_ts_now();
@@ -1090,10 +1106,7 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
         "authorize_url": authorize_url,
         "sqlite_path": context.store.path().display().to_string(),
         "expires_at_s": record.expires_at_s,
-        "capabilities": capabilities
-            .iter()
-            .map(|capability| capability.as_cli_value())
-            .collect::<Vec<_>>(),
+        "capabilities": reported_capabilities,
         "scopes": scopes,
     }))
 }

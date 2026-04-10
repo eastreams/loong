@@ -22,31 +22,22 @@ const FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY: &str = "im:message.group_msg:reado
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeishuCapabilityConfig {
     #[serde(default = "default_true")]
-    pub doc_read: bool,
-    #[serde(default)]
-    pub doc_write: bool,
+    pub docs: bool,
     #[serde(default = "default_true")]
-    pub message_read: bool,
+    pub messages: bool,
     #[serde(default = "default_true")]
-    pub message_search: bool,
-    #[serde(default = "default_true")]
-    pub calendar_read: bool,
+    pub calendar: bool,
     #[serde(default)]
     pub bitable: bool,
-    #[serde(default)]
-    pub message_write: bool,
 }
 
 impl Default for FeishuCapabilityConfig {
     fn default() -> Self {
         Self {
-            doc_read: true,
-            doc_write: false,
-            message_read: true,
-            message_search: true,
-            calendar_read: true,
+            docs: true,
+            messages: true,
+            calendar: true,
             bitable: false,
-            message_write: false,
         }
     }
 }
@@ -278,13 +269,10 @@ mod tests {
         assert_eq!(
             config.capabilities,
             FeishuCapabilityConfig {
-                doc_read: true,
-                doc_write: false,
-                message_read: true,
-                message_search: true,
-                calendar_read: true,
+                docs: true,
+                messages: true,
+                calendar: true,
                 bitable: false,
-                message_write: false,
             }
         );
     }
@@ -328,30 +316,28 @@ mod tests {
     fn runtime_config_loads_feishu_capabilities_block() {
         let raw = r#"
             [feishu_integration.capabilities]
-            doc_read = true
+            docs = true
+            messages = true
+            calendar = false
             bitable = true
-            message_write = false
         "#;
 
         let config: crate::config::LoongClawConfig = toml::from_str(raw).expect("parse config");
 
-        assert!(config.feishu_integration.capabilities.doc_read);
+        assert!(config.feishu_integration.capabilities.docs);
+        assert!(config.feishu_integration.capabilities.messages);
+        assert!(!config.feishu_integration.capabilities.calendar);
         assert!(config.feishu_integration.capabilities.bitable);
-        assert!(!config.feishu_integration.capabilities.message_write);
-        assert!(config.feishu_integration.capabilities.message_read);
     }
 
     #[test]
     fn runtime_config_marks_explicit_feishu_capabilities_block_even_when_values_match_defaults() {
         let raw = r#"
             [feishu_integration.capabilities]
-            doc_read = true
-            doc_write = false
-            message_read = true
-            message_search = true
-            calendar_read = true
+            docs = true
+            messages = true
+            calendar = true
             bitable = false
-            message_write = false
         "#;
 
         let config: crate::config::LoongClawConfig = toml::from_str(raw).expect("parse config");
@@ -379,8 +365,10 @@ mod tests {
         let custom_config = FeishuIntegrationConfig {
             capabilities_explicitly_configured: true,
             capabilities: FeishuCapabilityConfig {
+                docs: true,
+                messages: true,
+                calendar: true,
                 bitable: true,
-                ..FeishuCapabilityConfig::default()
             },
             ..FeishuIntegrationConfig::default()
         };

@@ -15,9 +15,15 @@ const FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY: &str = "im:message.group_msg:reado
 const FEISHU_OFFLINE_ACCESS_SCOPE: &str = "offline_access";
 const FEISHU_DOC_READ_SCOPE: &str = "docx:document:readonly";
 const FEISHU_MESSAGE_READ_SCOPE: &str = "im:message:readonly";
+const FEISHU_MESSAGE_SEND_SCOPE: &str = "im:message:send";
 const FEISHU_MESSAGE_SEARCH_SCOPE: &str = "search:message";
 const FEISHU_CALENDAR_READ_SCOPE: &str = "calendar:calendar:readonly";
 const FEISHU_BITABLE_SCOPE: &str = "bitable:app";
+const FEISHU_BITABLE_TABLE_READ_SCOPE: &str = "base:table:read";
+const FEISHU_BITABLE_RECORD_CREATE_SCOPE: &str = "base:record:create";
+const FEISHU_BITABLE_RECORD_RETRIEVE_SCOPE: &str = "base:record:retrieve";
+const FEISHU_BITABLE_RECORD_WRITE_SCOPE: &str = "base:record:write";
+const FEISHU_DRIVE_READ_SCOPE: &str = "drive:drive:readonly";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FeishuAuthCapability {
@@ -40,13 +46,21 @@ impl FeishuAuthCapability {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum FeishuConfiguredCapability {
-    DocRead,
-    DocWrite,
-    MessageRead,
-    MessageSearch,
-    CalendarRead,
+    Docs,
+    Messages,
+    Calendar,
     Bitable,
-    MessageWrite,
+}
+
+impl FeishuConfiguredCapability {
+    pub fn as_config_key(self) -> &'static str {
+        match self {
+            Self::Docs => "docs",
+            Self::Messages => "messages",
+            Self::Calendar => "calendar",
+            Self::Bitable => "bitable",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -199,26 +213,17 @@ pub fn configured_capabilities_from_config(
 ) -> Vec<FeishuConfiguredCapability> {
     let caps = &config.capabilities;
     let mut resolved = Vec::new();
-    if caps.doc_read {
-        resolved.push(FeishuConfiguredCapability::DocRead);
+    if caps.docs {
+        resolved.push(FeishuConfiguredCapability::Docs);
     }
-    if caps.doc_write {
-        resolved.push(FeishuConfiguredCapability::DocWrite);
+    if caps.messages {
+        resolved.push(FeishuConfiguredCapability::Messages);
     }
-    if caps.message_read {
-        resolved.push(FeishuConfiguredCapability::MessageRead);
-    }
-    if caps.message_search {
-        resolved.push(FeishuConfiguredCapability::MessageSearch);
-    }
-    if caps.calendar_read {
-        resolved.push(FeishuConfiguredCapability::CalendarRead);
+    if caps.calendar {
+        resolved.push(FeishuConfiguredCapability::Calendar);
     }
     if caps.bitable {
         resolved.push(FeishuConfiguredCapability::Bitable);
-    }
-    if caps.message_write {
-        resolved.push(FeishuConfiguredCapability::MessageWrite);
     }
     resolved
 }
@@ -232,31 +237,31 @@ pub fn scopes_for_configured_capabilities(
     }
     for capability in capabilities {
         match capability {
-            FeishuConfiguredCapability::DocRead => {
+            FeishuConfiguredCapability::Docs => {
                 push_scope_if_missing(&mut scopes, FEISHU_DOC_READ_SCOPE);
-            }
-            FeishuConfiguredCapability::DocWrite => {
                 for scope in mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES {
                     push_scope_if_missing(&mut scopes, scope);
                 }
             }
-            FeishuConfiguredCapability::MessageRead => {
+            FeishuConfiguredCapability::Messages => {
                 push_scope_if_missing(&mut scopes, FEISHU_MESSAGE_READ_SCOPE);
                 push_scope_if_missing(&mut scopes, FEISHU_GROUP_MESSAGE_READ_SCOPE);
-            }
-            FeishuConfiguredCapability::MessageSearch => {
                 push_scope_if_missing(&mut scopes, FEISHU_MESSAGE_SEARCH_SCOPE);
+                for scope in mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES {
+                    push_scope_if_missing(&mut scopes, scope);
+                }
+                push_scope_if_missing(&mut scopes, FEISHU_MESSAGE_SEND_SCOPE);
             }
-            FeishuConfiguredCapability::CalendarRead => {
+            FeishuConfiguredCapability::Calendar => {
                 push_scope_if_missing(&mut scopes, FEISHU_CALENDAR_READ_SCOPE);
             }
             FeishuConfiguredCapability::Bitable => {
                 push_scope_if_missing(&mut scopes, FEISHU_BITABLE_SCOPE);
-            }
-            FeishuConfiguredCapability::MessageWrite => {
-                for scope in mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_RECOMMENDED_SCOPES {
-                    push_scope_if_missing(&mut scopes, scope);
-                }
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_TABLE_READ_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_RECORD_CREATE_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_RECORD_RETRIEVE_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_RECORD_WRITE_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_DRIVE_READ_SCOPE);
             }
         }
     }
@@ -720,32 +725,23 @@ mod tests {
     fn configured_capabilities_from_config_reflects_enabled_flags() {
         let config = mvp::config::FeishuIntegrationConfig {
             capabilities: mvp::config::FeishuCapabilityConfig {
-                doc_read: false,
-                doc_write: true,
-                message_read: false,
-                message_search: false,
-                calendar_read: false,
+                docs: false,
+                messages: false,
+                calendar: false,
                 bitable: true,
-                message_write: false,
             },
             ..mvp::config::FeishuIntegrationConfig::default()
         };
 
         let capabilities = configured_capabilities_from_config(&config);
 
-        assert_eq!(
-            capabilities,
-            vec![
-                FeishuConfiguredCapability::DocWrite,
-                FeishuConfiguredCapability::Bitable,
-            ]
-        );
+        assert_eq!(capabilities, vec![FeishuConfiguredCapability::Bitable]);
     }
 
     #[test]
-    fn scopes_for_configured_capabilities_include_offline_access_and_bitable() {
+    fn scopes_for_configured_capabilities_include_offline_access_and_bitable_bundle() {
         let scopes = scopes_for_configured_capabilities(&[
-            FeishuConfiguredCapability::DocRead,
+            FeishuConfiguredCapability::Docs,
             FeishuConfiguredCapability::Bitable,
         ]);
 
@@ -756,6 +752,11 @@ mod tests {
         );
         assert!(scopes.iter().any(|scope| scope == FEISHU_DOC_READ_SCOPE));
         assert!(scopes.iter().any(|scope| scope == FEISHU_BITABLE_SCOPE));
+        assert!(scopes.iter().any(|scope| scope == "base:table:read"));
+        assert!(scopes.iter().any(|scope| scope == "base:record:create"));
+        assert!(scopes.iter().any(|scope| scope == "base:record:retrieve"));
+        assert!(scopes.iter().any(|scope| scope == "base:record:write"));
+        assert!(scopes.iter().any(|scope| scope == "drive:drive:readonly"));
     }
 
     #[test]
@@ -764,8 +765,10 @@ mod tests {
             default_scopes: vec!["offline_access".to_owned()],
             capabilities_explicitly_configured: true,
             capabilities: mvp::config::FeishuCapabilityConfig {
+                docs: true,
+                messages: true,
+                calendar: true,
                 bitable: true,
-                ..mvp::config::FeishuCapabilityConfig::default()
             },
             ..mvp::config::FeishuIntegrationConfig::default()
         };
