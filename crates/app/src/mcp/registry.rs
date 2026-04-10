@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::path::Path;
 
 use crate::CliResult;
@@ -324,9 +325,9 @@ fn mcp_server_status_from_config(server: &McpServerConfig) -> McpServerStatus {
     }
 
     match &server.transport {
-        McpServerTransportConfig::Stdio { command, cwd, .. } => {
-            stdio_mcp_server_status(command.as_str(), cwd.as_deref())
-        }
+        McpServerTransportConfig::Stdio {
+            command, env, cwd, ..
+        } => stdio_mcp_server_status(command.as_str(), env, cwd.as_deref()),
         McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var,
@@ -343,7 +344,8 @@ fn mcp_server_status_from_config(server: &McpServerConfig) -> McpServerStatus {
 
 fn mcp_server_status_from_acpx_profile(server: &AcpxMcpServerConfig) -> McpServerStatus {
     let command = server.command.as_str();
-    stdio_mcp_server_status(command, None)
+    let env = &server.env;
+    stdio_mcp_server_status(command, env, None)
 }
 
 fn disabled_mcp_server_status() -> McpServerStatus {
@@ -357,7 +359,11 @@ fn disabled_mcp_server_status() -> McpServerStatus {
     }
 }
 
-fn stdio_mcp_server_status(command: &str, cwd: Option<&Path>) -> McpServerStatus {
+fn stdio_mcp_server_status(
+    command: &str,
+    env: &BTreeMap<String, String>,
+    cwd: Option<&Path>,
+) -> McpServerStatus {
     let auth = McpAuthStatus::Unsupported;
 
     let cwd_result = validate_stdio_cwd(cwd);
@@ -370,7 +376,7 @@ fn stdio_mcp_server_status(command: &str, cwd: Option<&Path>) -> McpServerStatus
         return status;
     }
 
-    let command_result = validate_stdio_command(command, cwd);
+    let command_result = validate_stdio_command(command, env, cwd);
     if let Err(last_error) = command_result {
         let status = McpServerStatus {
             kind: McpServerStatusKind::Failed,
@@ -389,7 +395,11 @@ fn stdio_mcp_server_status(command: &str, cwd: Option<&Path>) -> McpServerStatus
     }
 }
 
-fn validate_stdio_command(command: &str, cwd: Option<&Path>) -> Result<(), String> {
+fn validate_stdio_command(
+    command: &str,
+    env: &BTreeMap<String, String>,
+    cwd: Option<&Path>,
+) -> Result<(), String> {
     let trimmed_command = command.trim();
     if trimmed_command.is_empty() {
         let error = "stdio_command_missing".to_owned();
@@ -430,7 +440,11 @@ fn validate_stdio_command(command: &str, cwd: Option<&Path>) -> Result<(), Strin
         return Err(error);
     }
 
-    let command_found = which::which(trimmed_command).is_ok();
+    let search_path = resolve_stdio_command_search_path(env);
+    let fallback_cwd = Path::new(".");
+    let search_cwd = cwd.unwrap_or(fallback_cwd);
+    let command_lookup = which::which_in(trimmed_command, search_path, search_cwd);
+    let command_found = command_lookup.is_ok();
     if command_found {
         return Ok(());
     }
@@ -464,6 +478,33 @@ fn validate_stdio_cwd(cwd: Option<&Path>) -> Result<(), String> {
     let rendered_cwd = cwd.display().to_string();
     let error = format!("stdio_cwd_not_directory: {rendered_cwd}");
     Err(error)
+}
+
+fn resolve_stdio_command_search_path(env: &BTreeMap<String, String>) -> Option<OsString> {
+    let path_override = find_env_value_ignore_case(env, "PATH");
+    if let Some(path_override) = path_override {
+        let path_override = OsString::from(path_override);
+        return Some(path_override);
+    }
+
+    std::env::var_os("PATH")
+}
+
+fn find_env_value_ignore_case<'a>(
+    env: &'a BTreeMap<String, String>,
+    expected_name: &str,
+) -> Option<&'a str> {
+    for (name, value) in env {
+        let is_match = name.eq_ignore_ascii_case(expected_name);
+        if !is_match {
+            continue;
+        }
+
+        let value = value.as_str();
+        return Some(value);
+    }
+
+    None
 }
 
 fn streamable_http_mcp_server_status(
@@ -1316,6 +1357,56 @@ mod tests {
             last_error.contains(missing_command.as_str()),
             "last_error={last_error}"
         );
+    }
+
+    #[test]
+    fn collect_mcp_runtime_snapshot_uses_configured_stdio_path_for_command_lookup() {
+        let mut scoped_env = ScopedEnv::new();
+        scoped_env.set("PATH", OsString::from(""));
+
+        let command_dir = unique_temp_dir("loongclaw-mcp-command-path-override");
+        std::fs::create_dir_all(&command_dir).expect("create command directory");
+
+        let source_executable = std::env::current_exe().expect("current executable path");
+        let command_file_name = source_executable
+            .file_name()
+            .expect("current executable file name");
+        let command_file_name = command_file_name.to_string_lossy();
+        let command_file_name = command_file_name.to_string();
+        let copied_command_path = command_dir.join(&command_file_name);
+        let copied_bytes = std::fs::copy(&source_executable, &copied_command_path)
+            .expect("copy executable into configured PATH");
+        assert!(copied_bytes > 0, "copied executable should not be empty");
+
+        let configured_path = command_dir.display().to_string();
+
+        let server = McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: command_file_name,
+                args: Vec::new(),
+                env: BTreeMap::from([("PATH".to_owned(), configured_path)]),
+                cwd: None,
+            },
+            enabled: true,
+            required: false,
+            startup_timeout_ms: None,
+            tool_timeout_ms: None,
+            enabled_tools: Vec::new(),
+            disabled_tools: Vec::new(),
+        };
+        let config = LoongClawConfig {
+            mcp: McpConfig {
+                servers: BTreeMap::from([("docs".to_owned(), server)]),
+            },
+            ..LoongClawConfig::default()
+        };
+
+        let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
+        let server = snapshot.servers.first().expect("docs server");
+
+        assert_eq!(server.status.kind, McpServerStatusKind::Pending);
+        assert_eq!(server.status.auth, McpAuthStatus::Unsupported);
+        assert_eq!(server.status.last_error, None);
     }
 
     #[test]
