@@ -137,6 +137,14 @@ impl FeishuWebhookState {
     ) {
         dispatch_deferred_feishu_card_updates(self.config.clone(), updates);
     }
+
+    pub(super) fn configured_account_id(&self) -> &str {
+        self.configured_account_id.as_str()
+    }
+
+    pub(super) fn account_id(&self) -> &str {
+        self.account_id.as_str()
+    }
 }
 
 struct RecentIdCache {
@@ -414,6 +422,15 @@ pub(super) async fn feishu_webhook_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    tracing::debug!(
+        target: "loongclaw.channel.feishu",
+        transport = "webhook",
+        configured_account_id = %state.configured_account_id,
+        content_length = body.len(),
+        has_signature = headers.contains_key("X-Lark-Signature"),
+        "received feishu webhook request"
+    );
+
     let body_text = match std::str::from_utf8(&body) {
         Ok(value) => value,
         Err(error) => {
@@ -485,19 +502,46 @@ pub(super) async fn handle_feishu_parsed_action(
     parsed: FeishuWebhookAction,
 ) -> Result<FeishuParsedActionResponse, (StatusCode, String)> {
     match parsed {
-        FeishuWebhookAction::UrlVerification { challenge } => Ok(
-            FeishuParsedActionResponse::immediate(json!({ "challenge": challenge })),
-        ),
+        FeishuWebhookAction::UrlVerification { challenge } => {
+            tracing::debug!(
+                target: "loongclaw.channel.feishu",
+                transport = "webhook",
+                configured_account_id = %state.configured_account_id,
+                "accepted feishu url verification request"
+            );
+            Ok(FeishuParsedActionResponse::immediate(
+                json!({ "challenge": challenge }),
+            ))
+        }
         FeishuWebhookAction::Ignore => Ok(FeishuParsedActionResponse::immediate(
             json!({"code": 0, "msg": "ignored"}),
         )),
         FeishuWebhookAction::CardCallback(event) => {
+            tracing::info!(
+                target: "loongclaw.channel.feishu",
+                transport = "webhook",
+                action = "card_callback",
+                configured_account_id = %state.configured_account_id,
+                event_id = %event.event_id,
+                conversation_id = %event.session.conversation_id,
+                has_open_message_id = event.context.open_message_id.is_some(),
+                has_open_chat_id = event.context.open_chat_id.is_some(),
+                has_principal = event.principal.is_some(),
+                "accepted feishu card callback event"
+            );
             {
                 let mut dedupe = state.seen_events.lock().await;
-                if !matches!(
-                    dedupe.begin_processing(&event.event_id),
-                    RecentIdReservation::Accepted
-                ) {
+                let reservation = dedupe.begin_processing(&event.event_id);
+                if !matches!(reservation, RecentIdReservation::Accepted) {
+                    tracing::debug!(
+                        target: "loongclaw.channel.feishu",
+                        transport = "webhook",
+                        action = "card_callback",
+                        configured_account_id = %state.configured_account_id,
+                        event_id = %event.event_id,
+                        reservation = ?reservation,
+                        "deduplicated feishu card callback event"
+                    );
                     return Ok(FeishuParsedActionResponse::immediate(
                         FeishuCallbackResponse::Noop.as_json(),
                     ));
@@ -515,12 +559,32 @@ pub(super) async fn handle_feishu_parsed_action(
             Ok(response)
         }
         FeishuWebhookAction::Inbound(event) => {
+            tracing::info!(
+                target: "loongclaw.channel.feishu",
+                transport = "webhook",
+                action = "inbound",
+                configured_account_id = %state.configured_account_id,
+                event_id = %event.event_id,
+                message_id = %event.message_id,
+                conversation_id = %event.session.conversation_id,
+                has_thread = event.session.thread_id.is_some(),
+                has_principal = event.principal.is_some(),
+                resource_count = event.resources.len(),
+                "accepted feishu inbound event"
+            );
             {
                 let mut dedupe = state.seen_events.lock().await;
-                if !matches!(
-                    dedupe.begin_processing(&event.event_id),
-                    RecentIdReservation::Accepted
-                ) {
+                let reservation = dedupe.begin_processing(&event.event_id);
+                if !matches!(reservation, RecentIdReservation::Accepted) {
+                    tracing::debug!(
+                        target: "loongclaw.channel.feishu",
+                        transport = "webhook",
+                        action = "inbound",
+                        configured_account_id = %state.configured_account_id,
+                        event_id = %event.event_id,
+                        reservation = ?reservation,
+                        "deduplicated feishu inbound event"
+                    );
                     return Ok(FeishuParsedActionResponse::immediate(
                         json!({"code": 0, "msg": "duplicate_event"}),
                     ));
@@ -584,6 +648,10 @@ async fn handle_feishu_inbound_event(
     state: &FeishuWebhookState,
     event: super::payload::FeishuInboundEvent,
 ) -> Result<FeishuParsedActionResponse, (StatusCode, String)> {
+    let inbound_event_id = event.event_id.clone();
+    let inbound_message_id = event.message_id.clone();
+    let inbound_conversation_id = event.session.conversation_id.clone();
+
     state.runtime.mark_run_start().await.map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -652,6 +720,19 @@ async fn handle_feishu_inbound_event(
         ))
     }
     .await;
+
+    if result.is_ok() {
+        tracing::info!(
+            target: "loongclaw.channel.feishu",
+            transport = "webhook",
+            action = "inbound",
+            configured_account_id = %state.configured_account_id,
+            event_id = %inbound_event_id,
+            message_id = %inbound_message_id,
+            conversation_id = %inbound_conversation_id,
+            "feishu inbound event processed successfully"
+        );
+    }
 
     if let Err(error) = state.runtime.mark_run_end().await {
         log_feishu_inbound_warning("runtime end failed", &error);

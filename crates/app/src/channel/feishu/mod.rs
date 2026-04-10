@@ -191,6 +191,19 @@ pub(super) async fn run_feishu_channel(
         path
     );
 
+    tracing::info!(
+        target: "loongclaw.channel.feishu",
+        transport = "webhook",
+        config_path = %resolved_path.display(),
+        configured_account_id = %resolved.configured_account_id,
+        account_id = %resolved.account.id,
+        selected_by_default,
+        default_source = default_account_source.as_str(),
+        bind = %bind,
+        path = %path,
+        "feishu runtime started"
+    );
+
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             stop.wait().await;

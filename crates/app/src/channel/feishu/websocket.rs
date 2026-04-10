@@ -208,6 +208,17 @@ pub(super) async fn run_feishu_websocket_channel(
         );
     }
 
+    tracing::info!(
+        target: "loongclaw.channel.feishu",
+        transport = "websocket",
+        config_path = %resolved_path.display(),
+        configured_account_id = %resolved.configured_account_id,
+        account_id = %resolved.account.id,
+        selected_by_default,
+        default_source = default_account_source.as_str(),
+        "feishu runtime started"
+    );
+
     loop {
         let endpoint = match tokio::select! {
             _ = stop.wait() => return Ok(()),
@@ -256,6 +267,15 @@ async fn run_feishu_websocket_session(
     ws_config: &FeishuWsEndpointClientConfig,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
+    tracing::info!(
+        target: "loongclaw.channel.feishu",
+        transport = "websocket",
+        configured_account_id = %state.configured_account_id(),
+        account_id = %state.account_id(),
+        url = %url,
+        "connecting feishu websocket session"
+    );
+
     let parsed_url = reqwest::Url::parse(url)
         .map_err(|error| format!("parse Feishu websocket URL failed: {error}"))?;
     let service_id = parsed_url
@@ -350,6 +370,15 @@ async fn run_feishu_websocket_session(
                         let payload = serde_json::from_slice::<Value>(&payload_bytes).map_err(|error| {
                             format!("decode Feishu websocket event payload failed: {error}")
                         })?;
+                        tracing::info!(
+                            target: "loongclaw.channel.feishu",
+                            transport = "websocket",
+                            configured_account_id = %state.configured_account_id(),
+                            message_id = %message_id,
+                            seq,
+                            total,
+                            "received feishu websocket event payload"
+                        );
                         let response: FeishuWsOutboundResponse = match state.parse_websocket_payload(&payload) {
                             Ok(parsed) => match handle_feishu_parsed_action(state, parsed).await {
                                 Ok(response) => build_ws_success_response(response, started_at.elapsed()),
