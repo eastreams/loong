@@ -27,8 +27,8 @@ use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind, active_cli
 use super::auth_profile_runtime::ProviderAuthProfile;
 use super::sse::SseEventStream;
 use super::transport_trait::{
-    PreparedTransportAuth, ProviderTransport, TransportError, TransportRequest, TransportResponse,
-    TransportStream, resolve_transport_auth,
+    ProviderTransport, TransportError, TransportRequest, TransportResponse, TransportStream,
+    resolve_transport_auth,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -94,21 +94,13 @@ impl ReqwestTransport {
         }
     }
 
-    fn prepare_headers(&self, headers: &mut HeaderMap, auth: Option<&PreparedTransportAuth>) {
-        if let Some(auth) = auth {
-            auth.apply(headers);
-        }
-    }
-
     fn build_request(
         &self,
         request: &TransportRequest,
     ) -> Result<reqwest::Request, TransportError> {
-        let mut headers = request.headers.clone();
-        self.prepare_headers(&mut headers, request.auth.as_ref());
         self.client
             .request(request.method.clone(), request.url.as_str())
-            .headers(headers)
+            .headers(request.headers.clone())
             .body(request.body.clone())
             .build()
             .map_err(|error| {
@@ -349,13 +341,15 @@ pub(super) fn build_transport_request(
     profile: Option<&ProviderAuthProfile>,
     auth_scheme: ProviderAuthScheme,
 ) -> CliResult<TransportRequest> {
-    let auth = resolve_transport_auth(profile, auth_scheme)?;
+    let mut headers = headers;
+    if let Some(auth) = resolve_transport_auth(profile, auth_scheme)? {
+        auth.apply(&mut headers);
+    }
     Ok(TransportRequest {
         method,
         url,
         headers,
         body,
-        auth,
     })
 }
 

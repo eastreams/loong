@@ -2598,8 +2598,15 @@ async fn request_turn_streaming_rejects_unsupported_transport_modes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn sibling_provider_tests_can_inject_mock_transport_into_dispatch_layer() {
-    let config = LoongClawConfig::default();
-    let provider = config.provider.clone();
+    let provider = ProviderConfig {
+        kind: ProviderKind::Openai,
+        api_key: Some(SecretRef::Inline("dispatch-test-secret".to_owned())),
+        api_key_env: None,
+        oauth_access_token: None,
+        oauth_access_token_env: None,
+        ..ProviderConfig::default()
+    };
+    let config = test_config(provider.clone());
     let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
     let auth_context = transport::RequestAuthContext::default();
     let auth_profiles = resolve_provider_auth_profiles(&provider);
