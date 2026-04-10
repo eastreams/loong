@@ -17,10 +17,10 @@ use super::{
     ChannelCatalogOperation, ChannelCatalogOperationAvailability,
     ChannelCatalogOperationRequirement, ChannelCatalogTargetKind, ChannelDoctorCheckSpec,
     ChannelDoctorCheckTrigger, ChannelOnboardingDescriptor, ChannelOnboardingStrategy,
-    ChannelOperationHealth, ChannelOperationStatus, ChannelPluginBridgeStableTarget,
-    ChannelRegistryDescriptor, ChannelRegistryOperationDescriptor, ChannelStatusSnapshot,
-    PLUGIN_BACKED_CHANNEL_CAPABILITIES, disabled_operation, misconfigured_operation,
-    unsupported_operation, validate_http_url, validate_websocket_url,
+    ChannelOperationStatus, ChannelPluginBridgeStableTarget, ChannelRegistryDescriptor,
+    ChannelRegistryOperationDescriptor, ChannelStatusSnapshot, PLUGIN_BACKED_CHANNEL_CAPABILITIES,
+    disabled_operation, misconfigured_operation, unsupported_operation, validate_http_url,
+    validate_websocket_url,
 };
 
 const WEIXIN_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
