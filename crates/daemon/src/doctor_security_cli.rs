@@ -231,7 +231,7 @@ async fn build_doctor_security_execution(
     let shell_finding = assess_shell_execution(config, &runtime);
     findings.push(shell_finding);
 
-    let file_root_finding = assess_tool_file_root(config, &runtime);
+    let file_root_finding = assess_tool_file_root(config);
     findings.push(file_root_finding);
 
     let web_fetch_finding = assess_web_fetch(runtime.web_fetch.clone());
@@ -417,10 +417,7 @@ fn assess_shell_execution(
     )
 }
 
-fn assess_tool_file_root(
-    config: &mvp::config::LoongClawConfig,
-    _runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-) -> SecurityFinding {
+fn assess_tool_file_root(config: &mvp::config::LoongClawConfig) -> SecurityFinding {
     let explicit_root = config.tools.file_root.as_deref();
     let file_root_resolution = config.tools.file_root_resolution();
     let effective_root = file_root_resolution.path().clone();
@@ -1731,10 +1728,7 @@ mod tests {
     #[test]
     fn tool_file_root_finding_uses_explicit_and_effective_resolution_truth() {
         let config = mvp::config::LoongClawConfig::default();
-        let runtime =
-            mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(&config, None);
-
-        let finding = assess_tool_file_root(&config, &runtime);
+        let finding = assess_tool_file_root(&config);
         let rendered_evidence = finding.evidence.join("\n");
         let effective_root = config.tools.resolved_file_root();
         let effective_root_text = effective_root.display().to_string();

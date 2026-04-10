@@ -117,6 +117,13 @@ impl GatewayControlAppState {
                 visible_tool_names: vec![],
                 capability_snapshot_sha256: String::new(),
                 capability_snapshot: String::new(),
+                tool_calling: super::read_models::GatewayToolCallingReadModel {
+                    availability: "inactive".to_owned(),
+                    structured_tool_schema_enabled: false,
+                    effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
+                    active_model: String::new(),
+                    reason: "no runtime-visible tools are enabled".to_owned(),
+                },
             },
             runtime_plugins: json!({}),
             external_skills: json!({}),

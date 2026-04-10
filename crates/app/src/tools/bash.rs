@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "tool-shell")]
+use std::time::Instant;
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
@@ -12,6 +14,8 @@ use super::bash_governance::{FinalGovernanceDecision, evaluate_bash_command};
 #[cfg(feature = "tool-shell")]
 use super::process_exec;
 use super::runtime_config::BashExecRuntimePolicy;
+#[cfg(feature = "tool-shell")]
+use super::runtime_events::current_tool_runtime_event_sink;
 
 const BASH_UNAVAILABLE_WARNING: &str =
     "bash unavailable; hiding bash.exec from runtime tool surface";
@@ -125,13 +129,15 @@ pub(super) fn execute_bash_tool_with_config(
             .as_deref()
             .ok_or_else(|| "bash unavailable".to_owned())?;
         let args = bash_exec_args(command, runtime.login_shell);
+        let runtime_event_sink = current_tool_runtime_event_sink();
         let output = process_exec::run_tool_async(
-            process_exec::run_process_with_timeout(
+            process_exec::run_process_with_timeout_with_sink(
                 runtime_command,
                 &args,
                 cwd.as_path(),
                 timeout_ms,
                 "bash command",
+                runtime_event_sink.clone(),
             ),
             "bash tool",
         )??;
@@ -234,13 +240,39 @@ fn probe_bash_candidate_with_timeout(candidate: &Path, timeout: Duration) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::bash_rules::{PrefixRuleDecision, compile_compatibility_rules};
     use crate::tools::runtime_config::ToolRuntimeConfig;
+    use crate::tools::runtime_events::{
+        ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
+    };
     use loongclaw_contracts::ToolCoreRequest;
     use serde_json::json;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct RecordingRuntimeSink {
+        events: Mutex<Vec<ToolRuntimeEvent>>,
+    }
+
+    fn lock_runtime_events(
+        sink: &RecordingRuntimeSink,
+    ) -> std::sync::MutexGuard<'_, Vec<ToolRuntimeEvent>> {
+        match sink.events.lock() {
+            Ok(events) => events,
+            Err(poisoned_events) => poisoned_events.into_inner(),
+        }
+    }
+
+    impl ToolRuntimeEventSink for RecordingRuntimeSink {
+        fn emit(&self, event: ToolRuntimeEvent) {
+            let mut events = lock_runtime_events(self);
+            events.push(event);
+        }
+    }
 
     #[test]
     fn probe_bash_runtime_prefers_path_bash_before_windows_fallbacks() {
@@ -375,6 +407,70 @@ mod tests {
             .expect_err("runtime should still be required after accepting trusted context");
 
         assert!(error.contains("bash unavailable"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn execute_bash_tool_with_config_emits_runtime_output_delta_and_single_metrics_event() {
+        let bash_available = probe_bash_candidate(Path::new("bash"));
+        if !bash_available {
+            eprintln!("skipping bash runtime event test because bash is unavailable");
+            return;
+        }
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let root_path = root.path().to_path_buf();
+        let mut config = ToolRuntimeConfig {
+            file_root: Some(root_path.clone()),
+            shell_allow: ["printf".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        };
+        config.bash_exec.available = true;
+        config.bash_exec.command = Some(PathBuf::from("bash"));
+        config.bash_exec.governance.rules = compile_compatibility_rules(
+            "test_allow",
+            PrefixRuleDecision::Allow,
+            ["printf", "hello"],
+        );
+
+        let request = ToolCoreRequest {
+            tool_name: "bash.exec".to_owned(),
+            payload: json!({
+                "command": "printf 'hello\\nworld'",
+                "cwd": root_path.display().to_string(),
+            }),
+        };
+        let sink = Arc::new(RecordingRuntimeSink::default());
+        let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
+            execute_bash_tool_with_config(request, &config)
+        }));
+        let outcome = outcome.expect("bash.exec should succeed under runtime sink");
+        let events = lock_runtime_events(&sink);
+        let stdout_delta_count = events
+            .iter()
+            .filter(|event| {
+                let ToolRuntimeEvent::OutputDelta(delta) = event else {
+                    return false;
+                };
+                let is_stdout = delta.stream == ToolRuntimeStream::Stdout;
+                let contains_output = delta.chunk.contains("hello");
+                is_stdout && contains_output
+            })
+            .count();
+        let metrics_count = events
+            .iter()
+            .filter(|event| matches!(event, ToolRuntimeEvent::CommandMetrics(_)))
+            .count();
+
+        assert_eq!(outcome.status, "ok");
+        assert!(stdout_delta_count >= 1, "events: {events:?}");
+        assert_eq!(metrics_count, 1, "events: {events:?}");
     }
 
     #[cfg(not(feature = "tool-shell"))]

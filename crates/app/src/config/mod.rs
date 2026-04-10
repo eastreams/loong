@@ -83,7 +83,9 @@ pub use memory::{
 };
 #[allow(unused_imports)]
 pub use outbound_http::OutboundHttpConfig;
-pub(crate) use provider::{GITHUB_COPILOT_DEFAULT_HEADERS, GITHUB_COPILOT_USER_AGENT};
+pub(crate) use provider::{
+    ANTHROPIC_DEFAULT_HEADERS, GITHUB_COPILOT_DEFAULT_HEADERS, GITHUB_COPILOT_USER_AGENT,
+};
 #[allow(unused_imports)]
 pub use provider::{
     ModelCatalogProbeRecovery, PROVIDER_DESCRIPTOR_SCHEMA_VERSION, ProviderAuthScheme,
@@ -478,6 +480,8 @@ mod tests {
                 "nvidia",
                 "ollama",
                 "openai",
+                "opencode_go",
+                "opencode_zen",
                 "openrouter",
                 "perplexity",
                 "qianfan",
@@ -531,6 +535,14 @@ mod tests {
                 "https://api.openai.com/v1/chat/completions",
             ),
             (
+                ProviderKind::OpencodeGo,
+                "https://opencode.ai/zen/go/v1/chat/completions",
+            ),
+            (
+                ProviderKind::OpencodeZen,
+                "https://opencode.ai/zen/v1/chat/completions",
+            ),
+            (
                 ProviderKind::Openrouter,
                 "https://openrouter.ai/api/v1/chat/completions",
             ),
@@ -567,6 +579,8 @@ mod tests {
             (ProviderKind::Kimi, Some("MOONSHOT_API_KEY")),
             (ProviderKind::Minimax, Some("MINIMAX_API_KEY")),
             (ProviderKind::Openai, Some("OPENAI_API_KEY")),
+            (ProviderKind::OpencodeGo, Some("OPENCODE_API_KEY")),
+            (ProviderKind::OpencodeZen, Some("OPENCODE_API_KEY")),
             (ProviderKind::Xiaomi, Some("XIAOMI_API_KEY")),
         ];
         for (kind, expected) in cases {
@@ -1287,6 +1301,34 @@ kind = "volcengine_coding"
     }
 
     #[test]
+    fn opencode_zen_warns_when_given_go_model_prefix() {
+        let config = ProviderConfig {
+            kind: ProviderKind::OpencodeZen,
+            model: "opencode-go/glm-5.1".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        let hint = config
+            .configuration_hint()
+            .expect("opencode_zen should warn about Go-prefixed models");
+        assert!(hint.contains("opencode_go"));
+    }
+
+    #[test]
+    fn opencode_go_warns_when_pointed_at_zen_base_url() {
+        let config = ProviderConfig {
+            kind: ProviderKind::OpencodeGo,
+            base_url: "https://opencode.ai/zen/v1".to_owned(),
+            ..ProviderConfig::default()
+        };
+
+        let hint = config
+            .configuration_hint()
+            .expect("opencode_go should warn about the wrong base url root");
+        assert!(hint.contains("opencode_zen"));
+    }
+
+    #[test]
     fn bedrock_uses_region_template_endpoints() {
         let config = ProviderConfig {
             kind: ProviderKind::Bedrock,
@@ -1450,6 +1492,14 @@ kind = "volcengine_coding"
             (
                 ProviderKind::VolcengineCoding,
                 "https://ark.cn-beijing.volces.com/api/coding/v3/models",
+            ),
+            (
+                ProviderKind::OpencodeGo,
+                "https://opencode.ai/zen/go/v1/models",
+            ),
+            (
+                ProviderKind::OpencodeZen,
+                "https://opencode.ai/zen/v1/models",
             ),
         ];
 
@@ -2454,6 +2504,14 @@ safe_lane_health_replan_warn_threshold = 0.55
             (ProviderKind::Minimax, "https://api.minimaxi.com/v1/models"),
             (ProviderKind::Ollama, "http://127.0.0.1:11434/v1/models"),
             (ProviderKind::Openai, "https://api.openai.com/v1/models"),
+            (
+                ProviderKind::OpencodeGo,
+                "https://opencode.ai/zen/go/v1/models",
+            ),
+            (
+                ProviderKind::OpencodeZen,
+                "https://opencode.ai/zen/v1/models",
+            ),
             (
                 ProviderKind::Openrouter,
                 "https://openrouter.ai/api/v1/models",

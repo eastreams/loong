@@ -3,6 +3,9 @@ use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
+use super::tool_input_contract::{
+    render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
+};
 use super::tool_result_compaction::compact_tool_search_payload_summary_str;
 use super::turn_engine::{
     ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolBatchExecutionIntentStatus,
@@ -1901,17 +1904,53 @@ fn render_tool_failure_repair_guidance(
     let tool_request_summary = tool_request_summary?;
     let request_summary_json = serde_json::from_str::<Value>(tool_request_summary).ok()?;
     let tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
+    let request_summary_request = request_summary_json.get("request");
+    let reason_mentions_repairable_shape = tool_failure_reason.contains("tool input needs repair")
+        || tool_failure_reason.contains("payload must be an object")
+        || tool_failure_reason.contains("payload.");
+
+    if !reason_mentions_repairable_shape {
+        return None;
+    }
+
+    let shell_guidance = render_shell_failure_repair_guidance(
+        tool_name,
+        request_summary_request,
+        tool_failure_reason,
+    );
+
+    if shell_guidance.is_some() {
+        return shell_guidance;
+    }
+
+    let guidance_from_request =
+        render_tool_input_repair_guidance(tool_name, request_summary_request);
+
+    if guidance_from_request.is_some() {
+        return guidance_from_request;
+    }
+
+    render_tool_input_repair_guidance_from_reason(tool_name, tool_failure_reason)
+}
+
+fn render_shell_failure_repair_guidance(
+    tool_name: &str,
+    request_summary_request: Option<&Value>,
+    tool_failure_reason: &str,
+) -> Option<String> {
     if tool_name != "shell.exec" {
         return None;
     }
 
-    let request_object = request_summary_json.get("request")?.as_object()?;
+    let request_object = request_summary_request?.as_object()?;
     let command = request_object.get("command").and_then(Value::as_str)?;
     let has_path_separator = command.contains('/') || command.contains('\\');
     let mentions_payload_command = tool_failure_reason.contains("payload.command");
     let mentions_path_separator = tool_failure_reason.contains("path separators");
+    let should_render_guidance =
+        has_path_separator || mentions_payload_command || mentions_path_separator;
 
-    if !has_path_separator && !mentions_payload_command && !mentions_path_separator {
+    if !should_render_guidance {
         return None;
     }
 
@@ -3064,6 +3103,63 @@ mod tests {
 
         assert!(user_prompt.contains("Repair guidance for shell.exec"));
         assert!(user_prompt.contains("The failed request used `\"ls -la\" `; retry with `ls`"));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_renders_required_field_guidance_for_file_read() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason:
+                "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
+                    .to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"file.read","request":{}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "read the file",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for file.read"));
+        assert!(user_prompt.contains("Add required field `payload.path` as a string."));
+        assert!(user_prompt.contains("Expected payload shape: path:string,max_bytes?:integer."));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_uses_failure_reason_when_shell_summary_redacts_args_type() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
+                .to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"echo"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "run echo safely",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("Set `payload.args` to an array value."));
+        assert!(user_prompt.contains(
+            "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
+        ));
     }
 
     #[test]

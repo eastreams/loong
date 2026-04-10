@@ -168,6 +168,14 @@ pub fn render_onboard_screen_spec(
 
 pub fn render_tui_message_spec(spec: &TuiMessageSpec, width: usize) -> Vec<String> {
     let mut lines = vec![render_message_heading(spec)];
+    let body_lines = render_tui_message_body_spec(spec, width);
+
+    lines.extend(body_lines);
+    lines
+}
+
+pub fn render_tui_message_body_spec(spec: &TuiMessageSpec, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
 
     for section in &spec.sections {
         append_section_lines(&mut lines, section, width);

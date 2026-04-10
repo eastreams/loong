@@ -495,6 +495,43 @@ chat_completions_path = "/api/v3/chat/completions"
 
 Both `volcengine` and `volcengine_coding` use `api_key = { env = "ARK_API_KEY" }`. LoongClaw resolves that environment variable and sends it as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
 
+OpenCode Zen / Go example:
+
+```bash
+export OPENCODE_API_KEY=your-opencode-api-key
+```
+
+```toml
+active_provider = "opencode_zen"
+
+[providers.opencode_zen]
+kind = "opencode_zen"
+model = "gpt-5.4"
+api_key = { env = "OPENCODE_API_KEY" }
+```
+
+```toml
+active_provider = "opencode_go"
+
+[providers.opencode_go]
+kind = "opencode_go"
+model = "glm-5.1"
+api_key = { env = "OPENCODE_API_KEY" }
+```
+
+LoongClaw treats these as native providers and routes models by OpenCode product semantics:
+
+- `opencode_zen`
+  - `gpt-*` → OpenAI Responses
+  - `claude-*` → Anthropic Messages
+  - `gemini-*` → Google Generate Content
+  - everything else → OpenAI Chat Completions
+- `opencode_go`
+  - `minimax-*` → Anthropic Messages
+  - everything else → OpenAI Chat Completions
+
+Use bare model ids in LoongClaw (`gpt-5.4`, `claude-sonnet-4-6`, `glm-5.1`). LoongClaw strips only the matching OpenCode namespace prefix for the active provider, so `opencode/gpt-5.4` is normalized under `opencode_zen` and `opencode-go/glm-5.1` is normalized under `opencode_go`. Cross-provider prefixes are rejected with guidance to switch provider kinds or remove the copied prefix.
+
 Feishu channel example (webhook mode):
 
 ```bash
@@ -569,6 +606,8 @@ slot and supervise the enabled runtime-backed service-channel subset.
 
 The current gateway slice now includes:
 
+- `loongclaw status` for one operator-readable summary across the gateway
+  owner, ACP runtime, and durable work-unit health
 - `loongclaw gateway run` for the owner lifecycle
 - `loongclaw gateway status` for cross-process owner inspection
 - `loongclaw gateway stop` for cooperative shutdown
@@ -590,6 +629,10 @@ that centralizes loopback validation, bearer-token loading, and route helpers
 for `status`, `channels`, `runtime-snapshot`, `acp/sessions`, `acp/status`,
 `acp/observability`, `operator-summary`, and `stop`. That keeps dashboard,
 ACP inspection, and Web UI bootstrap logic out of ad-hoc file reads.
+
+```bash
+loongclaw status --config ~/.loongclaw/config.toml --json
+```
 
 ```bash
 loongclaw gateway run --config ~/.loongclaw/config.toml

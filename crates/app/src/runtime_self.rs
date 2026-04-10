@@ -188,11 +188,7 @@ fn read_runtime_self_source(
     path: &Path,
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Option<String> {
-    if !should_attempt_runtime_self_source_read(workspace_root, path) {
-        return None;
-    }
-
-    let request_path = request_path_from_workspace_root(workspace_root, path)?;
+    let request_path = runtime_self_source_request_path(workspace_root, path)?;
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
         payload: json!({
@@ -211,21 +207,30 @@ fn read_runtime_self_source(
     Some(trimmed.to_owned())
 }
 
+#[cfg(test)]
 pub(crate) fn should_attempt_runtime_self_source_read(workspace_root: &Path, path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
+    let request_path = runtime_self_source_request_path(workspace_root, path);
+    request_path.is_some()
+}
+
+pub(crate) fn runtime_self_source_request_path(
+    workspace_root: &Path,
+    path: &Path,
+) -> Option<String> {
+    let path_is_file = path.is_file();
+    if !path_is_file {
+        return None;
     }
 
-    let canonical_workspace_root = match workspace_root.canonicalize() {
-        Ok(canonical_workspace_root) => canonical_workspace_root,
-        Err(_) => return false,
-    };
-    let canonical_path = match path.canonicalize() {
-        Ok(canonical_path) => canonical_path,
-        Err(_) => return false,
-    };
+    let canonical_workspace_root = workspace_root.canonicalize().ok()?;
+    let canonical_path = path.canonicalize().ok()?;
 
-    canonical_path.starts_with(canonical_workspace_root)
+    let path_within_workspace = canonical_path.starts_with(canonical_workspace_root);
+    if !path_within_workspace {
+        return None;
+    }
+
+    request_path_from_workspace_root(workspace_root, path)
 }
 
 fn request_path_from_workspace_root(workspace_root: &Path, path: &Path) -> Option<String> {
@@ -497,6 +502,17 @@ mod tests {
         assert!(model.soul_guidance[0].contains("rigorous execution"));
         assert!(model.identity_context[0].contains("runtime helper"));
         assert!(model.user_context[0].contains("concise output"));
+    }
+
+    #[test]
+    fn runtime_self_source_request_path_skips_missing_optional_files() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let missing_tools_path = workspace_root.join("TOOLS.md");
+
+        let request_path = runtime_self_source_request_path(workspace_root, &missing_tools_path);
+
+        assert_eq!(request_path, None);
     }
 
     #[test]

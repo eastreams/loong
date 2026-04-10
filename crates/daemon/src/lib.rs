@@ -37,6 +37,7 @@ pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
+pub use self::delegate_child_cli::run_detached_delegate_child_cli;
 pub use self::env_compat::make_env_compatible;
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
@@ -81,9 +82,7 @@ pub fn run_memory_context_benchmark_cli(
     Err("benchmark-memory-context requires the daemon `memory-sqlite` feature".to_owned())
 }
 
-pub use base64;
-pub use kernel;
-pub use sha2;
+pub use {base64, kernel, sha2};
 
 pub mod audit_cli;
 mod browser_companion_diagnostics;
@@ -98,6 +97,7 @@ mod command_kind;
 pub mod completions_cli;
 mod control_plane_server;
 mod copilot_onboarding;
+mod delegate_child_cli;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
 mod env_compat;
@@ -137,13 +137,14 @@ pub mod session_cli;
 pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
+pub mod status_cli;
 pub mod supervisor;
 mod task_execution;
 pub mod tasks_cli;
 mod tlon_cli;
+mod tool_calling_readiness;
 pub mod trajectory_cli;
 pub mod work_unit_cli;
-
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
     push_channel_surface_plugin_bridge_contract,
@@ -173,6 +174,8 @@ use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
+#[rustfmt::skip]
+use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
     TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
@@ -180,7 +183,6 @@ pub use trajectory_cli::{
     format_trajectory_inspect_text, load_trajectory_export_artifact, run_trajectory_export_cli,
     run_trajectory_inspect_cli,
 };
-
 #[allow(
     clippy::expect_used,
     clippy::panic,
@@ -682,6 +684,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: tasks_cli::TasksCommands,
     },
+    #[command(hide = true)]
+    DelegateChildRun {
+        #[arg(long)]
+        config_path: String,
+        #[arg(long)]
+        payload_file: String,
+    },
     #[command(
         about = "Inspect and manage persisted runtime sessions through an operator-facing session shell",
         long_about = "Bounded operator-facing session shell for persisted runtime sessions.\n\nUse this surface to list visible sessions, inspect one session's workflow metadata, review lifecycle events, inspect transcript history, and apply bounded recover, cancel, or archive actions without inventing a second session model."
@@ -696,6 +705,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: sessions_cli::SessionsCommands,
     },
+    /// Print one operator-readable runtime summary over gateway, ACP, and durable work-unit health
+    #[rustfmt::skip]
+    Status { #[arg(long)] config: Option<String>, #[arg(long, default_value_t = false)] json: bool },
     #[command(
         visible_alias = "plugin",
         about = "Author manifest-first plugin packages and inspect shared plugin governance truth",
@@ -2306,7 +2318,6 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
 
 pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
 pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
-
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
     pub config: String,
@@ -2321,6 +2332,7 @@ pub struct RuntimeSnapshotCliState {
     pub visible_tool_names: Vec<String>,
     pub capability_snapshot: String,
     pub capability_snapshot_sha256: String,
+    pub tool_calling: RuntimeSnapshotToolCallingState,
     pub runtime_plugins: RuntimeSnapshotRuntimePluginsState,
     pub external_skills: RuntimeSnapshotExternalSkillsState,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
@@ -2571,16 +2583,16 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let (external_skills, snapshot_tool_runtime) =
         collect_runtime_snapshot_external_skills_state(&tool_runtime);
     let tool_view = mvp::tools::runtime_tool_view_for_runtime_config(&snapshot_tool_runtime);
-    let visible_tool_names = tool_view
+    let visible_tools = tool_view
         .tool_names()
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
-        runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
+        runtime_snapshot_tool_digest(&visible_tools, &capability_snapshot)?;
+    let tool_calling = collect_runtime_snapshot_tool_calling_state(config, visible_tools.len());
     let runtime_plugins = collect_runtime_snapshot_runtime_plugins_state(config);
     let restore_spec = build_runtime_snapshot_restore_spec(config, &external_skills);
-
     Ok(RuntimeSnapshotCliState {
         config: config_display,
         provider,
@@ -2591,9 +2603,10 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         enabled_service_channel_ids,
         channels,
         tool_runtime: snapshot_tool_runtime,
-        visible_tool_names,
+        visible_tool_names: visible_tools,
         capability_snapshot,
         capability_snapshot_sha256,
+        tool_calling,
         runtime_plugins,
         external_skills,
         restore_spec,

@@ -693,6 +693,51 @@ pub struct AsyncDelegateSpawnRequest {
     pub binding: OwnedConversationRuntimeBinding,
 }
 
+impl AsyncDelegateSpawnRequest {
+    pub fn runtime_self_continuity_json(&self) -> Result<Option<Value>, String> {
+        let continuity = self.runtime_self_continuity.as_ref();
+        let encoded_continuity =
+            continuity
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    format!("serialize async delegate runtime-self continuity failed: {error}")
+                })?;
+
+        Ok(encoded_continuity)
+    }
+}
+
+pub fn async_delegate_spawn_request_from_serialized_parts(
+    child_session_id: String,
+    parent_session_id: String,
+    task: String,
+    label: Option<String>,
+    profile: Option<DelegateBuiltinProfile>,
+    execution: ConstrainedSubagentExecution,
+    runtime_self_continuity_json: Option<Value>,
+    timeout_seconds: u64,
+    binding: OwnedConversationRuntimeBinding,
+) -> Result<AsyncDelegateSpawnRequest, String> {
+    let runtime_self_continuity = runtime_self_continuity_json
+        .map(serde_json::from_value::<RuntimeSelfContinuity>)
+        .transpose()
+        .map_err(|error| format!("parse async delegate runtime-self continuity failed: {error}"))?;
+    let request = AsyncDelegateSpawnRequest {
+        child_session_id,
+        parent_session_id,
+        task,
+        label,
+        profile,
+        execution,
+        runtime_self_continuity,
+        timeout_seconds,
+        binding,
+    };
+
+    Ok(request)
+}
+
 #[async_trait]
 pub trait AsyncDelegateSpawner: Send + Sync {
     async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String>;
@@ -717,84 +762,99 @@ impl DefaultAsyncDelegateSpawner {
 #[async_trait]
 impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
     async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String> {
-        let AsyncDelegateSpawnRequest {
-            child_session_id,
-            parent_session_id,
-            task,
-            label,
-            profile,
-            execution,
-            runtime_self_continuity,
-            timeout_seconds,
-            binding,
-        } = request;
-
-        let execution_timeout_seconds = execution.timeout_seconds;
-        if timeout_seconds != execution_timeout_seconds {
-            return Err(format!(
-                "async_delegate_timeout_mismatch: request timeout {} != execution timeout {}",
-                timeout_seconds, execution_timeout_seconds
-            ));
-        }
-
-        let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(
-            &self.config.memory,
-        ))?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(self.config.as_ref())?;
-        let runtime_ref = &runtime;
-        let child_session_id_for_spawn = child_session_id.clone();
-        let parent_session_id_for_spawn = parent_session_id.clone();
-        let borrowed_binding = binding.as_borrowed();
-        let child_binding = binding.clone();
-        super::delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
-            runtime_ref,
-            &parent_session_id,
-            &child_session_id,
-            borrowed_binding,
-            move || async move {
-                let started = repo.transition_session_with_event_if_current(
-                    &child_session_id_for_spawn,
-                    TransitionSessionWithEventIfCurrentRequest {
-                        expected_state: SessionState::Ready,
-                        next_state: SessionState::Running,
-                        last_error: None,
-                        event_kind: "delegate_started".to_owned(),
-                        actor_session_id: Some(parent_session_id_for_spawn.clone()),
-                        event_payload_json: execution
-                            .spawn_payload_with_profile_and_runtime_self_continuity(
-                                &task,
-                                label.as_deref(),
-                                profile,
-                                runtime_self_continuity.as_ref(),
-                            ),
-                    },
-                )?;
-                if started.is_none() {
-                    return Err(format!(
-                        "async_delegate_spawn_skipped: session `{}` was not in Ready state",
-                        child_session_id_for_spawn
-                    ));
-                }
-
-                let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
-                    self.config.as_ref(),
-                    runtime_ref,
-                    &child_session_id_for_spawn,
-                    &parent_session_id_for_spawn,
-                    label,
-                    &task,
-                    profile,
-                    execution,
-                    execution_timeout_seconds,
-                    child_binding.as_borrowed(),
-                )
-                .await;
-                Ok(())
-            },
-        )
-        .await?;
+        execute_async_delegate_spawn_request(self.config.as_ref(), request).await?;
         Ok(())
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub async fn execute_async_delegate_spawn_request(
+    config: &LoongClawConfig,
+    request: AsyncDelegateSpawnRequest,
+) -> Result<(), String> {
+    let AsyncDelegateSpawnRequest {
+        child_session_id,
+        parent_session_id,
+        task,
+        label,
+        profile,
+        execution,
+        runtime_self_continuity,
+        timeout_seconds,
+        binding,
+    } = request;
+
+    let execution_timeout_seconds = execution.timeout_seconds;
+
+    if timeout_seconds != execution_timeout_seconds {
+        return Err(format!(
+            "async_delegate_timeout_mismatch: request timeout {} != execution timeout {}",
+            timeout_seconds, execution_timeout_seconds
+        ));
+    }
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+    let runtime_ref = &runtime;
+    let child_session_id_for_spawn = child_session_id.clone();
+    let parent_session_id_for_spawn = parent_session_id.clone();
+    let borrowed_binding = binding.as_borrowed();
+    let child_binding = binding.clone();
+
+    super::delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+        runtime_ref,
+        &parent_session_id,
+        &child_session_id,
+        borrowed_binding,
+        move || async move {
+            let event_payload_json = execution
+                .spawn_payload_with_profile_and_runtime_self_continuity(
+                    &task,
+                    label.as_deref(),
+                    profile,
+                    runtime_self_continuity.as_ref(),
+                );
+            let transition_request = TransitionSessionWithEventIfCurrentRequest {
+                expected_state: SessionState::Ready,
+                next_state: SessionState::Running,
+                last_error: None,
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some(parent_session_id_for_spawn.clone()),
+                event_payload_json,
+            };
+            let started = repo.transition_session_with_event_if_current(
+                &child_session_id_for_spawn,
+                transition_request,
+            )?;
+
+            if started.is_none() {
+                return Err(format!(
+                    "async_delegate_spawn_skipped: session `{}` was not in Ready state",
+                    child_session_id_for_spawn
+                ));
+            }
+
+            let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
+                config,
+                runtime_ref,
+                &child_session_id_for_spawn,
+                &parent_session_id_for_spawn,
+                label,
+                &task,
+                profile,
+                execution,
+                execution_timeout_seconds,
+                child_binding.as_borrowed(),
+            )
+            .await;
+
+            Ok(())
+        },
+    )
+    .await?;
+
+    Ok(())
 }
 
 pub struct DefaultConversationRuntime<E = DefaultContextEngine> {
@@ -1248,6 +1308,14 @@ pub trait ConversationRuntime: Send + Sync {
         config: &LoongClawConfig,
     ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
         Some(Arc::new(DefaultAsyncDelegateSpawner::new(config)))
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn background_task_spawner(
+        &self,
+        _config: &LoongClawConfig,
+    ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
+        None
     }
 
     async fn bootstrap(

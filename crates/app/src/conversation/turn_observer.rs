@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::acp::{StreamingTokenEvent, TokenDelta, ToolCallDelta};
+use crate::tools::runtime_events::ToolRuntimeEvent;
 
 use super::lane_arbiter::ExecutionLane;
 
@@ -264,10 +265,29 @@ impl ConversationTurnToolEvent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationTurnRuntimeEvent {
+    pub tool_call_id: String,
+    pub event: ToolRuntimeEvent,
+}
+
+impl ConversationTurnRuntimeEvent {
+    pub fn new(tool_call_id: impl Into<String>, event: ToolRuntimeEvent) -> Self {
+        let tool_call_id = tool_call_id.into();
+
+        Self {
+            tool_call_id,
+            event,
+        }
+    }
+}
+
 pub trait ConversationTurnObserver: Send + Sync {
     fn on_phase(&self, _event: ConversationTurnPhaseEvent) {}
 
     fn on_tool(&self, _event: ConversationTurnToolEvent) {}
+
+    fn on_runtime(&self, _event: ConversationTurnRuntimeEvent) {}
 
     fn on_streaming_token(&self, _event: StreamingTokenEvent) {}
 }

@@ -46,7 +46,9 @@ use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
 use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
-    finalize_and_announce_delegate_child_terminal, format_delegate_child_panic,
+    enqueue_delegate_result_announce_with_memory_config,
+    finalize_and_announce_delegate_child_terminal,
+    finalize_async_delegate_spawn_failure_with_recovery, format_delegate_child_panic,
     next_delegate_child_depth_for_delegate, spawn_async_delegate_detached,
 };
 use super::ingress::ConversationIngressContext;
@@ -2657,7 +2659,9 @@ fn observe_provider_turn_tool_batch_started(
 
     for intent in &turn.tool_intents {
         let tool_name = effective_result_tool_name(intent);
-        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name);
+        let request_summary = summarize_single_tool_followup_request(intent);
+        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name)
+            .with_request_summary(request_summary);
         observer.on_tool(event);
     }
 }
@@ -2983,6 +2987,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         &turn,
         binding,
         ingress,
+        observer,
         followup_chain_active,
     )
     .await;
@@ -4260,6 +4265,111 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     let spawner = runtime
         .async_delegate_spawner(config)
         .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
+    let delegate_request = build_delegate_async_enqueue_request(
+        config,
+        runtime,
+        session_context,
+        delegate_request,
+        binding,
+    )
+    .await?;
+    let detached_config = std::sync::Arc::new(config.clone());
+    spawn_async_delegate_detached(
+        runtime_handle,
+        detached_config,
+        delegate_request.memory_config,
+        spawner,
+        delegate_request.request,
+        config.tools.delegate.max_frozen_bytes,
+        DelegateAnnounceSettings::from_config(config),
+    );
+
+    Ok(delegate_request.outcome)
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    delegate_request: crate::tools::delegate::DelegateRequest,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    if !config.tools.delegate.enabled {
+        return Err("app_tool_disabled: delegate is disabled by config".to_owned());
+    }
+
+    let spawner = runtime
+        .background_task_spawner(config)
+        .ok_or_else(|| {
+            "background_task_host_unavailable: current runtime does not provide a durable async background-task host"
+                .to_owned()
+        })?;
+    let delegate_request = build_delegate_async_enqueue_request(
+        config,
+        runtime,
+        session_context,
+        delegate_request,
+        binding,
+    )
+    .await?;
+    let spawn_result = spawner.spawn(delegate_request.request.clone()).await;
+
+    if let Err(error) = spawn_result {
+        finalize_async_delegate_spawn_failure_with_recovery(
+            &delegate_request.memory_config,
+            &delegate_request.request.child_session_id,
+            &delegate_request.request.parent_session_id,
+            delegate_request.request.label.clone(),
+            delegate_request.request.profile,
+            &delegate_request.request.execution,
+            config.tools.delegate.max_frozen_bytes,
+            error.clone(),
+        )?;
+        enqueue_delegate_result_announce_with_memory_config(
+            delegate_request.memory_config.clone(),
+            delegate_request.request.parent_session_id.clone(),
+            delegate_request.request.child_session_id.clone(),
+            DelegateAnnounceSettings::from_config(config),
+        );
+        emit_async_delegate_child_terminal_event(
+            runtime,
+            &delegate_request.request.parent_session_id,
+            &delegate_request.request.child_session_id,
+            delegate_request.request.label.as_deref(),
+            delegate_request.request.profile,
+            "failed",
+            delegate_request.request.execution.isolation,
+            0,
+            None,
+            Some(error.as_str()),
+            None,
+            delegate_request.request.execution.workspace_root.as_deref(),
+            None,
+            binding,
+        )
+        .await;
+        return Err(error);
+    }
+
+    Ok(delegate_request.outcome)
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct PreparedAsyncDelegateEnqueue {
+    memory_config: MemoryRuntimeConfig,
+    request: AsyncDelegateSpawnRequest,
+    outcome: loongclaw_contracts::ToolCoreOutcome,
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    delegate_request: crate::tools::delegate::DelegateRequest,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
@@ -4328,26 +4438,17 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         binding,
     )
     .await;
-    let detached_config = std::sync::Arc::new(config.clone());
-    spawn_async_delegate_detached(
-        runtime_handle,
-        detached_config,
-        memory_config,
-        spawner,
-        AsyncDelegateSpawnRequest {
-            child_session_id: child_session_id.clone(),
-            parent_session_id: session_context.session_id.clone(),
-            task: delegate_request.task,
-            label: child_label,
-            profile: delegate_policy.profile,
-            execution: queued_execution,
-            runtime_self_continuity,
-            timeout_seconds: delegate_policy.timeout_seconds,
-            binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
-        },
-        config.tools.delegate.max_frozen_bytes,
-        DelegateAnnounceSettings::from_config(config),
-    );
+    let request = AsyncDelegateSpawnRequest {
+        child_session_id: child_session_id.clone(),
+        parent_session_id: session_context.session_id.clone(),
+        task: delegate_request.task,
+        label: child_label,
+        profile: delegate_policy.profile,
+        execution: queued_execution,
+        runtime_self_continuity,
+        timeout_seconds: delegate_policy.timeout_seconds,
+        binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
+    };
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
@@ -4357,7 +4458,12 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         delegate_policy.timeout_seconds,
     );
     inject_delegate_workspace_metadata(&mut outcome, &execution, None, None);
-    Ok(outcome)
+
+    Ok(PreparedAsyncDelegateEnqueue {
+        memory_config,
+        request,
+        outcome,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4392,7 +4498,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     }
     let delegate_request =
         crate::tools::delegate::parse_delegate_request_with_default_timeout(&delegate_payload)?;
-    enqueue_delegate_async_with_runtime(
+    enqueue_background_task_with_runtime(
         config,
         runtime,
         &session_context,
@@ -4732,6 +4838,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     turn: &ProviderTurn,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
     followup_chain_active: bool,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
@@ -4830,6 +4937,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                     &app_dispatcher,
                     binding,
                     ingress,
+                    observer,
                 )
                 .await;
             (result, None, trace)
@@ -6735,6 +6843,46 @@ mod tests {
 
         assert_eq!(error.kind, PlanNodeErrorKind::PolicyDenied);
         assert_eq!(error.message, "no_kernel_context");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_single_tool_intent_marks_repairable_file_read_failure_retryable() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
+            "file.read",
+            json!({}),
+            Some("root-session"),
+            Some("turn-file-read-plan-node"),
+        );
+        let intent = ToolIntent {
+            tool_name,
+            args_json,
+            source: "provider_tool_call".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-file-read-plan-node".to_owned(),
+            tool_call_id: "call-file-read-plan-node".to_owned(),
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::planned_root_tool_view(),
+        );
+
+        let error = execute_single_tool_intent(
+            &intent,
+            &session_context,
+            &DefaultAppToolDispatcher::runtime(),
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+            None,
+            2_048,
+        )
+        .await
+        .expect_err("repairable file.read preflight should return a plan-node error");
+
+        assert_eq!(error.kind, PlanNodeErrorKind::Retryable);
+        assert!(error.message.contains("tool input needs repair"));
+        assert!(error.message.contains("file.read payload.path is required"));
     }
 
     #[cfg(feature = "tool-shell")]

@@ -334,6 +334,9 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Status { config, json } => {
+            status_cli::run_status_cli(config.as_deref(), json).await
+        }
         Commands::Tasks {
             config,
             json,
@@ -348,6 +351,10 @@ async fn main() {
             })
             .await
         }
+        Commands::DelegateChildRun {
+            config_path,
+            payload_file,
+        } => run_detached_delegate_child_cli(&config_path, &payload_file).await,
         Commands::Sessions {
             config,
             json,

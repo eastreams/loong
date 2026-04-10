@@ -90,7 +90,11 @@ pub(super) async fn fetch_available_models_with_policy(
             runtime.auth_context,
         )?;
         let mut headers = runtime.headers.clone();
-        transport::apply_auth_profile_headers(&mut headers, runtime.auth_profile)?;
+        transport::apply_auth_profile_headers(
+            &mut headers,
+            runtime.auth_profile,
+            runtime.provider.kind.auth_scheme(),
+        )?;
         let req = client
             .get(request_endpoint.as_str())
             .headers(headers)

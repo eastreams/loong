@@ -155,7 +155,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         ));
     }
 
-    let file_root_resolution = config.tools.file_root_resolution();
+    let mut file_root_resolution = config.tools.file_root_resolution();
     let uses_file_root_fallback = file_root_resolution.uses_current_working_directory_fallback();
     if uses_file_root_fallback {
         checks.push(DoctorCheck {
@@ -169,6 +169,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
                 .display()
                 .to_string();
             config.tools.file_root = Some(suggested_root.clone());
+            file_root_resolution = config.tools.file_root_resolution();
             config_mutated = true;
             fixes.push(format!("set tools.file_root={suggested_root}"));
         }
