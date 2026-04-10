@@ -440,6 +440,54 @@ mod tests {
     }
 
     #[test]
+    fn allows_search_root_within_file_root() {
+        let root_dir = tempfile::tempdir().expect("tempdir");
+        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let pack = test_pack();
+        let token = token_with_caps(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({
+            "tool_name": "glob.search",
+            "payload": {
+                "root": "src",
+                "pattern": "**/*.rs"
+            }
+        });
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+
+        assert!(ext.authorize_extension(&ctx).is_ok());
+    }
+
+    #[test]
+    fn denies_search_root_escape() {
+        let root_dir = tempfile::tempdir().expect("tempdir");
+        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let pack = test_pack();
+        let token = token_with_caps(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({
+            "tool_name": "content.search",
+            "payload": {
+                "root": "../outside",
+                "query": "needle"
+            }
+        });
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        let result = ext.authorize_extension(&ctx);
+
+        assert!(matches!(
+            result.unwrap_err(),
+            PolicyError::ExtensionDenied { .. }
+        ));
+    }
+
+    #[test]
     fn config_import_requires_filesystem_read() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();

@@ -584,7 +584,7 @@ fn invoked_discoverable_tool_request(payload: &Value) -> Option<(&str, &Value)> 
 fn tool_requires_network_egress(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "http.request"
+        HTTP_REQUEST_TOOL_NAME
             | "web.fetch"
             | "web.search"
             | "browser.open"
@@ -2240,7 +2240,8 @@ mod tests {
             .iter()
             .map(|entry| entry.name)
             .collect::<BTreeSet<_>>();
-        let expected = BTreeSet::from([
+        #[allow(unused_mut)]
+        let mut expected = BTreeSet::from([
             "approval_request_resolve",
             "approval_request_status",
             "approval_requests_list",
@@ -2256,7 +2257,6 @@ mod tests {
             "file.read",
             "file.write",
             "glob.search",
-            "http.request",
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
@@ -2268,6 +2268,8 @@ mod tests {
             "web.fetch",
             "web.search",
         ]);
+        #[cfg(feature = "tool-http")]
+        expected.insert(HTTP_REQUEST_TOOL_NAME);
         assert_eq!(names, expected);
     }
 
@@ -2285,7 +2287,8 @@ mod tests {
             .iter()
             .map(|entry| entry.name)
             .collect::<BTreeSet<_>>();
-        let expected = BTreeSet::from([
+        #[allow(unused_mut)]
+        let mut expected = BTreeSet::from([
             "approval_request_resolve",
             "approval_request_status",
             "approval_requests_list",
@@ -2301,7 +2304,6 @@ mod tests {
             "file.read",
             "file.write",
             "glob.search",
-            "http.request",
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
@@ -2312,6 +2314,8 @@ mod tests {
             "sessions_list",
             "web.fetch",
         ]);
+        #[cfg(feature = "tool-http")]
+        expected.insert(HTTP_REQUEST_TOOL_NAME);
 
         assert_eq!(names, expected);
     }
@@ -2632,11 +2636,12 @@ mod tests {
         assert!(!is_provider_exposed_tool_name("shell.exec"));
     }
 
+    #[cfg(feature = "tool-http")]
     #[test]
     fn provider_tool_definitions_include_http_request_when_enabled() {
         let catalog = tool_catalog();
         let http_request_descriptor = catalog
-            .descriptor("http.request")
+            .descriptor(HTTP_REQUEST_TOOL_NAME)
             .expect("http.request should be in the catalog");
         let definition = http_request_descriptor.provider_definition();
         let properties = definition["function"]["parameters"]["properties"]
@@ -4562,8 +4567,16 @@ mod tests {
         assert!(is_known_tool_name("shell.exec"));
         assert!(is_known_tool_name("shell_exec"));
         assert!(is_known_tool_name("shell"));
-        assert!(is_known_tool_name("http.request"));
-        assert!(is_known_tool_name("http_request"));
+        #[cfg(feature = "tool-http")]
+        {
+            assert!(is_known_tool_name(HTTP_REQUEST_TOOL_NAME));
+            assert!(is_known_tool_name("http_request"));
+        }
+        #[cfg(not(feature = "tool-http"))]
+        {
+            assert!(!is_known_tool_name(HTTP_REQUEST_TOOL_NAME));
+            assert!(!is_known_tool_name("http_request"));
+        }
         assert!(is_known_tool_name("web.fetch"));
         assert!(is_known_tool_name("web_fetch"));
         assert!(is_known_tool_name("feishu.whoami"));
