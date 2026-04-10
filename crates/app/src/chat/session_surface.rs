@@ -307,9 +307,27 @@ fn filtered_command_palette_items(
 #[derive(Clone, Default)]
 struct LiveSurfaceModel {
     snapshot: Option<CliChatLiveSurfaceSnapshot>,
-    tool_lines: Vec<String>,
+    state: CliChatLiveSurfaceState,
     last_assistant_preview: Option<String>,
     last_phase_label: String,
+}
+
+fn sync_live_surface_snapshot(live: &mut LiveSurfaceModel) {
+    let snapshot = build_cli_chat_live_surface_snapshot(&live.state);
+    live.snapshot = snapshot;
+}
+
+fn fallback_live_surface_snapshot() -> CliChatLiveSurfaceSnapshot {
+    CliChatLiveSurfaceSnapshot {
+        phase: ConversationTurnPhase::Preparing,
+        provider_round: None,
+        lane: None,
+        tool_call_count: 0,
+        message_count: None,
+        estimated_tokens: None,
+        draft_preview: None,
+        tools: Vec::new(),
+    }
 }
 
 struct SurfaceGuard {
@@ -1088,7 +1106,7 @@ impl ChatSessionSurface {
             state.pending_turn = false;
             state.live.last_assistant_preview = Some(assistant_text);
             state.live.snapshot = None;
-            state.live.tool_lines.clear();
+            state.live.state = CliChatLiveSurfaceState::default();
             state.selected_entry = Some(state.transcript.len().saturating_sub(1));
             state.sticky_bottom = true;
         }
@@ -1426,16 +1444,7 @@ impl ChatSessionSurface {
                     .live
                     .snapshot
                     .clone()
-                    .unwrap_or(CliChatLiveSurfaceSnapshot {
-                        phase: ConversationTurnPhase::Preparing,
-                        provider_round: None,
-                        lane: None,
-                        tool_call_count: 0,
-                        message_count: None,
-                        estimated_tokens: None,
-                        draft_preview: None,
-                        tool_activity_lines: state.live.tool_lines.clone(),
-                    }),
+                    .unwrap_or_else(fallback_live_surface_snapshot),
                 width,
             );
             lines.extend(
@@ -1595,10 +1604,18 @@ impl ChatSessionSurface {
                         .map(|snapshot| snapshot.tool_call_count)
                         .unwrap_or(0)
                 ));
-                if state.live.tool_lines.is_empty() {
+                let tool_lines = state
+                    .live
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        format_cli_chat_live_tool_activity_lines(snapshot.tools.as_slice())
+                    })
+                    .unwrap_or_default();
+                if tool_lines.is_empty() {
                     lines.push("no tool activity recorded".to_owned());
                 } else {
-                    lines.extend(state.live.tool_lines.iter().take(10).cloned());
+                    lines.extend(tool_lines.into_iter().take(10));
                 }
             }
             SidebarTab::Help => {
@@ -1998,26 +2015,35 @@ struct SurfaceLiveObserver {
     term: Term,
 }
 
+fn live_surface_content_width(term: &Term, state: &SurfaceState) -> usize {
+    let (_, width_u16) = term.size();
+    let total_width = usize::from(width_u16);
+    let sidebar_visible = state.sidebar_visible && total_width >= MIN_SIDEBAR_TOTAL_WIDTH;
+    let sidebar_width = if sidebar_visible { SIDEBAR_WIDTH } else { 0 };
+
+    total_width
+        .saturating_sub(sidebar_width)
+        .saturating_sub(if sidebar_visible { 3 } else { 2 })
+        .max(24)
+}
+
 impl ConversationTurnObserver for SurfaceLiveObserver {
     fn on_phase(&self, event: ConversationTurnPhaseEvent) {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned_state) => poisoned_state.into_inner(),
         };
-        state.live.snapshot = Some(CliChatLiveSurfaceSnapshot {
-            phase: event.phase,
-            provider_round: event.provider_round,
-            lane: event.lane,
-            tool_call_count: event.tool_call_count,
-            message_count: event.message_count,
-            estimated_tokens: event.estimated_tokens,
-            draft_preview: state
-                .live
-                .snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.draft_preview.clone()),
-            tool_activity_lines: state.live.tool_lines.clone(),
-        });
+
+        if cli_chat_live_phase_starts_provider_request(event.phase) {
+            reset_cli_chat_live_request_state(&mut state.live.state);
+        }
+
+        state.live.state.latest_phase_event = Some(event.clone());
+        reconcile_cli_chat_live_tool_states_for_phase(
+            &mut state.live.state.tool_states,
+            event.phase,
+        );
+        sync_live_surface_snapshot(&mut state.live);
         state.live.last_phase_label = event.phase.as_str().to_owned();
         drop(state);
         let _ = render_live_update(self.term.clone(), self.state.clone());
@@ -2028,17 +2054,23 @@ impl ConversationTurnObserver for SurfaceLiveObserver {
             Ok(state) => state,
             Err(poisoned_state) => poisoned_state.into_inner(),
         };
-        let detail = event.detail.unwrap_or_else(|| "-".to_owned());
-        state.live.tool_lines.push(format!(
-            "[{}] {} - {}",
-            event.state.as_str(),
-            event.tool_name,
-            detail
-        ));
-        let tool_lines = state.live.tool_lines.clone();
-        if let Some(snapshot) = state.live.snapshot.as_mut() {
-            snapshot.tool_activity_lines = tool_lines;
-        }
+        let render_width = live_surface_content_width(&self.term, &state);
+
+        apply_cli_chat_live_tool_event(&mut state.live.state, &event, render_width);
+        sync_live_surface_snapshot(&mut state.live);
+        drop(state);
+        let _ = render_live_update(self.term.clone(), self.state.clone());
+    }
+
+    fn on_runtime(&self, event: ConversationTurnRuntimeEvent) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned_state) => poisoned_state.into_inner(),
+        };
+        let render_width = live_surface_content_width(&self.term, &state);
+
+        apply_cli_chat_live_runtime_event(&mut state.live.state, &event, render_width);
+        sync_live_surface_snapshot(&mut state.live);
         drop(state);
         let _ = render_live_update(self.term.clone(), self.state.clone());
     }
@@ -2048,29 +2080,46 @@ impl ConversationTurnObserver for SurfaceLiveObserver {
             Ok(state) => state,
             Err(poisoned_state) => poisoned_state.into_inner(),
         };
-        if let Some(text) = event.delta.text {
-            let preview = state
+        let render_width = live_surface_content_width(&self.term, &state);
+        let current_phase = state
+            .live
+            .state
+            .latest_phase_event
+            .as_ref()
+            .map(|phase_event| phase_event.phase);
+
+        if let Some(text_delta) = event.delta.text
+            && let Some(current_phase) = current_phase
+            && phase_supports_cli_chat_live_preview(current_phase)
+        {
+            let preview_char_limit = cli_chat_live_preview_char_limit(render_width);
+            state.live.state.total_text_chars_seen = state
                 .live
-                .snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.draft_preview.clone())
-                .unwrap_or_default();
-            let updated = format!("{preview}{text}");
-            if let Some(snapshot) = state.live.snapshot.as_mut() {
-                snapshot.draft_preview = Some(updated);
-            } else {
-                state.live.snapshot = Some(CliChatLiveSurfaceSnapshot {
-                    phase: ConversationTurnPhase::RequestingProvider,
-                    provider_round: None,
-                    lane: None,
-                    tool_call_count: 0,
-                    message_count: None,
-                    estimated_tokens: None,
-                    draft_preview: Some(updated),
-                    tool_activity_lines: state.live.tool_lines.clone(),
-                });
-            }
+                .state
+                .total_text_chars_seen
+                .saturating_add(text_delta.chars().count());
+            append_cli_chat_live_buffer(
+                &mut state.live.state.draft_preview,
+                text_delta.as_str(),
+                preview_char_limit,
+            );
         }
+
+        let tool_call_update = match (event.delta.tool_call, event.index) {
+            (Some(tool_call_delta), Some(index)) => Some((tool_call_delta, index)),
+            (Some(_), None) | (None, Some(_)) | (None, None) => None,
+        };
+
+        if let Some((tool_call_delta, index)) = tool_call_update {
+            update_cli_chat_live_tool_state(
+                &mut state.live.state,
+                index,
+                &tool_call_delta,
+                render_width,
+            );
+        }
+
+        sync_live_surface_snapshot(&mut state.live);
         drop(state);
         let _ = render_live_update(self.term.clone(), self.state.clone());
     }
@@ -2107,53 +2156,45 @@ fn render_live_update(term: Term, state: Arc<Mutex<SurfaceState>>) -> CliResult<
         .max(24);
     let reserved_height = header_lines.len() + HEADER_GAP + COMPOSER_HEIGHT + STATUS_BAR_HEIGHT + 1;
     let transcript_height = total_height.saturating_sub(reserved_height).max(5);
-    let transcript_lines =
-        {
-            let mut lines = Vec::new();
-            for (entry_index, entry) in snapshot_state.transcript.iter().enumerate() {
-                if !lines.is_empty() {
-                    lines.push(String::new());
-                }
-                for (line_index, line) in entry.lines.iter().enumerate() {
-                    let clipped = clipped_display_line(line, content_width.saturating_sub(2));
-                    if line_index == 0 && snapshot_state.selected_entry == Some(entry_index) {
-                        lines.push(format!("▶ {clipped}"));
-                    } else {
-                        lines.push(clipped);
-                    }
+    let transcript_lines = {
+        let mut lines = Vec::new();
+        for (entry_index, entry) in snapshot_state.transcript.iter().enumerate() {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            for (line_index, line) in entry.lines.iter().enumerate() {
+                let clipped = clipped_display_line(line, content_width.saturating_sub(2));
+                if line_index == 0 && snapshot_state.selected_entry == Some(entry_index) {
+                    lines.push(format!("▶ {clipped}"));
+                } else {
+                    lines.push(clipped);
                 }
             }
-            if snapshot_state.pending_turn {
-                if !lines.is_empty() {
-                    lines.push(String::new());
-                }
-                lines.extend(
-                    render_cli_chat_live_surface_lines_with_width(
-                        &snapshot_state.live.snapshot.clone().unwrap_or(
-                            CliChatLiveSurfaceSnapshot {
-                                phase: ConversationTurnPhase::Preparing,
-                                provider_round: None,
-                                lane: None,
-                                tool_call_count: 0,
-                                message_count: None,
-                                estimated_tokens: None,
-                                draft_preview: None,
-                                tool_activity_lines: snapshot_state.live.tool_lines.clone(),
-                            },
-                        ),
-                        content_width,
-                    )
-                    .into_iter()
-                    .map(|line| clipped_display_line(&line, content_width)),
-                );
+        }
+        if snapshot_state.pending_turn {
+            if !lines.is_empty() {
+                lines.push(String::new());
             }
-            if lines.len() > transcript_height {
-                let start = lines.len().saturating_sub(transcript_height);
-                lines.into_iter().skip(start).collect()
-            } else {
-                lines
-            }
-        };
+            lines.extend(
+                render_cli_chat_live_surface_lines_with_width(
+                    &snapshot_state
+                        .live
+                        .snapshot
+                        .clone()
+                        .unwrap_or_else(fallback_live_surface_snapshot),
+                    content_width,
+                )
+                .into_iter()
+                .map(|line| clipped_display_line(&line, content_width)),
+            );
+        }
+        if lines.len() > transcript_height {
+            let start = lines.len().saturating_sub(transcript_height);
+            lines.into_iter().skip(start).collect()
+        } else {
+            lines
+        }
+    };
 
     let startup_summary = snapshot_state
         .startup_summary

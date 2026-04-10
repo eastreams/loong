@@ -61,6 +61,7 @@ mod provider_switch;
 #[cfg(test)]
 mod required_capabilities_tests;
 pub mod runtime_config;
+pub(crate) mod runtime_events;
 mod session;
 #[cfg(feature = "memory-sqlite")]
 mod session_search;

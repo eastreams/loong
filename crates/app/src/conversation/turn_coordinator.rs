@@ -2478,7 +2478,9 @@ fn observe_provider_turn_tool_batch_started(
 
     for intent in &turn.tool_intents {
         let tool_name = effective_result_tool_name(intent);
-        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name);
+        let request_summary = summarize_single_tool_followup_request(intent);
+        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name)
+            .with_request_summary(request_summary);
         observer.on_tool(event);
     }
 }
@@ -2804,6 +2806,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         &turn,
         binding,
         ingress,
+        observer,
         followup_chain_active,
     )
     .await;
@@ -4654,6 +4657,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     turn: &ProviderTurn,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
     followup_chain_active: bool,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
@@ -4752,6 +4756,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                     &app_dispatcher,
                     binding,
                     ingress,
+                    observer,
                 )
                 .await;
             (result, None, trace)

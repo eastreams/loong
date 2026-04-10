@@ -1,11 +1,12 @@
 #[cfg(feature = "tool-shell")]
 use super::process_exec;
+#[cfg(feature = "tool-shell")]
+use super::runtime_events::current_tool_runtime_event_sink;
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-shell")]
 use std::path::{Path, PathBuf};
-
 pub(super) fn execute_shell_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -73,11 +74,16 @@ pub(super) fn execute_shell_tool_with_config(
             ));
         }
 
+        let runtime_event_sink = current_tool_runtime_event_sink();
+        // process_exec owns runtime command metrics emission. Keep shell.exec
+        // focused on payload construction so the live surface observes one
+        // metrics event per command.
         let output = run_shell_async(run_shell_command_with_timeout(
             normalized_command.as_str(),
             &args,
             cwd.as_path(),
             timeout_ms,
+            runtime_event_sink.clone(),
         ))??;
 
         Ok(ToolCoreOutcome {
@@ -186,8 +192,19 @@ async fn run_shell_command_with_timeout(
     args: &[String],
     cwd: &std::path::Path,
     timeout_ms: u64,
+    runtime_event_sink: Option<
+        std::sync::Arc<dyn crate::tools::runtime_events::ToolRuntimeEventSink>,
+    >,
 ) -> Result<std::process::Output, String> {
-    process_exec::run_process_with_timeout(command, args, cwd, timeout_ms, "shell command").await
+    process_exec::run_process_with_timeout_with_sink(
+        command,
+        args,
+        cwd,
+        timeout_ms,
+        "shell command",
+        runtime_event_sink,
+    )
+    .await
 }
 
 #[cfg(all(test, feature = "tool-shell", unix))]
@@ -195,7 +212,32 @@ mod tests {
     use super::*;
     use crate::test_support::unique_temp_dir;
     use crate::tools::runtime_config::ToolRuntimeConfig;
+    use crate::tools::runtime_events::{
+        ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
+    };
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct RecordingRuntimeSink {
+        events: Mutex<Vec<ToolRuntimeEvent>>,
+    }
+
+    fn lock_runtime_events(
+        sink: &RecordingRuntimeSink,
+    ) -> std::sync::MutexGuard<'_, Vec<ToolRuntimeEvent>> {
+        match sink.events.lock() {
+            Ok(events) => events,
+            Err(poisoned_events) => poisoned_events.into_inner(),
+        }
+    }
+
+    impl ToolRuntimeEventSink for RecordingRuntimeSink {
+        fn emit(&self, event: ToolRuntimeEvent) {
+            let mut events = lock_runtime_events(self);
+            events.push(event);
+        }
+    }
 
     fn shell_test_config(root: &Path) -> ToolRuntimeConfig {
         ToolRuntimeConfig {
@@ -274,5 +316,152 @@ mod tests {
             execute_shell_tool_with_config(request, &config).expect_err("file cwd should fail");
 
         assert!(error.contains("is not a directory"), "error: {error}");
+    }
+
+    #[test]
+    fn shell_exec_emits_runtime_output_delta_and_metrics_events() {
+        let root = unique_temp_dir("loongclaw-shell-runtime-events");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            shell_allow: ["printf".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "printf",
+                "args": ["hello\\nworld"],
+            }),
+        };
+        let sink = Arc::new(RecordingRuntimeSink::default());
+        let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
+            execute_shell_tool_with_config(request, &config)
+        }));
+        let outcome = outcome.expect("shell.exec should succeed under runtime sink");
+        let events = lock_runtime_events(&sink);
+        let has_stdout_delta = events.iter().any(|event| {
+            if let ToolRuntimeEvent::OutputDelta(delta) = event {
+                let is_stdout = delta.stream == ToolRuntimeStream::Stdout;
+                let contains_output = delta.chunk.contains("hello");
+                return is_stdout && contains_output;
+            }
+
+            false
+        });
+        let has_metrics = events.iter().any(|event| {
+            if let ToolRuntimeEvent::CommandMetrics(metrics) = event {
+                return metrics.exit_code == Some(0);
+            }
+
+            false
+        });
+        let metrics_count = events
+            .iter()
+            .filter(|event| matches!(event, ToolRuntimeEvent::CommandMetrics(_)))
+            .count();
+
+        assert_eq!(outcome.status, "ok");
+        assert!(has_stdout_delta, "events: {events:?}");
+        assert!(has_metrics, "events: {events:?}");
+        assert_eq!(metrics_count, 1, "events: {events:?}");
+    }
+
+    #[test]
+    fn shell_exec_runtime_output_delta_counts_terminal_newline_without_extra_line() {
+        let root = unique_temp_dir("loongclaw-shell-runtime-line-count");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            shell_allow: ["printf".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "printf",
+                "args": ["alpha\\nbeta\\n"],
+            }),
+        };
+        let sink = Arc::new(RecordingRuntimeSink::default());
+        let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
+            execute_shell_tool_with_config(request, &config)
+        }));
+        let outcome = outcome.expect("shell.exec should succeed");
+        let events = lock_runtime_events(&sink);
+        let total_lines = events.iter().rev().find_map(|event| {
+            if let ToolRuntimeEvent::OutputDelta(delta) = event {
+                let is_stdout = delta.stream == ToolRuntimeStream::Stdout;
+                if is_stdout {
+                    return Some(delta.total_lines);
+                }
+            }
+
+            None
+        });
+        let total_lines = total_lines.expect("stdout delta should exist");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(total_lines, 2);
+    }
+
+    #[test]
+    fn shell_exec_emits_runtime_metrics_for_timeout_failures() {
+        let root = unique_temp_dir("loongclaw-shell-runtime-timeout-metrics");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            shell_allow: ["sh".to_owned()].into_iter().collect(),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "sh",
+                "args": ["-c", "sleep 2"],
+                "timeout_ms": 1000,
+            }),
+        };
+        let sink = Arc::new(RecordingRuntimeSink::default());
+        let runtime_sink: Arc<dyn ToolRuntimeEventSink> = sink.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let error = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
+            execute_shell_tool_with_config(request, &config)
+        }));
+        let error = error.expect_err("shell.exec should time out");
+        let events = lock_runtime_events(&sink);
+        let metrics = events.iter().find_map(|event| {
+            if let ToolRuntimeEvent::CommandMetrics(metrics) = event {
+                return Some(metrics);
+            }
+
+            None
+        });
+        let metrics = metrics.expect("timeout should still emit runtime metrics");
+        let metrics_count = events
+            .iter()
+            .filter(|event| matches!(event, ToolRuntimeEvent::CommandMetrics(_)))
+            .count();
+
+        assert!(error.contains("timed out after 1000ms"), "error: {error}");
+        assert_eq!(metrics.exit_code, None);
+        assert!(metrics.duration_ms > 0, "metrics: {metrics:?}");
+        assert_eq!(metrics_count, 1, "events: {events:?}");
     }
 }

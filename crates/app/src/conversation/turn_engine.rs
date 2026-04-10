@@ -27,6 +27,9 @@ use crate::operator::session_graph::OperatorSessionGraph;
 use crate::session::repository::{
     NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };
+use crate::tools::runtime_events::{
+    ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
+};
 use crate::tools::{
     ResolvedToolExecution, ToolApprovalMode, ToolDescriptor, ToolExecutionKind,
     ToolSchedulingClass, ToolView, delegate_child_tool_view_for_contract,
@@ -43,6 +46,7 @@ use super::autonomy_policy::{
 use super::runtime::{DefaultConversationRuntime, SessionContext};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_result_compaction::compact_tool_search_payload_summary;
+use super::turn_observer::{ConversationTurnObserverHandle, ConversationTurnRuntimeEvent};
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
 use super::tool_input_contract::detect_repairable_tool_request_issue;
@@ -2501,6 +2505,30 @@ async fn execute_tool_intent_via_kernel(
         })
 }
 
+struct ObserverToolRuntimeEventSink {
+    observer: ConversationTurnObserverHandle,
+    tool_call_id: String,
+}
+
+impl ToolRuntimeEventSink for ObserverToolRuntimeEventSink {
+    fn emit(&self, event: ToolRuntimeEvent) {
+        let runtime_event = ConversationTurnRuntimeEvent::new(self.tool_call_id.clone(), event);
+
+        self.observer.on_runtime(runtime_event);
+    }
+}
+
+fn build_observer_tool_runtime_event_sink(
+    observer: &ConversationTurnObserverHandle,
+    tool_call_id: &str,
+) -> Arc<dyn ToolRuntimeEventSink> {
+    let observer_sink = ObserverToolRuntimeEventSink {
+        observer: Arc::clone(observer),
+        tool_call_id: tool_call_id.to_owned(),
+    };
+    Arc::new(observer_sink)
+}
+
 /// Single orchestration boundary for tool-call evaluation and execution.
 ///
 /// `evaluate_turn` performs synchronous validation (no execution).
@@ -3114,6 +3142,7 @@ impl<'a> ToolBatchHarness<'a> {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         trace: &mut ToolBatchExecutionTrace,
+        observer: Option<&ConversationTurnObserverHandle>,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
         let result = async {
@@ -3138,6 +3167,7 @@ impl<'a> ToolBatchHarness<'a> {
                             &mut trace.intent_outcomes,
                             &mut trace.outcome_records,
                             trace_segment,
+                            observer,
                         )
                         .await?
                     }
@@ -3150,6 +3180,7 @@ impl<'a> ToolBatchHarness<'a> {
                             &mut trace.intent_outcomes,
                             &mut trace.outcome_records,
                             trace_segment,
+                            observer,
                         )
                         .await?
                     }
@@ -3177,6 +3208,7 @@ impl<'a> ToolBatchHarness<'a> {
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
+        observer: Option<&ConversationTurnObserverHandle>,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
         let result = async {
@@ -3190,6 +3222,7 @@ impl<'a> ToolBatchHarness<'a> {
                         session_context,
                         app_dispatcher,
                         binding,
+                        observer,
                     )
                     .await
                 {
@@ -3264,6 +3297,7 @@ impl<'a> ToolBatchHarness<'a> {
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
+        observer: Option<&ConversationTurnObserverHandle>,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
         let payload_summary_limit_chars = self.engine.tool_result_payload_summary_limit_chars;
@@ -3289,6 +3323,7 @@ impl<'a> ToolBatchHarness<'a> {
                             session_context,
                             app_dispatcher,
                             binding,
+                            observer,
                         )
                         .await
                     {
@@ -3752,6 +3787,7 @@ impl TurnEngine {
             app_dispatcher,
             binding,
             ingress,
+            None,
         )
         .await
         .0
@@ -3764,6 +3800,7 @@ impl TurnEngine {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
+        observer: Option<&ConversationTurnObserverHandle>,
     ) -> (TurnResult, Option<ToolBatchExecutionTrace>) {
         match self.validate_turn_in_context(turn, session_context) {
             Ok(TurnValidation::FinalText(text)) => return (TurnResult::FinalText(text), None),
@@ -3821,6 +3858,7 @@ impl TurnEngine {
                 app_dispatcher,
                 binding,
                 &mut trace,
+                observer,
             )
             .await
         {
@@ -3857,6 +3895,7 @@ impl TurnEngine {
         session_context: &SessionContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
+        observer: Option<&ConversationTurnObserverHandle>,
     ) -> Result<ToolCoreOutcome, TurnResult> {
         match prepared_intent.execution_kind {
             ToolExecutionKind::Core => {
@@ -3866,13 +3905,24 @@ impl TurnEngine {
                         "no_kernel_context",
                     ));
                 };
-                execute_tool_intent_via_kernel(
+                let execution = execute_tool_intent_via_kernel(
                     prepared_intent.request.clone(),
                     kernel_ctx,
                     prepared_intent.trusted_internal_context,
-                )
-                .await
-                .map_err(turn_result_from_tool_execution_failure)
+                );
+                let outcome = match observer {
+                    Some(observer) => {
+                        let sink = build_observer_tool_runtime_event_sink(
+                            observer,
+                            prepared_intent.intent.tool_call_id.as_str(),
+                        );
+
+                        with_tool_runtime_event_sink(sink, execution).await
+                    }
+                    None => execution.await,
+                };
+
+                outcome.map_err(turn_result_from_tool_execution_failure)
             }
             ToolExecutionKind::App => match app_dispatcher
                 .execute_app_tool(session_context, prepared_intent.request.clone(), binding)
@@ -5904,6 +5954,7 @@ mod tests {
                 &dispatcher,
                 ConversationRuntimeBinding::direct(),
                 None,
+                None,
             )
             .await;
 
@@ -5968,6 +6019,7 @@ mod tests {
                 &dispatcher,
                 ConversationRuntimeBinding::direct(),
                 None,
+                None,
             )
             .await;
 
@@ -6010,6 +6062,7 @@ mod tests {
                 &session_context,
                 &dispatcher,
                 ConversationRuntimeBinding::direct(),
+                None,
                 None,
             )
             .await;
@@ -6068,6 +6121,7 @@ mod tests {
                 &dispatcher,
                 ConversationRuntimeBinding::direct(),
                 None,
+                None,
             )
             .await;
 
@@ -6112,6 +6166,7 @@ mod tests {
                 &session_context,
                 &dispatcher,
                 ConversationRuntimeBinding::direct(),
+                None,
                 None,
             )
             .await;

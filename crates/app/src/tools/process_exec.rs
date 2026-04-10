@@ -7,14 +7,20 @@ use std::path::Path;
 #[cfg(feature = "tool-shell")]
 use std::process::{Output, Stdio};
 #[cfg(feature = "tool-shell")]
+use std::sync::Arc;
+#[cfg(feature = "tool-shell")]
 use std::thread;
 #[cfg(feature = "tool-shell")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(feature = "tool-shell")]
 use tokio::io::AsyncReadExt;
 #[cfg(feature = "tool-shell")]
 use tokio::process::Command;
 
+#[cfg(feature = "tool-shell")]
+use super::runtime_events::{
+    ToolCommandMetrics, ToolOutputDelta, ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream,
+};
 #[cfg(feature = "tool-shell")]
 use crate::process_launch::retry_executable_file_busy_async;
 
@@ -66,12 +72,20 @@ where
 }
 
 #[cfg(feature = "tool-shell")]
-async fn read_capped<R>(mut reader: R, cap: usize, stream_name: &str) -> Result<Vec<u8>, String>
+async fn read_capped_with_runtime_events<R>(
+    mut reader: R,
+    cap: usize,
+    stream_name: &str,
+    stream: ToolRuntimeStream,
+    runtime_event_sink: Option<Arc<dyn ToolRuntimeEventSink>>,
+) -> Result<Vec<u8>, String>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut output = Vec::new();
     let mut buffer = [0_u8; 8_192];
+    let mut total_bytes = 0_usize;
+    let mut newline_count = 0_usize;
 
     loop {
         let read = reader
@@ -82,10 +96,33 @@ where
             break;
         }
 
+        total_bytes = total_bytes.saturating_add(read);
+        let chunk_bytes = buffer.get(..read).unwrap_or(buffer.as_slice());
+        let chunk_newlines = chunk_bytes.iter().filter(|byte| **byte == b'\n').count();
+        newline_count = newline_count.saturating_add(chunk_newlines);
+        let last_byte_was_newline = chunk_bytes.last().copied() == Some(b'\n');
+
         let remaining = cap.saturating_sub(output.len());
         if remaining > 0 {
             let to_copy = remaining.min(read);
-            output.extend(buffer.iter().take(to_copy).copied());
+            let retained_chunk = chunk_bytes.get(..to_copy).unwrap_or(chunk_bytes);
+            output.extend(retained_chunk.iter().copied());
+        }
+
+        let has_partial_final_line = total_bytes > 0 && !last_byte_was_newline;
+        let total_lines = newline_count + usize::from(has_partial_final_line);
+        let truncated = total_bytes > cap;
+
+        if let Some(sink) = runtime_event_sink.as_ref() {
+            let chunk_text = String::from_utf8_lossy(chunk_bytes).into_owned();
+            let event = ToolRuntimeEvent::OutputDelta(ToolOutputDelta {
+                stream,
+                chunk: chunk_text,
+                total_bytes,
+                total_lines,
+                truncated,
+            });
+            sink.emit(event);
         }
     }
 
@@ -93,17 +130,19 @@ where
 }
 
 #[cfg(feature = "tool-shell")]
-pub(super) async fn run_process_with_timeout<P, S>(
+pub(super) async fn run_process_with_timeout_with_sink<P, S>(
     program: P,
     args: &[S],
     cwd: &Path,
     timeout_ms: u64,
     error_prefix: &str,
+    runtime_event_sink: Option<Arc<dyn ToolRuntimeEventSink>>,
 ) -> Result<Output, String>
 where
     P: AsRef<OsStr>,
     S: AsRef<OsStr>,
 {
+    let started_at = Instant::now();
     let mut command = Command::new(program);
     let sanitized_env = loongclaw_contracts::sanitized_child_process_env();
 
@@ -134,12 +173,31 @@ where
         .take()
         .ok_or_else(|| format!("{error_prefix} stderr pipe missing"))?;
 
-    let stdout_task =
-        tokio::spawn(async move { read_capped(stdout, OUTPUT_CAP_BYTES, "stdout").await });
-    let stderr_task =
-        tokio::spawn(async move { read_capped(stderr, OUTPUT_CAP_BYTES, "stderr").await });
+    let metrics_runtime_event_sink = runtime_event_sink.clone();
+    let stdout_runtime_event_sink = runtime_event_sink.clone();
+    let stdout_task = tokio::spawn(async move {
+        read_capped_with_runtime_events(
+            stdout,
+            OUTPUT_CAP_BYTES,
+            "stdout",
+            ToolRuntimeStream::Stdout,
+            stdout_runtime_event_sink,
+        )
+        .await
+    });
+    let stderr_runtime_event_sink = runtime_event_sink;
+    let stderr_task = tokio::spawn(async move {
+        read_capped_with_runtime_events(
+            stderr,
+            OUTPUT_CAP_BYTES,
+            "stderr",
+            ToolRuntimeStream::Stderr,
+            stderr_runtime_event_sink,
+        )
+        .await
+    });
 
-    match tokio::time::timeout(duration, child.wait()).await {
+    let result = match tokio::time::timeout(duration, child.wait()).await {
         Ok(Ok(status)) => {
             let (stdout_result, stderr_result) = tokio::join!(stdout_task, stderr_task);
             let stdout = stdout_result
@@ -175,7 +233,21 @@ where
             let _ = tokio::join!(stdout_task, stderr_task);
             Err(format!("{error_prefix} timed out after {timeout_ms}ms"))
         }
+    };
+
+    if let Some(sink) = metrics_runtime_event_sink.as_ref() {
+        let duration_ms = started_at.elapsed().as_millis();
+        let duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
+        let exit_code = result.as_ref().ok().and_then(|output| output.status.code());
+        let metrics = ToolCommandMetrics {
+            exit_code,
+            duration_ms,
+        };
+        let event = ToolRuntimeEvent::CommandMetrics(metrics);
+        sink.emit(event);
     }
+
+    result
 }
 
 #[cfg(all(test, feature = "tool-shell"))]

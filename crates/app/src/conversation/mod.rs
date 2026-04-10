@@ -142,6 +142,7 @@ pub use turn_middleware_registry::{
     list_turn_middleware_ids, list_turn_middleware_metadata, register_turn_middleware,
     resolve_turn_middleware, resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
+pub(crate) use turn_observer::ConversationTurnRuntimeEvent;
 pub use turn_observer::{
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
     ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
