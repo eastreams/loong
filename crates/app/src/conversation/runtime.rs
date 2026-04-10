@@ -791,7 +791,7 @@ pub async fn execute_async_delegate_spawn_request(
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
-    let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+    let runtime = load_default_conversation_runtime(config)?;
     let runtime_ref = &runtime;
     let child_session_id_for_spawn = child_session_id.clone();
     let parent_session_id_for_spawn = parent_session_id.clone();
@@ -857,6 +857,9 @@ pub struct DefaultConversationRuntime<E = DefaultContextEngine> {
     context_engine: E,
     turn_middlewares: Vec<Box<dyn ConversationTurnMiddleware>>,
 }
+
+pub type BoxedDefaultConversationRuntime =
+    DefaultConversationRuntime<Box<dyn ConversationContextEngine>>;
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Clone)]
@@ -1300,6 +1303,21 @@ impl DefaultConversationRuntime<Box<dyn ConversationContextEngine>> {
             turn_middlewares,
         })
     }
+}
+
+pub fn load_default_conversation_runtime(
+    config: &LoongClawConfig,
+) -> CliResult<BoxedDefaultConversationRuntime> {
+    BoxedDefaultConversationRuntime::from_config_or_env(config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub fn load_hosted_default_conversation_runtime(
+    config: &LoongClawConfig,
+) -> CliResult<HostedConversationRuntime<BoxedDefaultConversationRuntime>> {
+    let inner_runtime = load_default_conversation_runtime(config)?;
+    let runtime = HostedConversationRuntime::new(inner_runtime);
+    Ok(runtime)
 }
 
 #[async_trait]
@@ -2213,5 +2231,19 @@ mod tests {
             &resolved_background_spawner,
             &override_background_spawner
         ));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn load_hosted_default_conversation_runtime_keeps_default_async_spawner_only() {
+        let config = LoongClawConfig::default();
+        let runtime = load_hosted_default_conversation_runtime(&config)
+            .expect("load hosted default conversation runtime");
+
+        let async_delegate_spawner = runtime.async_delegate_spawner(&config);
+        let background_task_spawner = runtime.background_task_spawner(&config);
+
+        assert!(async_delegate_spawner.is_some());
+        assert!(background_task_spawner.is_none());
     }
 }

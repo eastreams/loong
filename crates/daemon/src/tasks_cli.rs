@@ -275,17 +275,15 @@ fn build_tasks_create_runtime(
     // conversation runtime.
     #[cfg(feature = "memory-sqlite")]
     {
-        let inner_runtime =
-            mvp::conversation::DefaultConversationRuntime::from_config_or_env(config)?;
         let background_task_spawner = Arc::new(DetachedTasksSpawner);
-        let runtime = mvp::conversation::HostedConversationRuntime::new(inner_runtime)
+        let runtime = mvp::conversation::load_hosted_default_conversation_runtime(config)?
             .with_background_task_spawner(background_task_spawner);
         Ok(runtime)
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let runtime = mvp::conversation::DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = mvp::conversation::load_default_conversation_runtime(config)?;
         Ok(runtime)
     }
 }

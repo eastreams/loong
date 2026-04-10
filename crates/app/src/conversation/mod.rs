@@ -83,7 +83,8 @@ pub use runtime::{
     ConversationRuntime, DefaultConversationRuntime, HostedConversationRuntime, SessionContext,
     TurnMiddlewareRuntimeSnapshot, TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
     async_delegate_spawn_request_from_serialized_parts, collect_context_engine_runtime_snapshot,
-    execute_async_delegate_spawn_request, resolve_context_engine_selection,
+    execute_async_delegate_spawn_request, load_default_conversation_runtime,
+    load_hosted_default_conversation_runtime, resolve_context_engine_selection,
     resolve_turn_middleware_selection,
 };
 pub use runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};

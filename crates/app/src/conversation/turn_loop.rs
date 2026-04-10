@@ -11,7 +11,7 @@ use crate::memory::runtime_config::MemoryRuntimeConfig;
 use super::super::config::LoongClawConfig;
 use super::ProviderErrorMode;
 use super::persistence::persist_reply_turns_with_mode;
-use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
+use super::runtime::{ConversationRuntime, load_default_conversation_runtime};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
@@ -100,7 +100,7 @@ impl ConversationTurnLoop {
         error_mode: ProviderErrorMode,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = load_default_conversation_runtime(config)?;
         self.handle_turn_with_runtime(
             config, session_id, user_input, error_mode, &runtime, binding,
         )
