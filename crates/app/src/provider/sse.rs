@@ -150,6 +150,7 @@ pub(super) struct SseEventStream {
     byte_stream: Pin<Box<dyn Stream<Item = Result<Bytes, TransportError>> + Send>>,
     decoder: SseDecoder,
     pending: VecDeque<Result<Value, TransportError>>,
+    finished: bool,
 }
 
 impl SseEventStream {
@@ -160,6 +161,7 @@ impl SseEventStream {
             byte_stream,
             decoder: SseDecoder::default(),
             pending: VecDeque::new(),
+            finished: false,
         }
     }
 }
@@ -173,29 +175,37 @@ impl Stream for SseEventStream {
             if let Some(item) = this.pending.pop_front() {
                 return Poll::Ready(Some(item));
             }
+            if this.finished {
+                return Poll::Ready(None);
+            }
             match this.byte_stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => match this.decoder.push_chunk(bytes.as_ref()) {
                     Ok(messages) => {
                         this.pending.extend(messages.into_iter().map(Ok));
                     }
                     Err(error) => {
+                        this.finished = true;
                         this.pending.push_back(Err(error));
                     }
                 },
                 Poll::Ready(Some(Err(error))) => {
+                    this.finished = true;
                     return Poll::Ready(Some(Err(error)));
                 }
-                Poll::Ready(None) => match this.decoder.finish() {
-                    Ok(messages) => {
-                        if messages.is_empty() {
-                            return Poll::Ready(None);
+                Poll::Ready(None) => {
+                    this.finished = true;
+                    match this.decoder.finish() {
+                        Ok(messages) => {
+                            if messages.is_empty() {
+                                return Poll::Ready(None);
+                            }
+                            this.pending.extend(messages.into_iter().map(Ok));
                         }
-                        this.pending.extend(messages.into_iter().map(Ok));
+                        Err(error) => {
+                            return Poll::Ready(Some(Err(error)));
+                        }
                     }
-                    Err(error) => {
-                        return Poll::Ready(Some(Err(error)));
-                    }
-                },
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -390,5 +400,27 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["type"], "text_delta");
         assert_eq!(messages[0]["text"], "Hello");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sse_event_stream_stops_after_terminal_decode_error() {
+        use futures_util::StreamExt;
+
+        let invalid_bytes = Bytes::from_static(&[0x80]);
+        let valid_bytes = Bytes::from_static(br#"data: {"type":"text_delta","text":"late"}\n\n"#);
+        let byte_stream = futures_util::stream::iter(vec![Ok(invalid_bytes), Ok(valid_bytes)]);
+        let mut stream = SseEventStream::new(Box::pin(byte_stream));
+
+        let first = stream.next().await.expect("first event should exist");
+        assert!(
+            first.is_err(),
+            "first event should be the terminal decode error"
+        );
+
+        let second = stream.next().await;
+        assert!(
+            second.is_none(),
+            "stream should stop polling after the terminal decode error"
+        );
     }
 }

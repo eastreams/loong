@@ -744,16 +744,26 @@ fn should_fallback_responses_to_chat_completions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ProviderConfig;
     use crate::provider::auth_profile_runtime::resolve_provider_auth_profiles;
     use crate::provider::mock_transport::MockTransport;
     use crate::provider::transport::RequestAuthContext;
     use crate::provider::transport_trait::TransportResponse;
+    use loongclaw_contracts::SecretRef;
     use serde_json::json;
 
     #[tokio::test(flavor = "current_thread")]
     async fn request_completion_with_provider_uses_injected_transport() {
-        let config = LoongClawConfig::default();
-        let provider = config.provider.clone();
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Openai,
+            api_key: Some(SecretRef::Inline("dispatch-test-secret".to_owned())),
+            api_key_env: None,
+            oauth_access_token: None,
+            oauth_access_token_env: None,
+            ..ProviderConfig::default()
+        };
+        let mut config = LoongClawConfig::default();
+        config.provider = provider.clone();
         let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
         let auth_context = RequestAuthContext::default();
         let auth_profiles = resolve_provider_auth_profiles(&provider);
@@ -788,6 +798,12 @@ mod tests {
         .expect("dispatch should use injected transport");
 
         assert_eq!(result, "dispatch mocked completion");
-        assert_eq!(transport.requests().len(), 1);
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 1);
+        let authorization_header = requests[0]
+            .headers
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(authorization_header, Some("Bearer dispatch-test-secret"));
     }
 }
