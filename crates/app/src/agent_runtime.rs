@@ -232,14 +232,15 @@ impl AgentRuntime {
             || matches!(request.turn_mode, AgentTurnMode::Acp);
 
         if explicit_acp_request {
+            let turn_config = load_runtime_turn_config(runtime)?;
             let acp_manager = match acp_manager {
                 Some(manager) => manager,
-                None => crate::acp::shared_acp_session_manager(&runtime.config)?,
+                None => crate::acp::shared_acp_session_manager(&turn_config)?,
             };
             let acp_options = acp_turn_options_from_runtime(runtime, event_sink, request)
                 .with_provenance(provenance);
             let execution = crate::acp::execute_acp_conversation_turn_for_address_with_manager(
-                &runtime.config,
+                &turn_config,
                 &turn_address,
                 message,
                 &acp_options,
@@ -276,15 +277,7 @@ impl AgentRuntime {
             };
         }
 
-        let has_provenance = provenance.trace_id.is_some()
-            || provenance.source_message_id.is_some()
-            || provenance.ack_cursor.is_some();
-        let effective_ingress = if has_provenance { ingress } else { None };
-        let effective_provenance = if has_provenance {
-            provenance
-        } else {
-            AcpTurnProvenance::default()
-        };
+        let (effective_ingress, effective_provenance) = effective_turn_context(ingress, provenance);
         let output_text = crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode(
             runtime,
             &turn_address,
@@ -475,8 +468,16 @@ fn cli_chat_options_for_turn_request(request: &AgentTurnRequest) -> CliChatOptio
         acp_requested: request.acp || matches!(request.turn_mode, AgentTurnMode::Acp),
         acp_event_stream: request.acp_event_stream,
         acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
-        acp_working_directory: request.acp_cwd.as_deref().map(std::path::PathBuf::from),
+        acp_working_directory: normalized_turn_working_directory(request.acp_cwd.as_deref()),
     }
+}
+
+fn normalized_turn_working_directory(value: Option<&str>) -> Option<std::path::PathBuf> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(value))
 }
 
 fn resolved_session_address(
@@ -542,6 +543,24 @@ fn kernel_scope_for_turn_mode(turn_mode: AgentTurnMode) -> &'static str {
     }
 }
 
+fn effective_turn_context<'a>(
+    ingress: Option<&'a ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'a>,
+) -> (
+    Option<&'a ConversationIngressContext>,
+    AcpTurnProvenance<'a>,
+) {
+    let has_provenance = provenance.trace_id.is_some()
+        || provenance.source_message_id.is_some()
+        || provenance.ack_cursor.is_some();
+    let effective_provenance = if has_provenance {
+        provenance
+    } else {
+        AcpTurnProvenance::default()
+    };
+    (ingress, effective_provenance)
+}
+
 async fn load_runtime_prompt_frame_summary(
     runtime: &crate::chat::CliTurnRuntime,
 ) -> PromptFrameEventSummary {
@@ -562,6 +581,24 @@ async fn load_runtime_prompt_frame_summary(
         let _ = runtime;
         PromptFrameEventSummary::default()
     }
+}
+
+fn load_runtime_turn_config(
+    runtime: &crate::chat::CliTurnRuntime,
+) -> CliResult<crate::config::LoongClawConfig> {
+    if runtime.resolved_path.as_os_str().is_empty() {
+        return Ok(runtime.config.clone());
+    }
+    let path_exists = runtime
+        .resolved_path
+        .try_exists()
+        .map_err(|error| format!("failed to access runtime config path: {error}"))?;
+    if !path_exists {
+        return Ok(runtime.config.clone());
+    }
+    runtime
+        .config
+        .reload_provider_runtime_state_from_path(runtime.resolved_path.as_path())
 }
 
 fn build_prompt_plans(summary: &PromptFrameEventSummary) -> (PromptAssemblyPlan, PromptCachePlan) {
@@ -610,11 +647,14 @@ pub async fn load_agent_runtime(
     session_hint: Option<&str>,
 ) -> CliResult<(std::path::PathBuf, crate::config::LoongClawConfig, String)> {
     let (resolved_path, config) = load_config(config_path)?;
-    let runtime = initialize_cli_turn_runtime(
-        Some(resolved_path.to_string_lossy().as_ref()),
+    let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        resolved_path.clone(),
+        config.clone(),
         session_hint,
         &CliChatOptions::default(),
         "agent-runtime-load",
+        crate::chat::CliSessionRequirement::AllowImplicitDefault,
+        true,
     )?;
     Ok((resolved_path, config, runtime.session_id))
 }
@@ -622,6 +662,27 @@ pub async fn load_agent_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_test_ingress_context() -> ConversationIngressContext {
+        ConversationIngressContext {
+            channel: crate::conversation::ConversationIngressChannel {
+                platform: "feishu".to_owned(),
+                configured_account_id: Some("configured-account".to_owned()),
+                account_id: Some("account".to_owned()),
+                conversation_id: "conversation".to_owned(),
+                participant_id: Some("participant".to_owned()),
+                thread_id: Some("thread".to_owned()),
+            },
+            delivery: crate::conversation::ConversationIngressDelivery {
+                source_message_id: None,
+                sender_identity_key: Some("sender".to_owned()),
+                thread_root_id: Some("thread-root".to_owned()),
+                parent_message_id: Some("parent".to_owned()),
+                resources: Vec::new(),
+            },
+            private: crate::conversation::ConversationIngressPrivateContext::default(),
+        }
+    }
 
     #[test]
     fn build_prompt_plans_flags_prefix_reuse_and_drift() {
@@ -652,5 +713,34 @@ mod tests {
         assert!(!prompt_cache.cached_prefix_reused);
         assert!(prompt_cache.session_latched_context_drifted);
         assert!(!prompt_cache.session_local_recall_drifted);
+    }
+
+    #[test]
+    fn cli_chat_options_for_turn_request_ignores_blank_working_directory() {
+        let request = AgentTurnRequest {
+            acp_cwd: Some("   ".to_owned()),
+            ..AgentTurnRequest::default()
+        };
+
+        let options = cli_chat_options_for_turn_request(&request);
+
+        assert!(options.acp_working_directory.is_none());
+        assert!(!options.acp_requested);
+        assert!(!options.acp_event_stream);
+        assert!(options.acp_bootstrap_mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn effective_turn_context_keeps_ingress_without_provenance() {
+        let ingress = make_test_ingress_context();
+        let provenance = AcpTurnProvenance::default();
+
+        let (effective_ingress, effective_provenance) =
+            effective_turn_context(Some(&ingress), provenance);
+
+        assert!(effective_ingress.is_some());
+        assert!(effective_provenance.trace_id.is_none());
+        assert!(effective_provenance.source_message_id.is_none());
+        assert!(effective_provenance.ack_cursor.is_none());
     }
 }

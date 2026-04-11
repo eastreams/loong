@@ -307,6 +307,8 @@ mod tests {
         );
         let expected_workspace_root =
             std::env::current_dir().expect("current_dir should resolve during runtime env tests");
+        let expected_workspace_root =
+            dunce::canonicalize(&expected_workspace_root).unwrap_or(expected_workspace_root);
         let expected_workspace_root = expected_workspace_root.display().to_string();
         assert_eq!(
             std::env::var("LOONGCLAW_WORKSPACE_ROOT").ok().as_deref(),
