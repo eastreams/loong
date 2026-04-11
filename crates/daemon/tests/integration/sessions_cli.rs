@@ -269,6 +269,50 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         },
     )
     .expect("append assistant turn");
+    let prompt_frame_event = json!({
+        "type": "conversation_event",
+        "event": "provider_prompt_frame_snapshot",
+        "payload": {
+            "provider_round": 1,
+            "phase": "initial",
+            "prompt_frame": {
+                "schema_version": 1,
+                "total_estimated_tokens": 42,
+                "stable_runtime_segment_count": 1,
+                "stable_runtime_estimated_tokens": 12,
+                "session_latched_segment_count": 1,
+                "session_latched_estimated_tokens": 8,
+                "advisory_profile_segment_count": 1,
+                "advisory_profile_estimated_tokens": 6,
+                "session_local_recall_segment_count": 1,
+                "session_local_recall_estimated_tokens": 5,
+                "recent_window_segment_count": 1,
+                "recent_window_estimated_tokens": 7,
+                "turn_ephemeral_segment_count": 0,
+                "turn_ephemeral_estimated_tokens": 0,
+                "stable_runtime_hash": "stable-a",
+                "session_latched_hash": "latched-a",
+                "stable_prefix_hash_sha256": "prefix-a",
+                "cached_prefix_sha256": "cached-a",
+                "advisory_profile_hash": "profile-a",
+                "session_local_recall_hash": "recall-a",
+                "recent_window_hash": "window-a",
+                "turn_ephemeral_hash": null
+            }
+        }
+    });
+    let prompt_frame_event =
+        serde_json::to_string(&prompt_frame_event).expect("serialize prompt frame event");
+    mvp::memory::append_turn_direct(
+        "delegate:session-1",
+        "assistant",
+        &prompt_frame_event,
+        &mvp::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(root.path().join("memory.sqlite3")),
+            ..mvp::memory::runtime_config::MemoryRuntimeConfig::default()
+        },
+    )
+    .expect("append prompt frame event");
 
     let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
         loongclaw_daemon::sessions_cli::SessionsCommandOptions {
@@ -305,7 +349,15 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         execution.payload["detail"]["workflow"]["binding"]["worktree"]["worktree_id"],
         "delegate:session-1"
     );
-    assert_eq!(execution.payload["detail"]["session"]["turn_count"], 2);
+    assert_eq!(execution.payload["detail"]["session"]["turn_count"], 3);
+    assert_eq!(
+        execution.payload["detail"]["prompt_frame"]["summary"]["latest_phase"],
+        "initial"
+    );
+    assert_eq!(
+        execution.payload["detail"]["prompt_frame"]["summary"]["latest_total_estimated_tokens"],
+        42
+    );
     let recipes = execution.payload["recipes"]
         .as_array()
         .expect("recipes array");
@@ -367,6 +419,14 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
     assert!(
         rendered.contains("runtime_self_continuity: present"),
         "status render should surface continuity summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("prompt_frame: phase=initial total_tokens=42"),
+        "status render should surface prompt-frame summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("stable_prefix=prefix-a"),
+        "status render should surface prompt-frame stable prefix hash: {rendered}"
     );
 }
 
