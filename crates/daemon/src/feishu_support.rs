@@ -189,7 +189,7 @@ pub fn feishu_auth_start_command_hint(
     include_doc_write: bool,
 ) -> String {
     let mut parts = vec![format!(
-        "{} feishu auth start",
+        "{} feishu auth login",
         mvp::config::active_cli_command_name()
     )];
     let configured_account_id = configured_account_id.trim();
@@ -215,6 +215,19 @@ pub fn feishu_auth_select_command_hint(configured_account_id: &str) -> String {
         parts.push(format!("--account {configured_account_id}"));
     }
     parts.push("--open-id <open_id>".to_owned());
+    parts.join(" ")
+}
+
+pub fn feishu_auth_exchange_command_hint(configured_account_id: &str) -> String {
+    let mut parts = vec![format!(
+        "{} feishu auth exchange",
+        mvp::config::active_cli_command_name()
+    )];
+    let configured_account_id = configured_account_id.trim();
+    if !configured_account_id.is_empty() {
+        parts.push(format!("--account {configured_account_id}"));
+    }
+    parts.push("--callback-url '<full_callback_url>'".to_owned());
     parts.join(" ")
 }
 
@@ -643,7 +656,7 @@ mod tests {
 
         assert_eq!(
             command.as_deref(),
-            Some("loong feishu auth start --account feishu_main")
+            Some("loong feishu auth login --account feishu_main")
         );
     }
 
@@ -659,7 +672,7 @@ mod tests {
         assert_eq!(
             recommendations.auth_start_command.as_deref(),
             Some(
-                "loong feishu auth start --account feishu_main --capability doc-write --capability message-write"
+                "loong feishu auth login --account feishu_main --capability doc-write --capability message-write"
             )
         );
     }
@@ -682,7 +695,7 @@ mod tests {
         assert!(!recommendations.missing_message_write_scope);
         assert_eq!(
             recommendations.auth_start_command.as_deref(),
-            Some("loong feishu auth start --account feishu_main --capability doc-write")
+            Some("loong feishu auth login --account feishu_main --capability doc-write")
         );
     }
 
@@ -704,7 +717,7 @@ mod tests {
         assert!(recommendations.missing_message_write_scope);
         assert_eq!(
             recommendations.auth_start_command.as_deref(),
-            Some("loong feishu auth start --account feishu_main --capability message-write")
+            Some("loong feishu auth login --account feishu_main --capability message-write")
         );
     }
 

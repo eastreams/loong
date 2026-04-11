@@ -1,22 +1,197 @@
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+use std::sync::Arc;
+use std::time::Duration;
 
+use axum::{
+    Router,
+    extract::{Query, State},
+    http::StatusCode,
+    response::Html,
+    routing::get,
+};
 use clap::{Args, Subcommand, ValueEnum};
 use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
+use reqwest::Url;
 use serde_json::{Value, json};
+use tokio::sync::{Mutex, oneshot};
 
 use crate::feishu_support::{
     FeishuAuthCapability, FeishuDaemonContext, build_account_recommendations,
-    build_grant_recommendations, build_pkce_pair, feishu_auth_start_command_hint,
-    generate_oauth_state, load_feishu_daemon_context, normalized_auth_start_capabilities,
-    resolve_scopes, unix_ts_now,
+    build_grant_recommendations, build_pkce_pair, feishu_auth_exchange_command_hint,
+    feishu_auth_start_command_hint, generate_oauth_state, load_feishu_daemon_context,
+    normalized_auth_start_capabilities, resolve_scopes, unix_ts_now,
 };
 
 const DEFAULT_FEISHU_REDIRECT_URI: &str = "http://127.0.0.1:34819/callback";
+const FEISHU_LOCAL_CALLBACK_WAIT_TIMEOUT_S: u64 = 180;
 
 fn active_cli_command_name() -> &'static str {
     mvp::config::active_cli_command_name()
+}
+
+fn normalize_feishu_callback_wait_timeout_s(value: Option<u64>) -> u64 {
+    value.unwrap_or(FEISHU_LOCAL_CALLBACK_WAIT_TIMEOUT_S).max(1)
+}
+
+fn open_url_in_default_browser(url: &str) -> CliResult<()> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("browser launch requires a non-empty URL".to_owned());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("rundll32");
+        command.args(["url.dll,FileProtocolHandler", url]);
+        command
+    };
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    let status = command
+        .status()
+        .map_err(|error| format!("launch default browser failed: {error}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "launch default browser exited with status {status}"
+    ))
+}
+
+fn print_feishu_serve_preflight(
+    resolved: &mvp::config::ResolvedFeishuChannelConfig,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+) {
+    let bind_override = bind_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let path_override = path_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match resolved.mode {
+        mvp::config::FeishuChannelServeMode::Websocket => {
+            #[allow(clippy::print_stdout)]
+            {
+                println!(
+                    "feishu serve preflight: configured_account={} account={} mode=websocket transport=outbound_websocket_client local_listener=disabled",
+                    resolved.configured_account_id, resolved.account.label
+                );
+            }
+            if bind_override.is_some() || path_override.is_some() {
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!(
+                        "warning: effective Feishu serve mode is websocket; local HTTP overrides are ignored. Set `[feishu] mode = \"webhook\"` if you want bind/path to take effect."
+                    );
+                }
+            }
+        }
+        mvp::config::FeishuChannelServeMode::Webhook => {
+            let effective_bind = bind_override.unwrap_or(resolved.webhook_bind.as_str());
+            let effective_path = path_override.unwrap_or(resolved.webhook_path.as_str());
+            #[allow(clippy::print_stdout)]
+            {
+                println!(
+                    "feishu serve preflight: configured_account={} account={} mode=webhook bind={} path={}",
+                    resolved.configured_account_id,
+                    resolved.account.label,
+                    effective_bind,
+                    effective_path
+                );
+            }
+        }
+    }
+}
+
+fn apply_feishu_mode_override(
+    config: &mut mvp::config::LoongClawConfig,
+    configured_account_id: &str,
+    mode: FeishuServeModeOverride,
+) {
+    if let Some(account) = config.feishu.accounts.get_mut(configured_account_id) {
+        account.mode = Some(mode.to_config_mode());
+        return;
+    }
+    config.feishu.mode = Some(mode.to_config_mode());
+}
+
+fn reject_feishu_websocket_listener_overrides(
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+) -> CliResult<()> {
+    let bind_override = bind_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let path_override = path_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if bind_override.is_none() && path_override.is_none() {
+        return Ok(());
+    }
+    Err(
+        "feishu serve --mode websocket does not open a local HTTP listener; remove --bind/--path or switch to --mode webhook"
+            .to_owned(),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FeishuLoopbackRedirectSpec {
+    redirect_uri: String,
+    bind_target: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FeishuCapturedLocalCallback {
+    state: String,
+    code: String,
+    callback_url: String,
+}
+
+#[derive(Clone)]
+struct FeishuLocalCallbackState {
+    redirect_uri: String,
+    expected_state: String,
+    callback_sender: Arc<Mutex<Option<oneshot::Sender<FeishuCapturedLocalCallback>>>>,
+}
+
+#[derive(Debug)]
+struct FeishuLocalCallbackServer {
+    callback_receiver: oneshot::Receiver<FeishuCapturedLocalCallback>,
+    shutdown_sender: Option<oneshot::Sender<()>>,
+    join_handle: tokio::task::JoinHandle<CliResult<()>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FeishuServeModeOverride {
+    Websocket,
+    Webhook,
+}
+
+impl FeishuServeModeOverride {
+    fn to_config_mode(self) -> mvp::config::FeishuChannelServeMode {
+        match self {
+            Self::Websocket => mvp::config::FeishuChannelServeMode::Websocket,
+            Self::Webhook => mvp::config::FeishuChannelServeMode::Webhook,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -63,12 +238,18 @@ pub enum FeishuCommand {
     /// Reply to one Feishu message or thread with text, post, image, file, or card content
     Reply(FeishuReplyArgs),
     /// Run Feishu serve mode (webhook or websocket)
-    Serve(FeishuServeArgs),
+    Serve {
+        #[command(subcommand)]
+        command: Option<FeishuServeCommand>,
+        #[command(flatten)]
+        args: FeishuServeArgs,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum FeishuAuthCommand {
-    /// Generate an OAuth authorize URL and persist short-lived state locally
+    /// Start an interactive login or generate an OAuth authorize URL and persist short-lived state locally
+    #[command(visible_alias = "login")]
     Start(FeishuAuthStartArgs),
     /// Exchange an OAuth authorization code for a stored user grant
     Exchange(FeishuAuthExchangeArgs),
@@ -79,7 +260,16 @@ pub enum FeishuAuthCommand {
     /// Inspect stored grant freshness and required scope coverage
     Status(FeishuGrantArgs),
     /// Delete a stored user grant
+    #[command(visible_alias = "logout")]
     Revoke(FeishuGrantArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FeishuServeCommand {
+    /// Run Feishu in websocket mode (default, no local HTTP listener)
+    Websocket(FeishuServeWebsocketArgs),
+    /// Run Feishu in webhook mode (local HTTP listener)
+    Webhook(FeishuServeWebhookArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -196,6 +386,10 @@ pub struct FeishuAuthStartArgs {
     pub common: FeishuCommonArgs,
     #[arg(long, default_value = DEFAULT_FEISHU_REDIRECT_URI)]
     pub redirect_uri: String,
+    #[arg(long, default_value_t = false)]
+    pub no_launch_browser: bool,
+    #[arg(long)]
+    pub wait_timeout_s: Option<u64>,
     #[arg(long)]
     pub principal_hint: Option<String>,
     #[arg(long = "scope")]
@@ -211,9 +405,11 @@ pub struct FeishuAuthExchangeArgs {
     #[command(flatten)]
     pub common: FeishuCommonArgs,
     #[arg(long)]
-    pub state: String,
+    pub state: Option<String>,
     #[arg(long)]
-    pub code: String,
+    pub code: Option<String>,
+    #[arg(long)]
+    pub callback_url: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -776,40 +972,132 @@ pub struct FeishuReplyArgs {
 pub struct FeishuServeArgs {
     #[command(flatten)]
     pub common: FeishuCommonArgs,
+    #[arg(long, value_enum)]
+    pub mode: Option<FeishuServeModeOverride>,
     #[arg(long)]
     pub bind: Option<String>,
     #[arg(long)]
     pub path: Option<String>,
 }
 
-pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
+#[derive(Args, Debug, Clone)]
+pub struct FeishuServeWebsocketArgs {
+    #[command(flatten)]
+    pub common: FeishuCommonArgs,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuServeWebhookArgs {
+    #[command(flatten)]
+    pub common: FeishuCommonArgs,
+    #[arg(long)]
+    pub bind: Option<String>,
+    #[arg(long)]
+    pub path: Option<String>,
+}
+
+fn feishu_serve_args_from_subcommand(command: FeishuServeCommand) -> FeishuServeArgs {
     match command {
-        FeishuCommand::Auth { command } => match command {
-            FeishuAuthCommand::Start(args) => {
+        FeishuServeCommand::Websocket(command) => FeishuServeArgs {
+            common: command.common,
+            mode: Some(FeishuServeModeOverride::Websocket),
+            bind: None,
+            path: None,
+        },
+        FeishuServeCommand::Webhook(command) => FeishuServeArgs {
+            common: command.common,
+            mode: Some(FeishuServeModeOverride::Webhook),
+            bind: command.bind,
+            path: command.path,
+        },
+    }
+}
+
+pub async fn run_feishu_serve_command(args: &FeishuServeArgs) -> CliResult<()> {
+    let (resolved_path, mut config) = mvp::config::load(args.common.config.as_deref())?;
+    let account_resolution_hint =
+        "rerun with `--account <configured_account_id>` using one of those configured accounts";
+    let initial_resolved = mvp::channel::feishu::api::resolve_requested_feishu_account(
+        &config.feishu,
+        args.common.account.as_deref(),
+        account_resolution_hint,
+    )?;
+    if let Some(mode) = args.mode {
+        if mode == FeishuServeModeOverride::Websocket {
+            reject_feishu_websocket_listener_overrides(args.bind.as_deref(), args.path.as_deref())?;
+        }
+        apply_feishu_mode_override(&mut config, &initial_resolved.configured_account_id, mode);
+    }
+    let resolved = mvp::channel::feishu::api::resolve_requested_feishu_account(
+        &config.feishu,
+        args.common.account.as_deref(),
+        account_resolution_hint,
+    )?;
+    print_feishu_serve_preflight(&resolved, args.bind.as_deref(), args.path.as_deref());
+    crate::with_graceful_shutdown(mvp::channel::run_feishu_channel_with_stop(
+        resolved_path,
+        config,
+        args.common.account.as_deref(),
+        args.bind.as_deref(),
+        args.path.as_deref(),
+        mvp::channel::ChannelServeStopHandle::new(),
+        true,
+    ))
+    .await
+}
+
+async fn run_feishu_auth_command(command: FeishuAuthCommand) -> CliResult<()> {
+    match command {
+        FeishuAuthCommand::Start(args) => {
+            if args.common.json {
                 let payload = execute_feishu_auth_start(&args).await?;
                 print_feishu_payload(&payload, args.common.json, render_auth_start_text)?;
+            } else if is_loopback_callback_redirect_uri(args.redirect_uri.as_str()) {
+                run_feishu_auth_start_loopback_flow(&args).await?;
+            } else {
+                let payload = execute_feishu_auth_start(&args).await?;
+                print_feishu_payload(&payload, args.common.json, render_auth_start_text)?;
+                if args.no_launch_browser {
+                    println!("browser: disabled (--no-launch-browser)");
+                } else {
+                    let authorize_url = required_json_string(&payload, "authorize_url")?;
+                    match open_url_in_default_browser(authorize_url.as_str()) {
+                        Ok(()) => println!("browser: launched authorize_url in default browser"),
+                        Err(error) => {
+                            eprintln!("warning: {error}");
+                            eprintln!("manual step: open this URL in a browser: {authorize_url}");
+                        }
+                    }
+                }
             }
-            FeishuAuthCommand::Exchange(args) => {
-                let payload = execute_feishu_auth_exchange(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_exchange_text)?;
-            }
-            FeishuAuthCommand::List(args) => {
-                let payload = execute_feishu_auth_list(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_list_text)?;
-            }
-            FeishuAuthCommand::Select(args) => {
-                let payload = execute_feishu_auth_select(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_select_text)?;
-            }
-            FeishuAuthCommand::Status(args) => {
-                let payload = execute_feishu_auth_status(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_status_text)?;
-            }
-            FeishuAuthCommand::Revoke(args) => {
-                let payload = execute_feishu_auth_revoke(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_revoke_text)?;
-            }
-        },
+        }
+        FeishuAuthCommand::Exchange(args) => {
+            let payload = execute_feishu_auth_exchange(&args).await?;
+            print_feishu_payload(&payload, args.common.json, render_auth_exchange_text)?;
+        }
+        FeishuAuthCommand::List(args) => {
+            let payload = execute_feishu_auth_list(&args).await?;
+            print_feishu_payload(&payload, args.common.json, render_auth_list_text)?;
+        }
+        FeishuAuthCommand::Select(args) => {
+            let payload = execute_feishu_auth_select(&args).await?;
+            print_feishu_payload(&payload, args.common.json, render_auth_select_text)?;
+        }
+        FeishuAuthCommand::Status(args) => {
+            let payload = execute_feishu_auth_status(&args).await?;
+            print_feishu_payload(&payload, args.common.json, render_auth_status_text)?;
+        }
+        FeishuAuthCommand::Revoke(args) => {
+            let payload = execute_feishu_auth_revoke(&args).await?;
+            print_feishu_payload(&payload, args.common.json, render_auth_revoke_text)?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
+    match command {
+        FeishuCommand::Auth { command } => run_feishu_auth_command(command).await?,
         FeishuCommand::Whoami(args) => {
             let payload = execute_feishu_whoami(&args).await?;
             print_feishu_payload(&payload, args.common.json, render_whoami_text)?;
@@ -1034,17 +1322,379 @@ pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
             let payload = execute_feishu_reply(&args).await?;
             print_feishu_payload(&payload, args.grant.common.json, render_reply_text)?;
         }
-        FeishuCommand::Serve(args) => {
-            mvp::channel::run_feishu_channel(
-                args.common.config.as_deref(),
-                args.common.account.as_deref(),
-                args.bind.as_deref(),
-                args.path.as_deref(),
-            )
-            .await?;
+        FeishuCommand::Serve { command, args } => {
+            let args = command
+                .map(feishu_serve_args_from_subcommand)
+                .unwrap_or(args);
+            run_feishu_serve_command(&args).await?;
         }
     }
     Ok(())
+}
+
+fn resolve_feishu_auth_exchange_input(
+    args: &FeishuAuthExchangeArgs,
+) -> CliResult<(String, String, Option<String>)> {
+    if let Some(callback_url) = args
+        .callback_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if args
+            .state
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+            || args
+                .code
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+        {
+            return Err(
+                "feishu auth exchange accepts either --callback-url or --state/--code, not both"
+                    .to_owned(),
+            );
+        }
+
+        let url = Url::parse(callback_url)
+            .map_err(|error| format!("parse callback url `{callback_url}` failed: {error}"))?;
+        let mut state = None;
+        let mut code = None;
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "state" if state.is_none() => state = Some(value.into_owned()),
+                "code" if code.is_none() => code = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+        let state = state
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!("callback url `{callback_url}` is missing query parameter `state`")
+            })?;
+        let code = code
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!("callback url `{callback_url}` is missing query parameter `code`")
+            })?;
+        return Ok((state, code, Some(callback_url.to_owned())));
+    }
+
+    let state = args
+        .state
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "feishu auth exchange requires --callback-url or both --state and --code".to_owned()
+        })?
+        .to_owned();
+    let code = args
+        .code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "feishu auth exchange requires --callback-url or both --state and --code".to_owned()
+        })?
+        .to_owned();
+    Ok((state, code, None))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+fn is_loopback_callback_redirect_uri(redirect_uri: &str) -> bool {
+    let redirect_uri = redirect_uri.trim();
+    if redirect_uri.is_empty() {
+        return false;
+    }
+    let Ok(url) = Url::parse(redirect_uri) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https") && url.host_str().is_some_and(is_loopback_host)
+}
+
+fn parse_feishu_loopback_redirect_spec(
+    redirect_uri: &str,
+) -> CliResult<FeishuLoopbackRedirectSpec> {
+    let redirect_uri = redirect_uri.trim();
+    let url = Url::parse(redirect_uri)
+        .map_err(|error| format!("parse Feishu redirect uri `{redirect_uri}` failed: {error}"))?;
+    if url.scheme() != "http" {
+        return Err(format!(
+            "loopback callback listener only supports http redirect URIs, found `{}`",
+            url.scheme()
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("redirect uri `{redirect_uri}` is missing host"))?;
+    if !is_loopback_host(host) {
+        return Err(format!(
+            "redirect uri `{redirect_uri}` is not loopback; automatic callback listener is disabled"
+        ));
+    }
+    let port = url.port_or_known_default().ok_or_else(|| {
+        format!("redirect uri `{redirect_uri}` is missing an explicit or known port")
+    })?;
+    let bind_host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    let mut redirect_base = url.clone();
+    redirect_base.set_query(None);
+    redirect_base.set_fragment(None);
+    let path = match url.path().trim() {
+        "" => "/".to_owned(),
+        path => path.to_owned(),
+    };
+    Ok(FeishuLoopbackRedirectSpec {
+        redirect_uri: redirect_base.to_string(),
+        bind_target: format!("{bind_host}:{port}"),
+        path,
+    })
+}
+
+async fn feishu_local_callback_handler(
+    State(state): State<FeishuLocalCallbackState>,
+    Query(query): Query<std::collections::BTreeMap<String, String>>,
+) -> (StatusCode, Html<String>) {
+    let state_value = query
+        .get("state")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let code_value = query
+        .get("code")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let Some(state_value) = state_value else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(
+                "<html><body><h1>Feishu authorization callback missing state</h1><p>Return to the terminal and retry the authorization flow.</p></body></html>"
+                    .to_owned(),
+            ),
+        );
+    };
+    if state_value != state.expected_state {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(
+                "<html><body><h1>Feishu authorization callback state mismatch</h1><p>Return to the terminal and retry the authorization flow.</p></body></html>"
+                    .to_owned(),
+            ),
+        );
+    }
+    let Some(code_value) = code_value else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(
+                "<html><body><h1>Feishu authorization callback missing code</h1><p>Return to the terminal and retry the authorization flow.</p></body></html>"
+                    .to_owned(),
+            ),
+        );
+    };
+
+    let callback_url = format!(
+        "{}?code={}&state={}",
+        state.redirect_uri, code_value, state_value
+    );
+    let callback = FeishuCapturedLocalCallback {
+        state: state_value.to_owned(),
+        code: code_value.to_owned(),
+        callback_url,
+    };
+    let mut sender_guard = state.callback_sender.lock().await;
+    if let Some(sender) = sender_guard.take() {
+        let _ = sender.send(callback);
+        return (
+            StatusCode::OK,
+            Html(
+                "<html><body><h1>Feishu authorization received</h1><p>You can return to the terminal while LoongClaw finishes the token exchange.</p></body></html>"
+                    .to_owned(),
+            ),
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Html(
+            "<html><body><h1>Feishu authorization already received</h1><p>Return to the terminal if the first browser tab is still waiting.</p></body></html>"
+                .to_owned(),
+        ),
+    )
+}
+
+async fn start_feishu_local_callback_server(
+    redirect_uri: &str,
+    expected_state: &str,
+) -> CliResult<FeishuLocalCallbackServer> {
+    let spec = parse_feishu_loopback_redirect_spec(redirect_uri)?;
+    let listener = tokio::net::TcpListener::bind(spec.bind_target.as_str())
+        .await
+        .map_err(|error| {
+            format!(
+                "start local Feishu callback listener on {} failed: {error}",
+                spec.bind_target
+            )
+        })?;
+    let (callback_sender, callback_receiver) = oneshot::channel();
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+    let state = FeishuLocalCallbackState {
+        redirect_uri: spec.redirect_uri,
+        expected_state: expected_state.trim().to_owned(),
+        callback_sender: Arc::new(Mutex::new(Some(callback_sender))),
+    };
+    let app = Router::new()
+        .route(spec.path.as_str(), get(feishu_local_callback_handler))
+        .with_state(state);
+    let join_handle = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_receiver.await;
+            })
+            .await
+            .map_err(|error| format!("local Feishu callback listener stopped: {error}"))
+    });
+    Ok(FeishuLocalCallbackServer {
+        callback_receiver,
+        shutdown_sender: Some(shutdown_sender),
+        join_handle,
+    })
+}
+
+async fn wait_for_feishu_local_callback(
+    mut server: FeishuLocalCallbackServer,
+    timeout: Duration,
+) -> CliResult<Option<FeishuCapturedLocalCallback>> {
+    let callback_result = tokio::time::timeout(timeout, &mut server.callback_receiver).await;
+    if let Some(shutdown_sender) = server.shutdown_sender.take() {
+        let _ = shutdown_sender.send(());
+    }
+    let join_result = server
+        .join_handle
+        .await
+        .map_err(|error| format!("join local Feishu callback listener task failed: {error}"))?;
+    match callback_result {
+        Ok(Ok(callback)) => {
+            join_result?;
+            Ok(Some(callback))
+        }
+        Ok(Err(_)) => {
+            Err("local Feishu callback listener closed before receiving a callback".to_owned())
+        }
+        Err(_) => {
+            join_result?;
+            Ok(None)
+        }
+    }
+}
+
+fn update_auth_start_payload_for_loopback_listener(
+    payload: &mut Value,
+    redirect_uri: &str,
+    exchange_command: &str,
+    wait_timeout_s: u64,
+) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "flow".to_owned(),
+        Value::String("local_callback_listener".to_owned()),
+    );
+    object.insert("listener_started".to_owned(), Value::Bool(true));
+    object.insert(
+        "manual_note".to_owned(),
+        Value::String(format!(
+            "LoongClaw is waiting for a loopback callback on {redirect_uri}. Open the authorize URL, finish the browser grant, and this command will exchange the code automatically. If the listener stops or times out after {wait_timeout_s}s, fallback to `{exchange_command}`."
+        )),
+    );
+}
+
+async fn run_feishu_auth_start_loopback_flow(args: &FeishuAuthStartArgs) -> CliResult<()> {
+    let payload = execute_feishu_auth_start(args).await?;
+    let redirect_uri = required_json_string(&payload, "redirect_uri")?.to_owned();
+    let expected_state = required_json_string(&payload, "state")?.to_owned();
+    let exchange_command = payload
+        .get("exchange_command")
+        .and_then(Value::as_str)
+        .unwrap_or("loong feishu auth exchange --callback-url '<full_callback_url>'")
+        .to_owned();
+    let authorize_url = required_json_string(&payload, "authorize_url")?.to_owned();
+    let wait_timeout_s = normalize_feishu_callback_wait_timeout_s(args.wait_timeout_s);
+
+    let server =
+        match start_feishu_local_callback_server(redirect_uri.as_str(), expected_state.as_str())
+            .await
+        {
+            Ok(server) => server,
+            Err(error) => {
+                print_feishu_payload(&payload, false, render_auth_start_text)?;
+                eprintln!("{error}");
+                eprintln!(
+                    "manual fallback: finish browser authorization, then run `{exchange_command}`"
+                );
+                return Ok(());
+            }
+        };
+
+    let mut display_payload = payload.clone();
+    update_auth_start_payload_for_loopback_listener(
+        &mut display_payload,
+        redirect_uri.as_str(),
+        exchange_command.as_str(),
+        wait_timeout_s,
+    );
+    print_feishu_payload(&display_payload, false, render_auth_start_text)?;
+    if args.no_launch_browser {
+        println!("browser: disabled (--no-launch-browser)");
+    } else {
+        match open_url_in_default_browser(authorize_url.as_str()) {
+            Ok(()) => println!("browser: launched authorize_url in default browser"),
+            Err(error) => {
+                eprintln!("warning: {error}");
+                eprintln!("manual fallback: open this URL in a browser: {authorize_url}");
+            }
+        }
+    }
+    println!(
+        "listener: waiting for Feishu callback on {} (timeout={}s)",
+        redirect_uri, wait_timeout_s
+    );
+
+    let callback =
+        wait_for_feishu_local_callback(server, Duration::from_secs(wait_timeout_s)).await?;
+    let Some(callback) = callback else {
+        eprintln!("warning: timed out waiting for local Feishu callback on {redirect_uri}");
+        eprintln!(
+            "manual fallback: copy the full browser callback URL and run `{exchange_command}`"
+        );
+        return Ok(());
+    };
+
+    let exchange_payload = execute_feishu_auth_exchange(&FeishuAuthExchangeArgs {
+        common: args.common.clone(),
+        state: None,
+        code: None,
+        callback_url: Some(callback.callback_url),
+    })
+    .await?;
+    print_feishu_payload(&exchange_payload, false, render_auth_exchange_text)
 }
 
 pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<Value> {
@@ -1085,6 +1735,9 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
             code_challenge_method: Some("S256".to_owned()),
         },
     )?;
+    let exchange_command =
+        feishu_auth_exchange_command_hint(context.resolved.configured_account_id.as_str());
+    let loopback_redirect = is_loopback_callback_redirect_uri(args.redirect_uri.as_str());
 
     Ok(json!({
         "account_id": context.account_id(),
@@ -1100,6 +1753,15 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
             .map(|capability| capability.as_cli_value())
             .collect::<Vec<_>>(),
         "scopes": scopes,
+        "flow": "manual_exchange",
+        "listener_started": false,
+        "exchange_command": exchange_command,
+        "loopback_redirect_uri": loopback_redirect,
+        "manual_note": if loopback_redirect {
+            "LoongClaw could not use the automatic loopback listener for `feishu auth login`; if the browser shows connection refused after authorization, copy the full callback URL from the address bar and run the exchange command."
+        } else {
+            "LoongClaw stores OAuth state locally and expects a follow-up `feishu auth exchange` command to finish the grant."
+        },
     }))
 }
 
@@ -1108,8 +1770,9 @@ pub async fn execute_feishu_auth_exchange(args: &FeishuAuthExchangeArgs) -> CliR
         args.common.config.as_deref(),
         args.common.account.as_deref(),
     )?;
+    let (state, code, callback_url) = resolve_feishu_auth_exchange_input(args)?;
     let now_s = unix_ts_now();
-    let stored_state = context.store.consume_oauth_state(&args.state, now_s)?;
+    let stored_state = context.store.consume_oauth_state(&state, now_s)?;
     if stored_state.account_id.trim() != context.account_id() {
         return Err(format!(
             "oauth state belongs to account `{}` but current command resolved `{}`",
@@ -1123,7 +1786,7 @@ pub async fn execute_feishu_auth_exchange(args: &FeishuAuthExchangeArgs) -> CliR
     );
     let payload = client
         .exchange_authorization_code(
-            &args.code,
+            &code,
             stored_state.redirect_uri.as_deref(),
             &scopes,
             stored_state.code_verifier.as_deref(),
@@ -1153,6 +1816,7 @@ pub async fn execute_feishu_auth_exchange(args: &FeishuAuthExchangeArgs) -> CliR
         "refresh_expires_at_s": grant.refresh_expires_at_s,
         "selected_open_id": grant.principal.open_id,
         "effective_open_id": grant.principal.open_id,
+        "callback_url": callback_url,
     }))
 }
 
@@ -2978,7 +3642,7 @@ fn print_feishu_payload(
 
 fn render_auth_start_text(payload: &Value) -> CliResult<String> {
     let mut lines = vec![
-        "feishu auth start".to_owned(),
+        "feishu auth login".to_owned(),
         format!("account: {}", required_json_string(payload, "account_id")?),
     ];
     if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
@@ -3028,6 +3692,15 @@ fn render_auth_start_text(payload: &Value) -> CliResult<String> {
             required_json_string(payload, "sqlite_path")?
         ),
     ]);
+    if let Some(flow) = payload.get("flow").and_then(Value::as_str) {
+        lines.push(format!("flow: {flow}"));
+    }
+    if let Some(exchange_command) = payload.get("exchange_command").and_then(Value::as_str) {
+        lines.push(format!("next_step: {exchange_command}"));
+    }
+    if let Some(manual_note) = payload.get("manual_note").and_then(Value::as_str) {
+        lines.push(format!("note: {manual_note}"));
+    }
     if let Some(status) = payload.get("status").and_then(Value::as_str) {
         lines.push(format!("status: {status}"));
     }
@@ -4384,7 +5057,7 @@ mod render_tests {
                 "matched_scopes": []
             },
             "recommendations": {
-                "auth_start_command": "loong feishu auth start --account feishu_main --capability message-write"
+                "auth_start_command": "loong feishu auth login --account feishu_main --capability message-write"
             }
         })
     }
@@ -4460,11 +5133,98 @@ mod render_tests {
             "sqlite_path": "/tmp/feishu.sqlite3",
             "capabilities": ["read-only"],
             "scopes": ["offline_access", "docx:document:readonly"],
+            "flow": "manual_exchange",
+            "exchange_command": "loong feishu auth exchange --account work --callback-url '<full_callback_url>'",
+            "manual_note": "Copy the full callback URL into `feishu auth exchange`.",
         });
 
         let rendered = render_auth_start_text(&payload).expect("render auth start");
 
         assert!(rendered.contains("configured_account: work"));
+        assert!(rendered.contains("flow: manual_exchange"));
+        assert!(rendered.contains("next_step: loong feishu auth exchange --account work --callback-url '<full_callback_url>'"));
+        assert!(rendered.contains("note: Copy the full callback URL into `feishu auth exchange`."));
+    }
+
+    #[test]
+    fn resolve_feishu_auth_exchange_input_accepts_callback_url() {
+        let args = FeishuAuthExchangeArgs {
+            common: FeishuCommonArgs {
+                config: None,
+                account: Some("work".to_owned()),
+                json: false,
+            },
+            state: None,
+            code: None,
+            callback_url: Some(
+                "http://127.0.0.1:34819/callback?code=code-123&state=state-123".to_owned(),
+            ),
+        };
+
+        let (state, code, callback_url) =
+            resolve_feishu_auth_exchange_input(&args).expect("parse callback url");
+
+        assert_eq!(state, "state-123");
+        assert_eq!(code, "code-123");
+        assert_eq!(
+            callback_url.as_deref(),
+            Some("http://127.0.0.1:34819/callback?code=code-123&state=state-123")
+        );
+    }
+
+    #[test]
+    fn parse_feishu_loopback_redirect_spec_accepts_loopback_http_uri() {
+        let spec = parse_feishu_loopback_redirect_spec("http://127.0.0.1:34819/callback")
+            .expect("parse loopback redirect spec");
+
+        assert_eq!(spec.redirect_uri, "http://127.0.0.1:34819/callback");
+        assert_eq!(spec.bind_target, "127.0.0.1:34819");
+        assert_eq!(spec.path, "/callback");
+    }
+
+    #[test]
+    fn reject_feishu_websocket_listener_overrides_requires_no_bind_or_path() {
+        assert!(reject_feishu_websocket_listener_overrides(None, None).is_ok());
+        let error = reject_feishu_websocket_listener_overrides(Some("127.0.0.1:8080"), None)
+            .expect_err("websocket listener overrides should be rejected");
+        assert!(error.contains("--mode websocket"));
+    }
+
+    #[test]
+    fn apply_feishu_mode_override_prefers_selected_account_override() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.feishu.accounts.insert(
+            "work".to_owned(),
+            mvp::config::FeishuAccountConfig::default(),
+        );
+
+        apply_feishu_mode_override(&mut config, "work", FeishuServeModeOverride::Webhook);
+
+        assert_eq!(
+            config
+                .feishu
+                .accounts
+                .get("work")
+                .and_then(|account| account.mode),
+            Some(mvp::config::FeishuChannelServeMode::Webhook)
+        );
+    }
+
+    #[tokio::test]
+    async fn start_feishu_local_callback_server_rejects_unavailable_port() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind occupied listener");
+        let port = listener
+            .local_addr()
+            .expect("occupied listener addr")
+            .port();
+        let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+        let error = start_feishu_local_callback_server(redirect_uri.as_str(), "state-123")
+            .await
+            .expect_err("occupied port should reject local callback listener");
+
+        assert!(error.contains("start local Feishu callback listener"));
     }
 
     #[test]

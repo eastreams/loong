@@ -1,0 +1,20 @@
+[
+  {
+    "source": "/logs/agent/loongclaw.txt",
+    "destination": "artifacts/loongclaw.txt",
+    "type": "file",
+    "status": "failed"
+  },
+  {
+    "source": "/logs/agent/loongclaw-config.toml",
+    "destination": "artifacts/loongclaw-config.toml",
+    "type": "file",
+    "status": "failed"
+  },
+  {
+    "source": "/logs/agent/loongclaw-trajectory.json",
+    "destination": "artifacts/loongclaw-trajectory.json",
+    "type": "file",
+    "status": "failed"
+  }
+]

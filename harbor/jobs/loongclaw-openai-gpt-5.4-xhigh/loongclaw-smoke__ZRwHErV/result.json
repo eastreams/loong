@@ -1,0 +1,118 @@
+{
+    "id": "444943a1-840d-479c-8597-a41daf146c2e",
+    "task_name": "local/loongclaw-smoke",
+    "trial_name": "loongclaw-smoke__ZRwHErV",
+    "trial_uri": "file:///Users/chum/loongclaw/harbor/jobs/loongclaw-openai-gpt-5.4-xhigh/loongclaw-smoke__ZRwHErV",
+    "task_id": {
+        "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke"
+    },
+    "source": null,
+    "task_checksum": "0f7076781b6131b176f033f7314fcb073d0a871c92b3b12404a1448c6be2f3da",
+    "config": {
+        "task": {
+            "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke",
+            "git_url": null,
+            "git_commit_id": null,
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": null
+        },
+        "trial_name": "loongclaw-smoke__ZRwHErV",
+        "trials_dir": "harbor/jobs/loongclaw-openai-gpt-5.4-xhigh",
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": 2.0,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": 10.0,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": null,
+            "import_path": "harbor_loongclaw.agent:LoongClawInstalledAgent",
+            "model_name": "openai/gpt-5.4",
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "kwargs": {
+                "reasoning_effort": "xhigh",
+                "api_key_env": "OPENAI_API_KEY",
+                "provider_kind": "openai",
+                "source_mount": "/opt/loongclaw-src",
+                "session_name": "harbor",
+                "shell_default_mode": "allow"
+            },
+            "env": {
+                "OPENAI_API_KEY": "sk-0891d6f59780a496d73a7d052bb255a073d3defbf9c2e432ec63e709bc112294"
+            }
+        },
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "suppress_override_warnings": false,
+            "mounts_json": [
+                {
+                    "type": "bind",
+                    "source": "/Users/chum/loongclaw",
+                    "target": "/opt/loongclaw-src",
+                    "read_only": true,
+                    "bind": {
+                        "create_host_path": false
+                    }
+                }
+            ],
+            "env": {},
+            "kwargs": {}
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [
+            {
+                "source": "/logs/agent/loongclaw.txt",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-config.toml",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-trajectory.json",
+                "destination": null
+            }
+        ],
+        "job_id": "badcf753-1242-4aee-9249-724776adc593"
+    },
+    "agent_info": {
+        "name": "loongclaw",
+        "version": "unknown",
+        "model_info": {
+            "name": "gpt-5.4",
+            "provider": "openai"
+        }
+    },
+    "agent_result": null,
+    "verifier_result": null,
+    "exception_info": {
+        "exception_type": "RuntimeError",
+        "exception_message": "Docker compose command failed for environment local/loongclaw-smoke. Command: docker compose --project-name loongclaw-smoke__zrwherv --project-directory /private/tmp/harbor-loongclaw-smoke/loongclaw-smoke/environment -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-base.yaml -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-build.yaml -f /Users/chum/loongclaw/harbor/jobs/loongclaw-openai-gpt-5.4-xhigh/loongclaw-smoke__ZRwHErV/docker-compose-mounts.json build. Return code: 125. Stdout: unknown flag: --project-name\n\nUsage:  docker [OPTIONS] COMMAND [ARG...]\n\nRun 'docker --help' for more information\n. Stderr: None. ",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 531, in run\n    await self._setup_environment()\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 238, in _setup_environment\n    await self._start_environment_with_retry()\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/tenacity/asyncio/__init__.py\", line 193, in async_wrapped\n    return await copy(fn, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/tenacity/asyncio/__init__.py\", line 112, in __call__\n    do = await self.iter(retry_state=retry_state)\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/tenacity/asyncio/__init__.py\", line 157, in iter\n    result = await action(retry_state)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/tenacity/_utils.py\", line 111, in inner\n    return call(*args, **kwargs)\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/tenacity/__init__.py\", line 393, in <lambda>\n    self._add_action_func(lambda rs: rs.outcome.result())\n                                     ~~~~~~~~~~~~~~~~~^^\n  File \"/Users/chum/.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/concurrent/futures/_base.py\", line 449, in result\n    return self.__get_result()\n           ~~~~~~~~~~~~~~~~~^^\n  File \"/Users/chum/.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/concurrent/futures/_base.py\", line 401, in __get_result\n    raise self._exception\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/tenacity/asyncio/__init__.py\", line 116, in __call__\n    result = await fn(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 250, in _start_environment_with_retry\n    await asyncio.wait_for(\n    ...<4 lines>...\n    )\n  File \"/Users/chum/.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/asyncio/tasks.py\", line 507, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py\", line 341, in start\n    await self._run_docker_compose_command([\"build\"])\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py\", line 318, in _run_docker_compose_command\n    raise RuntimeError(\n    ...<5 lines>...\n    )\nRuntimeError: Docker compose command failed for environment local/loongclaw-smoke. Command: docker compose --project-name loongclaw-smoke__zrwherv --project-directory /private/tmp/harbor-loongclaw-smoke/loongclaw-smoke/environment -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-base.yaml -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-build.yaml -f /Users/chum/loongclaw/harbor/jobs/loongclaw-openai-gpt-5.4-xhigh/loongclaw-smoke__ZRwHErV/docker-compose-mounts.json build. Return code: 125. Stdout: unknown flag: --project-name\n\nUsage:  docker [OPTIONS] COMMAND [ARG...]\n\nRun 'docker --help' for more information\n. Stderr: None. \n",
+        "occurred_at": "2026-04-08T23:34:02.891839"
+    },
+    "started_at": "2026-04-08T15:34:02.869746Z",
+    "finished_at": "2026-04-08T15:34:03.075515Z",
+    "environment_setup": {
+        "started_at": "2026-04-08T15:34:02.870782Z",
+        "finished_at": "2026-04-08T15:34:02.888864Z"
+    },
+    "agent_setup": null,
+    "agent_execution": null,
+    "verifier": null
+}

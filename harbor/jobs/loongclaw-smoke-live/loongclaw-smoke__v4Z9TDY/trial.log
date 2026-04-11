@@ -1,0 +1,10 @@
+Trial loongclaw-smoke__v4Z9TDY failed: Docker compose command failed for environment local/loongclaw-smoke. Command: docker compose --project-name loongclaw-smoke__v4z9tdy --project-directory /private/tmp/harbor-loongclaw-smoke/loongclaw-smoke/environment -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-base.yaml -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-build.yaml -f /Users/chum/loongclaw/harbor/jobs/loongclaw-smoke-live/loongclaw-smoke__v4Z9TDY/docker-compose-mounts.json build. Return code: 1. Stdout: time="2026-04-08T23:35:17+08:00" level=warning msg="Docker Compose requires buildx plugin to be installed"
+ Image loongclaw-smoke__v4z9tdy-main Building 
+ Image loongclaw-smoke__v4z9tdy-main Building 
+Sending build context to Docker daemon     189B
+Step 1/3 : FROM ubuntu:24.04
+failed to resolve reference "docker.io/library/ubuntu:24.04": failed to do request: Head "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04": net/http: TLS handshake timeout
+. Stderr: None. 
+Failed to download artifact '/logs/agent/loongclaw.txt' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-config.toml' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-trajectory.json' (best-effort)

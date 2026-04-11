@@ -1,0 +1,121 @@
+{
+    "id": "52284da0-880b-4d17-bd3a-1f57b7d51e55",
+    "task_name": "local/loongclaw-smoke",
+    "trial_name": "loongclaw-smoke__eDpF4Li",
+    "trial_uri": "file:///Users/chum/loongclaw/harbor/jobs/loongclaw-smoke-live-4/loongclaw-smoke__eDpF4Li",
+    "task_id": {
+        "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke"
+    },
+    "source": null,
+    "task_checksum": "0a9758182a11279662f0d73055d839978550f70a078b5dbda9b85c0a56711ddb",
+    "config": {
+        "task": {
+            "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke",
+            "git_url": null,
+            "git_commit_id": null,
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": null
+        },
+        "trial_name": "loongclaw-smoke__eDpF4Li",
+        "trials_dir": "harbor/jobs/loongclaw-smoke-live-4",
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": 2.0,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": 10.0,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": null,
+            "import_path": "harbor_loongclaw.agent:LoongClawInstalledAgent",
+            "model_name": "openai/gpt-5.4",
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "kwargs": {
+                "reasoning_effort": "xhigh",
+                "api_key_env": "OPENAI_API_KEY",
+                "provider_kind": "openai",
+                "source_mount": "/opt/loongclaw-src",
+                "session_name": "harbor",
+                "shell_default_mode": "allow"
+            },
+            "env": {
+                "OPENAI_API_KEY": "sk-0891d6f59780a496d73a7d052bb255a073d3defbf9c2e432ec63e709bc112294"
+            }
+        },
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "suppress_override_warnings": false,
+            "mounts_json": [
+                {
+                    "type": "bind",
+                    "source": "/Users/chum/loongclaw",
+                    "target": "/opt/loongclaw-src",
+                    "read_only": true,
+                    "bind": {
+                        "create_host_path": false
+                    }
+                }
+            ],
+            "env": {},
+            "kwargs": {}
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [
+            {
+                "source": "/logs/agent/loongclaw.txt",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-config.toml",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-trajectory.json",
+                "destination": null
+            }
+        ],
+        "job_id": "58d86583-463d-4330-89b9-449f98a20365"
+    },
+    "agent_info": {
+        "name": "loongclaw",
+        "version": "unknown",
+        "model_info": {
+            "name": "gpt-5.4",
+            "provider": "openai"
+        }
+    },
+    "agent_result": null,
+    "verifier_result": null,
+    "exception_info": {
+        "exception_type": "NonZeroAgentExitCodeError",
+        "exception_message": "Command failed (exit 127): export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"\nif ! command -v cargo >/dev/null 2>&1; then\n  for attempt in 1 2 3; do\n    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then\n      break\n    fi\n    sleep $((attempt * 2))\n  done\nfi\nif [ -f \"$HOME/.cargo/env\" ]; then\n  . \"$HOME/.cargo/env\"\nfi\nif command -v cargo >/dev/null 2>&1; then\n  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\"; then\n    loong --version\n    exit 0\n  fi\nfi\nbash /opt/loongclaw-src/scripts/install.sh --prefix \"$HOME/.local/bin\" --target-libc gnu\nloong --version\nstdout:   Installing loongclaw v0.1.0-alpha.3 (/opt/loongclaw-src/crates/daemon)\n    Updating crates.io index\n Downloading crates ...\n  Downloaded arrayvec v0.7.6\n  Downloaded clap_derive v4.6.0\n  Downloaded bitcoin-io v0.1.4\n  Downloaded anyhow v1.0.102\n  Downloaded anstyle-query v1.1.5\n  Downloaded ascii-canvas v3.0.0\n  Downloaded Inflector v0.11.4\n  Downloaded atomic-waker v1.1.2\n  Downloaded allocative_derive v0.3.3\n  Downloaded crypto-common v0.2.1\n  Downloaded crypto-common v0.1.7\n  Downloaded cranelift-srcgen v0.130.0\n  Downloaded adler2 v2.0.1\n  Downloaded crunchy v0.2.4\n  Downloaded async-trait v0.1.89\n  Downloaded crc32fast v1.5.0\n  Downloaded block-buffer v0.12.0\n  Downloaded arbitrary v1.4.2\n  Downloaded beef v0.5.2\n  Downloaded futures-task v0.3.32\n  Downloaded compression-core v0.4.31\n  Downloaded cfg_aliases v0.1.1\n  Downloaded bit-set v0.5.3\n  Downloaded base64-simd v0.8.0\n  Downloaded cpufeatures v0.3.0\n  Downloaded cfg-if v1.0.4\n  Downloaded block-padding v0.3.3\n  Downloaded  ... [truncated]\nstderr: None",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 533, in run\n    await self._setup_agent()\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 266, in _setup_agent\n    await asyncio.wait_for(\n    ...<2 lines>...\n    )\n  File \"/Users/chum/.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/asyncio/tasks.py\", line 507, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 384, in setup\n    await self.install(environment)\n  File \"/Users/chum/loongclaw/harbor_loongclaw/agent.py\", line 103, in install\n    await self.exec_as_agent(\n    ...<26 lines>...\n    )\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 358, in exec_as_agent\n    return await self._exec(\n           ^^^^^^^^^^^^^^^^^\n        environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 321, in _exec\n    raise NonZeroAgentExitCodeError(\n    ...<3 lines>...\n    )\nharbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 127): export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"\nif ! command -v cargo >/dev/null 2>&1; then\n  for attempt in 1 2 3; do\n    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then\n      break\n    fi\n    sleep $((attempt * 2))\n  done\nfi\nif [ -f \"$HOME/.cargo/env\" ]; then\n  . \"$HOME/.cargo/env\"\nfi\nif command -v cargo >/dev/null 2>&1; then\n  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\"; then\n    loong --version\n    exit 0\n  fi\nfi\nbash /opt/loongclaw-src/scripts/install.sh --prefix \"$HOME/.local/bin\" --target-libc gnu\nloong --version\nstdout:   Installing loongclaw v0.1.0-alpha.3 (/opt/loongclaw-src/crates/daemon)\n    Updating crates.io index\n Downloading crates ...\n  Downloaded arrayvec v0.7.6\n  Downloaded clap_derive v4.6.0\n  Downloaded bitcoin-io v0.1.4\n  Downloaded anyhow v1.0.102\n  Downloaded anstyle-query v1.1.5\n  Downloaded ascii-canvas v3.0.0\n  Downloaded Inflector v0.11.4\n  Downloaded atomic-waker v1.1.2\n  Downloaded allocative_derive v0.3.3\n  Downloaded crypto-common v0.2.1\n  Downloaded crypto-common v0.1.7\n  Downloaded cranelift-srcgen v0.130.0\n  Downloaded adler2 v2.0.1\n  Downloaded crunchy v0.2.4\n  Downloaded async-trait v0.1.89\n  Downloaded crc32fast v1.5.0\n  Downloaded block-buffer v0.12.0\n  Downloaded arbitrary v1.4.2\n  Downloaded beef v0.5.2\n  Downloaded futures-task v0.3.32\n  Downloaded compression-core v0.4.31\n  Downloaded cfg_aliases v0.1.1\n  Downloaded bit-set v0.5.3\n  Downloaded base64-simd v0.8.0\n  Downloaded cpufeatures v0.3.0\n  Downloaded cfg-if v1.0.4\n  Downloaded block-padding v0.3.3\n  Downloaded  ... [truncated]\nstderr: None\n",
+        "occurred_at": "2026-04-08T23:56:08.714488"
+    },
+    "started_at": "2026-04-08T15:47:55.445642Z",
+    "finished_at": "2026-04-08T15:56:22.280405Z",
+    "environment_setup": {
+        "started_at": "2026-04-08T15:47:55.446399Z",
+        "finished_at": "2026-04-08T15:47:56.859572Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-04-08T15:47:56.859622Z",
+        "finished_at": "2026-04-08T15:56:08.705031Z"
+    },
+    "agent_execution": null,
+    "verifier": null
+}

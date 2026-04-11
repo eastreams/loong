@@ -1,0 +1,15 @@
+Trial loongclaw-smoke__ZRwHErV failed: Docker compose command failed for environment local/loongclaw-smoke. Command: docker compose --project-name loongclaw-smoke__zrwherv --project-directory /private/tmp/harbor-loongclaw-smoke/loongclaw-smoke/environment -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-base.yaml -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-build.yaml -f /Users/chum/loongclaw/harbor/jobs/loongclaw-openai-gpt-5.4-xhigh/loongclaw-smoke__ZRwHErV/docker-compose-mounts.json build. Return code: 125. Stdout: unknown flag: --project-name
+
+Usage:  docker [OPTIONS] COMMAND [ARG...]
+
+Run 'docker --help' for more information
+. Stderr: None. 
+Failed to download artifact '/logs/agent/loongclaw.txt' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-config.toml' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-trajectory.json' (best-effort)
+Docker compose down failed: Docker compose command failed for environment local/loongclaw-smoke. Command: docker compose --project-name loongclaw-smoke__zrwherv --project-directory /private/tmp/harbor-loongclaw-smoke/loongclaw-smoke/environment -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-base.yaml -f /Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-build.yaml -f /Users/chum/loongclaw/harbor/jobs/loongclaw-openai-gpt-5.4-xhigh/loongclaw-smoke__ZRwHErV/docker-compose-mounts.json down --rmi all --volumes --remove-orphans. Return code: 125. Stdout: unknown flag: --project-name
+
+Usage:  docker [OPTIONS] COMMAND [ARG...]
+
+Run 'docker --help' for more information
+. Stderr: None. 

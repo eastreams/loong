@@ -5,6 +5,7 @@ use axum::{
     extract::{Request, State},
     routing::{delete, get, patch, post, put},
 };
+use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -190,6 +191,54 @@ async fn spawn_mock_feishu_server(router: Router) -> (String, tokio::task::JoinH
     (format!("http://{address}"), handle)
 }
 
+fn reserve_loopback_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("bind loopback port")
+        .local_addr()
+        .expect("loopback listener addr")
+        .port()
+}
+
+async fn wait_for_oauth_state(sqlite_path: &std::path::Path) -> String {
+    for _ in 0..100 {
+        if sqlite_path.exists()
+            && let Ok(connection) = Connection::open(sqlite_path)
+            && let Ok(state) = connection.query_row(
+                "SELECT state FROM feishu_oauth_states ORDER BY created_at_s DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+        {
+            return state;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("oauth state should appear in sqlite store");
+}
+
+async fn wait_for_callback_success(url: &str) -> String {
+    let client = reqwest::Client::new();
+    let mut last_error = None;
+    for _ in 0..100 {
+        match client.get(url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.expect("callback response body");
+                assert_eq!(status, reqwest::StatusCode::OK);
+                return body;
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+    }
+    panic!(
+        "callback listener should respond successfully: {}",
+        last_error.unwrap_or_else(|| "no response".to_owned())
+    );
+}
+
 async fn record_request(State(state): State<MockServerState>, request: Request) {
     let (parts, body) = request.into_parts();
     let body = to_bytes(body, usize::MAX)
@@ -229,16 +278,50 @@ fn feishu_auth_subcommand_registers_start_exchange_status_and_revoke() {
     let help = render_cli_help(["feishu", "auth"]);
 
     assert!(help.contains("start"));
+    assert!(help.contains("login"));
     assert!(help.contains("exchange"));
     assert!(help.contains("list"));
     assert!(help.contains("select"));
     assert!(help.contains("status"));
     assert!(help.contains("revoke"));
+    assert!(help.contains("logout"));
+}
+
+#[test]
+fn feishu_serve_subcommand_registers_websocket_and_webhook_modes() {
+    let help = render_cli_help(["feishu", "serve"]);
+
+    assert!(help.contains("websocket"));
+    assert!(help.contains("webhook"));
 }
 
 #[test]
 fn feishu_resource_subcommands_parse() {
     try_parse_cli(["loongclaw", "feishu", "auth", "list"]).expect("auth list command should parse");
+
+    try_parse_cli(["loongclaw", "feishu", "auth", "login"])
+        .expect("auth login alias command should parse");
+
+    try_parse_cli([
+        "loongclaw",
+        "feishu",
+        "auth",
+        "login",
+        "--no-launch-browser",
+        "--wait-timeout-s",
+        "30",
+    ])
+    .expect("auth login browser flags should parse");
+
+    try_parse_cli([
+        "loongclaw",
+        "feishu",
+        "auth",
+        "exchange",
+        "--callback-url",
+        "http://127.0.0.1:34819/callback?code=demo&state=state-demo",
+    ])
+    .expect("auth exchange callback-url command should parse");
 
     try_parse_cli([
         "loongclaw",
@@ -757,6 +840,47 @@ fn feishu_resource_subcommands_parse() {
 
     try_parse_cli(["loongclaw", "feishu", "serve", "--bind", "127.0.0.1:18080"])
         .expect("nested feishu serve command should parse");
+
+    try_parse_cli(["loongclaw", "feishu", "serve", "websocket"])
+        .expect("nested feishu serve websocket subcommand should parse");
+
+    try_parse_cli([
+        "loongclaw",
+        "feishu",
+        "serve",
+        "webhook",
+        "--bind",
+        "127.0.0.1:18080",
+        "--path",
+        "/feishu/events",
+    ])
+    .expect("nested feishu serve webhook subcommand should parse");
+
+    try_parse_cli(["loongclaw", "feishu", "serve", "--mode", "websocket"])
+        .expect("nested feishu serve websocket mode should parse");
+
+    try_parse_cli([
+        "loongclaw",
+        "feishu",
+        "serve",
+        "--mode",
+        "webhook",
+        "--bind",
+        "127.0.0.1:18080",
+        "--path",
+        "/feishu/events",
+    ])
+    .expect("nested feishu serve webhook mode should parse");
+
+    try_parse_cli([
+        "loongclaw",
+        "feishu-serve",
+        "--mode",
+        "webhook",
+        "--bind",
+        "127.0.0.1:18080",
+    ])
+    .expect("top-level feishu-serve mode override should parse");
 }
 
 #[test]
@@ -881,7 +1005,7 @@ async fn feishu_send_command_requires_confirmed_write_scope() {
         "error={error}"
     );
     assert!(
-        error.contains("loong feishu auth start --account feishu_main --capability message-write"),
+        error.contains("loong feishu auth login --account feishu_main --capability message-write"),
         "error={error}"
     );
     assert!(requests.lock().await.is_empty());
@@ -951,7 +1075,7 @@ async fn feishu_bitable_create_record_requires_confirmed_write_scope() {
         "error={error}"
     );
     assert!(
-        error.contains("loong feishu auth start --account feishu_main"),
+        error.contains("loong feishu auth login --account feishu_main"),
         "error={error}"
     );
     assert!(requests.lock().await.is_empty());
@@ -1156,7 +1280,7 @@ async fn feishu_bitable_search_records_requires_confirmed_retrieve_scope() {
         "error={error}"
     );
     assert!(
-        error.contains("loong feishu auth start --account feishu_main"),
+        error.contains("loong feishu auth login --account feishu_main"),
         "error={error}"
     );
     assert!(requests.lock().await.is_empty());
@@ -3749,6 +3873,8 @@ async fn feishu_auth_start_persists_oauth_state_and_authorize_url() {
             json: true,
         },
         redirect_uri: "http://127.0.0.1:34819/callback".to_owned(),
+        no_launch_browser: true,
+        wait_timeout_s: None,
         principal_hint: Some("operator".to_owned()),
         scopes: Vec::new(),
         capabilities: Vec::new(),
@@ -3770,6 +3896,21 @@ async fn feishu_auth_start_persists_oauth_state_and_authorize_url() {
     assert!(authorize_url.contains("state="));
     assert!(authorize_url.contains("im%3Amessage.group_msg"));
     assert!(!authorize_url.contains("im%3Amessage.group_msg%3Areadonly"));
+    assert_eq!(payload["flow"], "manual_exchange");
+    assert_eq!(payload["listener_started"], false);
+    assert_eq!(payload["loopback_redirect_uri"], true);
+    assert!(
+        payload["exchange_command"]
+            .as_str()
+            .expect("exchange command")
+            .contains("feishu auth exchange")
+    );
+    assert!(
+        payload["manual_note"]
+            .as_str()
+            .expect("manual note")
+            .contains("automatic loopback listener")
+    );
 
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     let stored = store
@@ -3815,6 +3956,8 @@ async fn feishu_auth_start_non_json_keeps_manual_flow_for_non_local_redirect_uri
                     json: false,
                 },
                 redirect_uri: "https://example.com/callback".to_owned(),
+                no_launch_browser: true,
+                wait_timeout_s: None,
                 principal_hint: Some("operator".to_owned()),
                 scopes: Vec::new(),
                 capabilities: Vec::new(),
@@ -3823,12 +3966,142 @@ async fn feishu_auth_start_non_json_keeps_manual_flow_for_non_local_redirect_uri
         ),
     };
 
-    let result = loongclaw_daemon::feishu_cli::run_feishu_command(command).await;
+    let result = with_cli_stack("feishu-auth-start-manual", move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+        runtime.block_on(loongclaw_daemon::feishu_cli::run_feishu_command(command))
+    });
 
     assert!(
         result.is_ok(),
         "non-json auth start should remain manual and accept non-local redirect URIs: {result:?}"
     );
+}
+
+#[tokio::test]
+async fn feishu_auth_start_non_json_loopback_listener_exchanges_code_and_persists_grant() {
+    let temp_dir = temp_feishu_cli_dir("auth-start-loopback-listener");
+    let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+    let state = MockServerState {
+        requests: requests.clone(),
+    };
+    let router = Router::new()
+        .route(
+            "/open-apis/authen/v2/oauth/token",
+            post({
+                let state = state.clone();
+                move |request| {
+                    let state = state.clone();
+                    async move {
+                        record_request(State(state), request).await;
+                        Json(json!({
+                            "code": 0,
+                            "access_token": "u-token-auto",
+                            "refresh_token": "r-token-auto",
+                            "expires_in": 7200,
+                            "refresh_token_expires_in": 2592000,
+                            "scope": "offline_access docx:document:readonly im:message:readonly"
+                        }))
+                    }
+                }
+            }),
+        )
+        .route(
+            "/open-apis/authen/v1/user_info",
+            get({
+                let state = state.clone();
+                move |request| {
+                    let state = state.clone();
+                    async move {
+                        record_request(State(state), request).await;
+                        Json(json!({
+                            "code": 0,
+                            "data": {
+                                "name": "Loopback Alice",
+                                "open_id": "ou_loopback",
+                                "union_id": "on_loopback",
+                                "user_id": "u_loopback",
+                                "tenant_key": "tenant_loopback"
+                            }
+                        }))
+                    }
+                }
+            }),
+        );
+    let (base_url, server) = spawn_mock_feishu_server(router).await;
+    let config_path = write_sample_feishu_config_with_base_url(&temp_dir, &base_url);
+    let redirect_port = reserve_loopback_port();
+    let redirect_uri = format!("http://127.0.0.1:{redirect_port}/callback");
+    let sqlite_path = temp_dir.join("feishu.sqlite3");
+
+    let command = loongclaw_daemon::feishu_cli::FeishuCommand::Auth {
+        command: loongclaw_daemon::feishu_cli::FeishuAuthCommand::Start(
+            loongclaw_daemon::feishu_cli::FeishuAuthStartArgs {
+                common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                    config: Some(config_path.display().to_string()),
+                    account: Some("feishu_main".to_owned()),
+                    json: false,
+                },
+                redirect_uri: redirect_uri.clone(),
+                no_launch_browser: true,
+                wait_timeout_s: Some(15),
+                principal_hint: Some("operator".to_owned()),
+                scopes: Vec::new(),
+                capabilities: Vec::new(),
+                include_message_write: false,
+            },
+        ),
+    };
+
+    let command_task = std::thread::Builder::new()
+        .name("feishu-auth-start-loopback".to_owned())
+        .stack_size(CLI_STACK_SIZE_BYTES)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current-thread runtime");
+            runtime.block_on(loongclaw_daemon::feishu_cli::run_feishu_command(command))
+        })
+        .expect("spawn loopback auth start thread");
+
+    let oauth_state = wait_for_oauth_state(&sqlite_path).await;
+    let callback_url = format!("{redirect_uri}?code=code-loopback&state={oauth_state}");
+    let callback_body = wait_for_callback_success(callback_url.as_str()).await;
+    assert!(callback_body.contains("Feishu authorization received"));
+
+    let result = tokio::task::spawn_blocking(move || {
+        command_task
+            .join()
+            .expect("join auth start loopback thread")
+    })
+    .await
+    .expect("wait for auth start loopback thread");
+    assert!(
+        result.is_ok(),
+        "loopback auth flow should finish successfully: {result:?}"
+    );
+
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
+    assert_eq!(
+        store
+            .load_selected_grant("feishu_main")
+            .expect("load selected grant")
+            .as_deref(),
+        Some("ou_loopback")
+    );
+
+    let requests = requests.lock().await.clone();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].body.contains("\"code\":\"code-loopback\""));
+    assert!(
+        requests[0].body.contains("\"code_verifier\":"),
+        "loopback flow should still use the saved PKCE verifier"
+    );
+
+    server.abort();
 }
 
 #[tokio::test]
@@ -3842,6 +4115,8 @@ async fn feishu_auth_start_can_include_recommended_message_write_scopes() {
             json: true,
         },
         redirect_uri: "http://127.0.0.1:34819/callback".to_owned(),
+        no_launch_browser: true,
+        wait_timeout_s: None,
         principal_hint: Some("operator".to_owned()),
         scopes: vec!["offline_access".to_owned()],
         capabilities: Vec::new(),
@@ -3889,6 +4164,8 @@ async fn feishu_auth_start_capability_can_expand_read_and_write_scope_bundles() 
             json: true,
         },
         redirect_uri: "http://127.0.0.1:34819/callback".to_owned(),
+        no_launch_browser: true,
+        wait_timeout_s: None,
         principal_hint: Some("operator".to_owned()),
         scopes: vec!["offline_access".to_owned()],
         capabilities: vec![loongclaw_daemon::feishu_support::FeishuAuthCapability::All],
@@ -3990,8 +4267,9 @@ async fn feishu_auth_exchange_sets_selected_open_id_for_new_grant() {
                 account: Some("feishu_main".to_owned()),
                 json: true,
             },
-            state: "state-123".to_owned(),
-            code: "code-123".to_owned(),
+            state: Some("state-123".to_owned()),
+            code: Some("code-123".to_owned()),
+            callback_url: None,
         },
     )
     .await
@@ -4027,6 +4305,99 @@ async fn feishu_auth_exchange_sets_selected_open_id_for_new_grant() {
         requests[1].authorization.as_deref(),
         Some("Bearer u-token-new")
     );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn feishu_auth_exchange_accepts_full_callback_url() {
+    let temp_dir = temp_feishu_cli_dir("auth-exchange-callback-url");
+    let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+    let state = MockServerState {
+        requests: requests.clone(),
+    };
+    let router = Router::new()
+        .route(
+            "/open-apis/authen/v2/oauth/token",
+            post({
+                let state = state.clone();
+                move |request| {
+                    let state = state.clone();
+                    async move {
+                        record_request(State(state), request).await;
+                        Json(json!({
+                            "code": 0,
+                            "access_token": "u-token-callback",
+                            "refresh_token": "r-token-callback",
+                            "expires_in": 7200,
+                            "refresh_token_expires_in": 2592000,
+                            "scope": "offline_access docx:document:readonly im:message:readonly"
+                        }))
+                    }
+                }
+            }),
+        )
+        .route(
+            "/open-apis/authen/v1/user_info",
+            get({
+                let state = state.clone();
+                move |request| {
+                    let state = state.clone();
+                    async move {
+                        record_request(State(state), request).await;
+                        Json(json!({
+                            "code": 0,
+                            "data": {
+                                "name": "Callback Alice",
+                                "open_id": "ou_callback",
+                                "union_id": "on_callback",
+                                "user_id": "u_callback",
+                                "tenant_key": "tenant_callback"
+                            }
+                        }))
+                    }
+                }
+            }),
+        );
+    let (base_url, server) = spawn_mock_feishu_server(router).await;
+    let config_path = write_sample_feishu_config_with_base_url(&temp_dir, &base_url);
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    store
+        .save_oauth_state_record(&mvp::channel::feishu::api::FeishuOauthStateRecord {
+            state: "state-callback".to_owned(),
+            account_id: "feishu_main".to_owned(),
+            principal_hint: "operator".to_owned(),
+            scope_csv: "offline_access docx:document:readonly im:message:readonly".to_owned(),
+            redirect_uri: Some("http://127.0.0.1:34819/callback".to_owned()),
+            code_verifier: Some("verifier-callback".to_owned()),
+            expires_at_s: now_s + 600,
+            created_at_s: now_s,
+        })
+        .expect("seed oauth state");
+
+    let callback_url = "http://127.0.0.1:34819/callback?code=code-callback&state=state-callback";
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_auth_exchange(
+        &loongclaw_daemon::feishu_cli::FeishuAuthExchangeArgs {
+            common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                config: Some(config_path.display().to_string()),
+                account: Some("feishu_main".to_owned()),
+                json: true,
+            },
+            state: None,
+            code: None,
+            callback_url: Some(callback_url.to_owned()),
+        },
+    )
+    .await
+    .expect("execute feishu auth exchange from callback url");
+
+    assert_eq!(payload["selected_open_id"], "ou_callback");
+    assert_eq!(payload["callback_url"], callback_url);
+
+    let requests = requests.lock().await.clone();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].body.contains("\"code\":\"code-callback\""));
 
     server.abort();
 }
@@ -4669,7 +5040,7 @@ async fn feishu_auth_status_without_open_id_summarizes_multiple_grants() {
     );
     assert_eq!(
         payload["grants"][0]["recommendations"]["auth_start_command"],
-        "loong feishu auth start --account feishu_main --capability doc-write --capability message-write"
+        "loong feishu auth login --account feishu_main --capability doc-write --capability message-write"
     );
 }
 
@@ -4812,7 +5183,7 @@ async fn feishu_auth_status_recommends_account_scoped_reauthorize_for_missing_wr
     );
     assert_eq!(
         payload["recommendations"]["auth_start_command"],
-        "loong feishu auth start --account feishu_main --capability doc-write --capability message-write"
+        "loong feishu auth login --account feishu_main --capability doc-write --capability message-write"
     );
 }
 
@@ -4838,7 +5209,7 @@ async fn feishu_auth_status_without_grant_recommends_readonly_auth_start() {
     assert_eq!(payload["status"]["has_grant"], false);
     assert_eq!(
         payload["recommendations"]["auth_start_command"],
-        "loong feishu auth start --account feishu_main"
+        "loong feishu auth login --account feishu_main"
     );
     assert_eq!(
         payload["recommendations"]["missing_message_write_scope"],
@@ -5836,7 +6207,7 @@ async fn feishu_doc_create_reports_doc_write_hint_when_only_message_write_scope_
         "error={error}"
     );
     assert!(
-        error.contains("loong feishu auth start --account feishu_main --capability doc-write"),
+        error.contains("loong feishu auth login --account feishu_main --capability doc-write"),
         "error={error}"
     );
     assert!(

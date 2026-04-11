@@ -1,0 +1,121 @@
+{
+    "id": "36412a0c-41f3-41c4-ae6f-4be473d7fe0c",
+    "task_name": "local/loongclaw-smoke",
+    "trial_name": "loongclaw-smoke__bkoDMRT",
+    "trial_uri": "file:///Users/chum/loongclaw/harbor/jobs/loongclaw-smoke-live-3/loongclaw-smoke__bkoDMRT",
+    "task_id": {
+        "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke"
+    },
+    "source": null,
+    "task_checksum": "2809ee304f44e41f0cfde0f5f5d0c0c4f70437932561463903c29d62eb3bf282",
+    "config": {
+        "task": {
+            "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke",
+            "git_url": null,
+            "git_commit_id": null,
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": null
+        },
+        "trial_name": "loongclaw-smoke__bkoDMRT",
+        "trials_dir": "harbor/jobs/loongclaw-smoke-live-3",
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": 2.0,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": 10.0,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": null,
+            "import_path": "harbor_loongclaw.agent:LoongClawInstalledAgent",
+            "model_name": "openai/gpt-5.4",
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "kwargs": {
+                "reasoning_effort": "xhigh",
+                "api_key_env": "OPENAI_API_KEY",
+                "provider_kind": "openai",
+                "source_mount": "/opt/loongclaw-src",
+                "session_name": "harbor",
+                "shell_default_mode": "allow"
+            },
+            "env": {
+                "OPENAI_API_KEY": "sk-0891d6f59780a496d73a7d052bb255a073d3defbf9c2e432ec63e709bc112294"
+            }
+        },
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "suppress_override_warnings": false,
+            "mounts_json": [
+                {
+                    "type": "bind",
+                    "source": "/Users/chum/loongclaw",
+                    "target": "/opt/loongclaw-src",
+                    "read_only": true,
+                    "bind": {
+                        "create_host_path": false
+                    }
+                }
+            ],
+            "env": {},
+            "kwargs": {}
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [
+            {
+                "source": "/logs/agent/loongclaw.txt",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-config.toml",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-trajectory.json",
+                "destination": null
+            }
+        ],
+        "job_id": "85b97e60-cdaa-4cf9-acba-5b59e3a84892"
+    },
+    "agent_info": {
+        "name": "loongclaw",
+        "version": "unknown",
+        "model_info": {
+            "name": "gpt-5.4",
+            "provider": "openai"
+        }
+    },
+    "agent_result": null,
+    "verifier_result": null,
+    "exception_info": {
+        "exception_type": "NonZeroAgentExitCodeError",
+        "exception_message": "Command failed (exit 127): export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"\nif ! command -v cargo >/dev/null 2>&1; then\n  for attempt in 1 2 3; do\n    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then\n      break\n    fi\n    sleep $((attempt * 2))\n  done\nfi\nif [ -f \"$HOME/.cargo/env\" ]; then\n  . \"$HOME/.cargo/env\"\nfi\nif command -v cargo >/dev/null 2>&1; then\n  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\"; then\n    loong --version\n    exit 0\n  fi\nfi\nbash /opt/loongclaw-src/scripts/install.sh --prefix \"$HOME/.local/bin\" --target-libc gnu\nloong --version\nstdout: curl: (6) Could not resolve host: sh.rustup.rs\ncurl: (6) Could not resolve host: sh.rustup.rs\ncurl: (6) Could not resolve host: sh.rustup.rs\ncurl: (22) The requested URL returned error: 404\nerror: no GitHub release is published for loongclaw-ai/loongclaw yet.\n\nInstall from source instead:\n  1. Install Rust (if not already installed):\n     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n     source \"$HOME/.cargo/env\"\n  2. Clone and build:\n     git clone https://github.com/loongclaw-ai/loongclaw.git\n     cd loongclaw\n     bash scripts/install.sh --source --onboard\nbash: line 21: loong: command not found\n\nstderr: None",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 533, in run\n    await self._setup_agent()\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 266, in _setup_agent\n    await asyncio.wait_for(\n    ...<2 lines>...\n    )\n  File \"/Users/chum/.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/asyncio/tasks.py\", line 507, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 384, in setup\n    await self.install(environment)\n  File \"/Users/chum/loongclaw/harbor_loongclaw/agent.py\", line 103, in install\n    await self.exec_as_agent(\n    ...<26 lines>...\n    )\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 358, in exec_as_agent\n    return await self._exec(\n           ^^^^^^^^^^^^^^^^^\n        environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 321, in _exec\n    raise NonZeroAgentExitCodeError(\n    ...<3 lines>...\n    )\nharbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 127): export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"\nif ! command -v cargo >/dev/null 2>&1; then\n  for attempt in 1 2 3; do\n    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then\n      break\n    fi\n    sleep $((attempt * 2))\n  done\nfi\nif [ -f \"$HOME/.cargo/env\" ]; then\n  . \"$HOME/.cargo/env\"\nfi\nif command -v cargo >/dev/null 2>&1; then\n  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\"; then\n    loong --version\n    exit 0\n  fi\nfi\nbash /opt/loongclaw-src/scripts/install.sh --prefix \"$HOME/.local/bin\" --target-libc gnu\nloong --version\nstdout: curl: (6) Could not resolve host: sh.rustup.rs\ncurl: (6) Could not resolve host: sh.rustup.rs\ncurl: (6) Could not resolve host: sh.rustup.rs\ncurl: (22) The requested URL returned error: 404\nerror: no GitHub release is published for loongclaw-ai/loongclaw yet.\n\nInstall from source instead:\n  1. Install Rust (if not already installed):\n     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n     source \"$HOME/.cargo/env\"\n  2. Clone and build:\n     git clone https://github.com/loongclaw-ai/loongclaw.git\n     cd loongclaw\n     bash scripts/install.sh --source --onboard\nbash: line 21: loong: command not found\n\nstderr: None\n",
+        "occurred_at": "2026-04-08T23:44:06.224532"
+    },
+    "started_at": "2026-04-08T15:43:30.938234Z",
+    "finished_at": "2026-04-08T15:44:16.987941Z",
+    "environment_setup": {
+        "started_at": "2026-04-08T15:43:30.939372Z",
+        "finished_at": "2026-04-08T15:43:32.649288Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-04-08T15:43:32.649375Z",
+        "finished_at": "2026-04-08T15:44:06.222432Z"
+    },
+    "agent_execution": null,
+    "verifier": null
+}

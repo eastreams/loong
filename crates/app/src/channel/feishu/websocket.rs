@@ -199,7 +199,7 @@ pub(super) async fn run_feishu_websocket_channel(
     #[allow(clippy::print_stdout)]
     {
         println!(
-            "feishu channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, mode=websocket)",
+            "feishu channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, mode=websocket, local_listener=disabled, transport=outbound_websocket_client)",
             resolved_path.display(),
             resolved.configured_account_id,
             resolved.account.label,

@@ -129,6 +129,20 @@ pub(super) async fn run_feishu_channel(
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     if resolved.mode == crate::config::FeishuChannelServeMode::Websocket {
+        if bind_override
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+            || path_override
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+        {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!(
+                    "warning: feishu websocket mode does not open a local HTTP listener; --bind/--path are ignored"
+                );
+            }
+        }
         return websocket::run_feishu_websocket_channel(
             config,
             resolved,

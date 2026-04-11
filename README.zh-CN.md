@@ -345,7 +345,7 @@ allowed_chat_ids = ["oc_your_chat_id"]
 loong feishu-serve --config ~/.loongclaw/config.toml
 ```
 
-默认是 `mode = "webhook"`，会读取 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN` 和 `FEISHU_ENCRYPT_KEY`。
+如果没有显式配置 `mode`，LoongClaw 当前默认会走 `mode = "websocket"`。只有在 webhook 模式下才会读取 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN`、`FEISHU_ENCRYPT_KEY`，并且 `--bind` / `webhook_bind` 也只在 webhook 模式生效。
 
 飞书通道示例（websocket 模式）：
 
@@ -367,6 +367,13 @@ loong feishu-serve --config ~/.loongclaw/config.toml
 ```
 
 websocket 模式不需要 webhook secret。如果你接的是 Lark，可以再加上 `domain = "lark"`。
+
+`loong feishu auth login`（`auth start` 的别名）现在是更推荐的人类登录入口。它会先把 PKCE / state 存到本地，然后默认尽力在系统浏览器里打开授权页；如果不想自动打开，可以加 `--no-launch-browser`。默认的人类可读流程里，如果 `redirect_uri` 是 `http://127.0.0.1:...` 这样的 loopback 地址，LoongClaw 会临时启动本地回调监听，并在浏览器跳回后自动完成 token exchange；你也可以用 `--wait-timeout-s <秒>` 调整等待时长。JSON 模式和非 loopback 回调仍然保持手动流程；如果本地监听启动失败或等待超时，再把完整回调 URL 复制出来，执行 `loong feishu auth exchange --callback-url '<完整回调 URL>'`。
+
+如果你希望显式指定 transport，推荐直接用：
+
+- `loong feishu serve --mode websocket`
+- `loong feishu serve --mode webhook --bind 127.0.0.1:8080 --path /feishu/events`
 
 ### 多通道运行
 

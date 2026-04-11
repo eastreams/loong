@@ -1,0 +1,91 @@
+Running command: if [ -f /etc/alpine-release ]; then
+  apk add --no-cache bash curl git build-base pkgconf openssl-dev ca-certificates
+elif command -v apt-get >/dev/null 2>&1; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y curl git build-essential pkg-config libssl-dev ca-certificates
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y curl git gcc gcc-c++ make pkgconfig openssl-devel ca-certificates
+else
+  echo "unsupported package manager: need curl git rust build dependencies" >&2
+  exit 1
+fi
+Command outputs captured
+Running command: export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+if ! command -v cargo >/dev/null 2>&1; then
+  for attempt in 1 2 3; do
+    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then
+      break
+    fi
+    sleep $((attempt * 2))
+  done
+fi
+if [ -f "$HOME/.cargo/env" ]; then
+  . "$HOME/.cargo/env"
+fi
+if command -v cargo >/dev/null 2>&1; then
+  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target
+  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root "$HOME/.local"; then
+    loong --version
+    exit 0
+  fi
+fi
+bash /opt/loongclaw-src/scripts/install.sh --prefix "$HOME/.local/bin" --target-libc gnu
+loong --version
+Command failed
+Trial loongclaw-smoke__eDpF4Li failed: Command failed (exit 127): export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+if ! command -v cargo >/dev/null 2>&1; then
+  for attempt in 1 2 3; do
+    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then
+      break
+    fi
+    sleep $((attempt * 2))
+  done
+fi
+if [ -f "$HOME/.cargo/env" ]; then
+  . "$HOME/.cargo/env"
+fi
+if command -v cargo >/dev/null 2>&1; then
+  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target
+  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root "$HOME/.local"; then
+    loong --version
+    exit 0
+  fi
+fi
+bash /opt/loongclaw-src/scripts/install.sh --prefix "$HOME/.local/bin" --target-libc gnu
+loong --version
+stdout:   Installing loongclaw v0.1.0-alpha.3 (/opt/loongclaw-src/crates/daemon)
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded arrayvec v0.7.6
+  Downloaded clap_derive v4.6.0
+  Downloaded bitcoin-io v0.1.4
+  Downloaded anyhow v1.0.102
+  Downloaded anstyle-query v1.1.5
+  Downloaded ascii-canvas v3.0.0
+  Downloaded Inflector v0.11.4
+  Downloaded atomic-waker v1.1.2
+  Downloaded allocative_derive v0.3.3
+  Downloaded crypto-common v0.2.1
+  Downloaded crypto-common v0.1.7
+  Downloaded cranelift-srcgen v0.130.0
+  Downloaded adler2 v2.0.1
+  Downloaded crunchy v0.2.4
+  Downloaded async-trait v0.1.89
+  Downloaded crc32fast v1.5.0
+  Downloaded block-buffer v0.12.0
+  Downloaded arbitrary v1.4.2
+  Downloaded beef v0.5.2
+  Downloaded futures-task v0.3.32
+  Downloaded compression-core v0.4.31
+  Downloaded cfg_aliases v0.1.1
+  Downloaded bit-set v0.5.3
+  Downloaded base64-simd v0.8.0
+  Downloaded cpufeatures v0.3.0
+  Downloaded cfg-if v1.0.4
+  Downloaded block-padding v0.3.3
+  Downloaded  ... [truncated]
+stderr: None
+Failed to download artifact '/logs/agent/loongclaw.txt' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-config.toml' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-trajectory.json' (best-effort)
+Not retrying trial because the maximum number of retries has been reached

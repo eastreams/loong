@@ -141,6 +141,11 @@ selected mode:
   `allowed_chat_ids`
 - webhook mode additionally requires `verification_token` and `encrypt_key`
 - websocket mode must not be blocked on webhook-only secrets
+- websocket is the current default serve mode and does not open a local HTTP listener
+- operators should be able to force the serve transport with `loong feishu serve --mode websocket|webhook`
+- `loong feishu auth login` is the recommended human OAuth entry path; it may complete automatically through a loopback callback listener when `redirect_uri` is local
+- `loong feishu auth login` should best-effort launch the authorize URL in a browser unless the operator disables that behavior
+- `loong feishu auth start --json` and non-loopback redirect URIs remain explicit manual bootstrap flows
 - `loong feishu-send` supports both `receive_id` and `message_reply`
 - `loong feishu-serve` owns the inbound reply service
 

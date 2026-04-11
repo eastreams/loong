@@ -1052,6 +1052,8 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long)]
         account: Option<String>,
+        #[arg(long, value_enum)]
+        mode: Option<crate::feishu_cli::FeishuServeModeOverride>,
         #[arg(long)]
         bind: Option<String>,
         #[arg(long)]
@@ -5753,12 +5755,16 @@ pub fn parse_nostr_send_target_kind(
 
 pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
-        with_graceful_shutdown(mvp::channel::run_feishu_channel(
-            args.config_path,
-            args.account,
-            args.bind_override,
-            args.path_override,
-        ))
+        crate::feishu_cli::run_feishu_serve_command(&crate::feishu_cli::FeishuServeArgs {
+            common: crate::feishu_cli::FeishuCommonArgs {
+                config: args.config_path.map(str::to_owned),
+                account: args.account.map(str::to_owned),
+                json: false,
+            },
+            mode: None,
+            bind: args.bind_override.map(str::to_owned),
+            path: args.path_override.map(str::to_owned),
+        })
         .await
     })
 }

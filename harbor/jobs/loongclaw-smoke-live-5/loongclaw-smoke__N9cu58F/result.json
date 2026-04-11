@@ -1,0 +1,121 @@
+{
+    "id": "a530afdf-3e5a-4fd9-aac8-38ac529e3381",
+    "task_name": "local/loongclaw-smoke",
+    "trial_name": "loongclaw-smoke__N9cu58F",
+    "trial_uri": "file:///Users/chum/loongclaw/harbor/jobs/loongclaw-smoke-live-5/loongclaw-smoke__N9cu58F",
+    "task_id": {
+        "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke"
+    },
+    "source": null,
+    "task_checksum": "0a9758182a11279662f0d73055d839978550f70a078b5dbda9b85c0a56711ddb",
+    "config": {
+        "task": {
+            "path": "/tmp/harbor-loongclaw-smoke/loongclaw-smoke",
+            "git_url": null,
+            "git_commit_id": null,
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": null
+        },
+        "trial_name": "loongclaw-smoke__N9cu58F",
+        "trials_dir": "harbor/jobs/loongclaw-smoke-live-5",
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": 2.0,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": 10.0,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": null,
+            "import_path": "harbor_loongclaw.agent:LoongClawInstalledAgent",
+            "model_name": "openai/gpt-5.4",
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "kwargs": {
+                "reasoning_effort": "xhigh",
+                "api_key_env": "OPENAI_API_KEY",
+                "provider_kind": "openai",
+                "source_mount": "/opt/loongclaw-src",
+                "session_name": "harbor",
+                "shell_default_mode": "allow"
+            },
+            "env": {
+                "OPENAI_API_KEY": "sk-0891d6f59780a496d73a7d052bb255a073d3defbf9c2e432ec63e709bc112294"
+            }
+        },
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "suppress_override_warnings": false,
+            "mounts_json": [
+                {
+                    "type": "bind",
+                    "source": "/Users/chum/loongclaw",
+                    "target": "/opt/loongclaw-src",
+                    "read_only": true,
+                    "bind": {
+                        "create_host_path": false
+                    }
+                }
+            ],
+            "env": {},
+            "kwargs": {}
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [
+            {
+                "source": "/logs/agent/loongclaw.txt",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-config.toml",
+                "destination": null
+            },
+            {
+                "source": "/logs/agent/loongclaw-trajectory.json",
+                "destination": null
+            }
+        ],
+        "job_id": "6b162256-19df-4f9f-9d34-359da300ea9a"
+    },
+    "agent_info": {
+        "name": "loongclaw",
+        "version": "unknown",
+        "model_info": {
+            "name": "gpt-5.4",
+            "provider": "openai"
+        }
+    },
+    "agent_result": null,
+    "verifier_result": null,
+    "exception_info": {
+        "exception_type": "NonZeroAgentExitCodeError",
+        "exception_message": "Command failed (exit 2): export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"\nif ! command -v cargo >/dev/null 2>&1; then\n  for attempt in 1 2 3; do\n    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then\n      break\n    fi\n    sleep $((attempt * 2))\n  done\nfi\nif [ -f \"$HOME/.cargo/env\" ]; then\n  . \"$HOME/.cargo/env\"\nfi\nif command -v cargo >/dev/null 2>&1; then\n  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\" --bin loong; then\n    if command -v loong >/dev/null 2>&1; then\n      loong --version\n      exit 0\n    fi\n  fi\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\" --bin loongclaw; then\n    if command -v loongclaw >/dev/null 2>&1; then\n      loongclaw --version\n    fi\n    if [ -x \"$HOME/.local/bin/loongclaw\" ] && [ ! -e \"$HOME/.local/bin/loong\" ]; then\n      ln -sf \"$HOME/.local/bin/loongclaw\" \"$HOME/.local/bin/loong\"\n    fi\n    if command -v loong >/dev/null 2>&1; then\n      loong --version\n      exit 0\n    fi\n  fi\nfi\nif [ -x \"$HOME/.local/bin/loong\" ]; then\n  \"$HOME/.local/bin/loong\" --version\n  exit 0\nfi\nif [ -x \"$HOME/.local/bin/loongclaw\" ]; then\n  ln -sf \"$HOME/.local/bin/loongclaw\" \"$HOME/.local/bin/loong\"\n  loong --version\n    exit 0\n  fi\nfi\nbash /opt/loongclaw-src/scripts/install.sh --prefix \"$HOME/.local/bin\" --target-libc gnu\nloong --version\nstdout:   Installing loongclaw v0.1.0-alpha.3 (/opt/loongclaw-src/crates/daemon)\n    Updating crates.io index\n Downloading crates ...\n  Downloaded bitcoin-io v0.1.4\n  Downloaded block-padding v0.3.3\n  Downloaded crypto-common v0.1.7\n  Downloaded compression-core v0.4.31\n  Downloaded cpufeatures v0.3.0\n  Downloaded document-features v0.2.12\n  Downloaded dtoa-short v0.3.5\n  Downloaded cranelift-srcgen v0.130.0\n  Downloaded cranelift-native v0.130.0\n  Downloaded display_container v0.9.0\n  Downloaded dirs-sys-next v0.1.2\n  Downloaded cssparser-macros v0.6.1\n  Downloaded crunchy v0.2.4\n  Downloaded crypto-common v0.2.1\n  Downloaded dupe v0.9.1\n  Downloaded ctor v0.1.26\n  Downloaded cobs v0.3.0\n  Downloaded dupe_derive v0.9.1\n  Downloaded futures-macro v0.3.32\n  Downloaded fxhash v0.2.1\n  Downloaded futures-io v0.3.32\n  Downloaded equivalent v1.0.2\n  Downloaded embedded-io v0.4.0\n  Downloaded fd-lock v4.0.4\n  Downloaded futures-task v0.3.32\n  Downloaded http-body v0.4.6\n  Downloaded endian-type v0.1 ... [truncated]\nstderr: None",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 533, in run\n    await self._setup_agent()\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 266, in _setup_agent\n    await asyncio.wait_for(\n    ...<2 lines>...\n    )\n  File \"/Users/chum/.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/asyncio/tasks.py\", line 507, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 384, in setup\n    await self.install(environment)\n  File \"/Users/chum/loongclaw/harbor_loongclaw/agent.py\", line 103, in install\n    await self.exec_as_agent(\n    ...<50 lines>...\n    )\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 358, in exec_as_agent\n    return await self._exec(\n           ^^^^^^^^^^^^^^^^^\n        environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/chum/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py\", line 321, in _exec\n    raise NonZeroAgentExitCodeError(\n    ...<3 lines>...\n    )\nharbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 2): export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"\nif ! command -v cargo >/dev/null 2>&1; then\n  for attempt in 1 2 3; do\n    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then\n      break\n    fi\n    sleep $((attempt * 2))\n  done\nfi\nif [ -f \"$HOME/.cargo/env\" ]; then\n  . \"$HOME/.cargo/env\"\nfi\nif command -v cargo >/dev/null 2>&1; then\n  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\" --bin loong; then\n    if command -v loong >/dev/null 2>&1; then\n      loong --version\n      exit 0\n    fi\n  fi\n  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root \"$HOME/.local\" --bin loongclaw; then\n    if command -v loongclaw >/dev/null 2>&1; then\n      loongclaw --version\n    fi\n    if [ -x \"$HOME/.local/bin/loongclaw\" ] && [ ! -e \"$HOME/.local/bin/loong\" ]; then\n      ln -sf \"$HOME/.local/bin/loongclaw\" \"$HOME/.local/bin/loong\"\n    fi\n    if command -v loong >/dev/null 2>&1; then\n      loong --version\n      exit 0\n    fi\n  fi\nfi\nif [ -x \"$HOME/.local/bin/loong\" ]; then\n  \"$HOME/.local/bin/loong\" --version\n  exit 0\nfi\nif [ -x \"$HOME/.local/bin/loongclaw\" ]; then\n  ln -sf \"$HOME/.local/bin/loongclaw\" \"$HOME/.local/bin/loong\"\n  loong --version\n    exit 0\n  fi\nfi\nbash /opt/loongclaw-src/scripts/install.sh --prefix \"$HOME/.local/bin\" --target-libc gnu\nloong --version\nstdout:   Installing loongclaw v0.1.0-alpha.3 (/opt/loongclaw-src/crates/daemon)\n    Updating crates.io index\n Downloading crates ...\n  Downloaded bitcoin-io v0.1.4\n  Downloaded block-padding v0.3.3\n  Downloaded crypto-common v0.1.7\n  Downloaded compression-core v0.4.31\n  Downloaded cpufeatures v0.3.0\n  Downloaded document-features v0.2.12\n  Downloaded dtoa-short v0.3.5\n  Downloaded cranelift-srcgen v0.130.0\n  Downloaded cranelift-native v0.130.0\n  Downloaded display_container v0.9.0\n  Downloaded dirs-sys-next v0.1.2\n  Downloaded cssparser-macros v0.6.1\n  Downloaded crunchy v0.2.4\n  Downloaded crypto-common v0.2.1\n  Downloaded dupe v0.9.1\n  Downloaded ctor v0.1.26\n  Downloaded cobs v0.3.0\n  Downloaded dupe_derive v0.9.1\n  Downloaded futures-macro v0.3.32\n  Downloaded fxhash v0.2.1\n  Downloaded futures-io v0.3.32\n  Downloaded equivalent v1.0.2\n  Downloaded embedded-io v0.4.0\n  Downloaded fd-lock v4.0.4\n  Downloaded futures-task v0.3.32\n  Downloaded http-body v0.4.6\n  Downloaded endian-type v0.1 ... [truncated]\nstderr: None\n",
+        "occurred_at": "2026-04-09T00:19:46.717417"
+    },
+    "started_at": "2026-04-08T16:00:54.843904Z",
+    "finished_at": "2026-04-08T16:19:59.816528Z",
+    "environment_setup": {
+        "started_at": "2026-04-08T16:00:54.845219Z",
+        "finished_at": "2026-04-08T16:00:57.212423Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-04-08T16:00:57.212518Z",
+        "finished_at": "2026-04-08T16:19:46.695323Z"
+    },
+    "agent_execution": null,
+    "verifier": null
+}

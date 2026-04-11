@@ -1,0 +1,32 @@
+job_name: loongclaw-openai-gpt-5.4-xhigh
+jobs_dir: harbor/jobs
+n_concurrent_trials: 1
+agent_setup_timeout_multiplier: 10.0
+agent_timeout_multiplier: 2.0
+
+environment:
+  type: docker
+  delete: true
+  mounts_json:
+    - type: bind
+      source: /Users/chum/loongclaw
+      target: /opt/loongclaw-src
+      read_only: true
+      bind:
+        create_host_path: false
+
+agents:
+  - import_path: harbor_loongclaw.agent:LoongClawInstalledAgent
+    model_name: openai/gpt-5.4
+    kwargs:
+      reasoning_effort: xhigh
+      api_key_env: OPENAI_API_KEY
+      provider_kind: openai
+      source_mount: /opt/loongclaw-src
+      session_name: harbor
+      shell_default_mode: allow
+
+artifacts:
+  - source: /logs/agent/loongclaw.txt
+  - source: /logs/agent/loongclaw-config.toml
+  - source: /logs/agent/loongclaw-trajectory.json

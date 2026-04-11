@@ -1,0 +1,27 @@
+{
+    "id": "afbb9c26-a209-4fcc-ab8d-810ae9dfd6fb",
+    "started_at": "2026-04-08T23:35:16.372366",
+    "finished_at": "2026-04-08T23:35:28.231359",
+    "n_total_trials": 1,
+    "stats": {
+        "n_trials": 1,
+        "n_errors": 1,
+        "evals": {
+            "loongclaw__gpt-5.4__adhoc": {
+                "n_trials": 0,
+                "n_errors": 1,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "reward_stats": {},
+                "exception_stats": {
+                    "RuntimeError": [
+                        "loongclaw-smoke__v4Z9TDY"
+                    ]
+                }
+            }
+        }
+    }
+}

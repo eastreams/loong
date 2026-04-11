@@ -637,19 +637,20 @@ async fn main() {
         Commands::FeishuServe {
             config,
             account,
+            mode,
             bind,
             path,
         } => {
-            run_channel_serve_cli(
-                FEISHU_SERVE_CLI_SPEC,
-                ChannelServeCliArgs {
-                    config_path: config.as_deref(),
-                    account: account.as_deref(),
-                    once: false,
-                    bind_override: bind.as_deref(),
-                    path_override: path.as_deref(),
+            feishu_cli::run_feishu_serve_command(&feishu_cli::FeishuServeArgs {
+                common: feishu_cli::FeishuCommonArgs {
+                    config,
+                    account,
+                    json: false,
                 },
-            )
+                mode,
+                bind,
+                path,
+            })
             .await
         }
         Commands::MatrixSend {

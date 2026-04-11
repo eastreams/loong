@@ -554,7 +554,7 @@ allowed_chat_ids = ["oc_your_chat_id"]
 loong feishu-serve --config ~/.loongclaw/config.toml
 ```
 
-LoongClaw defaults to `mode = "webhook"` and reads `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, and `FEISHU_ENCRYPT_KEY`.
+When `mode` is omitted, LoongClaw currently defaults to `mode = "websocket"`. Webhook mode reads `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, and `FEISHU_ENCRYPT_KEY`; `--bind` / `webhook_bind` only apply in webhook mode.
 
 Feishu channel example (websocket mode):
 
@@ -576,6 +576,13 @@ loong feishu-serve --config ~/.loongclaw/config.toml
 ```
 
 Webhook secrets are not required in websocket mode. If you are targeting Lark instead of Feishu, add `domain = "lark"`.
+
+`loong feishu auth login` (an alias of `auth start`) is now the recommended human auth path. It stores PKCE/state locally first, then best-effort opens the authorize URL in your default browser unless you pass `--no-launch-browser`. In the normal human-readable flow, when `redirect_uri` is a loopback `http://127.0.0.1:...` callback, LoongClaw starts a temporary local callback listener and finishes the token exchange automatically after the browser redirect lands. Use `--wait-timeout-s <seconds>` to shorten or extend the listener wait. JSON mode and non-loopback redirect URIs remain manual; if the listener cannot start or times out, copy the full callback URL and run `loong feishu auth exchange --callback-url '<full_callback_url>'`.
+
+For explicit transport selection, prefer:
+
+- `loong feishu serve --mode websocket`
+- `loong feishu serve --mode webhook --bind 127.0.0.1:8080 --path /feishu/events`
 
 Assistant replies sent through `loong feishu-serve` use Feishu markdown cards when the reply fits the platform card payload limit, so Markdown renders natively in chat; oversized replies automatically fall back to plain text.
 

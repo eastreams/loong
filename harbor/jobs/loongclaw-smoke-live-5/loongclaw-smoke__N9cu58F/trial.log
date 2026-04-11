@@ -1,0 +1,137 @@
+Running command: if [ -f /etc/alpine-release ]; then
+  apk add --no-cache bash curl git build-base pkgconf openssl-dev ca-certificates
+elif command -v apt-get >/dev/null 2>&1; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y curl git build-essential pkg-config libssl-dev ca-certificates
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y curl git gcc gcc-c++ make pkgconfig openssl-devel ca-certificates
+else
+  echo "unsupported package manager: need curl git rust build dependencies" >&2
+  exit 1
+fi
+Command outputs captured
+Running command: export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+if ! command -v cargo >/dev/null 2>&1; then
+  for attempt in 1 2 3; do
+    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then
+      break
+    fi
+    sleep $((attempt * 2))
+  done
+fi
+if [ -f "$HOME/.cargo/env" ]; then
+  . "$HOME/.cargo/env"
+fi
+if command -v cargo >/dev/null 2>&1; then
+  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target
+  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root "$HOME/.local" --bin loong; then
+    if command -v loong >/dev/null 2>&1; then
+      loong --version
+      exit 0
+    fi
+  fi
+  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root "$HOME/.local" --bin loongclaw; then
+    if command -v loongclaw >/dev/null 2>&1; then
+      loongclaw --version
+    fi
+    if [ -x "$HOME/.local/bin/loongclaw" ] && [ ! -e "$HOME/.local/bin/loong" ]; then
+      ln -sf "$HOME/.local/bin/loongclaw" "$HOME/.local/bin/loong"
+    fi
+    if command -v loong >/dev/null 2>&1; then
+      loong --version
+      exit 0
+    fi
+  fi
+fi
+if [ -x "$HOME/.local/bin/loong" ]; then
+  "$HOME/.local/bin/loong" --version
+  exit 0
+fi
+if [ -x "$HOME/.local/bin/loongclaw" ]; then
+  ln -sf "$HOME/.local/bin/loongclaw" "$HOME/.local/bin/loong"
+  loong --version
+    exit 0
+  fi
+fi
+bash /opt/loongclaw-src/scripts/install.sh --prefix "$HOME/.local/bin" --target-libc gnu
+loong --version
+Command failed
+Trial loongclaw-smoke__N9cu58F failed: Command failed (exit 2): export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+if ! command -v cargo >/dev/null 2>&1; then
+  for attempt in 1 2 3; do
+    if curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; then
+      break
+    fi
+    sleep $((attempt * 2))
+  done
+fi
+if [ -f "$HOME/.cargo/env" ]; then
+  . "$HOME/.cargo/env"
+fi
+if command -v cargo >/dev/null 2>&1; then
+  export CARGO_TARGET_DIR=/tmp/loongclaw-harbor-target
+  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root "$HOME/.local" --bin loong; then
+    if command -v loong >/dev/null 2>&1; then
+      loong --version
+      exit 0
+    fi
+  fi
+  if cargo install --path /opt/loongclaw-src/crates/daemon --locked --force --root "$HOME/.local" --bin loongclaw; then
+    if command -v loongclaw >/dev/null 2>&1; then
+      loongclaw --version
+    fi
+    if [ -x "$HOME/.local/bin/loongclaw" ] && [ ! -e "$HOME/.local/bin/loong" ]; then
+      ln -sf "$HOME/.local/bin/loongclaw" "$HOME/.local/bin/loong"
+    fi
+    if command -v loong >/dev/null 2>&1; then
+      loong --version
+      exit 0
+    fi
+  fi
+fi
+if [ -x "$HOME/.local/bin/loong" ]; then
+  "$HOME/.local/bin/loong" --version
+  exit 0
+fi
+if [ -x "$HOME/.local/bin/loongclaw" ]; then
+  ln -sf "$HOME/.local/bin/loongclaw" "$HOME/.local/bin/loong"
+  loong --version
+    exit 0
+  fi
+fi
+bash /opt/loongclaw-src/scripts/install.sh --prefix "$HOME/.local/bin" --target-libc gnu
+loong --version
+stdout:   Installing loongclaw v0.1.0-alpha.3 (/opt/loongclaw-src/crates/daemon)
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded bitcoin-io v0.1.4
+  Downloaded block-padding v0.3.3
+  Downloaded crypto-common v0.1.7
+  Downloaded compression-core v0.4.31
+  Downloaded cpufeatures v0.3.0
+  Downloaded document-features v0.2.12
+  Downloaded dtoa-short v0.3.5
+  Downloaded cranelift-srcgen v0.130.0
+  Downloaded cranelift-native v0.130.0
+  Downloaded display_container v0.9.0
+  Downloaded dirs-sys-next v0.1.2
+  Downloaded cssparser-macros v0.6.1
+  Downloaded crunchy v0.2.4
+  Downloaded crypto-common v0.2.1
+  Downloaded dupe v0.9.1
+  Downloaded ctor v0.1.26
+  Downloaded cobs v0.3.0
+  Downloaded dupe_derive v0.9.1
+  Downloaded futures-macro v0.3.32
+  Downloaded fxhash v0.2.1
+  Downloaded futures-io v0.3.32
+  Downloaded equivalent v1.0.2
+  Downloaded embedded-io v0.4.0
+  Downloaded fd-lock v4.0.4
+  Downloaded futures-task v0.3.32
+  Downloaded http-body v0.4.6
+  Downloaded endian-type v0.1 ... [truncated]
+stderr: None
+Failed to download artifact '/logs/agent/loongclaw.txt' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-config.toml' (best-effort)
+Failed to download artifact '/logs/agent/loongclaw-trajectory.json' (best-effort)
