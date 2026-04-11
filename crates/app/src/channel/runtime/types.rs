@@ -7,15 +7,6 @@
 ))]
 use std::collections::BTreeSet;
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-discord",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-signal",
-    feature = "channel-slack",
-    feature = "channel-wecom"
-))]
 use async_trait::async_trait;
 
 #[cfg(any(
@@ -26,13 +17,6 @@ use async_trait::async_trait;
     feature = "channel-whatsapp"
 ))]
 use super::state::ChannelOperationRuntimeTracker;
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 use super::turn_feedback::ChannelTurnFeedbackPolicy;
 use crate::CliResult;
 #[cfg(any(
@@ -60,13 +44,6 @@ pub use super::super::core::types::*;
 // ChannelAdapter trait (runtime-coupled due to ChannelTurnFeedbackPolicy)
 // ============================================================================
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 #[allow(dead_code)]
 #[async_trait]
 pub trait ChannelAdapter {

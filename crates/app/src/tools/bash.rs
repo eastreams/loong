@@ -185,24 +185,7 @@ fn parse_bash_cwd(
     payload: &serde_json::Map<String, Value>,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<PathBuf, String> {
-    match payload.get("cwd") {
-        Some(cwd) => cwd
-            .as_str()
-            .map(PathBuf::from)
-            .ok_or_else(|| "bash.exec payload.cwd must be a string".to_owned()),
-        None => {
-            let current_dir = std::env::current_dir();
-            if let Ok(current_dir) = current_dir {
-                return Ok(current_dir);
-            }
-
-            if let Some(file_root) = config.file_root.clone() {
-                return Ok(file_root);
-            }
-
-            Ok(PathBuf::from("."))
-        }
-    }
+    process_exec::resolve_process_cwd_with_config(payload, config, "bash.exec")
 }
 
 #[cfg(feature = "tool-shell")]

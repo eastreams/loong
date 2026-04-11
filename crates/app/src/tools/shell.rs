@@ -6,7 +6,7 @@ use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-shell")]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 pub(super) fn execute_shell_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -111,58 +111,7 @@ fn resolve_shell_cwd_with_config(
     payload: &serde_json::Map<String, Value>,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<PathBuf, String> {
-    let raw_cwd = payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let default_cwd = config.default_working_directory();
-    let resolved_cwd = match raw_cwd {
-        Some(raw_cwd) => resolve_shell_cwd_override(raw_cwd, config)?,
-        None => default_cwd,
-    };
-    if !resolved_cwd.is_dir() {
-        let display_path = resolved_cwd.display();
-        let error = format!("shell.exec cwd `{display_path}` is not a directory");
-        return Err(error);
-    }
-    Ok(resolved_cwd)
-}
-
-#[cfg(feature = "tool-shell")]
-fn resolve_shell_cwd_override(
-    raw_cwd: &str,
-    config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<PathBuf, String> {
-    if config.file_root.is_some() {
-        return super::file::resolve_safe_directory_path_with_config(raw_cwd, config);
-    }
-
-    let requested_path = PathBuf::from(raw_cwd);
-    let base_path = if requested_path.is_absolute() {
-        requested_path
-    } else {
-        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        current_dir.join(requested_path)
-    };
-    canonicalize_existing_directory(base_path.as_path())
-}
-
-#[cfg(feature = "tool-shell")]
-fn canonicalize_existing_directory(path: &Path) -> Result<PathBuf, String> {
-    let metadata = std::fs::metadata(path).map_err(|error| {
-        let display_path = path.display();
-        format!("failed to inspect shell cwd `{display_path}`: {error}")
-    })?;
-    if !metadata.is_dir() {
-        let display_path = path.display();
-        let error = format!("shell.exec cwd `{display_path}` is not a directory");
-        return Err(error);
-    }
-    std::fs::canonicalize(path).map_err(|error| {
-        let display_path = path.display();
-        format!("failed to canonicalize shell cwd `{display_path}`: {error}")
-    })
+    process_exec::resolve_process_cwd_with_config(payload, config, "shell.exec")
 }
 
 #[cfg(feature = "tool-shell")]
@@ -216,6 +165,7 @@ mod tests {
         ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
     };
     use serde_json::json;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -316,6 +266,25 @@ mod tests {
             execute_shell_tool_with_config(request, &config).expect_err("file cwd should fail");
 
         assert!(error.contains("is not a directory"), "error: {error}");
+    }
+
+    #[test]
+    fn shell_exec_rejects_non_string_cwd() {
+        let root = unique_temp_dir("loongclaw-shell-cwd-non-string");
+        std::fs::create_dir_all(&root).expect("create shell root");
+        let config = shell_test_config(&root);
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "pwd",
+                "cwd": 123
+            }),
+        };
+
+        let error = execute_shell_tool_with_config(request, &config)
+            .expect_err("non-string cwd should fail");
+
+        assert!(error.contains("shell.exec payload.cwd must be a string"));
     }
 
     #[test]

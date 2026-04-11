@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(feature = "tool-file")]
 use std::fs;
@@ -2513,6 +2514,7 @@ pub(super) fn feishu_provider_tool_definition(tool_name: &str) -> Option<Value> 
         })
 }
 
+#[cfg(test)]
 pub(super) fn feishu_shape_examples() -> BTreeMap<&'static str, Value> {
     let mut shapes = BTreeMap::new();
     shapes.insert(

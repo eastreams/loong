@@ -469,9 +469,16 @@ fn initialize_cli_turn_runtime_with_loaded_config(
     session_requirement: CliSessionRequirement,
     initialize_runtime_environment: bool,
 ) -> CliResult<CliTurnRuntime> {
+    let mut config = config;
     if !config.cli.enabled {
         return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
     }
+
+    let runtime_workspace_root = std::env::current_dir()
+        .ok()
+        .unwrap_or_else(|| config.tools.resolved_file_root());
+    let runtime_workspace_root = runtime_workspace_root.display().to_string();
+    config.tools.runtime_workspace_root = Some(runtime_workspace_root);
 
     if initialize_runtime_environment {
         crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
@@ -1414,7 +1421,7 @@ async fn run_cli_turn(
     };
     runtime
         .turn_coordinator
-        .handle_turn_with_address_and_acp_options_and_observer(
+        .handle_production_turn_with_address_and_acp_options_and_observer(
             &turn_config,
             &runtime.session_address,
             input,
@@ -1530,7 +1537,9 @@ async fn print_turn_checkpoint_summary(
     #[cfg(feature = "memory-sqlite")]
     {
         let diagnostics = turn_coordinator
-            .load_turn_checkpoint_diagnostics_with_limit(config, session_id, limit, binding)
+            .load_production_turn_checkpoint_diagnostics_with_limit(
+                config, session_id, limit, binding,
+            )
             .await?;
         let render_width = detect_cli_chat_render_width();
         let rendered_lines = render_turn_checkpoint_summary_lines_with_width(
@@ -1569,7 +1578,7 @@ async fn print_turn_checkpoint_repair(
     #[cfg(feature = "memory-sqlite")]
     {
         let outcome = turn_coordinator
-            .repair_turn_checkpoint_tail(config, session_id, binding)
+            .repair_production_turn_checkpoint_tail(config, session_id, binding)
             .await?;
         let render_width = detect_cli_chat_render_width();
         let rendered_lines =

@@ -242,12 +242,6 @@ pub async fn device_code_login() -> CliResult<String> {
 
 #[cfg(test)]
 #[allow(dead_code)] // Used by auth_profile_runtime tests.
-pub(crate) fn set_cached_key_for_test(token: &str, expires_at: i64) {
-    set_cached_key_for_auth_source_for_test("test-github-token", token, expires_at);
-}
-
-#[cfg(test)]
-#[allow(dead_code)] // Used by auth_profile_runtime tests.
 pub(crate) fn set_cached_key_for_auth_source_for_test(
     github_token: &str,
     token: &str,

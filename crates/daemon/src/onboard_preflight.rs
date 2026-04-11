@@ -115,7 +115,8 @@ pub(crate) async fn run_preflight_checks(
     let sqlite_parent = sqlite_path.parent().unwrap_or(Path::new("."));
     checks.push(directory_preflight_check("memory path", sqlite_parent));
 
-    let file_root = config.tools.resolved_file_root();
+    let file_root_resolution = config.tools.file_root_resolution();
+    let file_root = file_root_resolution.path().clone();
     checks.push(directory_preflight_check("tool file root", &file_root));
 
     let browser_companion_checks = collect_browser_companion_preflight_checks(config).await;

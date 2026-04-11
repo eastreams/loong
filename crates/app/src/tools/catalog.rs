@@ -308,11 +308,15 @@ impl ToolDescriptor {
     }
 
     pub fn requires_kernel_binding(&self) -> bool {
+        let execution_kind = self.execution_kind;
+        if execution_kind != ToolExecutionKind::App {
+            return false;
+        }
+
         let governance_profile = self.governance_profile();
         let approval_mode = governance_profile.approval_mode;
-        let execution_kind = self.execution_kind;
 
-        execution_kind == ToolExecutionKind::App && approval_mode == ToolApprovalMode::PolicyDriven
+        approval_mode == ToolApprovalMode::PolicyDriven
     }
 }
 

@@ -3,7 +3,6 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::path::PathBuf;
 
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
@@ -233,7 +232,7 @@ async fn build_doctor_security_execution(
     let shell_finding = assess_shell_execution(config, &runtime);
     findings.push(shell_finding);
 
-    let file_root_finding = assess_tool_file_root(config, &runtime);
+    let file_root_finding = assess_tool_file_root(config);
     findings.push(file_root_finding);
 
     let web_fetch_finding = assess_web_fetch(runtime.web_fetch.clone());
@@ -419,15 +418,10 @@ fn assess_shell_execution(
     )
 }
 
-fn assess_tool_file_root(
-    config: &mvp::config::LoongClawConfig,
-    runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-) -> SecurityFinding {
+fn assess_tool_file_root(config: &mvp::config::LoongClawConfig) -> SecurityFinding {
     let explicit_root = config.tools.file_root.as_deref();
-    let effective_root = runtime
-        .file_root
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let file_root_resolution = config.tools.file_root_resolution();
+    let effective_root = file_root_resolution.path().clone();
     let effective_root_string = effective_root.display().to_string();
     let root_exists = effective_root.exists();
 
@@ -440,9 +434,7 @@ fn assess_tool_file_root(
     let root_exists_evidence = format!("effective_tool_root.exists={root_exists}");
     evidence.push(root_exists_evidence);
 
-    let explicit_root_missing = explicit_root
-        .map(str::trim)
-        .is_none_or(|value| value.is_empty());
+    let explicit_root_missing = file_root_resolution.uses_current_working_directory_fallback();
     if explicit_root_missing {
         let summary =
             "File tools still fall back to the current working directory because tools.file_root is unset."
@@ -1645,6 +1637,7 @@ mod tests {
     use crate::test_support::ScopedEnv;
     use loongclaw_contracts::SecretRef;
     use std::fs;
+    use std::path::PathBuf;
     use std::process::Command;
     use std::sync::MutexGuard;
 
@@ -1732,6 +1725,19 @@ mod tests {
             "unexpected summary: {}",
             finding.summary
         );
+    }
+
+    #[test]
+    fn tool_file_root_finding_uses_explicit_and_effective_resolution_truth() {
+        let config = mvp::config::LoongClawConfig::default();
+        let finding = assess_tool_file_root(&config);
+        let rendered_evidence = finding.evidence.join("\n");
+        let effective_root = config.tools.resolved_file_root();
+        let effective_root_text = effective_root.display().to_string();
+
+        assert_eq!(finding.status, SecurityFindingStatus::Exposed);
+        assert!(rendered_evidence.contains("tools.file_root=(current working directory)"));
+        assert!(rendered_evidence.contains(effective_root_text.as_str()));
     }
 
     #[tokio::test]
