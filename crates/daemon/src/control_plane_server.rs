@@ -209,6 +209,7 @@ struct ControlPlaneTurnStreamState {
 }
 
 struct ControlPlaneTurnRuntime {
+    resolved_path: std::path::PathBuf,
     config: mvp::config::LoongClawConfig,
     acp_manager: Arc<mvp::acp::AcpSessionManager>,
     registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
@@ -924,16 +925,21 @@ fn control_plane_subscribe_stream(
 }
 
 impl ControlPlaneTurnRuntime {
-    fn new(config: mvp::config::LoongClawConfig) -> Result<Self, String> {
+    fn new(
+        resolved_path: std::path::PathBuf,
+        config: mvp::config::LoongClawConfig,
+    ) -> Result<Self, String> {
         let acp_manager = mvp::acp::shared_acp_session_manager(&config)?;
-        Ok(Self::with_manager(config, acp_manager))
+        Ok(Self::with_manager(resolved_path, config, acp_manager))
     }
 
     fn with_manager(
+        resolved_path: std::path::PathBuf,
         config: mvp::config::LoongClawConfig,
         acp_manager: Arc<mvp::acp::AcpSessionManager>,
     ) -> Self {
         Self {
+            resolved_path,
             config,
             acp_manager,
             registry: Arc::new(mvp::control_plane::ControlPlaneTurnRegistry::new()),
@@ -949,26 +955,6 @@ impl mvp::acp::AcpTurnEventSink for ControlPlaneTurnEventForwarder {
         let payload = map_turn_event_payload(&recorded_event);
         let _ = self.manager.record_acp_turn_event(payload, true);
         Ok(())
-    }
-}
-
-fn extend_turn_metadata(
-    target: &mut std::collections::BTreeMap<String, String>,
-    extra: &std::collections::BTreeMap<String, String>,
-) {
-    for (key, value) in extra {
-        let normalized_key = key.trim();
-        let normalized_value = value.trim();
-        if normalized_key.is_empty() {
-            continue;
-        }
-        if normalized_value.is_empty() {
-            continue;
-        }
-
-        let normalized_key = normalized_key.to_owned();
-        let normalized_value = normalized_value.to_owned();
-        target.entry(normalized_key).or_insert(normalized_value);
     }
 }
 
@@ -1136,14 +1122,6 @@ fn control_plane_turn_stream(
 ) -> Result<impl Stream<Item = Result<Event, Infallible>>, String> {
     let initial_state = initial_turn_stream_state(registry, turn_id.as_str(), after_seq)?;
     Ok(stream::unfold(initial_state, next_turn_sse_item))
-}
-
-fn stop_reason_label(stop_reason: Option<mvp::acp::AcpTurnStopReason>) -> Option<&'static str> {
-    match stop_reason {
-        Some(mvp::acp::AcpTurnStopReason::Completed) => Some("completed"),
-        Some(mvp::acp::AcpTurnStopReason::Cancelled) => Some("cancelled"),
-        None => None,
-    }
 }
 
 fn connection_principal_from_connect(
@@ -2132,51 +2110,35 @@ async fn turn_submit(
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
-    let turn_address = match crate::build_acp_dispatch_address(
+    if let Err(error) = crate::build_acp_dispatch_address(
         session_id.as_str(),
         request.channel_id.as_deref(),
         request.conversation_id.as_deref(),
         request.account_id.as_deref(),
         request.thread_id.as_deref(),
     ) {
-        Ok(turn_address) => turn_address,
-        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
-    };
-
-    let working_directory = request
-        .working_directory
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from);
-    let turn_options = mvp::acp::AcpConversationTurnOptions::explicit();
-    let turn_options = turn_options.with_working_directory(working_directory.as_deref());
-    let prepared_turn = mvp::acp::prepare_acp_conversation_turn_for_address(
-        &turn_runtime.config,
-        &turn_address,
-        input.as_str(),
-        &turn_options,
-    );
-    let prepared_turn = match prepared_turn {
-        Ok(prepared_turn) => prepared_turn,
-        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
-    };
+        return error_response(StatusCode::BAD_REQUEST, error);
+    }
 
     let turn_snapshot = turn_runtime.registry.issue_turn(session_id.as_str());
     let turn_id = turn_snapshot.turn_id.clone();
-    let mut bootstrap = prepared_turn.bootstrap;
-    let mut acp_request = prepared_turn.request;
-    extend_turn_metadata(&mut bootstrap.metadata, &request.metadata);
-    extend_turn_metadata(&mut acp_request.metadata, &request.metadata);
-    acp_request
-        .metadata
-        .insert("control_plane.turn_id".to_owned(), turn_id.clone());
-
+    let resolved_path = turn_runtime.resolved_path.clone();
     let config = turn_runtime.config.clone();
     let acp_manager = turn_runtime.acp_manager.clone();
     let turn_registry = turn_runtime.registry.clone();
     let manager = state.manager.clone();
     let spawned_turn_id = turn_id;
+    let channel_id = request.channel_id.clone();
+    let account_id = request.account_id.clone();
+    let conversation_id = request.conversation_id.clone();
+    let thread_id = request.thread_id.clone();
+    let metadata = request.metadata.clone();
+    let working_directory = request
+        .working_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
 
     tokio::spawn(async move {
         let event_forwarder = ControlPlaneTurnEventForwarder {
@@ -2184,17 +2146,37 @@ async fn turn_submit(
             registry: turn_registry.clone(),
             turn_id: spawned_turn_id.clone(),
         };
-        let execution_result = acp_manager
-            .run_turn_with_sink(&config, &bootstrap, &acp_request, Some(&event_forwarder))
+        let turn_request = mvp::agent_runtime::AgentTurnRequest {
+            message: input,
+            turn_mode: mvp::agent_runtime::AgentTurnMode::Acp,
+            channel_id,
+            account_id,
+            conversation_id,
+            thread_id,
+            metadata,
+            acp: true,
+            acp_event_stream: true,
+            acp_bootstrap_mcp_servers: Vec::new(),
+            acp_cwd: working_directory,
+            live_surface_enabled: false,
+        };
+        let execution_result = mvp::agent_runtime::AgentRuntime::new()
+            .run_turn_with_loaded_config_and_acp_manager(
+                resolved_path,
+                config,
+                Some(session_id.as_str()),
+                &turn_request,
+                Some(&event_forwarder),
+                acp_manager,
+            )
             .await;
 
         match execution_result {
             Ok(result) => {
-                let stop_reason = stop_reason_label(result.stop_reason);
                 let completion = turn_registry.complete_success(
                     spawned_turn_id.as_str(),
                     result.output_text.as_str(),
-                    stop_reason,
+                    result.stop_reason.as_deref(),
                     result.usage.clone(),
                 );
                 if let Ok(record) = completion {
@@ -2450,7 +2432,10 @@ pub async fn run_control_plane_serve_cli(
     let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
     manager.set_runtime_ready(true);
     let turn_runtime = match loaded_config.as_ref() {
-        Some((_, config)) => Some(Arc::new(ControlPlaneTurnRuntime::new(config.clone())?)),
+        Some((resolved_path, config)) => Some(Arc::new(ControlPlaneTurnRuntime::new(
+            resolved_path.clone(),
+            config.clone(),
+        )?)),
         None => None,
     };
     #[cfg(feature = "memory-sqlite")]
@@ -2759,8 +2744,25 @@ mod tests {
         })
         .expect("register control-plane turn backend");
         let config = turn_runtime_test_config(backend_id);
+        let temp_root = std::env::temp_dir().join(format!(
+            "loongclaw-control-plane-turn-runtime-{}-{}",
+            backend_id,
+            current_time_ms()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create control-plane turn runtime temp root");
+        let resolved_path = temp_root.join("config.toml");
+        mvp::config::write(
+            Some(resolved_path.to_str().expect("utf8 config path")),
+            &config,
+            true,
+        )
+        .expect("write control-plane turn runtime config");
         let acp_manager = Arc::new(mvp::acp::AcpSessionManager::default());
-        Arc::new(ControlPlaneTurnRuntime::with_manager(config, acp_manager))
+        Arc::new(ControlPlaneTurnRuntime::with_manager(
+            resolved_path,
+            config,
+            acp_manager,
+        ))
     }
 
     fn remote_control_plane_config(shared_token: &str) -> mvp::config::LoongClawConfig {
@@ -2914,13 +2916,19 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     fn isolated_memory_config(test_name: &str) -> mvp::memory::runtime_config::MemoryRuntimeConfig {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_ISOLATED_MEMORY_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
+        let nonce = NEXT_ISOLATED_MEMORY_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-control-plane-server-{test_name}-{}",
-            std::process::id()
+            "loongclaw-control-plane-server-{test_name}-{}-{nonce}",
+            std::process::id(),
         ));
         let _ = std::fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(base.join("memory.sqlite3-wal"));
+        let _ = std::fs::remove_file(base.join("memory.sqlite3-shm"));
         mvp::memory::runtime_config::MemoryRuntimeConfig {
             sqlite_path: Some(db_path),
             ..mvp::memory::runtime_config::MemoryRuntimeConfig::default()

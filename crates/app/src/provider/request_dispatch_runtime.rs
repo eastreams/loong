@@ -159,6 +159,10 @@ pub(super) async fn request_completion_with_provider_transport(
                 transport_profile.default_user_agent,
                 transport_profile.default_headers,
             )
+            .and_then(|mut headers| {
+                super::transport::append_prompt_cache_headers(&mut headers, None, None, messages)?;
+                Ok(headers)
+            })
             .map_err(|error| {
                 build_model_request_error(
                     error,
@@ -315,6 +319,15 @@ pub(super) async fn request_turn_with_provider_transport(
                 transport_profile.default_user_agent,
                 transport_profile.default_headers,
             )
+            .and_then(|mut headers| {
+                super::transport::append_prompt_cache_headers(
+                    &mut headers,
+                    Some(session_id),
+                    Some(turn_id),
+                    messages,
+                )?;
+                Ok(headers)
+            })
             .map_err(|error| {
                 build_model_request_error(
                     error,
@@ -493,6 +506,15 @@ pub(super) async fn request_turn_streaming_with_transport(
                 transport_profile.default_user_agent,
                 transport_profile.default_headers,
             )
+            .and_then(|mut headers| {
+                super::transport::append_prompt_cache_headers(
+                    &mut headers,
+                    Some(session_id),
+                    Some(turn_id),
+                    messages,
+                )?;
+                Ok(headers)
+            })
             .map_err(|error| {
                 build_model_request_error(
                     error,

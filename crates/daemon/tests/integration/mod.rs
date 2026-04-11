@@ -1515,6 +1515,19 @@ fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
 
 #[test]
 fn render_memory_system_snapshot_text_reports_fail_open_policy() {
+    let mut env = loongclaw_daemon::test_support::ScopedEnv::new();
+    for key in [
+        "LOONGCLAW_MEMORY_BACKEND",
+        "LOONGCLAW_MEMORY_PROFILE",
+        "LOONGCLAW_MEMORY_FAIL_OPEN",
+        "LOONGCLAW_MEMORY_INGEST_MODE",
+        "LOONGCLAW_SQLITE_PATH",
+        "LOONGCLAW_SLIDING_WINDOW",
+        "LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS",
+        "LOONGCLAW_MEMORY_PROFILE_NOTE",
+    ] {
+        env.remove(key);
+    }
     let config = mvp::config::LoongClawConfig {
         memory: mvp::config::MemoryConfig {
             profile: mvp::config::MemoryProfile::WindowPlusSummary,

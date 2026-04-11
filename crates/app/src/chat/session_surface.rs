@@ -1067,30 +1067,32 @@ impl ChatSessionSurface {
         self.render()?;
 
         let observer = build_surface_live_observer(self.state.clone(), self.term.clone());
-        let assistant_text = self
-            .runtime
-            .turn_coordinator
-            .handle_turn_with_address_and_acp_options_and_observer(
-                &reload_cli_turn_config(
-                    &self.runtime.config,
-                    self.runtime.resolved_path.as_path(),
-                )?,
-                &self.runtime.session_address,
-                trimmed,
-                ProviderErrorMode::InlineMessage,
-                &if self.runtime.explicit_acp_request {
-                    AcpConversationTurnOptions::explicit()
-                } else {
-                    AcpConversationTurnOptions::automatic()
-                }
-                .with_additional_bootstrap_mcp_servers(
-                    &self.runtime.effective_bootstrap_mcp_servers,
-                )
-                .with_working_directory(self.runtime.effective_working_directory.as_deref()),
-                crate::conversation::ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx),
+        let assistant_text = crate::agent_runtime::AgentRuntime::new()
+            .run_turn_with_runtime_and_observer(
+                &self.runtime,
+                &crate::agent_runtime::AgentTurnRequest {
+                    message: trimmed.to_owned(),
+                    turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+                    channel_id: self.runtime.session_address.channel_id.clone(),
+                    account_id: self.runtime.session_address.account_id.clone(),
+                    conversation_id: self.runtime.session_address.conversation_id.clone(),
+                    thread_id: self.runtime.session_address.thread_id.clone(),
+                    metadata: std::collections::BTreeMap::new(),
+                    acp: self.runtime.explicit_acp_request,
+                    acp_event_stream: false,
+                    acp_bootstrap_mcp_servers: self.runtime.effective_bootstrap_mcp_servers.clone(),
+                    acp_cwd: self
+                        .runtime
+                        .effective_working_directory
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                    live_surface_enabled: true,
+                },
+                None,
                 Some(observer),
             )
-            .await?;
+            .await?
+            .output_text;
 
         {
             let mut state = self.lock_state();

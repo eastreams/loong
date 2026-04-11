@@ -58,17 +58,27 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
 }
 
 fn headless_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let runtime_root = unique_runtime_dir("headless-config");
+    let config_path = runtime_root.join("loongclaw.toml");
+    let sqlite_path = runtime_root.join("memory.sqlite3");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.memory.sqlite_path = sqlite_path.display().to_string();
+
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
-        config: mvp::config::LoongClawConfig::default(),
+        resolved_path: config_path,
+        config,
     }
 }
 
 fn telegram_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let runtime_root = unique_runtime_dir("telegram-config");
+    let config_path = runtime_root.join("loongclaw.toml");
+    let sqlite_path = runtime_root.join("memory.sqlite3");
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
+    config.memory.sqlite_path = sqlite_path.display().to_string();
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        resolved_path: config_path,
         config,
     }
 }
@@ -391,7 +401,9 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::await_holding_lock)]
 async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_runtime() {
+    let _lock = lock_daemon_test_environment();
     let runtime_dir = unique_runtime_dir("localhost-control");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),

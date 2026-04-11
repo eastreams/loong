@@ -146,6 +146,10 @@ impl MemoryRuntimeConfig {
         runtime
     }
 
+    pub fn from_memory_config_without_env_overrides(config: &MemoryConfig) -> Self {
+        Self::from_memory_config_base(config)
+    }
+
     pub const fn strict_mode_requested(&self) -> bool {
         !self.fail_open
     }

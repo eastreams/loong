@@ -20,6 +20,7 @@ use reqwest::header::{
     AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::CliResult;
 use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind, active_cli_command_name};
@@ -408,6 +409,96 @@ fn build_request_headers_with_defaults(
     Ok(headers)
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct PromptCacheHeaderPlan {
+    pub(super) stable_prefix_sha256: Option<String>,
+    pub(super) cached_prefix_sha256: Option<String>,
+    pub(super) cache_eligible: bool,
+}
+
+pub(super) fn derive_prompt_cache_header_plan(messages: &[Value]) -> PromptCacheHeaderPlan {
+    let stable_prefix_messages = messages
+        .iter()
+        .take_while(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let stable_prefix_sha256 = hash_prompt_cache_messages(stable_prefix_messages.as_slice());
+
+    let cached_prefix_messages = match messages.last() {
+        Some(last) if last.get("role").and_then(Value::as_str) == Some("user") => messages
+            .get(..messages.len().saturating_sub(1))
+            .unwrap_or(&[]),
+        Some(_) => messages,
+        None => &[],
+    };
+    let cached_prefix_sha256 = hash_prompt_cache_messages(cached_prefix_messages);
+    let cache_eligible = cached_prefix_sha256.is_some();
+
+    PromptCacheHeaderPlan {
+        stable_prefix_sha256,
+        cached_prefix_sha256,
+        cache_eligible,
+    }
+}
+
+pub(super) fn append_prompt_cache_headers(
+    headers: &mut HeaderMap,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    messages: &[Value],
+) -> CliResult<()> {
+    let plan = derive_prompt_cache_header_plan(messages);
+
+    if let Some(session_id) = session_id {
+        insert_runtime_header(headers, "x-loongclaw-session-id", session_id)?;
+    }
+    if let Some(turn_id) = turn_id {
+        insert_runtime_header(headers, "x-loongclaw-turn-id", turn_id)?;
+    }
+    if let Some(stable_prefix_sha256) = plan.stable_prefix_sha256.as_deref() {
+        insert_runtime_header(
+            headers,
+            "x-loongclaw-stable-prefix-sha256",
+            stable_prefix_sha256,
+        )?;
+    }
+    if let Some(cached_prefix_sha256) = plan.cached_prefix_sha256.as_deref() {
+        insert_runtime_header(
+            headers,
+            "x-loongclaw-cached-prefix-sha256",
+            cached_prefix_sha256,
+        )?;
+    }
+    insert_runtime_header(
+        headers,
+        "x-loongclaw-cache-eligible",
+        if plan.cache_eligible { "true" } else { "false" },
+    )?;
+
+    Ok(())
+}
+
+fn insert_runtime_header(headers: &mut HeaderMap, name: &str, value: &str) -> CliResult<()> {
+    let header_name = HeaderName::from_bytes(name.as_bytes())
+        .map_err(|error| format!("invalid runtime request header name `{name}`: {error}"))?;
+    let header_value = HeaderValue::from_str(value)
+        .map_err(|error| format!("invalid runtime request header `{name}`: {error}"))?;
+    headers.insert(header_name, header_value);
+    Ok(())
+}
+
+fn hash_prompt_cache_messages(messages: &[Value]) -> Option<String> {
+    if messages.is_empty() {
+        return None;
+    }
+
+    let Ok(serialized) = serde_json::to_vec(messages) else {
+        return None;
+    };
+    let digest = Sha256::digest(serialized);
+    Some(hex::encode(digest))
+}
+
 pub(super) fn apply_auth_profile_headers(
     headers: &mut HeaderMap,
     profile: Option<&ProviderAuthProfile>,
@@ -733,6 +824,61 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("custom-key")
         );
+    }
+
+    #[test]
+    fn derive_prompt_cache_header_plan_uses_leading_system_and_cached_prefix() {
+        let messages = vec![
+            json!({"role": "system", "content": "sys-a"}),
+            json!({"role": "system", "content": "sys-b"}),
+            json!({"role": "assistant", "content": "prior-answer"}),
+            json!({"role": "user", "content": "hello"}),
+        ];
+
+        let plan = derive_prompt_cache_header_plan(messages.as_slice());
+
+        assert!(plan.stable_prefix_sha256.is_some());
+        assert!(plan.cached_prefix_sha256.is_some());
+        assert!(plan.cache_eligible);
+        assert_ne!(plan.stable_prefix_sha256, plan.cached_prefix_sha256);
+    }
+
+    #[test]
+    fn append_prompt_cache_headers_inserts_runtime_request_metadata() {
+        let mut headers = HeaderMap::new();
+        let messages = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "hello"}),
+        ];
+
+        append_prompt_cache_headers(
+            &mut headers,
+            Some("session-1"),
+            Some("turn-1"),
+            messages.as_slice(),
+        )
+        .expect("append prompt cache headers");
+
+        assert_eq!(
+            headers
+                .get("x-loongclaw-session-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("session-1")
+        );
+        assert_eq!(
+            headers
+                .get("x-loongclaw-turn-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("turn-1")
+        );
+        assert_eq!(
+            headers
+                .get("x-loongclaw-cache-eligible")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        assert!(headers.contains_key("x-loongclaw-stable-prefix-sha256"));
+        assert!(headers.contains_key("x-loongclaw-cached-prefix-sha256"));
     }
 
     #[test]

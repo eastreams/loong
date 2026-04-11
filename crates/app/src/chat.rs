@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -10,7 +11,9 @@ use std::sync::{
 use tokio::sync::Notify;
 
 use crate::CliResult;
-use crate::acp::{AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink};
+use crate::acp::{
+    AcpConversationTurnOptions, AcpTurnEventSink, AcpTurnProvenance, JsonlAcpTurnEventSink,
+};
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 mod cli_input;
@@ -71,10 +74,11 @@ use super::conversation::ContextCompactionReport;
 #[cfg(test)]
 use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
 use super::conversation::{
-    ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
-    ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
-    ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent, ConversationTurnToolEvent,
-    ConversationTurnToolState, ExecutionLane, ProviderErrorMode, parse_approval_prompt_view,
+    ConversationIngressContext, ConversationRuntimeBinding, ConversationSessionAddress,
+    ConversationTurnCoordinator, ConversationTurnObserver, ConversationTurnObserverHandle,
+    ConversationTurnPhase, ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent,
+    ConversationTurnToolEvent, ConversationTurnToolState, ExecutionLane, ProviderErrorMode,
+    parse_approval_prompt_view,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -243,23 +247,23 @@ fn format_onboard_command_hint(config_path: Option<&str>, resolved_config_path: 
     command
 }
 
-struct CliTurnRuntime {
-    resolved_path: PathBuf,
-    config: LoongClawConfig,
-    session_id: String,
-    session_address: ConversationSessionAddress,
-    turn_coordinator: ConversationTurnCoordinator,
-    kernel_ctx: crate::KernelContext,
-    explicit_acp_request: bool,
-    effective_bootstrap_mcp_servers: Vec<String>,
-    effective_working_directory: Option<PathBuf>,
-    memory_label: String,
+pub(crate) struct CliTurnRuntime {
+    pub(crate) resolved_path: PathBuf,
+    pub(crate) config: LoongClawConfig,
+    pub(crate) session_id: String,
+    pub(crate) session_address: ConversationSessionAddress,
+    pub(crate) turn_coordinator: ConversationTurnCoordinator,
+    pub(crate) kernel_ctx: crate::KernelContext,
+    pub(crate) explicit_acp_request: bool,
+    pub(crate) effective_bootstrap_mcp_servers: Vec<String>,
+    pub(crate) effective_working_directory: Option<PathBuf>,
+    pub(crate) memory_label: String,
     #[cfg(feature = "memory-sqlite")]
-    memory_config: MemoryRuntimeConfig,
+    pub(crate) memory_config: MemoryRuntimeConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CliSessionRequirement {
+pub(crate) enum CliSessionRequirement {
     AllowImplicitDefault,
     RequireExplicit,
 }
@@ -442,7 +446,7 @@ fn run_concurrent_cli_host_repl(options: &ConcurrentCliHostOptions) -> CliResult
     })
 }
 
-fn initialize_cli_turn_runtime(
+pub(crate) fn initialize_cli_turn_runtime(
     config_path: Option<&str>,
     session_hint: Option<&str>,
     options: &CliChatOptions,
@@ -460,7 +464,7 @@ fn initialize_cli_turn_runtime(
     )
 }
 
-fn initialize_cli_turn_runtime_with_loaded_config(
+pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     resolved_path: PathBuf,
     config: LoongClawConfig,
     session_hint: Option<&str>,
@@ -485,6 +489,28 @@ fn initialize_cli_turn_runtime_with_loaded_config(
     }
     let kernel_ctx =
         bootstrap_kernel_context_with_config(kernel_scope, DEFAULT_TOKEN_TTL_S, &config)?;
+    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+        resolved_path,
+        config,
+        session_hint,
+        options,
+        kernel_ctx,
+        session_requirement,
+    )
+}
+
+pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    session_hint: Option<&str>,
+    options: &CliChatOptions,
+    kernel_ctx: crate::KernelContext,
+    session_requirement: CliSessionRequirement,
+) -> CliResult<CliTurnRuntime> {
+    if !config.cli.enabled {
+        return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
+    }
+
     let explicit_acp_request = options.requests_explicit_acp();
     let effective_bootstrap_mcp_servers = config
         .acp
@@ -849,9 +875,32 @@ async fn process_cli_chat_input(
         ChatCommandMatchResult::NotMatched => {}
     }
 
-    Ok(CliChatLoopControl::AssistantText(
-        run_cli_turn(runtime, input, event_sink, true).await?,
-    ))
+    let agent_runtime = crate::agent_runtime::AgentRuntime::new();
+    let turn_result = agent_runtime
+        .run_turn_with_runtime(
+            runtime,
+            &crate::agent_runtime::AgentTurnRequest {
+                message: input.to_owned(),
+                turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+                channel_id: runtime.session_address.channel_id.clone(),
+                account_id: runtime.session_address.account_id.clone(),
+                conversation_id: runtime.session_address.conversation_id.clone(),
+                thread_id: runtime.session_address.thread_id.clone(),
+                metadata: BTreeMap::new(),
+                acp: runtime.explicit_acp_request,
+                acp_event_stream: event_sink.is_some(),
+                acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
+                acp_cwd: runtime
+                    .effective_working_directory
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                live_surface_enabled: true,
+            },
+            event_sink,
+        )
+        .await?;
+
+    Ok(CliChatLoopControl::AssistantText(turn_result.output_text))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1398,11 +1447,86 @@ fn normalize_markdown_display_line(line: &str) -> String {
     trimmed_end.to_owned()
 }
 
-async fn run_cli_turn(
+pub(crate) async fn run_cli_turn(
     runtime: &CliTurnRuntime,
     input: &str,
     event_sink: Option<&dyn AcpTurnEventSink>,
     live_surface_enabled: bool,
+) -> CliResult<String> {
+    run_cli_turn_with_address(
+        runtime,
+        &runtime.session_address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        None,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn run_cli_turn_with_address(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    observer_override: Option<ConversationTurnObserverHandle>,
+) -> CliResult<String> {
+    run_cli_turn_with_address_and_ingress_and_error_mode(
+        runtime,
+        address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        metadata,
+        None,
+        AcpTurnProvenance::default(),
+        ProviderErrorMode::InlineMessage,
+        observer_override,
+    )
+    .await
+}
+
+pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    ingress: Option<&ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'_>,
+    provider_error_mode: ProviderErrorMode,
+    observer_override: Option<ConversationTurnObserverHandle>,
+) -> CliResult<String> {
+    run_cli_turn_with_address_and_ingress(
+        runtime,
+        address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        metadata,
+        ingress,
+        provenance,
+        provider_error_mode,
+        observer_override,
+    )
+    .await
+}
+
+pub(crate) async fn run_cli_turn_with_address_and_ingress(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    ingress: Option<&ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'_>,
+    provider_error_mode: ProviderErrorMode,
+    observer_override: Option<ConversationTurnObserverHandle>,
 ) -> CliResult<String> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
     let acp_options = if runtime.explicit_acp_request {
@@ -1412,31 +1536,54 @@ async fn run_cli_turn(
     }
     .with_event_sink(event_sink)
     .with_additional_bootstrap_mcp_servers(&runtime.effective_bootstrap_mcp_servers)
-    .with_working_directory(runtime.effective_working_directory.as_deref());
-    let live_surface_observer = if live_surface_enabled {
+    .with_working_directory(runtime.effective_working_directory.as_deref())
+    .with_metadata(metadata)
+    .with_provenance(provenance);
+    let live_surface_observer = if let Some(observer) = observer_override {
+        Some(observer)
+    } else if live_surface_enabled {
         let render_width = detect_cli_chat_render_width();
         Some(build_cli_chat_live_surface_observer(render_width))
     } else {
         None
     };
-    runtime
-        .turn_coordinator
-        .handle_production_turn_with_address_and_acp_options_and_observer(
-            &turn_config,
-            &runtime.session_address,
-            input,
-            ProviderErrorMode::InlineMessage,
-            &acp_options,
-            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            live_surface_observer,
-        )
-        .await
+    if let Some(ingress) = ingress {
+        runtime
+            .turn_coordinator
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+                &turn_config,
+                address,
+                input,
+                provider_error_mode,
+                &acp_options,
+                crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                Some(ingress),
+                live_surface_observer,
+            )
+            .await
+    } else {
+        runtime
+            .turn_coordinator
+            .handle_production_turn_with_address_and_acp_options_and_observer(
+                &turn_config,
+                address,
+                input,
+                provider_error_mode,
+                &acp_options,
+                crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                live_surface_observer,
+            )
+            .await
+    }
 }
 
 fn reload_cli_turn_config(
     config: &LoongClawConfig,
     resolved_path: &Path,
 ) -> CliResult<LoongClawConfig> {
+    if resolved_path.as_os_str().is_empty() {
+        return Ok(config.clone());
+    }
     config.reload_provider_runtime_state_from_path(resolved_path)
 }
 

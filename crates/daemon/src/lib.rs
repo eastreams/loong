@@ -144,6 +144,7 @@ pub mod tasks_cli;
 mod tlon_cli;
 mod tool_calling_readiness;
 pub mod trajectory_cli;
+mod turn_cli;
 pub mod work_unit_cli;
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
@@ -171,9 +172,10 @@ pub use session_cli::{
     run_session_search_cli, run_session_search_inspect_cli,
 };
 use task_execution::execute_daemon_task_with_supervisor;
-pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
+pub use task_execution::{DaemonTaskExecution, run_demo};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
+pub use turn_cli::{TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli};
 #[rustfmt::skip]
 use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
 pub use trajectory_cli::{
@@ -257,7 +259,10 @@ pub fn native_spec_tool_executor(
     if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "config.import" {
         return None;
     }
-    Some(mvp::tools::execute_tool_core(request))
+    Some(mvp::tools::execute_tool_core_with_config(
+        request,
+        &mvp::tools::runtime_config::ToolRuntimeConfig::default(),
+    ))
 }
 
 pub type ChannelCliCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
@@ -368,12 +373,10 @@ pub enum Commands {
     Welcome,
     /// Run the original end-to-end bootstrap demo
     Demo,
-    /// Execute one task through the kernel+harness path
-    RunTask {
-        #[arg(long)]
-        objective: String,
-        #[arg(long, default_value = "{}")]
-        payload: String,
+    /// Run agent turns through the unified runtime entry surface
+    Turn {
+        #[command(subcommand)]
+        command: TurnCommands,
     },
     /// Invoke one connector operation through kernel policy gate
     InvokeConnector {
@@ -1738,14 +1741,21 @@ mod first_run_entry_tests {
 
     #[test]
     fn redacted_command_name_omits_sensitive_command_payloads() {
-        let command = Commands::RunTask {
-            objective: "secret objective".to_owned(),
-            payload: "{\"api_key\":\"secret\"}".to_owned(),
+        let command = Commands::Turn {
+            command: TurnCommands::Run {
+                config: Some("/tmp/private.toml".to_owned()),
+                session: Some("session-secret".to_owned()),
+                message: "secret objective".to_owned(),
+                acp: false,
+                acp_event_stream: false,
+                acp_bootstrap_mcp_server: Vec::new(),
+                acp_cwd: None,
+            },
         };
 
         let redacted_name = redacted_command_name(&command);
 
-        assert_eq!(redacted_name, "run_task");
+        assert_eq!(redacted_name, "turn_run");
     }
 
     #[test]
@@ -4651,48 +4661,6 @@ pub fn resolve_acp_status_session_key(
             "acp-status requires --session <session_key>, --conversation-id <conversation_id>, or --route-session-id <route_session_id>"
                 .to_owned(),
         ),
-    }
-}
-
-pub async fn run_chat_cli(
-    config_path: Option<&str>,
-    session: Option<&str>,
-    acp: bool,
-    acp_event_stream: bool,
-    acp_bootstrap_mcp_server: &[String],
-    acp_cwd: Option<&str>,
-) -> CliResult<()> {
-    let options = build_cli_chat_options(acp, acp_event_stream, acp_bootstrap_mcp_server, acp_cwd);
-    mvp::chat::run_cli_chat(config_path, session, &options).await
-}
-
-pub async fn run_ask_cli(
-    config_path: Option<&str>,
-    session: Option<&str>,
-    message: &str,
-    acp: bool,
-    acp_event_stream: bool,
-    acp_bootstrap_mcp_server: &[String],
-    acp_cwd: Option<&str>,
-) -> CliResult<()> {
-    let options = build_cli_chat_options(acp, acp_event_stream, acp_bootstrap_mcp_server, acp_cwd);
-    mvp::chat::run_cli_ask(config_path, session, message, &options).await
-}
-
-pub fn build_cli_chat_options(
-    acp: bool,
-    acp_event_stream: bool,
-    acp_bootstrap_mcp_server: &[String],
-    acp_cwd: Option<&str>,
-) -> mvp::chat::CliChatOptions {
-    mvp::chat::CliChatOptions {
-        acp_requested: acp,
-        acp_event_stream,
-        acp_bootstrap_mcp_servers: acp_bootstrap_mcp_server.to_vec(),
-        acp_working_directory: acp_cwd
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(std::path::PathBuf::from),
     }
 }
 

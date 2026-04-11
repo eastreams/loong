@@ -1786,7 +1786,8 @@ impl ControlPlaneAcpView {
         if self.current_session_id == DEFAULT_CONTROL_PLANE_SESSION_ID {
             return Ok(None);
         }
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+        let memory_config =
+            MemoryRuntimeConfig::from_memory_config_without_env_overrides(&self.config.memory);
         SessionRepository::new(&memory_config).map(Some)
     }
 

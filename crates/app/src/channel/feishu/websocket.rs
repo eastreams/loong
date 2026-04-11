@@ -441,6 +441,7 @@ fn map_parse_error_status(error: &str) -> StatusCode {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -460,6 +461,7 @@ mod tests {
     use crate::channel::ChannelPlatform;
 
     const MOCK_PROVIDER_MARKDOWN_REPLY: &str = "## structured inbound ack\n\n- rendered";
+    const FEISHU_WEBSOCKET_TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
     use crate::config::{FeishuChannelServeMode, LoongClawConfig, ProviderConfig};
     use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
 
@@ -483,6 +485,28 @@ mod tests {
                 .expect("clock")
                 .as_nanos()
         ))
+    }
+
+    fn run_feishu_websocket_test_on_large_stack<F, Fut>(thread_name: &str, operation: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let join_handle = std::thread::Builder::new()
+            .name(thread_name.to_owned())
+            .stack_size(FEISHU_WEBSOCKET_TEST_STACK_SIZE_BYTES)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build feishu websocket test runtime");
+                runtime.block_on(operation());
+            })
+            .expect("spawn feishu websocket large-stack test thread");
+        match join_handle.join() {
+            Ok(()) => {}
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     async fn spawn_mock_http_server(router: Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -768,8 +792,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn feishu_websocket_fragments_refresh_ttl_when_new_chunks_arrive() {
+    #[test]
+    fn feishu_websocket_fragments_refresh_ttl_when_new_chunks_arrive() {
+        run_feishu_websocket_test_on_large_stack("feishu-websocket-fragments", || async move {
+            feishu_websocket_fragments_refresh_ttl_when_new_chunks_arrive_impl().await;
+        });
+    }
+
+    async fn feishu_websocket_fragments_refresh_ttl_when_new_chunks_arrive_impl() {
         let mut fragments = FeishuWsFragments::default();
         assert_eq!(
             fragments.combine("evt_ws_fragments", 3, 0, b"hel".to_vec()),
@@ -796,8 +826,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn feishu_websocket_wss_urls_do_not_fail_due_to_missing_tls_support() {
+    #[test]
+    fn feishu_websocket_wss_urls_do_not_fail_due_to_missing_tls_support() {
+        run_feishu_websocket_test_on_large_stack("feishu-websocket-wss-url", || async move {
+            feishu_websocket_wss_urls_do_not_fail_due_to_missing_tls_support_impl().await;
+        });
+    }
+
+    async fn feishu_websocket_wss_urls_do_not_fail_due_to_missing_tls_support_impl() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind disposable tcp listener");
@@ -814,8 +850,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn feishu_websocket_wss_session_surfaces_tls_errors_without_panicking() {
+    #[test]
+    fn feishu_websocket_wss_session_surfaces_tls_errors_without_panicking() {
+        run_feishu_websocket_test_on_large_stack("feishu-websocket-wss-session", || async move {
+            feishu_websocket_wss_session_surfaces_tls_errors_without_panicking_impl().await;
+        });
+    }
+
+    async fn feishu_websocket_wss_session_surfaces_tls_errors_without_panicking_impl() {
         let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let (provider_base_url, provider_server) =
@@ -892,8 +934,14 @@ mod tests {
         feishu_server.abort();
     }
 
-    #[tokio::test]
-    async fn feishu_websocket_session_stop_interrupts_stalled_initial_connect() {
+    #[test]
+    fn feishu_websocket_session_stop_interrupts_stalled_initial_connect() {
+        run_feishu_websocket_test_on_large_stack("feishu-websocket-stop", || async move {
+            feishu_websocket_session_stop_interrupts_stalled_initial_connect_impl().await;
+        });
+    }
+
+    async fn feishu_websocket_session_stop_interrupts_stalled_initial_connect_impl() {
         let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let (provider_base_url, provider_server) =
@@ -979,8 +1027,14 @@ mod tests {
         feishu_server.abort();
     }
 
-    #[tokio::test]
-    async fn feishu_websocket_session_reaches_provider_and_replies() {
+    #[test]
+    fn feishu_websocket_session_reaches_provider_and_replies() {
+        run_feishu_websocket_test_on_large_stack("feishu-websocket-session", || async move {
+            feishu_websocket_session_reaches_provider_and_replies_impl().await;
+        });
+    }
+
+    async fn feishu_websocket_session_reaches_provider_and_replies_impl() {
         let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let (provider_base_url, provider_server) =
