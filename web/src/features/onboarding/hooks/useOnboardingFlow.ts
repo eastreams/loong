@@ -133,8 +133,9 @@ export function useOnboardingFlow({
         buildPreferencesSavePayload({
           personality: preferencesForm.personality,
           memoryProfile: preferencesForm.memoryProfile,
+          slidingWindow: preferencesForm.slidingWindow,
           promptAddendum: preferencesForm.promptAddendum,
-        }),
+        }, t),
       );
       refreshOnboardingStatus();
       setPreferencesNotice(t("onboarding.preferences.saved"));

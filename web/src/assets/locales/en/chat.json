@@ -51,7 +51,8 @@
   },
   "errors": {
     "providerHostFallback": "the provider host",
-    "transportFailure": "Provider connection failed while contacting {{host}}. If you use a proxy, route this host DIRECT and add it to fake-ip-filter. You can confirm the current diagnosis in Runtime console > Provider route."
+    "transportFailure": "Provider connection failed while contacting {{host}}. If you use a proxy, route this host DIRECT and add it to fake-ip-filter. You can confirm the current diagnosis in Runtime console > Provider route.",
+    "streamEndedUnexpectedly": "The live stream ended before the turn reported a final status. Web reloaded local history, but this turn may still need a manual refresh."
   },
   "loading": {
     "connectingA": "LoongClaw is joining the flight path",

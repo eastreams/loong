@@ -134,6 +134,7 @@ export function OnboardingStatusPanel() {
   const preferencesForm = usePreferencesForm({
     personality: onboardingStatus?.personality || "calm_engineering",
     memoryProfile: onboardingStatus?.memoryProfile || "window_only",
+    slidingWindow: onboardingStatus?.slidingWindow ?? 12,
     promptAddendum: onboardingStatus?.promptAddendum || "",
   });
 
@@ -443,6 +444,29 @@ export function OnboardingStatusPanel() {
                         onSelect={preferencesForm.setMemoryProfile}
                       />
 
+                      <div className="settings-field">
+                        <label
+                          className="settings-label"
+                          htmlFor="onboarding-preferences-sliding-window"
+                        >
+                          {t("onboarding.preferences.slidingWindow")}
+                        </label>
+                        <input
+                          id="onboarding-preferences-sliding-window"
+                          className="settings-input"
+                          type="number"
+                          min={1}
+                          max={128}
+                          step={1}
+                          inputMode="numeric"
+                          value={preferencesForm.slidingWindow}
+                          onChange={(event) =>
+                            preferencesForm.setSlidingWindow(event.target.value)
+                          }
+                          placeholder="12"
+                        />
+                      </div>
+
                       <label className="settings-field">
                         <span className="settings-label">
                           {t("onboarding.preferences.promptAddendum")}
@@ -453,9 +477,6 @@ export function OnboardingStatusPanel() {
                           onChange={(event) => preferencesForm.setPromptAddendum(event.target.value)}
                           placeholder={t("onboarding.preferences.promptAddendumPlaceholder")}
                         />
-                        <span className="settings-helper">
-                          {t("onboarding.preferences.helper")}
-                        </span>
                       </label>
 
                       {preferencesError ? (

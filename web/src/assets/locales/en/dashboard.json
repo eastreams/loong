@@ -49,6 +49,7 @@
     "acp": "ACP",
     "memoryMode": "Memory mode",
     "memoryProfile": "Memory profile",
+    "slidingWindow": "Memory window",
     "personality": "Personality",
     "promptMode": "Prompt mode",
     "promptAddendum": "Prompt addendum",
@@ -182,7 +183,9 @@
     "validate": "Refresh diagnostics",
     "applyPending": "Applying...",
     "apply": "Apply changes",
-    "helper": "This panel now writes the same minimal provider fields as onboarding: kind, model, base URL or endpoint, and API key.",
+    "slidingWindow": "Memory window turns",
+    "slidingWindowHelper": "Range: 1 to 128.",
+    "helper": "Memory window range: 1 to 128. A blank API key keeps the current value.",
     "refreshed": "Refreshed current route and runtime status.",
     "saved": "Provider configuration saved.",
     "saveFailed": "Failed to save provider configuration."

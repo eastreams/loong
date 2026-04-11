@@ -295,6 +295,7 @@ export default function DashboardPage() {
   const preferencesForm = usePreferencesForm({
     personality: "calm_engineering",
     memoryProfile: "window_only",
+    slidingWindow: 12,
     promptAddendum: "",
   });
 
@@ -492,6 +493,12 @@ export default function DashboardPage() {
                   <strong title={memoryProfileDisplay}>{memoryProfileDisplay}</strong>
                 </div>
                 <div className="dashboard-kv-row">
+                  <span>{t("dashboard.fields.slidingWindow")}</span>
+                  <strong>
+                    {config?.slidingWindow ?? t("dashboard.values.notSet")}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
                   <span>{t("dashboard.fields.personality")}</span>
                   <strong title={personalityDisplay}>{personalityDisplay}</strong>
                 </div>
@@ -637,11 +644,6 @@ export default function DashboardPage() {
                               : t("dashboard.settings.apiKeyPlaceholder")
                           }
                         />
-                        <span className="settings-helper">
-                          {config?.apiKeyConfigured
-                            ? t("dashboard.settings.apiKeyMasked")
-                            : t("dashboard.settings.apiKeyHelper")}
-                        </span>
                       </label>
 
                       <ChoiceField
@@ -677,6 +679,25 @@ export default function DashboardPage() {
                       />
 
                       <label className="settings-field">
+                        <span className="settings-label">
+                          {t("dashboard.settings.slidingWindow")}
+                        </span>
+                        <input
+                          className="settings-input"
+                          type="number"
+                          min={1}
+                          max={128}
+                          step={1}
+                          inputMode="numeric"
+                          value={preferencesForm.slidingWindow}
+                          onChange={(event) =>
+                            preferencesForm.setSlidingWindow(event.target.value)
+                          }
+                          placeholder="12"
+                        />
+                      </label>
+
+                      <label className="settings-field">
                         <span className="settings-label">{t("onboarding.preferences.promptAddendum")}</span>
                         <textarea
                           className="settings-input settings-textarea"
@@ -684,9 +705,6 @@ export default function DashboardPage() {
                           onChange={(event) => preferencesForm.setPromptAddendum(event.target.value)}
                           placeholder={t("onboarding.preferences.promptAddendumPlaceholder")}
                         />
-                        <span className="settings-helper">
-                          {t("onboarding.preferences.helper")}
-                        </span>
                       </label>
 
                       {settingsError ? (

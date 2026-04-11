@@ -136,6 +136,7 @@ export function useDashboardData({
     return {
       personality: snapshot.config.personality || "calm_engineering",
       memoryProfile: snapshot.config.memoryProfile || "window_only",
+      slidingWindow: snapshot.config.slidingWindow ?? 12,
       promptAddendum:
         options?.promptAddendum ?? snapshot.config.promptAddendum ?? "",
     };
@@ -373,8 +374,9 @@ export function useDashboardData({
         const savedPreferences = buildPreferencesSavePayload({
           personality: preferencesForm.personality,
           memoryProfile: preferencesForm.memoryProfile,
+          slidingWindow: preferencesForm.slidingWindow,
           promptAddendum: preferencesForm.promptAddendum,
-        });
+        }, t);
         await onboardingApi.savePreferences(savedPreferences);
         refreshOnboardingStatus();
         await reloadDashboardData({

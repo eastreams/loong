@@ -38,6 +38,36 @@ function extractErrorHost(message: string): string | null {
   return match?.[1] ?? null;
 }
 
+function resolveStreamPhaseFromLifecycleEvent(
+  phase: string,
+  currentPhase: SessionViewState["streamPhase"],
+): SessionViewState["streamPhase"] {
+  switch (phase) {
+    case "completed":
+    case "failed":
+      return "idle";
+    case "preparing":
+    case "context_ready":
+    case "requesting_provider":
+    case "running_tools":
+    case "requesting_followup_provider":
+    case "finalizing_reply":
+      return currentPhase === "streaming" ? "streaming" : "thinking";
+    default:
+      return currentPhase;
+  }
+}
+
+function isTerminalStreamEvent(event: ChatTurnStreamEvent): boolean {
+  return event.type === "turn.completed" || event.type === "turn.failed";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function toFriendlyChatError(
   error: unknown,
   t: TFunction,
@@ -119,6 +149,15 @@ export function useChatStream({
             streamPhase: "thinking",
           }));
           break;
+        case "turn.phase":
+          updateSessionViewState(targetSessionId, (current) => ({
+            ...current,
+            streamPhase: resolveStreamPhaseFromLifecycleEvent(
+              event.phase,
+              current.streamPhase,
+            ),
+          }));
+          break;
         case "message.delta":
           updateSessionViewState(targetSessionId, (current) => ({
             ...current,
@@ -175,9 +214,10 @@ export function useChatStream({
               label: event.label,
               status: event.outcome === "ok" ? "ok" : "error",
               detail:
-                event.outcome === "ok"
+                event.detail ??
+                (event.outcome === "ok"
                   ? t("chat.recentTools.detail.ok")
-                  : t("chat.recentTools.detail.error"),
+                  : t("chat.recentTools.detail.error")),
             }),
           }));
           break;
@@ -216,7 +256,51 @@ export function useChatStream({
           break;
       }
     },
-    [setError, updateSessionViewState],
+    [setError, t, updateSessionViewState],
+  );
+
+  const reconcileUnexpectedStreamClose = useCallback(
+    async (targetSessionId: string, placeholderId: string) => {
+      const settleDelaysMs = [0, 150, 450, 900];
+
+      for (const settleDelayMs of settleDelaysMs) {
+        if (settleDelayMs > 0) {
+          await delay(settleDelayMs);
+        }
+
+        try {
+          const latestMessages = await chatApi.loadHistory(targetSessionId);
+          const hasAssistantReply = latestMessages.some(
+            (message) => message.role === "assistant" && message.content.trim().length > 0,
+          );
+
+          updateSessionViewState(targetSessionId, (current) => ({
+            ...current,
+            messages: latestMessages,
+            activeTools: [],
+            pendingAssistantId: null,
+            streamPhase: "idle",
+          }));
+
+          if (hasAssistantReply) {
+            return true;
+          }
+        } catch {
+          // Keep retrying briefly in case the final turn is still settling into sqlite.
+        }
+      }
+
+      updateSessionViewState(targetSessionId, (current) => ({
+        ...current,
+        messages: current.messages.filter((message) => message.id !== placeholderId),
+        activeTools: [],
+        pendingAssistantId: null,
+        streamPhase: "idle",
+      }));
+      setError(t("chat.errors.streamEndedUnexpectedly"));
+      return false;
+    },
+    [setError, t, updateSessionViewState],
   );
 
   const sendMessage = useCallback(
@@ -281,6 +365,7 @@ export function useChatStream({
 
         const acceptedTurn = await chatApi.createTurn(targetSessionId, input);
         turnAccepted = true;
+        let receivedTerminalEvent = false;
 
         abortControllerRef.current = new AbortController();
 
@@ -288,13 +373,21 @@ export function useChatStream({
           targetSessionId,
           acceptedTurn.turnId,
           {
-            onEvent: (event) =>
-              handleStreamEvent(targetSessionId!, event, placeholderAssistantId),
+            onEvent: (event) => {
+              if (isTerminalStreamEvent(event)) {
+                receivedTerminalEvent = true;
+              }
+              handleStreamEvent(targetSessionId!, event, placeholderAssistantId);
+            },
           },
           {
             signal: abortControllerRef.current.signal,
           },
         );
+
+        if (!receivedTerminalEvent) {
+          await reconcileUnexpectedStreamClose(targetSessionId, placeholderAssistantId);
+        }
 
         updateSessionViewState(targetSessionId, (current) => ({
           ...current,
@@ -381,6 +474,7 @@ export function useChatStream({
       handleStreamEvent,
       isSubmitting,
       markUnauthorized,
+      reconcileUnexpectedStreamClose,
       refreshSessions,
       removeSession,
       selectSession,

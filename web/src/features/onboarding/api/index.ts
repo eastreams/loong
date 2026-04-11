@@ -38,6 +38,7 @@ export interface SaveOnboardingProviderRequest {
 export interface SaveOnboardingPreferencesRequest {
   personality: string;
   memoryProfile: string;
+  slidingWindow?: number;
   promptAddendum?: string;
 }
 
@@ -57,6 +58,7 @@ export interface OnboardingStatus {
   apiKeyConfigured: boolean;
   personality: string;
   memoryProfile: string;
+  slidingWindow: number;
   promptAddendum: string;
   configPath: string;
   blockingStage: string;

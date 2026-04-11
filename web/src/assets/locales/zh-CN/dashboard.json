@@ -49,6 +49,7 @@
                    "acp":  "ACP",
                    "memoryMode":  "记忆模式",
                    "memoryProfile":  "记忆档位",
+                   "slidingWindow":  "记忆窗口",
                    "personality":  "性格",
                    "promptMode":  "Prompt 模式",
                    "promptAddendum":  "Prompt 附加说明",
@@ -182,7 +183,9 @@
                      "validate":  "刷新诊断",
                      "applyPending":  "应用中...",
                      "apply":  "应用更改",
-                     "helper":  "这个面板现在已经接入最小受控写入：provider kind、model、base URL / endpoint 和 API key。",
+                     "slidingWindow":  "记忆窗口轮数",
+                     "slidingWindowHelper":  "范围 1 到 128。",
+                     "helper":  "记忆窗口范围 1 到 128；API Key 留空会沿用当前值。",
                      "refreshed":  "已刷新当前路由与运行状态。",
                      "saved":  "Provider 配置已保存。",
                      "saveFailed":  "保存 Provider 配置失败。"

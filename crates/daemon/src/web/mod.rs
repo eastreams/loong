@@ -263,6 +263,90 @@ impl mvp::acp::AcpTurnEventSink for WebTurnEventSink {
     }
 }
 
+impl mvp::conversation::ConversationTurnObserver for WebTurnEventSink {
+    fn on_phase(&self, event: mvp::conversation::ConversationTurnPhaseEvent) {
+        let lane = match event.lane {
+            Some(mvp::conversation::ExecutionLane::Fast) => Some("fast"),
+            Some(mvp::conversation::ExecutionLane::Safe) => Some("safe"),
+            None => None,
+        };
+        let _ = send_stream_event(
+            &self.sender,
+            json!({
+                "type": "turn.phase",
+                "turnId": self.turn_id,
+                "phase": event.phase.as_str(),
+                "providerRound": event.provider_round,
+                "lane": lane,
+                "toolCallCount": event.tool_call_count,
+                "messageCount": event.message_count,
+                "estimatedTokens": event.estimated_tokens,
+            }),
+        );
+    }
+
+    fn on_tool(&self, event: mvp::conversation::ConversationTurnToolEvent) {
+        match event.state {
+            mvp::conversation::ConversationTurnToolState::Running => {
+                let _ = send_stream_event(
+                    &self.sender,
+                    json!({
+                        "type": "tool.started",
+                        "turnId": self.turn_id,
+                        "toolId": event.tool_call_id,
+                        "label": event.tool_name,
+                    }),
+                );
+                record_tool_started(
+                    &self.state,
+                    "",
+                    &self.turn_id,
+                    event.tool_call_id.as_str(),
+                    event.tool_name.as_str(),
+                );
+            }
+            mvp::conversation::ConversationTurnToolState::Completed
+            | mvp::conversation::ConversationTurnToolState::NeedsApproval
+            | mvp::conversation::ConversationTurnToolState::Denied
+            | mvp::conversation::ConversationTurnToolState::Failed
+            | mvp::conversation::ConversationTurnToolState::Interrupted => {
+                let outcome = if matches!(
+                    event.state,
+                    mvp::conversation::ConversationTurnToolState::Completed
+                ) {
+                    "ok"
+                } else {
+                    "error"
+                };
+                let detail = event
+                    .detail
+                    .as_deref()
+                    .or(event.request_summary.as_deref())
+                    .map(str::to_owned);
+                let _ = send_stream_event(
+                    &self.sender,
+                    json!({
+                        "type": "tool.finished",
+                        "turnId": self.turn_id,
+                        "toolId": event.tool_call_id,
+                        "label": event.tool_name,
+                        "outcome": outcome,
+                        "detail": detail,
+                    }),
+                );
+                record_tool_finished(
+                    &self.state,
+                    "",
+                    &self.turn_id,
+                    event.tool_call_id.as_str(),
+                    event.tool_name.as_str(),
+                    outcome,
+                );
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ApiEnvelope<T> {
     ok: bool,
@@ -581,13 +665,6 @@ struct ChatMessagePayload {
     role: String,
     content: String,
     created_at: String,
-}
-
-#[derive(Debug)]
-struct StreamToolEvent {
-    tool_id: String,
-    label: String,
-    outcome: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -1242,10 +1319,6 @@ async fn run_chat_turn_stream(
 ) -> Result<(), WebApiError> {
     let stream_result: Result<(), WebApiError> = async {
         let snapshot = load_web_snapshot(state.as_ref())?;
-        let mut seen_internal_records = collect_internal_record_keys(&load_session_messages(
-            &snapshot.memory_config,
-            &session_id,
-        )?);
 
         send_stream_event(
             &sender,
@@ -1278,14 +1351,16 @@ async fn run_chat_turn_stream(
         let address = mvp::conversation::ConversationSessionAddress::from_session_id(&session_id);
         let coordinator = mvp::conversation::ConversationTurnCoordinator::new();
         let emitted_text = Arc::new(AtomicBool::new(false));
-        let event_sink = WebTurnEventSink {
+        let event_sink = Arc::new(WebTurnEventSink {
             state: state.clone(),
             turn_id: turn_id.clone(),
             sender: sender.clone(),
             emitted_text: emitted_text.clone(),
-        };
+        });
+        let observer_handle: mvp::conversation::ConversationTurnObserverHandle =
+            event_sink.clone();
         let acp_options =
-            mvp::acp::AcpConversationTurnOptions::automatic().with_event_sink(Some(&event_sink));
+            mvp::acp::AcpConversationTurnOptions::automatic().with_event_sink(Some(event_sink.as_ref()));
 
         let turn_future = coordinator.handle_production_turn_with_address_and_acp_options_and_observer(
             &turn_config,
@@ -1294,39 +1369,17 @@ async fn run_chat_turn_stream(
             mvp::conversation::ProviderErrorMode::InlineMessage,
             &acp_options,
             mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
+            Some(observer_handle),
         );
         tokio::pin!(turn_future);
-
-        let mut poll_interval = time::interval(Duration::from_millis(150));
-        poll_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
         let assistant_text: String = loop {
             tokio::select! {
                 result = &mut turn_future => {
                     break result.map_err(WebApiError::internal)?;
                 }
-                _ = poll_interval.tick() => {
-                    emit_internal_tool_events(
-                        &state,
-                        &snapshot.memory_config,
-                        &session_id,
-                        &turn_id,
-                        &mut seen_internal_records,
-                        &sender,
-                    )?;
-                }
             }
         };
-
-        emit_internal_tool_events(
-            &state,
-            &snapshot.memory_config,
-            &session_id,
-            &turn_id,
-            &mut seen_internal_records,
-            &sender,
-        )?;
 
         let final_message =
             latest_assistant_message(&snapshot.memory_config, &session_id, &assistant_text);
@@ -1633,120 +1686,6 @@ fn find_debug_block_mut<'a>(
     id: &str,
 ) -> Option<&'a mut DebugConsoleBlock> {
     blocks.iter_mut().find(|block| block.id == id)
-}
-
-fn collect_internal_record_keys(turns: &[mvp::memory::ConversationTurn]) -> HashSet<String> {
-    turns.iter().filter_map(internal_record_key).collect()
-}
-
-fn internal_record_key(turn: &mvp::memory::ConversationTurn) -> Option<String> {
-    is_internal_assistant_record(&turn.content)
-        .then(|| format!("{}:{}:{}", turn.ts, turn.role, turn.content))
-}
-
-fn emit_internal_tool_events(
-    state: &Arc<WebApiState>,
-    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
-    session_id: &str,
-    turn_id: &str,
-    seen_internal_records: &mut HashSet<String>,
-    sender: &mpsc::UnboundedSender<String>,
-) -> Result<(), WebApiError> {
-    let history = load_session_messages(memory_config, session_id)?;
-    for turn in history {
-        let Some(record_key) = internal_record_key(&turn) else {
-            continue;
-        };
-        if !seen_internal_records.insert(record_key) {
-            continue;
-        }
-        let Some(event) = stream_tool_event_from_record(turn.content.as_str()) else {
-            continue;
-        };
-        let event_type = if event.outcome.is_some() {
-            "tool.finished"
-        } else {
-            "tool.started"
-        };
-        let payload = if let Some(ref outcome) = event.outcome {
-            json!({
-                "type": event_type,
-                "turnId": turn_id,
-                "toolId": event.tool_id,
-                "label": event.label,
-                "outcome": outcome,
-            })
-        } else {
-            json!({
-                "type": event_type,
-                "turnId": turn_id,
-                "toolId": event.tool_id,
-                "label": event.label,
-            })
-        };
-        send_stream_event(sender, payload)?;
-        match event.outcome {
-            Some(outcome) => record_tool_finished(
-                state,
-                session_id,
-                turn_id,
-                event.tool_id.as_str(),
-                event.label.as_str(),
-                outcome,
-            ),
-            None => record_tool_started(
-                state,
-                session_id,
-                turn_id,
-                event.tool_id.as_str(),
-                event.label.as_str(),
-            ),
-        }
-    }
-    Ok(())
-}
-
-fn stream_tool_event_from_record(content: &str) -> Option<StreamToolEvent> {
-    let parsed: Value = serde_json::from_str(content).ok()?;
-    let record_type = parsed.get("type")?.as_str()?;
-    let tool_id = parsed.get("tool_call_id")?.as_str()?.to_owned();
-    let label = parsed
-        .pointer("/decision/tool_name")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            parsed
-                .pointer("/outcome/payload/tool")
-                .and_then(Value::as_str)
-        })
-        .or_else(|| parsed.pointer("/outcome/tool_name").and_then(Value::as_str))
-        .map(str::to_owned)
-        .unwrap_or_else(|| tool_id.clone());
-
-    match record_type {
-        "tool_decision" => Some(StreamToolEvent {
-            tool_id,
-            label,
-            outcome: None,
-        }),
-        "tool_outcome" => {
-            let outcome = if parsed
-                .pointer("/outcome/status")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                == "ok"
-            {
-                "ok"
-            } else {
-                "error"
-            };
-            Some(StreamToolEvent {
-                tool_id,
-                label,
-                outcome: Some(outcome),
-            })
-        }
-        _ => None,
-    }
 }
 
 fn latest_assistant_message(

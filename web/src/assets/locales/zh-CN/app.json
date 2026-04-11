@@ -99,13 +99,18 @@
                                            "memoryProfileWindowOnly":  "仅窗口",
                                            "memoryProfileWindowPlusSummary":  "窗口 + 摘要",
                                            "memoryProfileProfilePlusWindow":  "画像 + 窗口",
+                                           "slidingWindow":  "记忆窗口轮数",
+                                           "slidingWindowHelper":  "范围 1 到 128，常用 12 或 24。",
                                            "promptAddendum":  "Prompt 附加说明",
                                            "promptAddendumPlaceholder":  "给后续对话补充一条可选说明",
-                                           "helper":  "这些设置是可选项，会影响后续对话风格，但不会阻塞进入 Web。",
+                                           "helper":  "留空表示不设；记忆窗口范围 1 到 128。",
                                            "save":  "保存可选设置",
                                            "savePending":  "保存中...",
                                            "saved":  "可选设置已保存。",
-                                           "saveFailed":  "可选设置保存失败。"
+                                           "saveFailed":  "可选设置保存失败。",
+                                           "errors":  {
+                                                          "slidingWindowInvalid":  "记忆窗口轮数必须是 1 到 128 的整数。"
+                                                      }
                                        },
                        "validation":  {
                                           "required":  "进入 Web 前，先做一次 provider 验证。",
