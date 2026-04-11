@@ -106,6 +106,7 @@ async fn main() {
     let result = match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
+        Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
         Commands::Turn { command } => match command {
             loongclaw_daemon::TurnCommands::Run {
                 config,

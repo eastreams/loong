@@ -450,10 +450,16 @@ pub(super) fn append_prompt_cache_headers(
     let plan = derive_prompt_cache_header_plan(messages);
 
     if let Some(session_id) = session_id {
-        insert_runtime_header(headers, "x-loongclaw-session-id", session_id)?;
+        let hashed_session_id = hash_runtime_identifier(session_id);
+        insert_runtime_header(
+            headers,
+            "x-loongclaw-session-id",
+            hashed_session_id.as_str(),
+        )?;
     }
     if let Some(turn_id) = turn_id {
-        insert_runtime_header(headers, "x-loongclaw-turn-id", turn_id)?;
+        let hashed_turn_id = hash_runtime_identifier(turn_id);
+        insert_runtime_header(headers, "x-loongclaw-turn-id", hashed_turn_id.as_str())?;
     }
     if let Some(stable_prefix_sha256) = plan.stable_prefix_sha256.as_deref() {
         insert_runtime_header(
@@ -497,6 +503,11 @@ fn hash_prompt_cache_messages(messages: &[Value]) -> Option<String> {
     };
     let digest = Sha256::digest(serialized);
     Some(hex::encode(digest))
+}
+
+fn hash_runtime_identifier(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    hex::encode(digest)
 }
 
 pub(super) fn apply_auth_profile_headers(
@@ -863,13 +874,13 @@ mod tests {
             headers
                 .get("x-loongclaw-session-id")
                 .and_then(|value| value.to_str().ok()),
-            Some("session-1")
+            Some(hash_runtime_identifier("session-1").as_str())
         );
         assert_eq!(
             headers
                 .get("x-loongclaw-turn-id")
                 .and_then(|value| value.to_str().ok()),
-            Some("turn-1")
+            Some(hash_runtime_identifier("turn-1").as_str())
         );
         assert_eq!(
             headers

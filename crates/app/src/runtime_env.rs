@@ -56,6 +56,7 @@ pub fn initialize_runtime_environment(
     let workspace_root = std::env::current_dir()
         .ok()
         .unwrap_or_else(|| config.tools.resolved_file_root());
+    let workspace_root = dunce::canonicalize(&workspace_root).unwrap_or(workspace_root);
     set_env_var(
         "LOONGCLAW_WORKSPACE_ROOT",
         workspace_root.display().to_string(),

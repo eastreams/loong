@@ -58,6 +58,7 @@ pub(super) async fn run_cli_chat_surface(
 }
 
 pub(super) fn run_concurrent_cli_host_surface(options: &ConcurrentCliHostOptions) -> CliResult<()> {
+    reject_disabled_cli_channel(&options.config)?;
     let chat_options = CliChatOptions::default();
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         options.resolved_path.clone(),

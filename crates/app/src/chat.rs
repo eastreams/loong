@@ -280,6 +280,7 @@ pub async fn run_cli_chat(
     session_hint: Option<&str>,
     options: &CliChatOptions,
 ) -> CliResult<()> {
+    ensure_cli_channel_enabled_for_entrypoint(config_path)?;
     if session_surface::interactive_terminal_surface_supported() {
         return session_surface::run_cli_chat_surface(config_path, session_hint, options).await;
     }
@@ -396,6 +397,7 @@ pub async fn run_cli_ask(
     if input.is_empty() {
         return Err("ask message must not be empty".to_owned());
     }
+    ensure_cli_channel_enabled_for_entrypoint(config_path)?;
 
     let runtime = initialize_cli_turn_runtime(config_path, session_hint, options, "cli-ask")?;
     let acp_event_printer = options
@@ -415,6 +417,7 @@ pub async fn run_cli_ask(
 }
 
 pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<()> {
+    reject_disabled_cli_channel(&options.config)?;
     if session_surface::interactive_terminal_surface_supported() {
         return session_surface::run_concurrent_cli_host_surface(options);
     }
@@ -446,6 +449,32 @@ fn run_concurrent_cli_host_repl(options: &ConcurrentCliHostOptions) -> CliResult
     })
 }
 
+pub(crate) fn reject_disabled_cli_channel(config: &LoongClawConfig) -> CliResult<()> {
+    if config.cli.enabled {
+        return Ok(());
+    }
+
+    Err("CLI channel is disabled by config.cli.enabled=false".to_owned())
+}
+
+fn ensure_cli_channel_enabled_for_entrypoint(config_path: Option<&str>) -> CliResult<()> {
+    let resolved_config_path = config_path
+        .map(config::expand_path)
+        .unwrap_or_else(config::default_config_path);
+    let config_exists = resolved_config_path.try_exists().map_err(|error| {
+        format!(
+            "failed to access config path {}: {error}",
+            resolved_config_path.display()
+        )
+    })?;
+    if !config_exists {
+        return Ok(());
+    }
+
+    let (_resolved_path, config) = config::load(config_path)?;
+    reject_disabled_cli_channel(&config)
+}
+
 pub(crate) fn initialize_cli_turn_runtime(
     config_path: Option<&str>,
     session_hint: Option<&str>,
@@ -474,13 +503,11 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     initialize_runtime_environment: bool,
 ) -> CliResult<CliTurnRuntime> {
     let mut config = config;
-    if !config.cli.enabled {
-        return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
-    }
-
     let runtime_workspace_root = std::env::current_dir()
         .ok()
         .unwrap_or_else(|| config.tools.resolved_file_root());
+    let runtime_workspace_root =
+        dunce::canonicalize(&runtime_workspace_root).unwrap_or(runtime_workspace_root);
     let runtime_workspace_root = runtime_workspace_root.display().to_string();
     config.tools.runtime_workspace_root = Some(runtime_workspace_root);
 
@@ -507,10 +534,6 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     kernel_ctx: crate::KernelContext,
     session_requirement: CliSessionRequirement,
 ) -> CliResult<CliTurnRuntime> {
-    if !config.cli.enabled {
-        return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
-    }
-
     let explicit_acp_request = options.requests_explicit_acp();
     let effective_bootstrap_mcp_servers = config
         .acp

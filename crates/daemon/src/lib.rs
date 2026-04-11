@@ -172,7 +172,7 @@ pub use session_cli::{
     run_session_search_cli, run_session_search_inspect_cli,
 };
 use task_execution::execute_daemon_task_with_supervisor;
-pub use task_execution::{DaemonTaskExecution, run_demo};
+pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use turn_cli::{TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli};
@@ -373,6 +373,14 @@ pub enum Commands {
     Welcome,
     /// Run the original end-to-end bootstrap demo
     Demo,
+    #[command(hide = true)]
+    /// Deprecated compatibility alias for the generic task runner
+    RunTask {
+        #[arg(long)]
+        objective: String,
+        #[arg(long, default_value = "{}")]
+        payload: String,
+    },
     /// Run agent turns through the unified runtime entry surface
     Turn {
         #[command(subcommand)]

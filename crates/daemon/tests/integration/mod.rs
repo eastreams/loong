@@ -1518,6 +1518,7 @@ fn render_memory_system_snapshot_text_reports_fail_open_policy() {
     let mut env = loongclaw_daemon::test_support::ScopedEnv::new();
     for key in [
         "LOONGCLAW_MEMORY_BACKEND",
+        "LOONGCLAW_MEMORY_SYSTEM",
         "LOONGCLAW_MEMORY_PROFILE",
         "LOONGCLAW_MEMORY_FAIL_OPEN",
         "LOONGCLAW_MEMORY_INGEST_MODE",

@@ -1294,8 +1294,6 @@ fn canonicalize_or_fallback(path: PathBuf) -> Result<PathBuf, String> {
 }
 
 fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, String> {
-    ensure_path_within_root(root, normalized)?;
-
     if normalized.exists() {
         let canonical = dunce::canonicalize(normalized).map_err(|error| {
             format!(
@@ -1307,6 +1305,8 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
         ensure_path_within_root(root, &canonical)?;
         return Ok(canonical);
     }
+
+    ensure_path_within_root(root, normalized)?;
 
     let (ancestor, suffix) = split_existing_ancestor(normalized)?;
     let canonical_ancestor = dunce::canonicalize(&ancestor).map_err(|error| {

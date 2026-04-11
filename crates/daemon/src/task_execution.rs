@@ -174,6 +174,34 @@ pub async fn run_demo() -> CliResult<()> {
     Ok(())
 }
 
+pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
+    let payload = crate::cli_json::parse_json_payload(payload_raw, "run-task payload")?;
+
+    let kernel = kernel_bootstrap::KernelBuilder::default().build();
+    let token = kernel
+        .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
+        .map_err(|error| format!("token issue failed: {error}"))?;
+
+    let dispatch = execute_daemon_task_with_supervisor(
+        &kernel,
+        DEFAULT_PACK_ID,
+        &token,
+        TaskIntent {
+            task_id: "task-cli-01".to_owned(),
+            objective: objective.to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead]),
+            payload,
+        },
+    )
+    .await?;
+
+    let pretty = serde_json::to_string_pretty(&dispatch)
+        .map_err(|error| format!("serialize task outcome failed: {error}"))?;
+    println!("{pretty}");
+    require_successful_daemon_task_execution(&dispatch)?;
+    Ok(())
+}
+
 pub(crate) async fn run_turn_cli(
     config_path: Option<&str>,
     session_hint: Option<&str>,
@@ -185,6 +213,10 @@ pub(crate) async fn run_turn_cli(
 ) -> CliResult<()> {
     if message.trim().is_empty() {
         return Err("turn message must not be empty".to_owned());
+    }
+    let (_resolved_path, config) = loongclaw_app::config::load(config_path)?;
+    if !config.cli.enabled {
+        return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
     }
 
     let kernel = build_daemon_runtime_kernel();

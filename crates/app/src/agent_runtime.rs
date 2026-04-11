@@ -135,7 +135,6 @@ impl AgentRuntime {
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
     ) -> CliResult<AgentTurnResult> {
-        let acp_manager = crate::acp::shared_acp_session_manager(&runtime.config)?;
         self.run_turn_with_runtime_and_context_and_manager(
             runtime,
             request,
@@ -144,7 +143,7 @@ impl AgentRuntime {
             None,
             AcpTurnProvenance::default(),
             crate::conversation::ProviderErrorMode::InlineMessage,
-            acp_manager,
+            None,
         )
         .await
     }
@@ -198,7 +197,6 @@ impl AgentRuntime {
         provenance: AcpTurnProvenance<'_>,
         provider_error_mode: crate::conversation::ProviderErrorMode,
     ) -> CliResult<AgentTurnResult> {
-        let acp_manager = crate::acp::shared_acp_session_manager(&runtime.config)?;
         self.run_turn_with_runtime_and_context_and_manager(
             runtime,
             request,
@@ -207,7 +205,7 @@ impl AgentRuntime {
             ingress,
             provenance,
             provider_error_mode,
-            acp_manager,
+            None,
         )
         .await
     }
@@ -221,7 +219,7 @@ impl AgentRuntime {
         ingress: Option<&ConversationIngressContext>,
         provenance: AcpTurnProvenance<'_>,
         provider_error_mode: crate::conversation::ProviderErrorMode,
-        acp_manager: Arc<crate::acp::AcpSessionManager>,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<AgentTurnResult> {
         if request.message.trim().is_empty() {
             return Err("agent runtime message must not be empty".to_owned());
@@ -234,6 +232,10 @@ impl AgentRuntime {
             || matches!(request.turn_mode, AgentTurnMode::Acp);
 
         if explicit_acp_request {
+            let acp_manager = match acp_manager {
+                Some(manager) => manager,
+                None => crate::acp::shared_acp_session_manager(&runtime.config)?,
+            };
             let acp_options = acp_turn_options_from_runtime(runtime, event_sink, request)
                 .with_provenance(provenance);
             let execution = crate::acp::execute_acp_conversation_turn_for_address_with_manager(
@@ -277,32 +279,25 @@ impl AgentRuntime {
         let has_provenance = provenance.trace_id.is_some()
             || provenance.source_message_id.is_some()
             || provenance.ack_cursor.is_some();
-        let output_text = if ingress.is_none() && !has_provenance {
-            crate::chat::run_cli_turn_with_address(
-                runtime,
-                &turn_address,
-                message,
-                event_sink,
-                request.live_surface_enabled,
-                Some(&request.metadata),
-                observer,
-            )
-            .await?
+        let effective_ingress = if has_provenance { ingress } else { None };
+        let effective_provenance = if has_provenance {
+            provenance
         } else {
-            crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode(
-                runtime,
-                &turn_address,
-                message,
-                event_sink,
-                request.live_surface_enabled,
-                Some(&request.metadata),
-                ingress,
-                provenance,
-                provider_error_mode,
-                observer,
-            )
-            .await?
+            AcpTurnProvenance::default()
         };
+        let output_text = crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode(
+            runtime,
+            &turn_address,
+            message,
+            event_sink,
+            request.live_surface_enabled,
+            Some(&request.metadata),
+            effective_ingress,
+            effective_provenance,
+            provider_error_mode,
+            observer,
+        )
+        .await?;
         let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
         let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
@@ -389,7 +384,7 @@ impl AgentRuntime {
             None,
             AcpTurnProvenance::default(),
             crate::conversation::ProviderErrorMode::InlineMessage,
-            acp_manager,
+            Some(acp_manager),
         )
         .await
     }

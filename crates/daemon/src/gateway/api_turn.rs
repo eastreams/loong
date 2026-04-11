@@ -76,7 +76,7 @@ pub(crate) async fn handle_turn(
         }
     };
 
-    if turn_request.input.is_empty() {
+    if turn_request.input.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "input must not be empty"})),
@@ -109,6 +109,13 @@ pub(crate) async fn handle_turn(
         );
     }
 
+    let working_directory = turn_request
+        .working_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
     let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
     let result = crate::mvp::agent_runtime::AgentRuntime::new()
         .run_turn_with_loaded_config_and_acp_manager(
@@ -126,7 +133,7 @@ pub(crate) async fn handle_turn(
                 acp: true,
                 acp_event_stream: event_sink.is_some(),
                 acp_bootstrap_mcp_servers: Vec::new(),
-                acp_cwd: turn_request.working_directory.clone(),
+                acp_cwd: working_directory,
                 live_surface_enabled: false,
             },
             event_sink
