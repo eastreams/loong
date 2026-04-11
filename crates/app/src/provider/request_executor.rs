@@ -1388,6 +1388,7 @@ mod tests {
                 tool_call: None,
             },
             index: None,
+            elapsed_ms: None,
         };
 
         let json = serde_json::to_string(&text_event).expect("should serialize");
@@ -1412,6 +1413,7 @@ mod tests {
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         };
 
         let json = serde_json::to_string(&tool_event).expect("should serialize");

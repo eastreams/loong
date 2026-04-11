@@ -5352,12 +5352,16 @@ allowed_decisions: yes / auto / full / esc";
             tool_call_count: 0,
             message_count: Some(4),
             estimated_tokens: Some(128),
+            first_token_latency_ms: Some(123),
             draft_preview: Some("Inspecting the repo layout...".to_owned()),
             tools: Vec::new(),
         };
         let lines = render_cli_chat_live_surface_lines_with_width(&snapshot, 72);
 
-        assert_eq!(lines[0], "╭─ loong · live · round 1 · 4 msgs · ~128 tok");
+        assert_eq!(
+            lines[0],
+            "╭─ loong · live · round 1 · 4 msgs · ~128 tok · ttft 123ms"
+        );
         assert!(
             lines
                 .iter()
@@ -5370,9 +5374,15 @@ allowed_decisions: yes / auto / full / esc";
         );
         assert!(
             lines.iter().any(|line| {
-                line.contains("[WARN] call model") && line.contains("provider round 1 in progress")
+                line.contains("[WARN] call model") && line.contains("first token in 123 ms")
             }),
             "live surface should keep the model step actively highlighted: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("first token") && line.contains("123 ms")),
+            "live surface should surface first-token latency in status rows: {lines:#?}"
         );
         assert!(
             !lines
@@ -5419,6 +5429,7 @@ allowed_decisions: yes / auto / full / esc";
                 tool_call: None,
             },
             index: None,
+            elapsed_ms: Some(42),
         });
 
         let batches = captured_batches
@@ -5438,6 +5449,10 @@ allowed_decisions: yes / auto / full / esc";
                 .iter()
                 .any(|line| line.contains("Draft response")),
             "preview batch should include the streamed text: {preview_batch:#?}"
+        );
+        assert!(
+            preview_batch.iter().any(|line| line.contains("ttft 42ms")),
+            "preview batch should include the first-token latency in the title: {preview_batch:#?}"
         );
     }
 
@@ -5471,6 +5486,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
         observer.on_streaming_token(crate::acp::StreamingTokenEvent {
             event_type: "tool_call_input_delta".to_owned(),
@@ -5483,6 +5499,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
         observer.on_tool(ConversationTurnToolEvent::completed(
             "call-tool-1",
@@ -5621,6 +5638,7 @@ allowed_decisions: yes / auto / full / esc";
                 ExecutionLane::Fast,
                 1,
             )),
+            first_token_latency_ms: Some(88),
             ..CliChatLiveSurfaceState::default()
         };
 
@@ -5655,6 +5673,7 @@ allowed_decisions: yes / auto / full / esc";
         assert_eq!(tool.stdout.text, "hello");
         assert_eq!(tool.duration_ms, Some(12));
         assert_eq!(tool.exit_code, Some(0));
+        assert_eq!(snapshot.first_token_latency_ms, Some(88));
     }
 
     #[test]
@@ -5693,6 +5712,7 @@ allowed_decisions: yes / auto / full / esc";
                 tool_call: None,
             },
             index: None,
+            elapsed_ms: Some(55),
         });
         observer.on_streaming_token(crate::acp::StreamingTokenEvent {
             event_type: "tool_call_input_delta".to_owned(),
@@ -5705,6 +5725,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
         observer.on_phase(ConversationTurnPhaseEvent::requesting_followup_provider(
             2,
@@ -5726,6 +5747,10 @@ allowed_decisions: yes / auto / full / esc";
         assert!(
             !last_batch.iter().any(|line| line.contains("tool activity")),
             "follow-up provider requests should not reuse prior tool activity lines: {last_batch:#?}"
+        );
+        assert!(
+            !last_batch.iter().any(|line| line.contains("ttft 55ms")),
+            "follow-up provider requests should reset prior first-token latency: {last_batch:#?}"
         );
         assert!(
             !last_batch
@@ -5771,6 +5796,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
 
         let batch_count_after_tool_delta = captured_batches

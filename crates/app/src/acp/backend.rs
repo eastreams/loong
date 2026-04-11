@@ -462,6 +462,8 @@ pub struct StreamingTokenEvent {
     pub event_type: String,
     pub delta: TokenDelta,
     pub index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
