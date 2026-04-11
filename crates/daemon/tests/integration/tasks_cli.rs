@@ -556,6 +556,46 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     let _env = TasksCliEnvironmentGuard::set(&[]);
     let config_path = write_tasks_config(root.path());
     seed_background_task(&config_path, "ops-root", "delegate:task-1");
+    let prompt_frame_event = json!({
+        "type": "conversation_event",
+        "event": "provider_prompt_frame_snapshot",
+        "payload": {
+            "provider_round": 1,
+            "phase": "initial",
+            "prompt_frame": {
+                "schema_version": 1,
+                "total_estimated_tokens": 64,
+                "stable_runtime_segment_count": 1,
+                "stable_runtime_estimated_tokens": 12,
+                "session_latched_segment_count": 1,
+                "session_latched_estimated_tokens": 8,
+                "advisory_profile_segment_count": 1,
+                "advisory_profile_estimated_tokens": 6,
+                "session_local_recall_segment_count": 1,
+                "session_local_recall_estimated_tokens": 5,
+                "recent_window_segment_count": 1,
+                "recent_window_estimated_tokens": 7,
+                "turn_ephemeral_segment_count": 0,
+                "turn_ephemeral_estimated_tokens": 0,
+                "stable_runtime_hash": "stable-a",
+                "session_latched_hash": "latched-a",
+                "stable_prefix_hash_sha256": "prefix-task",
+                "cached_prefix_sha256": "cached-task",
+                "advisory_profile_hash": "profile-a",
+                "session_local_recall_hash": "recall-a",
+                "recent_window_hash": "window-a",
+                "turn_ephemeral_hash": null
+            }
+        }
+    });
+    let prompt_frame_event =
+        serde_json::to_string(&prompt_frame_event).expect("serialize prompt frame event");
+    append_tasks_session_turn(
+        &config_path,
+        "delegate:task-1",
+        "assistant",
+        &prompt_frame_event,
+    );
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
         loongclaw_daemon::tasks_cli::TasksCommandOptions {
@@ -602,6 +642,14 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         execution.payload["task"]["tool_policy"]["effective_tool_ids"][0],
         "file.read"
     );
+    assert_eq!(
+        execution.payload["task"]["prompt_frame"]["summary"]["latest_phase"],
+        "initial"
+    );
+    assert_eq!(
+        execution.payload["task"]["prompt_frame"]["summary"]["latest_total_estimated_tokens"],
+        64
+    );
 
     let rendered = loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution)
         .expect("render tasks status");
@@ -632,6 +680,14 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert!(
         rendered.contains("effective_tool_ids: file.read"),
         "status render should surface effective tool ids: {rendered}"
+    );
+    assert!(
+        rendered.contains("prompt_frame: phase=initial total_tokens=64"),
+        "status render should surface prompt-frame summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("stable_prefix=prefix-task"),
+        "status render should surface prompt-frame stable prefix: {rendered}"
     );
 }
 

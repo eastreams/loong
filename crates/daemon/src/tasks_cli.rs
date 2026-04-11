@@ -149,36 +149,45 @@ pub async fn execute_tasks_command(
             state,
             overdue_only,
             include_archived,
-        } => execute_list_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            limit,
-            state.as_deref(),
-            overdue_only,
-            include_archived,
-        )?,
-        TasksCommands::Status { task_id } => execute_status_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-        )?,
+        } => {
+            execute_list_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                limit,
+                state.as_deref(),
+                overdue_only,
+                include_archived,
+            )
+            .await?
+        }
+        TasksCommands::Status { task_id } => {
+            execute_status_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+            )
+            .await?
+        }
         TasksCommands::Events {
             task_id,
             after_id,
             limit,
-        } => execute_events_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-            after_id,
-            limit,
-        )?,
+        } => {
+            execute_events_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+                after_id,
+                limit,
+            )
+            .await?
+        }
         TasksCommands::Wait {
             task_id,
             after_id,
@@ -195,22 +204,28 @@ pub async fn execute_tasks_command(
             )
             .await?
         }
-        TasksCommands::Cancel { task_id, dry_run } => execute_cancel_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-            dry_run,
-        )?,
-        TasksCommands::Recover { task_id, dry_run } => execute_recover_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-            dry_run,
-        )?,
+        TasksCommands::Cancel { task_id, dry_run } => {
+            execute_cancel_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+                dry_run,
+            )
+            .await?
+        }
+        TasksCommands::Recover { task_id, dry_run } => {
+            execute_recover_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+                dry_run,
+            )
+            .await?
+        }
     };
 
     Ok(TasksCommandExecution {
@@ -250,7 +265,8 @@ async fn execute_create_command(
     .await?;
     let task_id = required_string_field(&queued.payload, "child_session_id", "tasks create")?;
     let (task_detail, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, &task_id);
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, &task_id)
+            .await;
     let recipes = build_task_recipes(resolved_config_path, current_session_id, &task_id);
     let next_steps = build_task_next_steps();
     let payload = json!({
@@ -288,7 +304,7 @@ fn build_tasks_create_runtime(
     }
 }
 
-fn execute_list_command(
+async fn execute_list_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -314,7 +330,8 @@ fn execute_list_command(
         if tasks.len() >= raw_limit {
             break;
         }
-        let task = build_task_detail(memory_config, tool_config, current_session_id, &session_id)?;
+        let task =
+            build_task_detail(memory_config, tool_config, current_session_id, &session_id).await?;
         tasks.push(task);
     }
 
@@ -336,14 +353,14 @@ fn execute_list_command(
     Ok(payload)
 }
 
-fn execute_status_command(
+async fn execute_status_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     task_id: &str,
 ) -> CliResult<Value> {
-    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let payload = json!({
         "command": "status",
         "config": resolved_config_path,
@@ -353,7 +370,7 @@ fn execute_status_command(
     Ok(payload)
 }
 
-fn execute_events_command(
+async fn execute_events_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -362,7 +379,7 @@ fn execute_events_command(
     after_id: Option<i64>,
     limit: usize,
 ) -> CliResult<Value> {
-    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let event_limit = limit.clamp(1, 200);
     let payload = json!({
         "session_id": task_id,
@@ -407,7 +424,7 @@ async fn execute_wait_command(
     after_id: Option<i64>,
     timeout_ms: u64,
 ) -> CliResult<Value> {
-    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let payload = json!({
         "session_id": task_id,
         "after_id": after_id,
@@ -420,7 +437,7 @@ async fn execute_wait_command(
         tool_config,
     )
     .await?;
-    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let wait_payload = outcome.payload;
     let next_after_id = wait_payload
         .get("next_after_id")
@@ -445,7 +462,7 @@ async fn execute_wait_command(
     Ok(output)
 }
 
-fn execute_cancel_command(
+async fn execute_cancel_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -466,7 +483,8 @@ fn execute_cancel_command(
         payload,
     )?;
     let (task, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id);
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id)
+            .await;
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -503,7 +521,7 @@ fn execute_cancel_command(
     Ok(output)
 }
 
-fn execute_recover_command(
+async fn execute_recover_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -524,7 +542,8 @@ fn execute_recover_command(
         payload,
     )?;
     let (task, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id);
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id)
+            .await;
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -745,7 +764,7 @@ fn current_unix_timestamp() -> i64 {
     duration.as_secs().min(i64::MAX as u64) as i64
 }
 
-fn build_task_detail(
+async fn build_task_detail(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
@@ -836,6 +855,9 @@ fn build_task_detail(
         &tool_policy,
         &recent_events,
     );
+    let prompt_frame =
+        crate::session_prompt_frame_cli::load_session_prompt_frame_payload(memory_config, task_id)
+            .await;
 
     let detail = json!({
         "task_id": task_id,
@@ -867,17 +889,19 @@ fn build_task_detail(
         "terminal_outcome": terminal_outcome,
         "recent_events": recent_events,
         "task_status": task_status,
+        "prompt_frame": prompt_frame,
     });
     Ok(detail)
 }
 
-fn build_best_effort_task_detail(
+async fn build_best_effort_task_detail(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
     task_id: &str,
 ) -> (Value, Value) {
-    let detail_result = build_task_detail(memory_config, tool_config, current_session_id, task_id);
+    let detail_result =
+        build_task_detail(memory_config, tool_config, current_session_id, task_id).await;
     match detail_result {
         Ok(task_detail) => (task_detail, Value::Null),
         Err(error) => {
@@ -1834,6 +1858,8 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .and_then(|value| value.get("effective_runtime_narrowing"))
         .cloned()
         .unwrap_or(Value::Null);
+    let prompt_frame_summary =
+        crate::session_prompt_frame_cli::render_prompt_frame_summary(task.get("prompt_frame"));
     let rendered_runtime_narrowing = if effective_runtime_narrowing.is_null() {
         "-".to_owned()
     } else {
@@ -1880,6 +1906,7 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     lines.push(format!(
         "effective_runtime_narrowing: {rendered_runtime_narrowing}"
     ));
+    lines.push(format!("prompt_frame: {prompt_frame_summary}"));
     Ok(lines)
 }
 

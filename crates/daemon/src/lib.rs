@@ -159,6 +159,7 @@ mod runtime_snapshot_render;
 mod runtime_snapshot_types;
 pub mod runtime_trajectory_cli;
 pub mod session_cli;
+mod session_prompt_frame_cli;
 pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
