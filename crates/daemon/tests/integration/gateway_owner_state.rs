@@ -57,37 +57,35 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
     runtime_dir
 }
 
-fn headless_loaded_config_fixture() -> LoadedSupervisorConfig {
-    let runtime_root = unique_runtime_dir("headless-config");
-    let config_path = runtime_root.join("loongclaw.toml");
-    let sqlite_path = runtime_root.join("memory.sqlite3");
+fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongClawConfig::default();
+    let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
 
     LoadedSupervisorConfig {
-        resolved_path: config_path,
+        resolved_path: runtime_dir.join("loongclaw.toml"),
         config,
     }
 }
 
-fn telegram_loaded_config_fixture() -> LoadedSupervisorConfig {
-    let runtime_root = unique_runtime_dir("telegram-config");
-    let config_path = runtime_root.join("loongclaw.toml");
-    let sqlite_path = runtime_root.join("memory.sqlite3");
+fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
+    let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
     LoadedSupervisorConfig {
-        resolved_path: config_path,
+        resolved_path: runtime_dir.join("loongclaw.toml"),
         config,
     }
 }
 
-fn plugin_backed_loaded_config_fixture() -> LoadedSupervisorConfig {
-    let config = super::mixed_account_weixin_plugin_bridge_config();
+fn plugin_backed_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
+    let mut config = super::mixed_account_weixin_plugin_bridge_config();
+    let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
+    config.memory.sqlite_path = sqlite_path.display().to_string();
 
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        resolved_path: runtime_dir.join("loongclaw.toml"),
         config,
     }
 }
@@ -151,7 +149,10 @@ async fn wait_for_gateway_control_surface(
 async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request() {
     let runtime_dir = unique_runtime_dir("headless-stop");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -211,7 +212,10 @@ async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request
 async fn gateway_owner_state_rejects_second_active_owner_slot() {
     let runtime_dir = unique_runtime_dir("exclusive-slot");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -241,7 +245,10 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
     .await;
 
     let second_hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -276,7 +283,10 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
 async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request() {
     let runtime_dir = unique_runtime_dir("duplicate-start-pending-stop");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -309,7 +319,10 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
     assert_eq!(stop_result, GatewayStopRequestOutcome::Requested);
 
     let second_hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -349,7 +362,10 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
         telegram_runner,
     )]);
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(telegram_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(telegram_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|options| {
             boxed_cli_result(async move {
@@ -406,7 +422,10 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
     let _lock = lock_daemon_test_environment();
     let runtime_dir = unique_runtime_dir("localhost-control");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -681,7 +700,10 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
 async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy() {
     let runtime_dir = unique_runtime_dir("turn-policy-disabled");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -749,7 +771,10 @@ async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy()
 async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stops_runtime() {
     let runtime_dir = unique_runtime_dir("local-client");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -853,7 +878,10 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
 {
     let runtime_dir = unique_runtime_dir("plugin-backed-parity");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new(|_| Ok(plugin_backed_loaded_config_fixture())),
+        load_config: Arc::new({
+            let runtime_dir = runtime_dir.clone();
+            move |_| Ok(plugin_backed_loaded_config_fixture(runtime_dir.as_path()))
+        }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
