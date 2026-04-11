@@ -762,8 +762,10 @@ mod tests {
             oauth_access_token_env: None,
             ..ProviderConfig::default()
         };
-        let mut config = LoongClawConfig::default();
-        config.provider = provider.clone();
+        let config = LoongClawConfig {
+            provider: provider.clone(),
+            ..LoongClawConfig::default()
+        };
         let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
         let auth_context = RequestAuthContext::default();
         let auth_profiles = resolve_provider_auth_profiles(&provider);
