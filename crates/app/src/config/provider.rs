@@ -2082,9 +2082,14 @@ impl ProviderConfig {
         let current_profile = self.kind.url_validation_profile()?;
         let sources = effective_urls.sources();
 
-        for (source_name, source_value) in sources {
-            let current_match = current_profile.matching_canonical_fingerprint(source_value);
-            let candidate_match = find_cross_routed_validation_profile(self.kind, source_value);
+        for (source_name, source_value, allow_host_only_base_match) in sources {
+            let current_match = current_profile
+                .matching_canonical_fingerprint(source_value, allow_host_only_base_match);
+            let candidate_match = find_cross_routed_validation_profile(
+                self.kind,
+                source_value,
+                allow_host_only_base_match,
+            );
             let Some((candidate_profile, candidate_fingerprint)) = candidate_match else {
                 continue;
             };
@@ -2110,30 +2115,21 @@ impl ProviderConfig {
     ) -> Option<String> {
         let validation_profile = self.kind.url_validation_profile()?;
         let sources = effective_urls.sources();
-        let mut has_required_path = validation_profile.required_path_fragments.is_empty();
-        if !has_required_path {
-            for (_, value) in sources {
+        let requires_path_validation = !validation_profile.required_path_fragments.is_empty();
+        if requires_path_validation {
+            for (_, value, _) in sources {
                 let path_match = validation_profile.matches_required_path_fragment(value);
-                if path_match {
-                    has_required_path = true;
-                    break;
+                if !path_match {
+                    return Some(validation_profile.path_validation_hint.to_owned());
                 }
             }
         }
-        if !has_required_path {
-            return Some(validation_profile.path_validation_hint.to_owned());
-        }
 
-        let mut has_forbidden_path = false;
-        for (_, value) in sources {
+        for (_, value, _) in sources {
             let path_match = validation_profile.matches_forbidden_path_fragment(value);
             if path_match {
-                has_forbidden_path = true;
-                break;
+                return Some(validation_profile.path_validation_hint.to_owned());
             }
-        }
-        if has_forbidden_path {
-            return Some(validation_profile.path_validation_hint.to_owned());
         }
 
         None
@@ -2571,20 +2567,28 @@ fn maybe_normalize_custom_chat_path(kind: ProviderKind, base_url: &str, path: &s
 }
 
 impl ProviderEffectiveUrlValues {
-    fn sources(&self) -> [(&'static str, &str); 3] {
+    fn sources(&self) -> [(&'static str, &str, bool); 3] {
         [
-            ("endpoint", self.endpoint.as_str()),
-            ("models endpoint", self.models_endpoint.as_str()),
-            ("base url", self.resolved_base_url.as_str()),
+            ("endpoint", self.endpoint.as_str(), false),
+            ("models endpoint", self.models_endpoint.as_str(), false),
+            ("base url", self.resolved_base_url.as_str(), true),
         ]
     }
 }
 
 impl ProviderUrlValidationProfile {
-    fn matching_canonical_fingerprint(self, value: &str) -> Option<&'static str> {
+    fn matching_canonical_fingerprint(
+        self,
+        value: &str,
+        allow_host_only_base_match: bool,
+    ) -> Option<&'static str> {
         let profile = self.kind.profile();
         let base_fingerprint = profile.base_url;
-        let base_match = matches_url_validation_fingerprint(value, base_fingerprint);
+        let base_match = matches_base_url_validation_fingerprint(
+            value,
+            base_fingerprint,
+            allow_host_only_base_match,
+        );
         if base_match {
             return Some(base_fingerprint);
         }
@@ -3048,6 +3052,8 @@ const NON_CODING_ARK_FORBIDDEN_PATH_FRAGMENTS: [&str; 1] = ["/api/coding"];
 const CODING_ARK_REQUIRED_PATH_FRAGMENTS: [&str; 1] = ["/api/coding/v3"];
 const CODING_ARK_FORBIDDEN_PATH_FRAGMENTS: [&str; 2] = ["/api/v3", "/api/coding"];
 const CODING_ARK_FORBIDDEN_PATH_EXCEPTIONS: [&str; 1] = ["/api/coding/v3"];
+const VOLCENGINE_STANDARD_CANONICAL_URL_FINGERPRINTS: [&str; 1] =
+    ["https://ark.cn-beijing.volces.com/api/v3"];
 
 const PROVIDER_URL_VALIDATION_PROFILES: [ProviderUrlValidationProfile; 4] = [
     ProviderUrlValidationProfile {
@@ -3070,7 +3076,7 @@ const PROVIDER_URL_VALIDATION_PROFILES: [ProviderUrlValidationProfile; 4] = [
     },
     ProviderUrlValidationProfile {
         kind: ProviderKind::Volcengine,
-        extra_canonical_url_fingerprints: &[],
+        extra_canonical_url_fingerprints: &VOLCENGINE_STANDARD_CANONICAL_URL_FINGERPRINTS,
         required_path_fragments: &[],
         forbidden_path_fragments: &NON_CODING_ARK_FORBIDDEN_PATH_FRAGMENTS,
         forbidden_path_exceptions: &[],
@@ -3091,6 +3097,7 @@ const PROVIDER_URL_VALIDATION_PROFILES: [ProviderUrlValidationProfile; 4] = [
 fn find_cross_routed_validation_profile(
     current_kind: ProviderKind,
     source_value: &str,
+    allow_host_only_base_match: bool,
 ) -> Option<(&'static ProviderUrlValidationProfile, &'static str)> {
     let mut best_match: Option<(&'static ProviderUrlValidationProfile, &'static str)> = None;
 
@@ -3100,7 +3107,8 @@ fn find_cross_routed_validation_profile(
             continue;
         }
 
-        let matching_fingerprint = profile.matching_canonical_fingerprint(source_value);
+        let matching_fingerprint =
+            profile.matching_canonical_fingerprint(source_value, allow_host_only_base_match);
         if let Some(fingerprint) = matching_fingerprint {
             let mut should_replace = true;
             if let Some((_, best_fingerprint)) = best_match {
@@ -3122,11 +3130,45 @@ fn matches_url_validation_fingerprint(value: &str, fingerprint: &str) -> bool {
     matches_region_endpoint_url(normalized_value.as_str(), normalized_fingerprint.as_str())
 }
 
+fn matches_base_url_validation_fingerprint(
+    value: &str,
+    fingerprint: &str,
+    allow_host_only_base_match: bool,
+) -> bool {
+    let fingerprint_has_non_root_path = url_has_non_root_path(fingerprint);
+    if fingerprint_has_non_root_path {
+        return matches_url_validation_fingerprint(value, fingerprint);
+    }
+    if !allow_host_only_base_match {
+        return false;
+    }
+    is_same_base_url(value, fingerprint)
+}
+
 fn url_contains_validation_fragment(value: &str, fragment: &str) -> bool {
     let normalized_value = normalize_url_validation_value(value);
     let normalized_fragment = normalize_url_validation_value(fragment);
 
     normalized_value.contains(normalized_fragment.as_str())
+}
+
+fn url_has_non_root_path(value: &str) -> bool {
+    let trimmed = value.trim();
+    let after_scheme = trimmed
+        .split_once("://")
+        .map(|(_, remainder)| remainder)
+        .unwrap_or(trimmed);
+    let Some((_, path_with_query)) = after_scheme.split_once('/') else {
+        return false;
+    };
+    let raw_path = format!("/{path_with_query}");
+    let path = raw_path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(raw_path.as_str());
+    let normalized_path = path.trim_end_matches('/');
+
+    !normalized_path.is_empty()
 }
 
 fn normalize_url_validation_value(value: &str) -> String {
@@ -4707,6 +4749,66 @@ mod tests {
             .expect("explicit cross-routed endpoints should surface a hint");
 
         assert!(hint.contains("kind = \"volcengine\""));
+    }
+
+    #[test]
+    fn provider_configuration_hint_requires_coding_path_for_explicit_endpoint_overrides() {
+        let cases = [ProviderKind::ByteplusCoding, ProviderKind::VolcengineCoding];
+
+        for kind in cases {
+            let provider = ProviderConfig {
+                kind,
+                endpoint: Some("https://proxy.example.com/openai/v1/chat/completions".to_owned()),
+                endpoint_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("explicit endpoint overrides should keep the coding path");
+
+            assert!(
+                hint.contains("/api/coding/v3"),
+                "expected coding-path guidance for {kind:?}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_requires_coding_path_for_explicit_models_endpoints() {
+        let cases = [ProviderKind::ByteplusCoding, ProviderKind::VolcengineCoding];
+
+        for kind in cases {
+            let provider = ProviderConfig {
+                kind,
+                models_endpoint: Some("https://proxy.example.com/openai/v1/models".to_owned()),
+                models_endpoint_explicit: true,
+                ..ProviderConfig::default()
+            };
+            let hint = provider
+                .configuration_hint()
+                .expect("explicit models endpoints should keep the coding path");
+
+            assert!(
+                hint.contains("/api/coding/v3"),
+                "expected coding-path guidance for {kind:?}: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_hint_ignores_non_canonical_host_only_proxy_paths() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Byteplus,
+            base_url: "https://ark.cn-beijing.volces.com/custom/proxy".to_owned(),
+            base_url_explicit: true,
+            ..ProviderConfig::default()
+        };
+        let hint = provider.configuration_hint();
+
+        assert!(
+            hint.is_none(),
+            "non-canonical host-only proxy paths should not claim a canonical cross-route: {hint:?}"
+        );
     }
 
     #[test]
