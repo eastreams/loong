@@ -2893,7 +2893,8 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
     if let Some(observer) = observer
         && provider_turn_observer_supports_streaming(config, Some(observer))
     {
-        let on_token = build_observer_streaming_token_callback(observer);
+        let request_started_at = std::time::Instant::now();
+        let on_token = build_observer_streaming_token_callback(observer, request_started_at);
         return runtime
             .request_turn_streaming(
                 config, session_id, turn_id, messages, tool_view, binding, on_token,
@@ -6875,6 +6876,7 @@ mod tests {
         assert_eq!(token_events.len(), 1);
         assert_eq!(token_events[0].event_type, "text_delta");
         assert_eq!(token_events[0].delta.text.as_deref(), Some("draft"));
+        assert!(token_events[0].elapsed_ms.is_some());
     }
 
     #[tokio::test]

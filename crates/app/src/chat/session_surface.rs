@@ -683,6 +683,7 @@ fn fallback_live_surface_snapshot() -> CliChatLiveSurfaceSnapshot {
         tool_call_count: 0,
         message_count: None,
         estimated_tokens: None,
+        first_token_latency_ms: None,
         draft_preview: None,
         tools: Vec::new(),
     }
@@ -3725,6 +3726,9 @@ impl ConversationTurnObserver for SurfaceLiveObserver {
             && let Some(current_phase) = current_phase
             && phase_supports_cli_chat_live_preview(current_phase)
         {
+            if state.live.state.first_token_latency_ms.is_none() {
+                state.live.state.first_token_latency_ms = event.elapsed_ms;
+            }
             let preview_char_limit = cli_chat_live_preview_char_limit(render_width);
             state.live.state.total_text_chars_seen = state
                 .live
