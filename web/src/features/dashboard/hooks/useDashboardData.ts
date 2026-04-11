@@ -355,6 +355,12 @@ export function useDashboardData({
     setIsSavingSettings(true);
     let providerApplied = false;
     try {
+      const savedPreferences = buildPreferencesSavePayload({
+        personality: preferencesForm.personality,
+        memoryProfile: preferencesForm.memoryProfile,
+        slidingWindow: preferencesForm.slidingWindow,
+        promptAddendum: preferencesForm.promptAddendum,
+      }, t);
       setSettingsModal({
         phase: "pending",
         title: t("dashboard.settings.applyPending"),
@@ -371,12 +377,6 @@ export function useDashboardData({
       if (result.passed) {
         providerApplied = true;
         acceptValidatedOnboardingStatus(result.status);
-        const savedPreferences = buildPreferencesSavePayload({
-          personality: preferencesForm.personality,
-          memoryProfile: preferencesForm.memoryProfile,
-          slidingWindow: preferencesForm.slidingWindow,
-          promptAddendum: preferencesForm.promptAddendum,
-        }, t);
         await onboardingApi.savePreferences(savedPreferences);
         refreshOnboardingStatus();
         await reloadDashboardData({

@@ -684,16 +684,13 @@ export default function DashboardPage() {
                         </span>
                         <input
                           className="settings-input"
-                          type="number"
-                          min={1}
-                          max={128}
-                          step={1}
+                          type="text"
                           inputMode="numeric"
                           value={preferencesForm.slidingWindow}
                           onChange={(event) =>
                             preferencesForm.setSlidingWindow(event.target.value)
                           }
-                          placeholder="12"
+                          placeholder="24"
                         />
                       </label>
 

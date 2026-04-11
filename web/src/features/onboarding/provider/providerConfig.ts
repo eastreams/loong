@@ -438,5 +438,8 @@ export function readProviderSaveError(
   if (error instanceof ApiRequestError) {
     return error.message;
   }
+  if (error instanceof Error) {
+    return error.message;
+  }
   return t(fallbackKey);
 }
