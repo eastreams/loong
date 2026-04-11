@@ -156,6 +156,7 @@ pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
+mod runtime_snapshot_types;
 pub mod runtime_trajectory_cli;
 pub mod session_cli;
 pub mod sessions_cli;
@@ -201,6 +202,10 @@ pub(crate) use runtime_snapshot_render::{
     runtime_snapshot_external_skills_json, runtime_snapshot_memory_system_json,
     runtime_snapshot_provider_json, runtime_snapshot_runtime_plugins_json,
     runtime_snapshot_tool_runtime_json,
+};
+pub use runtime_snapshot_types::{
+    RuntimeSnapshotProviderProfileState, RuntimeSnapshotProviderState,
+    RuntimeSnapshotProviderTransportState,
 };
 pub use session_cli::{
     SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION, SessionSearchArtifactDocument,
@@ -2710,39 +2715,6 @@ pub struct RuntimeSnapshotCliState {
     pub restore_spec: RuntimeSnapshotRestoreSpec,
 }
 
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotProviderState {
-    pub active_profile_id: String,
-    pub active_label: String,
-    pub last_provider_id: Option<String>,
-    pub saved_profile_ids: Vec<String>,
-    pub profiles: Vec<RuntimeSnapshotProviderProfileState>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotProviderProfileState {
-    pub profile_id: String,
-    pub is_active: bool,
-    pub default_for_kind: bool,
-    pub descriptor: mvp::config::ProviderDescriptorDocument,
-    pub kind: mvp::config::ProviderKind,
-    pub model: String,
-    pub wire_api: mvp::config::ProviderWireApi,
-    pub base_url: String,
-    pub endpoint: String,
-    pub models_endpoint: String,
-    pub protocol_family: &'static str,
-    pub credential_resolved: bool,
-    pub auth_env: Option<String>,
-    pub reasoning_effort: Option<String>,
-    pub temperature: f64,
-    pub max_tokens: Option<u32>,
-    pub request_timeout_ms: u64,
-    pub retry_max_attempts: usize,
-    pub header_names: Vec<String>,
-    pub preferred_models: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeSnapshotInventoryStatus {
     Ok,
@@ -3023,11 +2995,20 @@ fn collect_runtime_snapshot_provider_state(
             .collect::<Vec<_>>()
     };
 
+    let transport_metrics = mvp::provider::provider_http_client_runtime_metrics_snapshot();
+    let transport_runtime = RuntimeSnapshotProviderTransportState {
+        http_client_cache_entries: transport_metrics.cache_entry_count,
+        http_client_cache_hits: transport_metrics.cache_hit_count,
+        http_client_cache_misses: transport_metrics.cache_miss_count,
+        built_http_clients: transport_metrics.built_client_count,
+    };
+
     RuntimeSnapshotProviderState {
         active_profile_id,
         active_label: provider_presentation::active_provider_detail_label(config),
         last_provider_id: config.last_provider_id().map(str::to_owned),
         saved_profile_ids,
+        transport_runtime,
         profiles,
     }
 }

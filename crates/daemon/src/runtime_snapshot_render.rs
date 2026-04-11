@@ -28,6 +28,16 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
                     .map(String::as_str)
             )
         ),
+        format!(
+            "provider transport cache_entries={} cache_hits={} cache_misses={} built_clients={}",
+            snapshot
+                .provider
+                .transport_runtime
+                .http_client_cache_entries,
+            snapshot.provider.transport_runtime.http_client_cache_hits,
+            snapshot.provider.transport_runtime.http_client_cache_misses,
+            snapshot.provider.transport_runtime.built_http_clients
+        ),
     ];
 
     for profile in &snapshot.provider.profiles {
@@ -425,6 +435,12 @@ pub(crate) fn runtime_snapshot_provider_json(snapshot: &RuntimeSnapshotProviderS
         "active_label": snapshot.active_label,
         "last_provider_id": snapshot.last_provider_id,
         "saved_profile_ids": snapshot.saved_profile_ids,
+        "transport_runtime": {
+            "http_client_cache_entries": snapshot.transport_runtime.http_client_cache_entries,
+            "http_client_cache_hits": snapshot.transport_runtime.http_client_cache_hits,
+            "http_client_cache_misses": snapshot.transport_runtime.http_client_cache_misses,
+            "built_http_clients": snapshot.transport_runtime.built_http_clients,
+        },
         "profiles": snapshot
             .profiles
             .iter()
