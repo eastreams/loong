@@ -1287,20 +1287,21 @@ async fn run_chat_turn_stream(
         let acp_options =
             mvp::acp::AcpConversationTurnOptions::automatic().with_event_sink(Some(&event_sink));
 
-        let turn_future = coordinator.handle_turn_with_address_and_acp_options(
+        let turn_future = coordinator.handle_production_turn_with_address_and_acp_options_and_observer(
             &turn_config,
             &address,
             &input,
             mvp::conversation::ProviderErrorMode::InlineMessage,
             &acp_options,
             mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
+            None,
         );
         tokio::pin!(turn_future);
 
         let mut poll_interval = time::interval(Duration::from_millis(150));
         poll_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
-        let assistant_text = loop {
+        let assistant_text: String = loop {
             tokio::select! {
                 result = &mut turn_future => {
                     break result.map_err(WebApiError::internal)?;
