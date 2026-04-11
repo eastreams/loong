@@ -354,6 +354,46 @@ const SEARCH_CONCEPT_DEFINITIONS: &[SearchConceptDefinition] = &[
         ],
     },
     SearchConceptDefinition {
+        id: "directory",
+        categories: &["workspace", "discovery"],
+        forms: &[
+            "directory",
+            "directories",
+            "folder",
+            "folders",
+            "current directory",
+            "current folder",
+            "dir",
+            "directory tree",
+            "folder tree",
+            "carpeta",
+            "repertoire",
+            "dossier",
+            "ordner",
+            "verzeichnis",
+            "папка",
+            "каталог",
+            "текущая папка",
+            "دليل",
+            "مجلد",
+            "المجلد الحالي",
+            "फ़ोल्डर",
+            "डायरेक्टरी",
+            "वर्तमान फ़ोल्डर",
+            "目录",
+            "目录树",
+            "文件夹",
+            "当前目录",
+            "当前文件夹",
+            "フォルダ",
+            "ディレクトリ",
+            "カレントディレクトリ",
+            "폴더",
+            "디렉터리",
+            "현재 디렉터리",
+        ],
+    },
+    SearchConceptDefinition {
         id: "memory",
         categories: &["workspace"],
         forms: &[
@@ -2220,6 +2260,14 @@ mod tests {
 
         assert!(!version_query.concepts.contains("file"));
         assert!(!numeric_query.concepts.contains("file"));
+    }
+
+    #[test]
+    fn structural_query_hints_do_not_treat_generic_tree_queries_as_directories() {
+        let query = SearchQuery::new("binary tree traversal");
+
+        assert!(!query.concepts.contains("directory"));
+        assert!(!query.categories.contains("workspace"));
     }
 
     #[test]

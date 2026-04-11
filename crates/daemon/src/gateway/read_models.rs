@@ -59,6 +59,32 @@ pub struct GatewayAcpSessionActivationProvenanceReadModel {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GatewayAcpSessionMetadataReadModel {
+    pub session_key: String,
+    pub conversation_id: Option<String>,
+    pub binding: Option<GatewayAcpBindingScopeReadModel>,
+    pub activation_origin: Option<&'static str>,
+    pub provenance: GatewayAcpSessionActivationProvenanceReadModel,
+    pub backend_id: String,
+    pub runtime_session_name: String,
+    pub working_directory: Option<String>,
+    pub backend_session_id: Option<String>,
+    pub agent_session_id: Option<String>,
+    pub mode: Option<&'static str>,
+    pub state: &'static str,
+    pub last_activity_ms: u64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GatewayAcpSessionListReadModel {
+    pub config: String,
+    pub matched_count: usize,
+    pub returned_count: usize,
+    pub sessions: Vec<GatewayAcpSessionMetadataReadModel>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GatewayAcpSessionStatusReadModel {
     pub session_key: String,
     pub backend_id: String,
@@ -208,6 +234,7 @@ pub struct GatewayRuntimeSnapshotToolsReadModel {
     pub visible_tool_names: Vec<String>,
     pub capability_snapshot_sha256: String,
     pub capability_snapshot: String,
+    pub tool_calling: GatewayToolCallingReadModel,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -221,6 +248,7 @@ pub struct GatewayRuntimeSnapshotReadModel {
     pub channels: GatewayRuntimeSnapshotChannelsReadModel,
     pub tool_runtime: Value,
     pub tools: GatewayRuntimeSnapshotToolsReadModel,
+    pub runtime_plugins: Value,
     pub external_skills: Value,
 }
 
@@ -267,6 +295,16 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub capability_snapshot_sha256: String,
     pub active_provider_profile_id: Option<String>,
     pub active_provider_label: Option<String>,
+    pub tool_calling: GatewayToolCallingReadModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayToolCallingReadModel {
+    pub availability: String,
+    pub structured_tool_schema_enabled: bool,
+    pub effective_tool_schema_mode: String,
+    pub active_model: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,6 +354,26 @@ fn build_channel_surface_read_model(
     GatewayChannelSurfaceReadModel {
         surface,
         plugin_bridge_account_summary,
+    }
+}
+
+pub fn build_acp_session_list_read_model(
+    config_path: &str,
+    matched_count: usize,
+    sessions: &[mvp::acp::AcpSessionMetadata],
+) -> GatewayAcpSessionListReadModel {
+    let config = config_path.to_owned();
+    let returned_count = sessions.len();
+    let sessions = sessions
+        .iter()
+        .map(build_acp_session_metadata_read_model)
+        .collect();
+
+    GatewayAcpSessionListReadModel {
+        config,
+        matched_count,
+        returned_count,
+        sessions,
     }
 }
 
@@ -397,12 +455,15 @@ pub fn build_runtime_snapshot_read_model(
     let visible_tool_names = snapshot.visible_tool_names.clone();
     let capability_snapshot_sha256 = snapshot.capability_snapshot_sha256.clone();
     let capability_snapshot = snapshot.capability_snapshot.clone();
+    let tool_calling = build_tool_calling_read_model(&snapshot.tool_calling);
     let tools = GatewayRuntimeSnapshotToolsReadModel {
         visible_tool_count,
         visible_tool_names,
         capability_snapshot_sha256,
         capability_snapshot,
+        tool_calling,
     };
+    let runtime_plugins = crate::runtime_snapshot_runtime_plugins_json(&snapshot.runtime_plugins);
     let external_skills = crate::runtime_snapshot_external_skills_json(&snapshot.external_skills);
 
     GatewayRuntimeSnapshotReadModel {
@@ -415,6 +476,7 @@ pub fn build_runtime_snapshot_read_model(
         channels,
         tool_runtime,
         tools,
+        runtime_plugins,
         external_skills,
     }
 }
@@ -464,6 +526,50 @@ fn build_acp_session_activation_provenance_read_model(
     GatewayAcpSessionActivationProvenanceReadModel {
         surface,
         activation_origin,
+    }
+}
+
+fn build_acp_session_metadata_read_model(
+    metadata: &mvp::acp::AcpSessionMetadata,
+) -> GatewayAcpSessionMetadataReadModel {
+    let session_key = metadata.session_key.clone();
+    let conversation_id = metadata.conversation_id.clone();
+    let binding = metadata
+        .binding
+        .as_ref()
+        .map(build_acp_binding_scope_read_model);
+    let activation_origin = metadata
+        .activation_origin
+        .map(mvp::acp::AcpRoutingOrigin::as_str);
+    let provenance = build_acp_session_activation_provenance_read_model(metadata.activation_origin);
+    let backend_id = metadata.backend_id.clone();
+    let runtime_session_name = metadata.runtime_session_name.clone();
+    let working_directory = metadata
+        .working_directory
+        .as_ref()
+        .map(|path| path.display().to_string());
+    let backend_session_id = metadata.backend_session_id.clone();
+    let agent_session_id = metadata.agent_session_id.clone();
+    let mode = metadata.mode.map(crate::acp_session_mode_label);
+    let state = crate::acp_session_state_label(metadata.state);
+    let last_activity_ms = metadata.last_activity_ms;
+    let last_error = metadata.last_error.clone();
+
+    GatewayAcpSessionMetadataReadModel {
+        session_key,
+        conversation_id,
+        binding,
+        activation_origin,
+        provenance,
+        backend_id,
+        runtime_session_name,
+        working_directory,
+        backend_session_id,
+        agent_session_id,
+        mode,
+        state,
+        last_activity_ms,
+        last_error,
     }
 }
 
@@ -796,6 +902,7 @@ fn build_operator_runtime_summary_read_model(
     let active_provider_profile_id =
         json_string_field(&runtime_snapshot.provider, "active_profile_id");
     let active_provider_label = json_string_field(&runtime_snapshot.provider, "active_label");
+    let tool_calling = runtime_snapshot.tools.tool_calling.clone();
 
     GatewayOperatorRuntimeSummaryReadModel {
         enabled_channel_ids,
@@ -804,6 +911,19 @@ fn build_operator_runtime_summary_read_model(
         capability_snapshot_sha256,
         active_provider_profile_id,
         active_provider_label,
+        tool_calling,
+    }
+}
+
+fn build_tool_calling_read_model(
+    state: &crate::RuntimeSnapshotToolCallingState,
+) -> GatewayToolCallingReadModel {
+    GatewayToolCallingReadModel {
+        availability: state.availability.clone(),
+        structured_tool_schema_enabled: state.structured_tool_schema_enabled,
+        effective_tool_schema_mode: state.effective_tool_schema_mode.clone(),
+        active_model: state.active_model.clone(),
+        reason: state.reason.clone(),
     }
 }
 

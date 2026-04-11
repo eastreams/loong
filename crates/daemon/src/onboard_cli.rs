@@ -15,6 +15,7 @@ use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 use serde_json::json;
 
+use crate::copilot_onboarding::finalize_github_copilot_onboard_credentials;
 use crate::onboard_finalize::{
     ConfigWritePlan, build_onboarding_success_summary_with_memory, prepare_output_path_for_write,
     render_onboarding_success_summary_lines, resolve_backup_path, rollback_onboard_write_failure,
@@ -866,10 +867,17 @@ fn parse_select_one_input(trimmed: &str, options: &[SelectOption]) -> Option<usi
     {
         return Some(selected - 1);
     }
-    options.iter().position(|option| {
+
+    let direct_match = options.iter().position(|option| {
         option.slug.eq_ignore_ascii_case(trimmed)
             || select_option_input_slug(option).eq_ignore_ascii_case(trimmed)
-    })
+    });
+
+    if direct_match.is_some() {
+        return direct_match;
+    }
+
+    parse_prompt_personality_select_input(trimmed, options)
 }
 
 fn render_select_one_invalid_input_message(options: &[SelectOption]) -> String {
@@ -888,6 +896,33 @@ fn resolve_select_one_eof(default: Option<usize>) -> CliResult<usize> {
     default.ok_or_else(|| {
         "onboarding cancelled: stdin closed while waiting for required selection".to_owned()
     })
+}
+
+fn parse_prompt_personality_select_input(trimmed: &str, options: &[SelectOption]) -> Option<usize> {
+    let prompt_personality_options = select_options_are_prompt_personalities(options);
+
+    if !prompt_personality_options {
+        return None;
+    }
+
+    let personality = parse_prompt_personality(trimmed)?;
+    let canonical_slug = prompt_personality_id(personality);
+
+    options
+        .iter()
+        .position(|option| option.slug.eq_ignore_ascii_case(canonical_slug))
+}
+
+fn select_options_are_prompt_personalities(options: &[SelectOption]) -> bool {
+    for option in options {
+        let parsed_personality = parse_prompt_personality(&option.slug);
+
+        if parsed_personality.is_none() {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn print_lines(ui: &mut impl OnboardUi, lines: impl IntoIterator<Item = String>) -> CliResult<()> {
@@ -1438,16 +1473,25 @@ pub async fn run_onboard_cli_with_ui(
         )?;
         config.provider.model = selected_model;
 
-        let default_api_key_env = preferred_api_key_env_default(&config);
-        let selected_api_key_env = resolve_api_key_env_selection(
-            &options,
-            &config,
-            default_api_key_env,
-            guided_prompt_path,
-            ui,
-            context,
-        )?;
-        apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
+        if config.provider.kind == mvp::config::ProviderKind::GithubCopilot {
+            finalize_github_copilot_onboard_credentials(
+                &mut config.provider,
+                &output_path,
+                options.non_interactive,
+            )
+            .await?;
+        } else {
+            let default_api_key_env = preferred_api_key_env_default(&config);
+            let selected_api_key_env = resolve_api_key_env_selection(
+                &options,
+                &config,
+                default_api_key_env,
+                guided_prompt_path,
+                ui,
+                context,
+            )?;
+            apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
+        }
 
         match guided_prompt_path {
             GuidedPromptPath::NativePromptPack => {
@@ -1505,7 +1549,7 @@ pub async fn run_onboard_cli_with_ui(
             &mut config,
             selected_web_search_provider.as_str(),
             web_search_credential_selection,
-        );
+        )?;
     }
     let selected_preinstalled_skill_ids =
         resolve_preinstalled_skill_selection(&options, ui, context)?;
@@ -2527,35 +2571,26 @@ fn resolve_personality_selection(
         .and_then(parse_prompt_personality)
         .unwrap_or_else(|| config.cli.resolved_personality());
 
-    let personalities = [
-        (
-            mvp::prompt::PromptPersonality::CalmEngineering,
-            "calm engineering",
-            "rigorous, direct, and technically grounded",
-        ),
-        (
-            mvp::prompt::PromptPersonality::FriendlyCollab,
-            "friendly collab",
-            "warm, cooperative, and explanatory when helpful",
-        ),
-        (
-            mvp::prompt::PromptPersonality::AutonomousExecutor,
-            "autonomous executor",
-            "decisive, high-initiative, and execution-oriented",
-        ),
-    ];
-    let select_options: Vec<SelectOption> = personalities
+    let personality_catalog = mvp::prompt::prompt_personality_catalog();
+    let select_options: Vec<SelectOption> = personality_catalog
         .iter()
-        .map(|(p, label, desc)| SelectOption {
-            label: label.to_string(),
-            slug: prompt_personality_id(*p).to_owned(),
-            description: desc.to_string(),
-            recommended: *p == default_personality,
+        .map(|descriptor| {
+            let label = descriptor.label.to_owned();
+            let slug = descriptor.id.to_owned();
+            let description = personality_selection_description(descriptor);
+            let recommended = descriptor.personality == default_personality;
+
+            SelectOption {
+                label,
+                slug,
+                description,
+                recommended,
+            }
         })
         .collect();
-    let default_idx = personalities
+    let default_idx = personality_catalog
         .iter()
-        .position(|(p, _, _)| *p == default_personality);
+        .position(|descriptor| descriptor.personality == default_personality);
 
     print_lines(
         ui,
@@ -2567,10 +2602,10 @@ fn resolve_personality_selection(
         default_idx,
         SelectInteractionMode::List,
     )?;
-    let (personality, _, _) = personalities
+    let descriptor = personality_catalog
         .get(idx)
         .ok_or_else(|| format!("personality selection index {idx} out of range"))?;
-    Ok(*personality)
+    Ok(descriptor.personality)
 }
 
 fn resolve_prompt_addendum_selection(
@@ -2958,31 +2993,25 @@ fn apply_selected_web_search_credential(
     config: &mut mvp::config::LoongClawConfig,
     provider: &str,
     selection: WebSearchCredentialSelection,
-) {
+) -> CliResult<()> {
     let next_value = match selection {
-        WebSearchCredentialSelection::KeepCurrent => return,
+        WebSearchCredentialSelection::KeepCurrent => return Ok(()),
         WebSearchCredentialSelection::ClearConfigured => None,
         WebSearchCredentialSelection::UseEnv(env_name) => Some(format!("${{{}}}", env_name.trim())),
     };
 
-    match provider {
-        mvp::config::WEB_SEARCH_PROVIDER_BRAVE => {
-            config.tools.web_search.brave_api_key = next_value;
-        }
-        mvp::config::WEB_SEARCH_PROVIDER_TAVILY => {
-            config.tools.web_search.tavily_api_key = next_value;
-        }
-        mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY => {
-            config.tools.web_search.perplexity_api_key = next_value;
-        }
-        mvp::config::WEB_SEARCH_PROVIDER_EXA => {
-            config.tools.web_search.exa_api_key = next_value;
-        }
-        mvp::config::WEB_SEARCH_PROVIDER_JINA => {
-            config.tools.web_search.jina_api_key = next_value;
-        }
-        _ => {}
+    let updated = config
+        .tools
+        .web_search
+        .set_configured_api_key_for_provider(provider, next_value);
+
+    if !updated {
+        let message =
+            format!("unsupported web.search provider `{provider}`; credential update was skipped");
+        return Err(message);
     }
+
+    Ok(())
 }
 
 fn validate_selected_provider_credential_env(
@@ -3018,36 +3047,8 @@ fn non_interactive_preflight_warning_message(
         "onboard preflight failed: {detail}; rerun without --non-interactive to inspect and confirm them"
     )
 }
-fn render_configured_provider_credential_source_value(
-    provider: &mvp::config::ProviderConfig,
-) -> Option<String> {
-    let configured_oauth = provider.configured_oauth_access_token_env_override();
-    let rendered_oauth = provider_credential_policy::render_provider_credential_source_value(
-        configured_oauth.as_deref(),
-    );
-    if rendered_oauth.is_some() {
-        return rendered_oauth;
-    }
-
-    let configured_api_key = provider.configured_api_key_env_override();
-    provider_credential_policy::render_provider_credential_source_value(
-        configured_api_key.as_deref(),
-    )
-}
-
 pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
-    let provider = &config.provider;
-    if let Some(binding) =
-        provider_credential_policy::configured_provider_credential_env_binding(provider)
-    {
-        return binding.env_name;
-    }
-    if provider_credential_policy::provider_has_inline_credential(provider) {
-        return String::new();
-    }
-    provider_credential_policy::preferred_provider_credential_env_binding(provider)
-        .map(|binding| binding.env_name)
-        .unwrap_or_default()
+    provider_credential_policy::preferred_provider_credential_env_name(config)
 }
 
 pub fn collect_import_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<ImportSurface> {
@@ -5312,7 +5313,10 @@ fn render_api_key_env_selection_screen_lines_with_style(
         "- provider: {}",
         crate::provider_presentation::guided_provider_label(config.provider.kind)
     )];
-    if let Some(current_env) = render_configured_provider_credential_source_value(&config.provider)
+    if let Some(current_env) =
+        provider_credential_policy::render_configured_provider_credential_source_value(
+            &config.provider,
+        )
     {
         context_lines.push(format!("- current source: {current_env}"));
     }
@@ -5509,31 +5513,22 @@ fn render_personality_selection_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let options = [
-        (
-            mvp::prompt::PromptPersonality::CalmEngineering,
-            "calm engineering",
-            "rigorous, direct, and technically grounded",
-        ),
-        (
-            mvp::prompt::PromptPersonality::FriendlyCollab,
-            "friendly collab",
-            "warm, cooperative, and explanatory when helpful",
-        ),
-        (
-            mvp::prompt::PromptPersonality::AutonomousExecutor,
-            "autonomous executor",
-            "decisive, high-initiative, and execution-oriented",
-        ),
-    ]
-    .into_iter()
-    .map(|(personality, label, detail)| OnboardScreenOption {
-        key: prompt_personality_id(personality).to_owned(),
-        label: label.to_owned(),
-        detail_lines: vec![detail.to_owned()],
-        recommended: personality == default_personality,
-    })
-    .collect::<Vec<_>>();
+    let options = mvp::prompt::prompt_personality_catalog()
+        .iter()
+        .map(|descriptor| {
+            let key = descriptor.id.to_owned();
+            let label = descriptor.label.to_owned();
+            let detail = personality_selection_description(descriptor);
+            let recommended = descriptor.personality == default_personality;
+
+            OnboardScreenOption {
+                key,
+                label,
+                detail_lines: vec![detail],
+                recommended,
+            }
+        })
+        .collect::<Vec<_>>();
 
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
@@ -5580,6 +5575,18 @@ fn render_personality_selection_header_lines(
         true,
         true,
     )
+}
+
+fn personality_selection_description(
+    descriptor: &mvp::prompt::PromptPersonalityDescriptor,
+) -> String {
+    let summary = descriptor.selection_summary;
+
+    if descriptor.experimental {
+        return format!("experimental · {summary}");
+    }
+
+    summary.to_owned()
 }
 
 pub fn render_prompt_addendum_selection_screen_lines(
@@ -5855,7 +5862,9 @@ pub(crate) fn summarize_provider_credential(
             value: "inline oauth token".to_owned(),
         });
     }
-    if let Some(configured_env) = render_configured_provider_credential_source_value(provider) {
+    if let Some(configured_env) =
+        provider_credential_policy::render_configured_provider_credential_source_value(provider)
+    {
         return Some(OnboardingCredentialSummary {
             label: "credential source",
             value: configured_env,
@@ -6130,18 +6139,7 @@ pub fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind> {
 }
 
 pub fn parse_prompt_personality(raw: &str) -> Option<mvp::prompt::PromptPersonality> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "calm_engineering" | "engineering" | "calm" => {
-            Some(mvp::prompt::PromptPersonality::CalmEngineering)
-        }
-        "friendly_collab" | "friendly" | "collab" => {
-            Some(mvp::prompt::PromptPersonality::FriendlyCollab)
-        }
-        "autonomous_executor" | "autonomous" | "executor" => {
-            Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
-        }
-        _ => None,
-    }
+    mvp::prompt::parse_prompt_personality(raw)
 }
 
 pub fn parse_memory_profile(raw: &str) -> Option<mvp::config::MemoryProfile> {
@@ -6170,11 +6168,7 @@ pub fn provider_kind_display_name(kind: mvp::config::ProviderKind) -> &'static s
 }
 
 pub fn prompt_personality_id(personality: mvp::prompt::PromptPersonality) -> &'static str {
-    match personality {
-        mvp::prompt::PromptPersonality::CalmEngineering => "calm_engineering",
-        mvp::prompt::PromptPersonality::FriendlyCollab => "friendly_collab",
-        mvp::prompt::PromptPersonality::AutonomousExecutor => "autonomous_executor",
-    }
+    personality.id()
 }
 
 pub fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static str {
@@ -6193,8 +6187,8 @@ pub fn supported_provider_list() -> String {
         .join(", ")
 }
 
-pub fn supported_personality_list() -> &'static str {
-    "calm_engineering, friendly_collab, autonomous_executor"
+pub fn supported_personality_list() -> String {
+    mvp::prompt::supported_prompt_personality_list()
 }
 
 pub fn supported_memory_profile_list() -> &'static str {
@@ -7571,7 +7565,8 @@ mod tests {
             &mut config,
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
             WebSearchCredentialSelection::UseEnv("TEAM_TAVILY_KEY".to_owned()),
-        );
+        )
+        .expect("apply tavily web search credential");
 
         assert_eq!(
             config.tools.web_search.tavily_api_key.as_deref(),
@@ -7580,11 +7575,50 @@ mod tests {
     }
 
     #[test]
+    fn apply_selected_web_search_credential_updates_firecrawl_field() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let provider = mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL;
+        let credential_env = "TEAM_FIRECRAWL_KEY".to_owned();
+        let selection = WebSearchCredentialSelection::UseEnv(credential_env);
+
+        apply_selected_web_search_credential(&mut config, provider, selection)
+            .expect("apply firecrawl web search credential");
+
+        let configured_credential = config.tools.web_search.firecrawl_api_key.as_deref();
+        assert_eq!(configured_credential, Some("${TEAM_FIRECRAWL_KEY}"));
+    }
+
+    #[test]
+    fn apply_selected_web_search_credential_rejects_unknown_provider() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let error = apply_selected_web_search_credential(
+            &mut config,
+            "unknown-provider",
+            WebSearchCredentialSelection::UseEnv("TEAM_UNKNOWN_KEY".to_owned()),
+        )
+        .expect_err("reject unsupported web search provider");
+
+        assert!(error.contains("unsupported web.search provider"));
+        assert!(error.contains("unknown-provider"));
+    }
+
+    fn clear_web_search_credential_envs(env: &mut ScopedEnv) {
+        for descriptor in mvp::config::web_search_provider_descriptors() {
+            if let Some(default_env) = descriptor.default_api_key_env {
+                env.remove(default_env);
+            }
+            for env_name in descriptor.api_key_env_names {
+                env.remove(*env_name);
+            }
+        }
+    }
+    #[test]
     fn recommend_web_search_provider_from_available_credentials_prefers_unique_ready_provider() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("PERPLEXITY_API_KEY", "perplexity-test-token");
 
         let recommendation = recommend_web_search_provider_from_available_credentials(&config)
@@ -7611,6 +7645,7 @@ mod tests {
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
         env.set("PERPLEXITY_API_KEY", "perplexity-test-token");
 
@@ -7664,6 +7699,7 @@ mod tests {
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
 
         let mut ui = TestOnboardUi::with_inputs([""]);
@@ -7776,6 +7812,8 @@ mod tests {
             skip_model_probe: false,
         };
         let config = mvp::config::LoongClawConfig::default();
+        let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         let recommendation = WebSearchProviderRecommendation {
             provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
             reason: "domestic locale or timezone was detected".to_owned(),
@@ -9177,8 +9215,8 @@ mod tests {
     fn render_onboard_option_lines_align_wrapped_labels_with_option_prefix() {
         let lines = render_onboard_option_lines(
             &[OnboardScreenOption {
-                key: "friendly_collab".to_owned(),
-                label: "friendly collab keeps longer wrapped labels aligned".to_owned(),
+                key: "classicist".to_owned(),
+                label: "classicist keeps longer wrapped labels aligned".to_owned(),
                 detail_lines: Vec::new(),
                 recommended: false,
             }],
@@ -9191,11 +9229,7 @@ mod tests {
 
         assert!(
             continuation.starts_with(
-                &" ".repeat(
-                    render_onboard_option_prefix("friendly_collab")
-                        .chars()
-                        .count()
-                )
+                &" ".repeat(render_onboard_option_prefix("classicist").chars().count())
             ),
             "wrapped option labels should continue under the label text instead of snapping back to a fixed indent: {lines:#?}"
         );
@@ -9359,17 +9393,17 @@ mod tests {
 
     #[test]
     fn test_onboard_ui_select_one_accepts_slug_input() {
-        let mut ui = TestOnboardUi::with_inputs(["friendly_collab"]);
+        let mut ui = TestOnboardUi::with_inputs(["hermit"]);
         let options = vec![
             SelectOption {
-                label: "calm engineering".to_owned(),
-                slug: "calm_engineering".to_owned(),
+                label: "classicist".to_owned(),
+                slug: "classicist".to_owned(),
                 description: String::new(),
                 recommended: true,
             },
             SelectOption {
-                label: "friendly collab".to_owned(),
-                slug: "friendly_collab".to_owned(),
+                label: "hermit".to_owned(),
+                slug: "hermit".to_owned(),
                 description: String::new(),
                 recommended: false,
             },
@@ -9383,6 +9417,36 @@ mod tests {
                 SelectInteractionMode::List,
             )
             .expect("test ui should stay aligned with shared slug-selection behavior");
+
+        assert_eq!(index, 1);
+    }
+
+    #[test]
+    fn test_onboard_ui_select_one_accepts_legacy_personality_alias_input() {
+        let mut ui = TestOnboardUi::with_inputs(["friendly_collab"]);
+        let options = vec![
+            SelectOption {
+                label: "classicist".to_owned(),
+                slug: "classicist".to_owned(),
+                description: String::new(),
+                recommended: true,
+            },
+            SelectOption {
+                label: "hermit".to_owned(),
+                slug: "hermit".to_owned(),
+                description: String::new(),
+                recommended: false,
+            },
+        ];
+
+        let index = ui
+            .select_one(
+                "Personality",
+                &options,
+                Some(0),
+                SelectInteractionMode::List,
+            )
+            .expect("legacy personality aliases should still resolve in selector mode");
 
         assert_eq!(index, 1);
     }

@@ -3,14 +3,19 @@ import { ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Panel } from "../../../components/surfaces/Panel";
 import { useWebConnection } from "../../../hooks/useWebConnection";
+import { resolveTokenHintEnv, resolveTokenHintPath } from "../../../lib/auth/tokenHint";
 import { useOnboardingFlow } from "../hooks/useOnboardingFlow";
+import { onboardingApi } from "../api";
 import {
   MEMORY_PROFILE_OPTIONS,
   PERSONALITY_OPTIONS,
-  PROVIDER_KIND_SUGGESTIONS,
   usePreferencesForm,
   useProviderConfigForm,
-} from "../providerConfig";
+} from "../provider/providerConfig";
+import {
+  buildProviderKindOptions,
+  type ProviderCatalogItem,
+} from "../provider/providerCatalog";
 import { ChoiceField } from "../../../components/inputs/ChoiceField";
 
 function readStageCopy(
@@ -80,15 +85,51 @@ export function OnboardingStatusPanel() {
     acknowledgeOnboarding,
     autoPairingInProgress,
     authMode,
+    canAccessProtectedApi,
   } = connection;
+
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogItem[]>([]);
+  const [providerCatalogLoadFailed, setProviderCatalogLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!canAccessProtectedApi) {
+      setProviderCatalog([]);
+      setProviderCatalogLoadFailed(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void onboardingApi
+      .loadProviderCatalog()
+      .then((items) => {
+        if (!cancelled) {
+          setProviderCatalog(items);
+          setProviderCatalogLoadFailed(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProviderCatalog([]);
+          setProviderCatalogLoadFailed(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canAccessProtectedApi]);
 
   const providerForm = useProviderConfigForm({
     kind: onboardingStatus?.activeProvider ?? "",
     model: onboardingStatus?.activeModel ?? "",
-    baseUrlOrEndpoint:
-      onboardingStatus?.providerEndpoint || onboardingStatus?.providerBaseUrl || "",
+    baseUrlOrEndpoint: onboardingStatus?.providerEndpointExplicit
+      ? onboardingStatus?.providerEndpoint || ""
+      : onboardingStatus?.providerBaseUrl || "",
     apiKeyConfigured: onboardingStatus?.apiKeyConfigured ?? false,
-  });
+  }, providerCatalog);
 
   const preferencesForm = usePreferencesForm({
     personality: onboardingStatus?.personality || "calm_engineering",
@@ -147,25 +188,12 @@ export function OnboardingStatusPanel() {
     ].includes(
       onboardingStatus?.blockingStage ?? "",
     );
-  const providerKindOptions = PROVIDER_KIND_SUGGESTIONS.includes(
-    providerForm.kind as (typeof PROVIDER_KIND_SUGGESTIONS)[number],
-  )
-    ? PROVIDER_KIND_SUGGESTIONS.map((item) => ({
-      value: item,
-      label: item,
-    }))
-    : providerForm.kind
-      ? [
-        { value: providerForm.kind, label: providerForm.kind },
-        ...PROVIDER_KIND_SUGGESTIONS.map((item) => ({
-          value: item,
-          label: item,
-        })),
-      ]
-      : PROVIDER_KIND_SUGGESTIONS.map((item) => ({
-        value: item,
-        label: item,
-      }));
+  const providerKindOptions = buildProviderKindOptions(
+    providerCatalog,
+    providerForm.kind,
+  );
+  const resolvedTokenPath = resolveTokenHintPath(tokenPath);
+  const resolvedTokenEnv = resolveTokenHintEnv(tokenEnv);
   const personalityOptions = PERSONALITY_OPTIONS.map((item) => ({
     value: item,
     label:
@@ -198,7 +226,7 @@ export function OnboardingStatusPanel() {
         <h1 className="hero-title">{stageCopy.title}</h1>
       </div>
 
-      <Panel title={t("onboarding.panelTitle")}>
+      <Panel className="onboarding-status-panel" title={t("onboarding.panelTitle")}>
         <div className="dashboard-kv-grid onboarding-summary-grid">
           <div className="dashboard-kv-card">
             <span>{t("onboarding.summary.runtime")}</span>
@@ -253,7 +281,10 @@ export function OnboardingStatusPanel() {
           <form className="settings-form onboarding-form" onSubmit={handleSubmitToken}>
             {autoPairingInProgress ? (
               <p className="settings-note onboarding-validation-note">
-                {t("onboarding.tokenPairingAutoInProgress")}
+                {t("onboarding.tokenPairingAutoInProgress", {
+                  tokenPath: resolvedTokenPath,
+                  tokenEnv: resolvedTokenEnv,
+                })}
               </p>
             ) : null}
 
@@ -275,12 +306,12 @@ export function OnboardingStatusPanel() {
               <p className="settings-helper">
                 {status === "unauthorized"
                   ? t("auth.invalidBody", {
-                    tokenPath: tokenPath ?? "",
-                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                    tokenPath: resolvedTokenPath,
+                    tokenEnv: resolvedTokenEnv,
                   })
                   : t("auth.bannerBody", {
-                    tokenPath: tokenPath ?? "",
-                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                    tokenPath: resolvedTokenPath,
+                    tokenEnv: resolvedTokenEnv,
                   })}
               </p>
             </div>
@@ -319,6 +350,11 @@ export function OnboardingStatusPanel() {
               options={providerKindOptions}
               onSelect={providerForm.setKindWithRouteReset}
             />
+            {providerCatalogLoadFailed ? (
+              <p className="settings-note dashboard-error">
+                {t("onboarding.form.catalogLoadFailed")}
+              </p>
+            ) : null}
 
             <div className="settings-field">
               <label className="settings-label" htmlFor="onboarding-provider-model">
@@ -505,4 +541,3 @@ export function OnboardingStatusPanel() {
     </div>
   );
 }
-

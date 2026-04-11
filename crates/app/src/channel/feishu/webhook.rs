@@ -25,7 +25,7 @@ use crate::KernelContext;
 use crate::channel::feishu::api::{FeishuClient, resources::cards};
 use crate::channel::{
     ChannelInboundMessage, ChannelOutboundTarget, ChannelTurnFeedbackPolicy,
-    process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker,
+    process_inbound_with_provider, runtime::state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
 use crate::crypto::timing_safe_eq;
@@ -936,7 +936,7 @@ fn read_header_required<'a>(
 mod tests {
     use super::*;
     use crate::channel::ChannelPlatform;
-    use crate::channel::runtime_state::start_channel_operation_runtime_tracker_for_test;
+    use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
     use crate::config::{LoongClawConfig, ProviderConfig};
     use crate::context::{DEFAULT_TOKEN_TTL_S, KernelContext, bootstrap_test_kernel_context};
     use crate::tools::runtime_config::ToolRuntimeConfig;

@@ -8,11 +8,11 @@ use crate::{
 
 use super::{
     ChannelOutboundTargetKind,
+    core::webhook_auth::build_webhook_auth_header_from_parts,
     http::{
         ChannelOutboundHttpPolicy, build_outbound_http_client, response_body_detail,
         validate_outbound_http_target,
     },
-    webhook_auth::build_webhook_auth_header_from_parts,
 };
 
 const WEBHOOK_JSON_CONTENT_TYPE: &str = "application/json";

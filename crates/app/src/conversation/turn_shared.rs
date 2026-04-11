@@ -3,10 +3,14 @@ use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
+use super::tool_input_contract::{
+    render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
+};
 use super::tool_result_compaction::compact_tool_search_payload_summary_str;
 use super::turn_engine::{
     ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolBatchExecutionIntentStatus,
-    ToolBatchExecutionTrace, ToolIntent, ToolResultPayloadSemantics, TurnResult,
+    ToolBatchExecutionTrace, ToolIntent, ToolResultEnvelope, ToolResultPayloadSemantics,
+    TurnFailure, TurnResult,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -21,6 +25,7 @@ pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the 
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
+pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. Otherwise, provide the best possible answer with the currently available evidence.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
@@ -114,6 +119,7 @@ pub fn tool_loop_circuit_breaker_reply(
 pub enum ToolDrivenFollowupPayload {
     ToolResult { text: String },
     ToolFailure { reason: String },
+    DiscoveryRecovery { reason: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -121,6 +127,146 @@ pub enum ToolDrivenFollowupPayload {
 pub enum ToolDrivenFollowupKind {
     ToolResult,
     ToolFailure,
+    DiscoveryRecovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolDrivenFollowupLabel {
+    ToolResult,
+    ToolFailure,
+    DiscoveryRecovery,
+}
+
+impl ToolDrivenFollowupLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolResult => "tool_result",
+            Self::ToolFailure => "tool_failure",
+            Self::DiscoveryRecovery => "tool_recovery",
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_marker(marker: &str) -> Option<Self> {
+        match marker {
+            "tool_result" => Some(Self::ToolResult),
+            "tool_failure" => Some(Self::ToolFailure),
+            "tool_recovery" => Some(Self::DiscoveryRecovery),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolDrivenFollowupTextRef<'a> {
+    label: ToolDrivenFollowupLabel,
+    text: &'a str,
+}
+
+impl<'a> ToolDrivenFollowupTextRef<'a> {
+    pub fn new(label: ToolDrivenFollowupLabel, text: &'a str) -> Self {
+        Self { label, text }
+    }
+
+    pub fn label(self) -> ToolDrivenFollowupLabel {
+        self.label
+    }
+
+    pub fn text(self) -> &'a str {
+        self.text
+    }
+
+    pub fn render_assistant_content(self) -> String {
+        let marker = self.label.as_str();
+        format!("[{marker}]\n{}", self.text)
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDrivenFollowupMessageOwned {
+    label: ToolDrivenFollowupLabel,
+    body: String,
+}
+
+#[cfg(test)]
+impl ToolDrivenFollowupMessageOwned {
+    pub fn parse_assistant_content(content: &str) -> Option<Self> {
+        let (marker_line, body) = content.split_once('\n')?;
+        let marker = marker_line.trim().strip_prefix('[')?.strip_suffix(']')?;
+        let label = ToolDrivenFollowupLabel::from_marker(marker)?;
+        Some(Self {
+            label,
+            body: body.to_owned(),
+        })
+    }
+
+    pub fn label(&self) -> ToolDrivenFollowupLabel {
+        self.label
+    }
+
+    pub fn body(&self) -> &str {
+        self.body.as_str()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolResultLine {
+    status_marker: String,
+    envelope: ToolResultEnvelope,
+}
+
+impl ToolResultLine {
+    pub fn new(status_marker: impl Into<String>, envelope: ToolResultEnvelope) -> Self {
+        Self {
+            status_marker: status_marker.into(),
+            envelope,
+        }
+    }
+
+    pub fn parse(line: &str) -> Option<Self> {
+        let trimmed = line.trim();
+        let (status_prefix, payload) = trimmed.split_once(' ')?;
+        let status_marker = status_prefix.strip_prefix('[')?.strip_suffix(']')?.trim();
+        if status_marker.is_empty() {
+            return None;
+        }
+        let envelope = serde_json::from_str::<ToolResultEnvelope>(payload).ok()?;
+        Some(Self::new(status_marker, envelope))
+    }
+
+    pub fn render(&self) -> Option<String> {
+        let payload = serde_json::to_string(&self.envelope).ok()?;
+        Some(format!("[{}] {payload}", self.status_marker))
+    }
+
+    pub fn tool_name(&self) -> &str {
+        self.envelope.tool.as_str()
+    }
+
+    pub fn payload_truncated(&self) -> bool {
+        self.envelope.payload_truncated
+    }
+
+    pub fn set_payload_truncated(&mut self, truncated: bool) {
+        self.envelope.payload_truncated = truncated;
+    }
+
+    pub fn payload_summary_str(&self) -> &str {
+        self.envelope.payload_summary.as_str()
+    }
+
+    pub fn payload_summary_json(&self) -> Option<Value> {
+        serde_json::from_str(self.envelope.payload_summary.as_str()).ok()
+    }
+
+    pub fn replace_payload_summary_str(&mut self, payload_summary: String) {
+        self.envelope.payload_summary = payload_summary;
+    }
+
+    pub fn envelope(&self) -> &ToolResultEnvelope {
+        &self.envelope
+    }
 }
 
 impl ToolDrivenFollowupPayload {
@@ -128,15 +274,34 @@ impl ToolDrivenFollowupPayload {
         match self {
             Self::ToolResult { .. } => ToolDrivenFollowupKind::ToolResult,
             Self::ToolFailure { .. } => ToolDrivenFollowupKind::ToolFailure,
+            Self::DiscoveryRecovery { .. } => ToolDrivenFollowupKind::DiscoveryRecovery,
         }
     }
 
-    pub fn message_context(&self) -> (&'static str, &str) {
+    pub fn label(&self) -> ToolDrivenFollowupLabel {
         match self {
-            Self::ToolResult { text } => ("tool_result", text.as_str()),
-            Self::ToolFailure { reason } => ("tool_failure", reason.as_str()),
+            Self::ToolResult { .. } => ToolDrivenFollowupLabel::ToolResult,
+            Self::ToolFailure { .. } => ToolDrivenFollowupLabel::ToolFailure,
+            Self::DiscoveryRecovery { .. } => ToolDrivenFollowupLabel::DiscoveryRecovery,
         }
     }
+
+    pub fn message_context(&self) -> ToolDrivenFollowupTextRef<'_> {
+        let label = self.label();
+        match self {
+            Self::ToolResult { text } => ToolDrivenFollowupTextRef::new(label, text.as_str()),
+            Self::ToolFailure { reason } => ToolDrivenFollowupTextRef::new(label, reason.as_str()),
+            Self::DiscoveryRecovery { reason } => {
+                ToolDrivenFollowupTextRef::new(label, reason.as_str())
+            }
+        }
+    }
+}
+
+pub fn turn_failure_supports_discovery_recovery(failure: &TurnFailure) -> bool {
+    let is_tool_not_found = failure.code == "tool_not_found";
+    let has_recovery_hint = failure.supports_discovery_recovery;
+    is_tool_not_found && has_recovery_hint
 }
 
 pub fn tool_driven_followup_payload(
@@ -157,6 +322,11 @@ pub fn tool_driven_followup_payload(
             })
         }
         TurnResult::NeedsApproval(_) => None,
+        TurnResult::ToolDenied(failure) if turn_failure_supports_discovery_recovery(failure) => {
+            Some(ToolDrivenFollowupPayload::DiscoveryRecovery {
+                reason: failure.reason.clone(),
+            })
+        }
         TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
             Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: failure.reason.clone(),
@@ -742,7 +912,9 @@ impl<'a> ToolDrivenReplyKernel<'a> {
             };
         };
         let raw_reply = self.raw_reply().unwrap_or_else(|| fallback_reply.clone());
-        if raw_tool_output_requested {
+        let recovery_requires_followup =
+            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. });
+        if raw_tool_output_requested && !recovery_requires_followup {
             ToolDrivenReplyBaseDecision::FinalizeDirect { reply: raw_reply }
         } else {
             ToolDrivenReplyBaseDecision::RequireFollowup { raw_reply, payload }
@@ -1121,6 +1293,9 @@ fn parse_tool_result_envelope(line: &str) -> Option<Value> {
     if trimmed.is_empty() {
         return None;
     }
+    if let Some(tool_result_line) = ToolResultLine::parse(trimmed) {
+        return serde_json::to_value(tool_result_line.envelope()).ok();
+    }
     let candidate = if trimmed.starts_with('[') {
         trimmed
             .split_once(' ')
@@ -1176,6 +1351,22 @@ pub fn build_tool_followup_user_prompt_with_context(
     }
     if let Some(extra_context) = extra_context {
         sections.push(extra_context.to_owned());
+    }
+    sections.push(format!("Original request:\n{user_input}"));
+    sections.join("\n\n")
+}
+
+pub fn build_discovery_recovery_followup_user_prompt(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    recovery_reason: &str,
+) -> String {
+    let mut sections = vec![DISCOVERY_RECOVERY_FOLLOWUP_PROMPT.to_owned()];
+    sections.push(format!("Recovery reason:\n{recovery_reason}"));
+    if let Some(reason) = loop_warning_reason {
+        sections.push(format!(
+            "Loop warning:\n{reason}\nAvoid repeating identical unavailable tool calls. Search for the missing capability or change strategy."
+        ));
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
@@ -1326,35 +1517,23 @@ fn envelope_has_payload_semantics(
 }
 
 fn reduce_tool_result_line_for_model(line: &str) -> String {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
+    let Some(mut tool_result_line) = ToolResultLine::parse(line) else {
+        return line.to_owned();
+    };
+    let tool = tool_result_line.tool_name();
+    let payload_truncated = tool_result_line.payload_truncated();
+    let payload_summary = tool_result_line.payload_summary_str();
+    if payload_summary.is_empty() {
         return line.to_owned();
     }
-    let Some((status_prefix, payload)) = trimmed.split_once(' ') else {
-        return line.to_owned();
-    };
-    if !(status_prefix.starts_with('[') && status_prefix.ends_with(']')) {
-        return line.to_owned();
-    }
-    let Ok(mut envelope) = serde_json::from_str::<Value>(payload) else {
-        return line.to_owned();
-    };
-    let payload_truncated = envelope
-        .get("payload_truncated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let Some(payload_summary) = envelope.get("payload_summary").and_then(Value::as_str) else {
-        return line.to_owned();
-    };
-
-    let reduction = match envelope.get("tool").and_then(Value::as_str) {
-        Some("file.read") => {
+    let reduction = match tool {
+        "file.read" => {
             let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
                 return line.to_owned();
             };
             reduce_file_read_payload_summary(&payload_json).map(|summary| (summary, true))
         }
-        Some("shell.exec") => {
+        "shell.exec" => {
             let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
                 return line.to_owned();
             };
@@ -1368,18 +1547,11 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
     let Some((reduced_summary, mark_truncated)) = reduction else {
         return line.to_owned();
     };
-
-    let Some(envelope_object) = envelope.as_object_mut() else {
-        return line.to_owned();
-    };
-    envelope_object.insert("payload_summary".to_owned(), Value::String(reduced_summary));
     if mark_truncated {
-        envelope_object.insert("payload_truncated".to_owned(), Value::Bool(true));
+        tool_result_line.set_payload_truncated(true);
     }
-    let Ok(encoded) = serde_json::to_string(&envelope) else {
-        return line.to_owned();
-    };
-    format!("{status_prefix} {encoded}")
+    tool_result_line.replace_payload_summary_str(reduced_summary);
+    tool_result_line.render().unwrap_or_else(|| line.to_owned())
 }
 
 fn reduce_file_read_payload_summary(payload: &Value) -> Option<String> {
@@ -1535,10 +1707,13 @@ where
         return messages;
     }
 
-    let bounded_result = payload_mapper("tool_result", tool_result_text);
+    let label = ToolDrivenFollowupLabel::ToolResult;
+    let bounded_result = payload_mapper(label.as_str(), tool_result_text);
+    let assistant_content =
+        ToolDrivenFollowupTextRef::new(label, bounded_result.as_str()).render_assistant_content();
     messages.push(serde_json::json!({
         "role": "assistant",
-        "content": format!("[tool_result]\n{bounded_result}"),
+        "content": assistant_content,
     }));
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
@@ -1599,15 +1774,18 @@ where
     }
     let repair_guidance =
         render_tool_failure_repair_guidance(tool_failure_reason, tool_request_summary);
-    let bounded_failure = payload_mapper("tool_failure", tool_failure_reason);
+    let label = ToolDrivenFollowupLabel::ToolFailure;
+    let bounded_failure = payload_mapper(label.as_str(), tool_failure_reason);
     let bounded_failure = if repair_guidance.is_some() {
         format!("tool input needs repair: {bounded_failure}")
     } else {
         bounded_failure
     };
+    let assistant_content =
+        ToolDrivenFollowupTextRef::new(label, bounded_failure.as_str()).render_assistant_content();
     messages.push(serde_json::json!({
         "role": "assistant",
-        "content": format!("[tool_failure]\n{bounded_failure}"),
+        "content": assistant_content,
     }));
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
@@ -1618,6 +1796,38 @@ where
             None,
             None,
             repair_guidance.as_deref(),
+        ),
+    }));
+    messages
+}
+
+pub fn build_discovery_recovery_followup_tail<F>(
+    assistant_preface: &str,
+    recovery_reason: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    mut payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    let mut messages = Vec::new();
+    append_followup_preface(&mut messages, assistant_preface);
+    let label = ToolDrivenFollowupLabel::DiscoveryRecovery;
+    let bounded_recovery = payload_mapper(label.as_str(), recovery_reason);
+    let assistant_content =
+        ToolDrivenFollowupTextRef::new(label, bounded_recovery.as_str()).render_assistant_content();
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": assistant_content,
+    }));
+    append_followup_warning(&mut messages, loop_warning_reason);
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": build_discovery_recovery_followup_user_prompt(
+            user_input,
+            loop_warning_reason,
+            bounded_recovery.as_str(),
         ),
     }));
     messages
@@ -1675,6 +1885,15 @@ where
                 payload_mapper,
             )
         }
+        ToolDrivenFollowupPayload::DiscoveryRecovery { reason } => {
+            build_discovery_recovery_followup_tail(
+                assistant_preface,
+                reason.as_str(),
+                user_input,
+                loop_warning_reason,
+                payload_mapper,
+            )
+        }
     }
 }
 
@@ -1685,54 +1904,119 @@ fn render_tool_failure_repair_guidance(
     let tool_request_summary = tool_request_summary?;
     let request_summary_json = serde_json::from_str::<Value>(tool_request_summary).ok()?;
     let tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
+    let request_summary_request = request_summary_json.get("request");
+    let reason_mentions_repairable_shape = tool_failure_reason.contains("tool input needs repair")
+        || tool_failure_reason.contains("payload must be an object")
+        || tool_failure_reason.contains("payload.");
+
+    if !reason_mentions_repairable_shape {
+        return None;
+    }
+
+    let shell_guidance = render_shell_failure_repair_guidance(
+        tool_name,
+        request_summary_request,
+        tool_failure_reason,
+    );
+
+    if shell_guidance.is_some() {
+        return shell_guidance;
+    }
+
+    let guidance_from_request =
+        render_tool_input_repair_guidance(tool_name, request_summary_request);
+
+    if guidance_from_request.is_some() {
+        return guidance_from_request;
+    }
+
+    render_tool_input_repair_guidance_from_reason(tool_name, tool_failure_reason)
+}
+
+fn render_shell_failure_repair_guidance(
+    tool_name: &str,
+    request_summary_request: Option<&Value>,
+    tool_failure_reason: &str,
+) -> Option<String> {
     if tool_name != "shell.exec" {
         return None;
     }
 
-    let request_object = request_summary_json.get("request")?.as_object()?;
+    let request_object = request_summary_request?.as_object()?;
     let command = request_object.get("command").and_then(Value::as_str)?;
     let has_path_separator = command.contains('/') || command.contains('\\');
     let mentions_payload_command = tool_failure_reason.contains("payload.command");
     let mentions_path_separator = tool_failure_reason.contains("path separators");
+    let should_render_guidance =
+        has_path_separator || mentions_payload_command || mentions_path_separator;
 
-    if !has_path_separator && !mentions_payload_command && !mentions_path_separator {
+    if !should_render_guidance {
         return None;
     }
 
-    let bare_command = command
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(command)
-        .to_ascii_lowercase();
+    let bare_command = suggested_shell_command_name(command);
     let guidance = format!(
         "Repair guidance for shell.exec:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{bare_command}`."
     );
     Some(guidance)
 }
 
+fn suggested_shell_command_name(command: &str) -> String {
+    let candidate = first_shell_command_segment(command).trim();
+    let candidate = if !candidate.contains('/') && !candidate.contains('\\') {
+        candidate.split_whitespace().next().unwrap_or(candidate)
+    } else {
+        candidate
+    };
+    candidate
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(candidate)
+        .to_ascii_lowercase()
+}
+
+fn first_shell_command_segment(command: &str) -> &str {
+    let trimmed = command.trim();
+    if let Some(rest) = trimmed.strip_prefix('"')
+        && let Some((quoted, _)) = rest.split_once('"')
+    {
+        return quoted;
+    }
+    if let Some(rest) = trimmed.strip_prefix('\'')
+        && let Some((quoted, _)) = rest.split_once('\'')
+    {
+        return quoted;
+    }
+    trimmed.split_whitespace().next().unwrap_or(trimmed)
+}
+
 pub fn build_tool_loop_guard_tail<F>(
     assistant_preface: &str,
     reason: &str,
     user_input: &str,
-    latest_tool_context: Option<(&str, &str)>,
+    latest_tool_context: Option<ToolDrivenFollowupTextRef<'_>>,
     mut payload_mapper: F,
 ) -> Vec<Value>
 where
-    F: FnMut(&str, &str) -> String,
+    F: FnMut(ToolDrivenFollowupLabel, &str) -> String,
 {
     let mut messages = Vec::new();
     let mut original_tool_result_text = None;
-    let mut rendered_tool_result_text = None;
+    let mut rendered_tool_result_text = Option::<String>::None;
     append_followup_preface(&mut messages, assistant_preface);
-    if let Some((label, text)) = latest_tool_context {
+    if let Some(latest_tool_context) = latest_tool_context {
+        let label = latest_tool_context.label();
+        let text = latest_tool_context.text();
         let bounded = payload_mapper(label, text);
-        if label == "tool_result" {
+        let assistant_content =
+            ToolDrivenFollowupTextRef::new(label, bounded.as_str()).render_assistant_content();
+        if label == ToolDrivenFollowupLabel::ToolResult {
             original_tool_result_text = Some(text);
-            rendered_tool_result_text = Some(bounded.clone());
+            rendered_tool_result_text = Some(bounded);
         }
         messages.push(serde_json::json!({
             "role": "assistant",
-            "content": format!("[{label}]\n{bounded}"),
+            "content": assistant_content,
         }));
     }
     messages.push(serde_json::json!({
@@ -1817,25 +2101,17 @@ fn build_tool_loop_guard_prompt(
 }
 
 fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let payload = trimmed.strip_prefix("[ok] ")?;
-    let envelope: Value = serde_json::from_str(payload).ok()?;
+    let tool_result_line = ToolResultLine::parse(line)?;
+    let envelope = serde_json::to_value(tool_result_line.envelope()).ok()?;
     let uses_external_skill_context = envelope_uses_external_skill_context(&envelope);
-    if !uses_external_skill_context {
+    let uses_legacy_carrier = tool_result_line.tool_name() == "external_skills.invoke";
+    if !uses_legacy_carrier && !uses_external_skill_context {
         return None;
     }
-    if envelope
-        .get("payload_truncated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if tool_result_line.payload_truncated() {
         return None;
     }
-    let payload_summary = envelope.get("payload_summary")?.as_str()?;
-    let payload_json: Value = serde_json::from_str(payload_summary).ok()?;
+    let payload_json = tool_result_line.payload_summary_json()?;
     let instructions = payload_json
         .get("instructions")
         .and_then(Value::as_str)
@@ -1876,16 +2152,16 @@ pub(crate) fn parse_tool_result_followup_for_test(messages: &[Value]) -> (Value,
         })
         .and_then(|message| message.get("content"))
         .and_then(Value::as_str)
+        .and_then(ToolDrivenFollowupMessageOwned::parse_assistant_content)
         .expect("assistant tool_result followup message should exist");
-    let line = assistant_tool_result
-        .lines()
-        .nth(1)
-        .expect("assistant tool_result should keep payload line");
-    let envelope: Value = serde_json::from_str(
-        line.strip_prefix("[ok] ")
-            .expect("tool result line should preserve status prefix"),
-    )
-    .expect("followup envelope should stay valid json");
+    assert_eq!(
+        assistant_tool_result.label(),
+        ToolDrivenFollowupLabel::ToolResult
+    );
+    let tool_result_line = ToolResultLine::parse(assistant_tool_result.body())
+        .expect("tool result line should preserve structured envelope");
+    let envelope = serde_json::to_value(tool_result_line.envelope())
+        .expect("tool result envelope should serialize");
     let summary: Value = serde_json::from_str(
         envelope["payload_summary"]
             .as_str()
@@ -2130,9 +2406,12 @@ mod tests {
         let payload = ToolDrivenFollowupPayload::ToolResult {
             text: "tool output".to_owned(),
         };
+        let message_context = payload.message_context();
 
         assert_eq!(payload.kind(), ToolDrivenFollowupKind::ToolResult);
-        assert_eq!(payload.message_context(), ("tool_result", "tool output"));
+        assert_eq!(message_context.label(), ToolDrivenFollowupLabel::ToolResult);
+        assert_eq!(message_context.label().as_str(), "tool_result");
+        assert_eq!(message_context.text(), "tool output");
     }
 
     #[test]
@@ -2154,9 +2433,34 @@ mod tests {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool failed".to_owned(),
         };
+        let message_context = payload.message_context();
 
         assert_eq!(payload.kind(), ToolDrivenFollowupKind::ToolFailure);
-        assert_eq!(payload.message_context(), ("tool_failure", "tool failed"));
+        assert_eq!(
+            message_context.label(),
+            ToolDrivenFollowupLabel::ToolFailure
+        );
+        assert_eq!(message_context.label().as_str(), "tool_failure");
+        assert_eq!(message_context.text(), "tool failed");
+    }
+
+    #[test]
+    fn tool_driven_followup_payload_reports_discovery_recovery_context() {
+        let payload = ToolDrivenFollowupPayload::DiscoveryRecovery {
+            reason: "tool_not_found: requested tool is not available".to_owned(),
+        };
+        let message_context = payload.message_context();
+
+        assert_eq!(payload.kind(), ToolDrivenFollowupKind::DiscoveryRecovery);
+        assert_eq!(
+            message_context.label(),
+            ToolDrivenFollowupLabel::DiscoveryRecovery
+        );
+        assert_eq!(message_context.label().as_str(), "tool_recovery");
+        assert_eq!(
+            message_context.text(),
+            "tool_not_found: requested tool is not available"
+        );
     }
 
     #[test]
@@ -2168,6 +2472,67 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ToolDrivenFollowupKind::ToolFailure).expect("serialize kind"),
             Value::String("tool_failure".to_owned())
+        );
+        assert_eq!(
+            serde_json::to_value(ToolDrivenFollowupKind::DiscoveryRecovery)
+                .expect("serialize kind"),
+            Value::String("discovery_recovery".to_owned())
+        );
+    }
+
+    #[test]
+    fn turn_failure_supports_discovery_recovery_requires_structured_metadata() {
+        let recovery_failure = TurnFailure::policy_denied_with_discovery_recovery(
+            "tool_not_found",
+            "tool_not_found: requested tool is not available If you need a non-core capability, call tool.search with a short natural-language description of the task.",
+        );
+        let plain_failure = TurnFailure::policy_denied(
+            "tool_not_found",
+            "tool_not_found: requested tool is not available",
+        );
+
+        assert!(turn_failure_supports_discovery_recovery(&recovery_failure));
+        assert!(!turn_failure_supports_discovery_recovery(&plain_failure));
+    }
+
+    #[test]
+    fn tool_result_line_roundtrip_preserves_envelope() {
+        let envelope = ToolResultEnvelope {
+            status: "ok".to_owned(),
+            tool: "file.read".to_owned(),
+            tool_call_id: "call-1".to_owned(),
+            payload_semantics: None,
+            payload_summary: json!({
+                "path": "README.md",
+                "content": "hello"
+            })
+            .to_string(),
+            payload_chars: 42,
+            payload_truncated: false,
+        };
+        let tool_result_line = ToolResultLine::new("ok", envelope.clone());
+        let rendered = tool_result_line.render().expect("render tool result line");
+        let reparsed = ToolResultLine::parse(rendered.as_str()).expect("parse tool result line");
+
+        assert_eq!(reparsed.envelope(), &envelope);
+        assert_eq!(reparsed.tool_name(), "file.read");
+        assert!(!reparsed.payload_truncated());
+    }
+
+    #[test]
+    fn tool_driven_followup_message_owned_parses_typed_assistant_marker() {
+        let message = ToolDrivenFollowupTextRef::new(
+            ToolDrivenFollowupLabel::DiscoveryRecovery,
+            "tool_not_found: requested tool is not available",
+        )
+        .render_assistant_content();
+        let parsed = ToolDrivenFollowupMessageOwned::parse_assistant_content(message.as_str())
+            .expect("parse assistant followup content");
+
+        assert_eq!(parsed.label(), ToolDrivenFollowupLabel::DiscoveryRecovery);
+        assert_eq!(
+            parsed.body(),
+            "tool_not_found: requested tool is not available"
         );
     }
 
@@ -2612,12 +2977,47 @@ mod tests {
     }
 
     #[test]
+    fn tool_driven_followup_tail_dispatches_discovery_recovery_payload() {
+        let payload = ToolDrivenFollowupPayload::DiscoveryRecovery {
+            reason: "tool_not_found: requested tool is not available If you still need a hidden capability, call tool.search.".to_owned(),
+        };
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            None,
+            "summarize note.md",
+            Some("warning"),
+            |_, _| "bounded-recovery".to_owned(),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_recovery]\nbounded-recovery")
+                    .unwrap_or(false)
+        }));
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains(DISCOVERY_RECOVERY_FOLLOWUP_PROMPT));
+        assert!(user_prompt.contains("Recovery reason:\nbounded-recovery"));
+        assert!(!user_prompt.contains("tool_not_found"));
+        assert!(user_prompt.contains("Loop warning:\nwarning"));
+    }
+
+    #[test]
     fn tool_loop_guard_tail_uses_payload_mapper_and_builds_guard_prompt() {
+        let latest_tool_context =
+            ToolDrivenFollowupTextRef::new(ToolDrivenFollowupLabel::ToolResult, "tool output");
         let tail = build_tool_loop_guard_tail(
             "preface",
             "stop",
             "summarize note.md",
-            Some(("tool_result", "tool output")),
+            Some(latest_tool_context),
             |_, _| "bounded-result".to_owned(),
         );
 
@@ -2656,12 +3056,123 @@ mod tests {
     }
 
     #[test]
+    fn tool_failure_followup_tail_strips_shell_arguments_from_repair_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"ls -la"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "list the current directory",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("The failed request used `ls -la`; retry with `ls`"));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_strips_quoted_shell_arguments_from_repair_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"\"ls -la\" "}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "list the current directory",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("The failed request used `\"ls -la\" `; retry with `ls`"));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_renders_required_field_guidance_for_file_read() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason:
+                "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
+                    .to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"file.read","request":{}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "read the file",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for file.read"));
+        assert!(user_prompt.contains("Add required field `payload.path` as a string."));
+        assert!(user_prompt.contains("Expected payload shape: path:string,max_bytes?:integer."));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_uses_failure_reason_when_shell_summary_redacts_args_type() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
+                .to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"echo"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "run echo safely",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("Set `payload.args` to an array value."));
+        assert!(user_prompt.contains(
+            "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
+        ));
+    }
+
+    #[test]
     fn tool_loop_guard_tail_includes_truncation_hint_when_payload_mapper_truncates_result() {
+        let latest_tool_context = ToolDrivenFollowupTextRef::new(
+            ToolDrivenFollowupLabel::ToolResult,
+            r#"[ok] {"payload_truncated":false}"#,
+        );
         let tail = build_tool_loop_guard_tail(
             "preface",
             "stop",
             "summarize note.md",
-            Some(("tool_result", r#"[ok] {"payload_truncated":false}"#)),
+            Some(latest_tool_context),
             |_, _| r#"[ok] {"payload_truncated":true}"#.to_owned(),
         );
 

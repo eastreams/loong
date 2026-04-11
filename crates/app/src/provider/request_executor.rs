@@ -15,6 +15,7 @@ use tokio::time::sleep;
 
 use crate::CliResult;
 use crate::acp::AcpTurnEventSink;
+use crate::config::ProviderAuthScheme;
 use crate::config::ProviderConfig;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
 
@@ -42,6 +43,7 @@ pub(super) struct ModelRequestRuntime<'a> {
     pub(super) capability: ProviderCapabilityContract,
     pub(super) auto_model_mode: bool,
     pub(super) auth_profile: &'a ProviderAuthProfile,
+    pub(super) request_auth_scheme: ProviderAuthScheme,
     pub(super) endpoint: &'a str,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a policy::ProviderRequestPolicy,
@@ -56,6 +58,7 @@ pub(super) struct StreamingModelRequestRuntime<'a> {
     pub(super) capability: ProviderCapabilityContract,
     pub(super) auto_model_mode: bool,
     pub(super) auth_profile: &'a ProviderAuthProfile,
+    pub(super) request_auth_scheme: ProviderAuthScheme,
     pub(super) endpoint: &'a str,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a policy::ProviderRequestPolicy,
@@ -216,7 +219,12 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
+        transport::apply_auth_profile_headers(
+            &mut headers,
+            Some(runtime.auth_profile),
+            runtime.request_auth_scheme,
+        )
+        .map_err(
             |error| {
                 build_model_request_error(
                     format!(
@@ -523,25 +531,28 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
-            |error| {
-                build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                        model = runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                )
-            },
-        )?;
+        transport::apply_auth_profile_headers(
+            &mut headers,
+            Some(runtime.auth_profile),
+            runtime.request_auth_scheme,
+        )
+        .map_err(|error| {
+            build_model_request_error(
+                format!(
+                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                    model = runtime.model,
+                    max_attempts = runtime.request_policy.max_attempts
+                ),
+                false,
+                ProviderFailoverReason::TransportFailure,
+                ProviderFailoverStage::TransportFailure,
+                runtime.model,
+                attempt,
+                runtime.request_policy.max_attempts,
+                None,
+                None,
+            )
+        })?;
         let req = runtime
             .client
             .post(request_endpoint.as_str())
@@ -820,7 +831,12 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(&mut headers, Some(runtime.auth_profile)).map_err(
+        transport::apply_auth_profile_headers(
+            &mut headers,
+            Some(runtime.auth_profile),
+            runtime.request_auth_scheme,
+        )
+        .map_err(
             |error| {
                 build_model_request_error(
                     format!(

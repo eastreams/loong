@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type { TFunction } from "i18next";
 import { useWebConnection } from "../../../hooks/useWebConnection";
 import { ApiRequestError } from "../../../lib/api/client";
+import { resolveTokenHintEnv, resolveTokenHintPath } from "../../../lib/auth/tokenHint";
 import {
   chatApi,
   type ChatMessage,
@@ -163,8 +164,8 @@ export function useChatSessions(t: TFunction) {
           ? authMode === "same_origin_session"
             ? t("auth.sessionInvalidBody")
             : t("auth.invalidBody", {
-                tokenPath: tokenPath ?? "",
-                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                tokenPath: resolveTokenHintPath(tokenPath),
+                tokenEnv: resolveTokenHintEnv(tokenEnv),
               })
           : t("auth.requiredBody"),
       );
@@ -194,8 +195,8 @@ export function useChatSessions(t: TFunction) {
               authMode === "same_origin_session"
                 ? t("auth.sessionInvalidBody")
                 : t("auth.invalidBody", {
-                    tokenPath: tokenPath ?? "",
-                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                    tokenPath: resolveTokenHintPath(tokenPath),
+                    tokenEnv: resolveTokenHintEnv(tokenEnv),
                   }),
             );
           } else {

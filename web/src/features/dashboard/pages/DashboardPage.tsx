@@ -1,4 +1,5 @@
-﻿import { useTranslation } from "react-i18next";
+﻿import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ChoiceField } from "../../../components/inputs/ChoiceField";
 import { Panel } from "../../../components/surfaces/Panel";
@@ -7,14 +8,20 @@ import { useDashboardData } from "../hooks/useDashboardData";
 import {
   MEMORY_PROFILE_OPTIONS,
   PERSONALITY_OPTIONS,
+  normalizePersonalityForUi,
   usePreferencesForm,
   useProviderConfigForm,
-} from "../../onboarding/providerConfig";
+} from "../../onboarding/provider/providerConfig";
 import { DebugConsolePanel } from "../components/DebugConsolePanel";
-import type {
-  DashboardConnectivity,
-  DashboardToolItem,
-  DashboardTools,
+import {
+  buildProviderKindOptions,
+  type ProviderCatalogItem,
+} from "../../onboarding/provider/providerCatalog";
+import {
+  dashboardApi,
+  type DashboardConnectivity,
+  type DashboardToolItem,
+  type DashboardTools,
 } from "../api";
 
 type SettingsModalPhase = "pending" | "success" | "error";
@@ -99,7 +106,7 @@ function formatPersonality(
     return t("dashboard.values.notSet");
   }
 
-  switch (personality) {
+  switch (normalizePersonalityForUi(personality)) {
     case "calm_engineering":
       return t("dashboard.values.personalityCalmEngineering");
     case "friendly_collab":
@@ -242,6 +249,40 @@ function buildConnectivityCopy(
 export default function DashboardPage() {
   const { t } = useTranslation();
   const connection = useWebConnection();
+  const { canAccessProtectedApi } = connection;
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogItem[]>([]);
+  const [providerCatalogLoadFailed, setProviderCatalogLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!canAccessProtectedApi) {
+      setProviderCatalog([]);
+      setProviderCatalogLoadFailed(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void dashboardApi
+      .loadProviderCatalog()
+      .then((items) => {
+        if (!cancelled) {
+          setProviderCatalog(items);
+          setProviderCatalogLoadFailed(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProviderCatalog([]);
+          setProviderCatalogLoadFailed(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canAccessProtectedApi]);
 
   // These forms depend on initial data but manage their own state
   const providerForm = useProviderConfigForm({
@@ -249,7 +290,7 @@ export default function DashboardPage() {
     model: "",
     baseUrlOrEndpoint: "",
     apiKeyConfigured: false,
-  });
+  }, providerCatalog);
 
   const preferencesForm = usePreferencesForm({
     personality: "calm_engineering",
@@ -302,6 +343,10 @@ export default function DashboardPage() {
 
 
   const toolItems: DashboardToolItem[] = tools?.items ?? [];
+  const providerKindOptions = buildProviderKindOptions(
+    providerCatalog,
+    providerForm.kind,
+  );
   const debugConsoleBlocks = debugConsole?.blocks ?? [
     {
       id: "loading",
@@ -537,6 +582,7 @@ export default function DashboardPage() {
 
                 <section className="dashboard-settings">
                   <Panel
+                    className="dashboard-settings-panel"
                     title={t("dashboard.settings.title")}
                   >
 
@@ -545,12 +591,14 @@ export default function DashboardPage() {
                         id="dashboard-provider-kind"
                         label={t("dashboard.settings.activeProvider")}
                         value={providerForm.kind}
-                        options={providers.map((provider) => ({
-                          value: provider.id,
-                          label: provider.label,
-                        }))}
+                        options={providerKindOptions}
                         onSelect={(val) => providerForm.setKindWithRouteReset(val)}
                       />
+                      {providerCatalogLoadFailed ? (
+                        <p className="settings-note dashboard-error">
+                          {t("dashboard.settings.catalogLoadFailed")}
+                        </p>
+                      ) : null}
 
                       <label className="settings-field">
                         <span className="settings-label">{t("dashboard.settings.model")}</span>

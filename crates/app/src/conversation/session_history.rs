@@ -14,10 +14,10 @@ use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::analytics::{
-    DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary, SafeLaneEventSummary,
-    TurnCheckpointEventSummary, summarize_discovery_first_events,
-    summarize_fast_lane_tool_batch_events, summarize_safe_lane_events,
-    summarize_turn_checkpoint_history,
+    DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary, PromptFrameEventSummary,
+    SafeLaneEventSummary, TurnCheckpointEventSummary, summarize_discovery_first_events,
+    summarize_fast_lane_tool_batch_events, summarize_prompt_frame_events,
+    summarize_safe_lane_events, summarize_turn_checkpoint_history,
 };
 use super::runtime_binding::ConversationRuntimeBinding;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,6 +198,27 @@ pub async fn load_fast_lane_tool_batch_event_summary(
     {
         let _ = (session_id, limit, binding);
         Err("fast-lane summary unavailable: memory-sqlite feature disabled".to_owned())
+    }
+}
+
+pub async fn load_prompt_frame_event_summary(
+    session_id: &str,
+    limit: usize,
+    binding: ConversationRuntimeBinding<'_>,
+    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+) -> CliResult<PromptFrameEventSummary> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        load_assistant_history_summary(session_id, limit, binding, memory_config, |contents| {
+            summarize_prompt_frame_events(contents.iter().map(String::as_str))
+        })
+        .await
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (session_id, limit, binding);
+        Err("prompt-frame summary unavailable: memory-sqlite feature disabled".to_owned())
     }
 }
 

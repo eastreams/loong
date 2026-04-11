@@ -84,6 +84,9 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     ));
 
     checks.push(provider_transport_doctor_check(&config.provider));
+    if config.tools.web_search.enabled {
+        checks.push(web_search_provider_doctor_check(&config));
+    }
 
     if options.skip_model_probe {
         checks.push(DoctorCheck {
@@ -190,6 +193,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         "create tool file root",
     ));
     checks.extend(collect_browser_companion_doctor_checks(&config).await);
+    checks.extend(collect_runtime_plugins_doctor_checks(&config));
 
     checks.extend(check_feishu_integration(&config, options.fix, &mut fixes));
     let channel_inventory = mvp::channel::channel_inventory(&config);
@@ -330,6 +334,98 @@ fn collect_channel_surface_checks(inventory: &mvp::channel::ChannelInventory) ->
 
     checks.extend(snapshot_checks);
     checks.extend(discovery_checks);
+
+    checks
+}
+
+fn collect_runtime_plugins_doctor_checks(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<DoctorCheck> {
+    let state = crate::collect_runtime_snapshot_runtime_plugins_state(config);
+    let runtime_level = if !state.enabled || state.scanned_root_count == 0 {
+        DoctorCheckLevel::Warn
+    } else {
+        DoctorCheckLevel::Pass
+    };
+    let mut checks = vec![DoctorCheck {
+        name: "runtime plugins runtime".to_owned(),
+        level: runtime_level,
+        detail: format!(
+            "enabled={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={}",
+            state.enabled,
+            doctor_render_string_list(&state.supported_bridges),
+            doctor_render_string_list(&state.supported_adapter_families),
+            doctor_render_string_list(&state.roots),
+            state.scanned_root_count,
+        ),
+    }];
+
+    if !state.enabled {
+        return checks;
+    }
+
+    let inventory_level = match state.inventory_status {
+        crate::RuntimeSnapshotInventoryStatus::Error => DoctorCheckLevel::Fail,
+        crate::RuntimeSnapshotInventoryStatus::Disabled => DoctorCheckLevel::Warn,
+        crate::RuntimeSnapshotInventoryStatus::Ok => {
+            let zero_roots_scanned = state.scanned_root_count == 0;
+            let has_setup_warnings = state.setup_incomplete_plugin_count > 0;
+            let has_blocked_plugins = state.blocked_plugin_count > 0;
+            if zero_roots_scanned || has_setup_warnings || has_blocked_plugins {
+                DoctorCheckLevel::Warn
+            } else {
+                DoctorCheckLevel::Pass
+            }
+        }
+    };
+    let inventory_detail = if let Some(error) = state.inventory_error.as_deref() {
+        let rendered_error = crate::render_line_safe_text_value(error);
+
+        format!(
+            "inventory_status={} error={rendered_error}",
+            state.inventory_status.as_str(),
+        )
+    } else {
+        let blocked_ids = state
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.status.starts_with("blocked_"))
+            .map(|plugin| plugin.plugin_id.as_str())
+            .collect::<Vec<_>>();
+        let setup_incomplete_ids = state
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.status == "setup_incomplete")
+            .map(|plugin| plugin.plugin_id.as_str())
+            .collect::<Vec<_>>();
+        format!(
+            "inventory_status={} readiness_evaluation={} discovered={} translated={} ready={} setup_incomplete={} blocked={} blocked_ids={} setup_incomplete_ids={}",
+            state.inventory_status.as_str(),
+            state.readiness_evaluation,
+            state.discovered_plugin_count,
+            state.translated_plugin_count,
+            state.ready_plugin_count,
+            state.setup_incomplete_plugin_count,
+            state.blocked_plugin_count,
+            doctor_render_string_list(
+                &blocked_ids
+                    .iter()
+                    .map(|id| (*id).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
+            doctor_render_string_list(
+                &setup_incomplete_ids
+                    .iter()
+                    .map(|id| (*id).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    };
+    checks.push(DoctorCheck {
+        name: "runtime plugins inventory".to_owned(),
+        level: inventory_level,
+        detail: inventory_detail,
+    });
 
     checks
 }
@@ -1788,6 +1884,52 @@ fn provider_credentials_doctor_check(
     }
 }
 
+fn web_search_provider_doctor_check(config: &mvp::config::LoongClawConfig) -> DoctorCheck {
+    if !config.tools.web_search.enabled {
+        return DoctorCheck {
+            name: "web search provider".to_owned(),
+            level: DoctorCheckLevel::Pass,
+            detail: "tools.web_search.enabled=false".to_owned(),
+        };
+    }
+
+    let configured_provider = config.tools.web_search.default_provider.as_str();
+    let normalized_provider = mvp::config::normalize_web_search_provider(configured_provider);
+    let provider = normalized_provider.unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
+    let provider_label = crate::onboard_web_search::web_search_provider_display_name(provider);
+    let credential_summary =
+        crate::onboard_web_search::summarize_web_search_provider_credential(config, provider);
+    let credential_available =
+        crate::onboard_web_search::web_search_provider_has_available_credential(config, provider);
+
+    if credential_available {
+        let detail = credential_summary
+            .map(|summary| format!("{provider_label}: {}", summary.value))
+            .unwrap_or_else(|| provider_label.clone());
+
+        return DoctorCheck {
+            name: "web search provider".to_owned(),
+            level: DoctorCheckLevel::Pass,
+            detail,
+        };
+    }
+
+    let detail = credential_summary
+        .map(|summary| {
+            format!(
+                "{provider_label}: {}. web.search will stay unavailable until the provider credential is supplied",
+                summary.value
+            )
+        })
+        .unwrap_or_else(|| provider_label.clone());
+
+    DoctorCheck {
+        name: "web search provider".to_owned(),
+        level: DoctorCheckLevel::Warn,
+        detail,
+    }
+}
+
 fn doctor_check_from_provider_model_probe_failure(
     probe_failure: provider_model_probe_policy::ProviderModelProbeFailure,
 ) -> DoctorCheck {
@@ -1986,6 +2128,14 @@ fn doctor_plugin_bridge_account_summaries(
     summaries
 }
 
+fn doctor_render_string_list(values: &[String]) -> String {
+    if values.is_empty() {
+        return "-".to_owned();
+    }
+
+    crate::render_line_safe_text_values(values.iter().map(String::as_str), ",")
+}
+
 #[cfg(test)]
 fn build_doctor_next_steps(
     checks: &[DoctorCheck],
@@ -2064,6 +2214,31 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
                 format!("Set provider credentials in env: {}", hints.join(" or ")),
             );
         }
+    }
+
+    if checks
+        .iter()
+        .any(|check| check.name == "web search provider" && check.level != DoctorCheckLevel::Pass)
+    {
+        let configured_provider = config.tools.web_search.default_provider.as_str();
+        let normalized_provider = mvp::config::normalize_web_search_provider(configured_provider);
+        let provider = normalized_provider.unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
+        let descriptor = mvp::config::web_search_provider_descriptor(provider);
+        let default_env_name = descriptor.and_then(|value| value.default_api_key_env);
+
+        if let Some(default_env_name) = default_env_name {
+            push_unique_step(
+                &mut steps,
+                format!("Set web search credential in env: {default_env_name}"),
+            );
+        }
+
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Or rerun onboarding to review the web search provider choice: {rerun_onboard_command}"
+            ),
+        );
     }
 
     let provider_model_probe_recovery =
@@ -2211,6 +2386,50 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             &mut steps,
             format!(
                 "Keep using the built-in browser lane, or disable `tools.browser_companion.enabled` until the managed companion runtime is ready, then re-run: {rerun_command}"
+            ),
+        );
+    }
+
+    let runtime_snapshot_json_command = format!(
+        "{} runtime-snapshot --json --config {}",
+        mvp::config::CLI_COMMAND_NAME,
+        crate::cli_handoff::shell_quote_argument(&config_path_display),
+    );
+    if checks.iter().any(|check| {
+        check.name == "runtime plugins runtime" && check.level != DoctorCheckLevel::Pass
+    }) {
+        let runtime_plugins_disabled = !config.runtime_plugins.enabled;
+        if runtime_plugins_disabled {
+            push_unique_step(
+                &mut steps,
+                format!(
+                    "Enable runtime plugins by setting [runtime_plugins].enabled = true, then re-run diagnostics: {rerun_command}"
+                ),
+            );
+        } else {
+            push_unique_step(
+                &mut steps,
+                format!(
+                    "Review runtime plugin roots and support policy in config, then re-run diagnostics: {rerun_command}"
+                ),
+            );
+            push_unique_step(
+                &mut steps,
+                format!("Inspect runtime plugin inventory: {runtime_snapshot_json_command}"),
+            );
+        }
+    }
+    if checks.iter().any(|check| {
+        check.name == "runtime plugins inventory" && check.level != DoctorCheckLevel::Pass
+    }) {
+        push_unique_step(
+            &mut steps,
+            format!("Inspect runtime plugin inventory: {runtime_snapshot_json_command}"),
+        );
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Review [runtime_plugins].roots, [runtime_plugins].supported_bridges, [runtime_plugins].supported_adapter_families, and package manifests, then re-run diagnostics: {rerun_command}"
             ),
         );
     }
@@ -2709,7 +2928,6 @@ mod tests {
     use std::ffi::OsString;
     use std::fs::Permissions;
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     #[cfg(unix)]
     use std::sync::MutexGuard;
@@ -2735,6 +2953,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).expect("create browser companion temp dir");
         temp_dir
+    }
+
+    fn runtime_plugins_test_config(root: &Path, enabled: bool) -> mvp::config::LoongClawConfig {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.file_root = Some(root.display().to_string());
+        config.runtime_plugins.enabled = enabled;
+        config.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
+        config
     }
 
     fn sample_audit_event(
@@ -2921,7 +3147,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     fn set_browser_companion_env_var(key: &str, value: &str) {
         // SAFETY: daemon tests serialize process env mutations behind
         // `lock_daemon_test_environment`, so no concurrent env readers/writers
@@ -2977,6 +3202,30 @@ mod tests {
                 None => remove_browser_companion_env_var(key),
             }
         }
+    }
+
+    #[cfg(unix)]
+    fn rustc_version_probe() -> (String, String, String, String) {
+        let output = std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .expect("run rustc --version");
+        let observed_version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let exact_version = observed_version
+            .split_whitespace()
+            .nth(1)
+            .expect("rustc --version should include a semantic version")
+            .to_owned();
+        let version_components = exact_version.split('.').collect::<Vec<_>>();
+        let partial_version =
+            version_components[..version_components.len().saturating_sub(1)].join(".");
+
+        (
+            "rustc".to_owned(),
+            observed_version,
+            exact_version,
+            partial_version,
+        )
     }
 
     #[test]
@@ -4139,23 +4388,13 @@ mod tests {
         assert!(check.detail.contains("not writable"));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn audit_retention_doctor_check_fails_when_parent_directory_is_not_writable() {
-        let temp_dir = browser_companion_temp_dir("audit-target-parent-readonly");
-        let readonly_dir = temp_dir.join("readonly-audit");
-        std::fs::create_dir_all(&readonly_dir).expect("create readonly audit directory");
-        let original_permissions = std::fs::metadata(&readonly_dir)
-            .expect("readonly audit directory metadata")
-            .permissions();
-        let mut permissions = original_permissions.clone();
-        permissions.set_mode(0o555);
-        std::fs::set_permissions(&readonly_dir, permissions)
-            .expect("mark audit directory readonly");
-        let _permission_restore =
-            PermissionRestore::new(readonly_dir.clone(), original_permissions);
+    fn audit_retention_doctor_check_fails_when_parent_path_is_not_a_directory() {
+        let temp_dir = browser_companion_temp_dir("audit-target-parent-not-directory");
+        let blocked_parent = temp_dir.join("readonly-audit");
+        std::fs::write(&blocked_parent, b"not a directory").expect("create blocking parent file");
 
-        let journal_path = readonly_dir.join("events.jsonl");
+        let journal_path = blocked_parent.join("events.jsonl");
         let check = audit_retention_doctor_check(&mvp::config::AuditConfig {
             mode: mvp::config::AuditMode::Fanout,
             path: journal_path.display().to_string(),
@@ -4164,26 +4403,22 @@ mod tests {
 
         assert_eq!(check.name, "audit retention");
         assert_eq!(check.level, DoctorCheckLevel::Fail);
-        assert!(check.detail.contains("runtime open + lock probe failed"));
+        assert!(
+            check
+                .detail
+                .contains(journal_path.display().to_string().as_str()),
+            "expected failing detail to mention the blocked journal path, got: {}",
+            check.detail
+        );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn audit_retention_doctor_check_fails_when_missing_parent_chain_is_not_creatable() {
+    fn audit_retention_doctor_check_fails_when_missing_parent_chain_runs_into_file_boundary() {
         let temp_dir = browser_companion_temp_dir("audit-target-missing-parent-chain");
-        let readonly_dir = temp_dir.join("readonly-audit");
-        std::fs::create_dir_all(&readonly_dir).expect("create readonly audit directory");
-        let original_permissions = std::fs::metadata(&readonly_dir)
-            .expect("readonly audit directory metadata")
-            .permissions();
-        let mut permissions = original_permissions.clone();
-        permissions.set_mode(0o555);
-        std::fs::set_permissions(&readonly_dir, permissions)
-            .expect("mark audit directory readonly");
-        let _permission_restore =
-            PermissionRestore::new(readonly_dir.clone(), original_permissions);
+        let blocked_parent = temp_dir.join("readonly-audit");
+        std::fs::write(&blocked_parent, b"not a directory").expect("create blocking parent file");
 
-        let journal_path = readonly_dir.join("nested").join("events.jsonl");
+        let journal_path = blocked_parent.join("nested").join("events.jsonl");
         let check = audit_retention_doctor_check(&mvp::config::AuditConfig {
             mode: mvp::config::AuditMode::Fanout,
             path: journal_path.display().to_string(),
@@ -4192,7 +4427,13 @@ mod tests {
 
         assert_eq!(check.name, "audit retention");
         assert_eq!(check.level, DoctorCheckLevel::Fail);
-        assert!(check.detail.contains("runtime open + lock probe failed"));
+        assert!(
+            check
+                .detail
+                .contains(journal_path.display().to_string().as_str()),
+            "expected failing detail to mention the blocked journal path, got: {}",
+            check.detail
+        );
     }
 
     #[test]
@@ -5259,6 +5500,60 @@ mod tests {
     }
 
     #[test]
+    fn web_search_provider_doctor_check_warns_when_firecrawl_credential_is_missing() {
+        let mut env = ScopedEnv::new();
+        let mut config = mvp::config::LoongClawConfig::default();
+        let provider_id = mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
+        let configured_secret = "${FIRECRAWL_API_KEY}".to_owned();
+
+        env.remove("FIRECRAWL_API_KEY");
+        config.tools.web_search.default_provider = provider_id;
+        config.tools.web_search.firecrawl_api_key = Some(configured_secret);
+
+        let check = web_search_provider_doctor_check(&config);
+
+        assert_eq!(check.name, "web search provider");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(check.detail.contains("Firecrawl Search"));
+        assert!(check.detail.contains("FIRECRAWL_API_KEY"));
+        assert!(check.detail.contains("web.search will stay unavailable"));
+    }
+
+    #[test]
+    fn web_search_provider_doctor_check_passes_when_firecrawl_credential_is_available() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let provider_id = mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
+        let configured_secret = "${FIRECRAWL_API_KEY}".to_owned();
+        let mut env = ScopedEnv::new();
+
+        env.set("FIRECRAWL_API_KEY", "firecrawl-test-token");
+        config.tools.web_search.default_provider = provider_id;
+        config.tools.web_search.firecrawl_api_key = Some(configured_secret);
+
+        let check = web_search_provider_doctor_check(&config);
+
+        assert_eq!(check.name, "web search provider");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert!(check.detail.contains("Firecrawl Search"));
+        assert!(check.detail.contains("FIRECRAWL_API_KEY"));
+    }
+
+    #[test]
+    fn web_search_provider_doctor_check_passes_when_tool_is_disabled() {
+        let mut config = mvp::config::LoongClawConfig::default();
+
+        config.tools.web_search.enabled = false;
+        config.tools.web_search.default_provider =
+            mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
+
+        let check = web_search_provider_doctor_check(&config);
+
+        assert_eq!(check.name, "web search provider");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert_eq!(check.detail, "tools.web_search.enabled=false");
+    }
+
+    #[test]
     fn build_doctor_next_steps_shell_quotes_config_paths_with_single_quotes() {
         let checks = vec![DoctorCheck {
             name: "memory path".to_owned(),
@@ -5332,6 +5627,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_doctor_next_steps_guides_missing_web_search_credentials() {
+        let checks = vec![DoctorCheck {
+            name: "web search provider".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "Firecrawl Search: FIRECRAWL_API_KEY (expected). web.search will stay unavailable until the provider credential is supplied".to_owned(),
+        }];
+        let mut config = mvp::config::LoongClawConfig::default();
+        let config_path = Path::new("/tmp/loongclaw.toml");
+
+        config.tools.web_search.default_provider =
+            mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
+
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            config_path,
+            &config,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+        let rerun_onboard_command =
+            crate::cli_handoff::format_subcommand_with_config("onboard", "/tmp/loongclaw.toml");
+        let expected_onboard_step = format!(
+            "Or rerun onboarding to review the web search provider choice: {rerun_onboard_command}"
+        );
+
+        assert!(
+            next_steps
+                .iter()
+                .any(|step| step == "Set web search credential in env: FIRECRAWL_API_KEY"),
+            "doctor should surface the missing Firecrawl env binding as a concrete next step: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| step == &expected_onboard_step),
+            "doctor should keep the onboarding recovery path explicit for web search credentials: {next_steps:#?}"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_doctor_checks_warn_when_command_is_missing() {
@@ -5355,13 +5688,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_doctor_checks_warn_when_expected_version_mismatches() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let (command, observed_version, _exact_version, partial_version) = rustc_version_probe();
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.browser_companion.enabled = true;
-        config.tools.browser_companion.command = Some(
-            crate::browser_companion_diagnostics::fake_browser_companion_version_command("1.4.0"),
-        );
-        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+        config.tools.browser_companion.command = Some(command);
+        config.tools.browser_companion.expected_version = Some(partial_version.clone());
 
         let checks = collect_browser_companion_doctor_checks(&config).await;
 
@@ -5369,10 +5701,12 @@ mod tests {
             checks.iter().any(|check| {
                 check.name == "browser companion install"
                     && check.level == DoctorCheckLevel::Warn
-                    && check.detail.contains("expected_version=1.5.0")
                     && check
                         .detail
-                        .contains("observed_version=loongclaw-browser-companion 1.4.0")
+                        .contains(format!("expected_version={partial_version}").as_str())
+                    && check
+                        .detail
+                        .contains(format!("observed_version={observed_version}").as_str())
             }),
             "doctor should surface version mismatches for the managed companion lane: {checks:#?}"
         );
@@ -5382,13 +5716,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_doctor_checks_warn_when_runtime_gate_is_closed() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let (command, _observed_version, exact_version, _partial_version) = rustc_version_probe();
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.browser_companion.enabled = true;
-        config.tools.browser_companion.command = Some(
-            crate::browser_companion_diagnostics::fake_browser_companion_version_command("1.5.0"),
-        );
-        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+        config.tools.browser_companion.command = Some(command);
+        config.tools.browser_companion.expected_version = Some(exact_version);
 
         let checks = collect_browser_companion_doctor_checks(&config).await;
 
@@ -5406,13 +5739,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_doctor_checks_pass_when_runtime_gate_is_open() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_open();
+        let (command, _observed_version, exact_version, _partial_version) = rustc_version_probe();
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.browser_companion.enabled = true;
-        config.tools.browser_companion.command = Some(
-            crate::browser_companion_diagnostics::fake_browser_companion_version_command("1.5.0"),
-        );
-        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+        config.tools.browser_companion.command = Some(command);
+        config.tools.browser_companion.expected_version = Some(exact_version);
 
         let checks = collect_browser_companion_doctor_checks(&config).await;
 
@@ -5748,6 +6080,112 @@ mod tests {
                 step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "doctor should keep generic browser preview behind personalization when only three healthy-path actions are shown: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn collect_runtime_plugins_doctor_checks_warns_when_runtime_is_disabled() {
+        let root = browser_companion_temp_dir("runtime-plugins-disabled");
+        let config = runtime_plugins_test_config(&root, false);
+
+        let checks = collect_runtime_plugins_doctor_checks(&config);
+
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "runtime plugins runtime");
+        assert_eq!(checks[0].level, DoctorCheckLevel::Warn);
+        assert!(checks[0].detail.contains("enabled=false"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_runtime_plugins_doctor_checks_escape_runtime_values() {
+        let root = browser_companion_temp_dir("runtime-plugins-escaped");
+        let mut config = runtime_plugins_test_config(&root, true);
+        let escaped_root = root.join("runtime\nplugins");
+
+        config.runtime_plugins.roots = vec![escaped_root.display().to_string()];
+        config.runtime_plugins.supported_adapter_families = vec!["web\nsearch".to_owned()];
+
+        let checks = collect_runtime_plugins_doctor_checks(&config);
+        let runtime_check = checks
+            .iter()
+            .find(|check| check.name == "runtime plugins runtime")
+            .expect("runtime plugins runtime check should exist");
+        let inventory_check = checks
+            .iter()
+            .find(|check| check.name == "runtime plugins inventory")
+            .expect("runtime plugins inventory check should exist");
+
+        assert!(
+            runtime_check
+                .detail
+                .contains("supported_adapter_families=\"web\\nsearch\"")
+        );
+        assert!(runtime_check.detail.contains("roots=\""));
+        assert!(runtime_check.detail.contains("\\nplugins\""));
+        assert!(
+            inventory_check
+                .detail
+                .contains("error=\"runtime plugin scan failed for ")
+        );
+        assert!(inventory_check.detail.contains("\\nplugins"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_runtime_plugins_doctor_checks_warns_when_no_runtime_roots_are_scanned() {
+        let root = browser_companion_temp_dir("runtime-plugins-zero-roots");
+        let mut config = runtime_plugins_test_config(&root, true);
+        config.runtime_plugins.roots = vec!["   ".to_owned()];
+
+        let checks = collect_runtime_plugins_doctor_checks(&config);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "runtime plugins runtime"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("enabled=true")
+                    && check.detail.contains("scanned_roots=0")
+            }),
+            "runtime plugins runtime should warn when no usable roots can be scanned: {checks:#?}"
+        );
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "runtime plugins inventory"
+                    && check.level == DoctorCheckLevel::Fail
+                    && check.detail.contains("inventory_status=error")
+            }),
+            "runtime plugins inventory should fail when roots resolve to nothing: {checks:#?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_runtime_plugin_enablement_when_disabled() {
+        let checks = vec![DoctorCheck {
+            name: "runtime plugins runtime".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "enabled=false supported_bridges=- supported_adapter_families=- roots=/tmp/runtime-plugins scanned_roots=0".to_owned(),
+        }];
+        let config = mvp::config::LoongClawConfig::default();
+
+        let next_steps =
+            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Enable runtime plugins by setting [runtime_plugins].enabled = true, then re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"
+            }),
+            "doctor should surface an explicit runtime-plugin enablement step: {next_steps:#?}"
+        );
+        assert!(
+            next_steps
+                .iter()
+                .all(|step| { !step.starts_with("Inspect runtime plugin inventory:") }),
+            "disabled runtime plugins should not suggest inventory inspection before enablement: {next_steps:#?}"
         );
     }
 }

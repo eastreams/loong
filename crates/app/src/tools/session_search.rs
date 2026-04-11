@@ -470,6 +470,7 @@ mod tests {
                 event_payload_json: json!({ "result": "ok" }),
                 outcome_status: "ok".to_owned(),
                 outcome_payload_json: json!({ "child_session_id": "child-session" }),
+                frozen_result: None,
             },
         )
         .expect("finalize child");

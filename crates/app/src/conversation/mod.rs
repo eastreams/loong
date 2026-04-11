@@ -1,9 +1,11 @@
 pub mod analytics;
+mod announce;
 mod approval_resolution;
 mod autonomy_policy;
 mod compaction;
 mod context_engine;
 mod context_engine_registry;
+mod delegate_support;
 mod ingress;
 mod lane_arbiter;
 mod persistence;
@@ -11,6 +13,7 @@ pub mod plan_executor;
 pub mod plan_ir;
 pub mod plan_verifier;
 mod prompt_fragments;
+mod prompt_frame;
 mod prompt_orchestrator;
 mod runtime;
 mod runtime_binding;
@@ -19,6 +22,7 @@ mod session_address;
 mod session_history;
 mod subagent;
 mod tool_discovery_state;
+mod tool_input_contract;
 mod tool_result_compaction;
 mod trust_projection;
 mod turn_budget;
@@ -30,18 +34,20 @@ mod turn_middleware;
 mod turn_middleware_registry;
 mod turn_observer;
 mod turn_shared;
+pub(crate) mod workspace_isolation;
 
 pub use analytics::{
     ConversationEventRecord, DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary,
-    FastLaneToolBatchSegmentSnapshot, SafeLaneEventSummary, SafeLaneFinalStatus,
-    SafeLaneHealthSignalSnapshot, SafeLaneMetricsSnapshot, SafeLaneToolOutputSnapshot,
-    TurnCheckpointEventSummary, TurnCheckpointFailureStep, TurnCheckpointProgressStatus,
-    TurnCheckpointRecoveryAction, TurnCheckpointRepairManualReason, TurnCheckpointRepairPlan,
-    TurnCheckpointSessionState, TurnCheckpointStage, build_turn_checkpoint_repair_plan,
-    parse_conversation_event, plan_turn_checkpoint_recovery, summarize_discovery_first_events,
-    summarize_fast_lane_tool_batch_events, summarize_safe_lane_events,
-    summarize_turn_checkpoint_events,
+    FastLaneToolBatchSegmentSnapshot, PromptFrameEventSummary, SafeLaneEventSummary,
+    SafeLaneFinalStatus, SafeLaneHealthSignalSnapshot, SafeLaneMetricsSnapshot,
+    SafeLaneToolOutputSnapshot, TurnCheckpointEventSummary, TurnCheckpointFailureStep,
+    TurnCheckpointProgressStatus, TurnCheckpointRecoveryAction, TurnCheckpointRepairManualReason,
+    TurnCheckpointRepairPlan, TurnCheckpointSessionState, TurnCheckpointStage,
+    build_turn_checkpoint_repair_plan, parse_conversation_event, plan_turn_checkpoint_recovery,
+    summarize_discovery_first_events, summarize_fast_lane_tool_batch_events,
+    summarize_prompt_frame_events, summarize_safe_lane_events, summarize_turn_checkpoint_events,
 };
+pub(crate) use compaction::{COMPACTED_SUMMARY_PREFIX, is_compacted_summary_content};
 pub use context_engine::{
     AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextArtifactDescriptor,
     ContextArtifactKind, ContextEngineBootstrapResult, ContextEngineCapability,
@@ -53,13 +59,22 @@ pub use context_engine_registry::{
     context_engine_id_from_env, describe_context_engine, list_context_engine_ids,
     list_context_engine_metadata, register_context_engine, resolve_context_engine,
 };
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound;
 pub use ingress::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
     ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
     ConversationIngressPrivateContext,
 };
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
-pub use prompt_fragments::{PromptFragment, PromptLane, PromptRenderPolicy};
+pub use prompt_fragments::{
+    PromptFragment, PromptFrameAuthority, PromptFrameLayer, PromptLane, PromptRenderPolicy,
+};
+pub use prompt_frame::{
+    PromptFrame, PromptFrameBucketSummary, PromptFrameFragmentSummary, PromptFrameLayerStats,
+    PromptFrameMessageSummary, PromptFrameSummary, summarize_assembled_prompt_frame,
+    summarize_followup_prompt_frame,
+};
 pub use prompt_orchestrator::{PromptCompilation, PromptCompiler};
 #[allow(unused_imports)]
 pub use runtime::{
@@ -67,7 +82,8 @@ pub use runtime::{
     ContextEngineRuntimeSnapshot, ContextEngineSelection, ContextEngineSelectionSource,
     ConversationRuntime, DefaultConversationRuntime, SessionContext, TurnMiddlewareRuntimeSnapshot,
     TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
-    collect_context_engine_runtime_snapshot, resolve_context_engine_selection,
+    async_delegate_spawn_request_from_serialized_parts, collect_context_engine_runtime_snapshot,
+    execute_async_delegate_spawn_request, resolve_context_engine_selection,
     resolve_turn_middleware_selection,
 };
 pub use runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
@@ -83,6 +99,7 @@ pub use session_address::{
 };
 pub use session_history::{
     load_discovery_first_event_summary, load_discovery_first_event_summary_with_kernel_context,
+    load_prompt_frame_event_summary,
 };
 pub use session_history::{
     load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
@@ -92,10 +109,10 @@ pub use subagent::{
     ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
     ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
     ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
-    ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentMode,
-    ConstrainedSubagentProfile, ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
-    ConstrainedSubagentTerminalReason, coordination_actions_for_subagent_handle,
-    subagent_surface_fields,
+    ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,
+    ConstrainedSubagentMode, ConstrainedSubagentProfile, ConstrainedSubagentRole,
+    ConstrainedSubagentRuntimeBinding, ConstrainedSubagentTerminalReason, DelegateBuiltinProfile,
+    coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;
@@ -105,7 +122,11 @@ pub use turn_checkpoint::{
     TurnCheckpointTailRepairRuntimeProbe, TurnCheckpointTailRepairSource,
     TurnCheckpointTailRepairStatus,
 };
-pub use turn_coordinator::{ConversationTurnCoordinator, spawn_background_delegate_with_runtime};
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use turn_coordinator::run_started_delegate_child_turn_with_runtime;
+pub use turn_coordinator::{
+    ContextCompactionReport, ConversationTurnCoordinator, spawn_background_delegate_with_runtime,
+};
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,
     ToolIntent, ToolOutcome, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,
@@ -121,6 +142,7 @@ pub use turn_middleware_registry::{
     list_turn_middleware_ids, list_turn_middleware_metadata, register_turn_middleware,
     resolve_turn_middleware, resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
+pub(crate) use turn_observer::ConversationTurnRuntimeEvent;
 pub use turn_observer::{
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
     ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import type { TFunction } from "i18next";
 import { ApiRequestError } from "../../../lib/api/client";
+import { resolveTokenHintEnv, resolveTokenHintPath } from "../../../lib/auth/tokenHint";
 import {
   chatApi,
   type ChatMessage,
@@ -50,8 +51,8 @@ function toFriendlyChatError(
     return authMode === "same_origin_session"
       ? t("auth.sessionInvalidBody")
       : t("auth.invalidBody", {
-          tokenPath: tokenPath ?? "",
-          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+          tokenPath: resolveTokenHintPath(tokenPath),
+          tokenEnv: resolveTokenHintEnv(tokenEnv),
         });
   }
 

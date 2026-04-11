@@ -114,6 +114,10 @@ impl AssembledConversationContext {
             system_prompt_addition: None,
         }
     }
+
+    pub fn prompt_frame_summary(&self) -> crate::conversation::PromptFrameSummary {
+        crate::conversation::summarize_assembled_prompt_frame(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -377,19 +381,8 @@ impl ConversationContextEngine for DefaultContextEngine {
         #[cfg(feature = "memory-sqlite")]
         {
             const MAX_COMPACTION_CONFLICT_RETRIES: usize = 3;
-            let memory_config =
-                memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
 
             for _ in 0..MAX_COMPACTION_CONFLICT_RETRIES {
-                let context_entries =
-                    load_memory_context_entries(&memory_config, session_id, kernel_ctx).await?;
-                let has_summary_checkpoint = context_entries
-                    .into_iter()
-                    .any(|entry| entry.kind == memory::MemoryContextKind::Summary);
-                if has_summary_checkpoint {
-                    return Ok(());
-                }
-
                 let snapshot = load_memory_window_snapshot(config, session_id, kernel_ctx).await?;
                 if !snapshot.is_complete_session_snapshot() {
                     return Ok(());
@@ -559,36 +552,6 @@ async fn load_memory_window_snapshot(
     })
 }
 
-#[cfg(feature = "memory-sqlite")]
-async fn load_memory_context_entries(
-    config: &memory::runtime_config::MemoryRuntimeConfig,
-    session_id: &str,
-    kernel_ctx: &KernelContext,
-) -> CliResult<Vec<memory::MemoryContextEntry>> {
-    let request = memory::build_read_context_request(session_id, config);
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let outcome = kernel_ctx
-        .kernel
-        .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-        )
-        .await
-        .map_err(|error| format!("load memory context via kernel failed: {error}"))?;
-
-    if outcome.status != "ok" {
-        return Err(format!(
-            "load memory context via kernel returned non-ok status: {}",
-            outcome.status
-        ));
-    }
-
-    Ok(memory::decode_memory_context_entries(&outcome.payload))
-}
-
 async fn persist_memory_window(
     session_id: &str,
     turns: &[memory::WindowTurn],
@@ -687,10 +650,11 @@ mod tests {
         )
         .await
         .expect("load staged memory envelope");
+        let runtime_tool_view = crate::tools::runtime_tool_view_from_loongclaw_config(config);
         crate::provider::project_hydrated_memory_context_for_view_with_binding(
             config,
             true,
-            &crate::tools::runtime_tool_view(),
+            &runtime_tool_view,
             crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
             &envelope.hydrated,
         )
@@ -742,6 +706,18 @@ mod tests {
     fn assembled_context_from_messages_defaults_to_empty_artifacts() {
         let assembled = AssembledConversationContext::from_messages(vec![Value::Null]);
         assert!(assembled.artifacts.is_empty());
+    }
+
+    #[test]
+    fn assembled_context_prompt_frame_summary_defaults_to_empty_buckets() {
+        let assembled = AssembledConversationContext::from_messages(vec![Value::Null]);
+        let frame_summary = assembled.prompt_frame_summary();
+        let sliding_window_bucket = frame_summary
+            .bucket(crate::conversation::PromptFrameLayer::RecentWindow)
+            .expect("sliding window bucket");
+
+        assert_eq!(frame_summary.fragments.len(), 0);
+        assert_eq!(sliding_window_bucket.message_count, 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -947,6 +923,77 @@ mod tests {
             }),
             "expected kernel-bound assembly to keep the durable recall block"
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_kernel_bound_workspace_recall_system_reorders_retrieved_memory() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let session_id = "kernel-workspace-recall-session";
+        let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+        let sqlite_path_text = sqlite_path.display().to_string();
+        let curated_memory_path = harness.temp_dir.join("MEMORY.md");
+
+        std::fs::write(
+            &curated_memory_path,
+            "# Durable Notes\n\nPromote workspace recall above history.\n",
+        )
+        .expect("write durable recall");
+
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.memory.sqlite_path = sqlite_path_text;
+        config.memory.system_id = Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
+
+        let memory_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        memory::append_turn_direct(session_id, "user", "turn 1", &memory_config)
+            .expect("append turn 1 should succeed");
+        memory::append_turn_direct(session_id, "assistant", "turn 2", &memory_config)
+            .expect("append turn 2 should succeed");
+
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let assembled = DefaultContextEngine
+            .assemble_context(&config, session_id, true, binding)
+            .await
+            .expect("assemble context");
+
+        assert!(
+            assembled.messages.len() >= 3,
+            "expected system prompt, retrieved memory, and history turns"
+        );
+        let retrieved_artifact = assembled
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == ContextArtifactKind::RetrievedMemory)
+            .expect("retrieved memory artifact");
+        let retrieved_index = retrieved_artifact.message_index;
+        let retrieved_message = &assembled.messages[retrieved_index];
+
+        assert_eq!(retrieved_message["role"], "system");
+        assert!(
+            retrieved_message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("Promote workspace recall above history.")),
+            "expected a retrieved memory message containing workspace recall content"
+        );
+        let first_user_index = assembled
+            .messages
+            .iter()
+            .position(|message| message["role"] == "user")
+            .expect("first history message index");
+        assert!(
+            retrieved_index < first_user_index,
+            "retrieved memory (index {retrieved_index}) should precede history (index {first_user_index})"
+        );
+        assert_eq!(assembled.messages[first_user_index]["content"], "turn 1");
     }
 
     #[cfg(feature = "memory-sqlite")]

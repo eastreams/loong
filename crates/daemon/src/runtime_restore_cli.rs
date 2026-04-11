@@ -187,6 +187,7 @@ fn build_restored_config(
     restored.acp = artifact.restore_spec.acp.clone();
     restored.tools = artifact.restore_spec.tools.clone();
     restored.external_skills = artifact.restore_spec.external_skills.clone();
+    restored.runtime_plugins = artifact.restore_spec.runtime_plugins.clone();
     restored.providers = artifact.restore_spec.provider.profiles.clone();
     restored.active_provider = artifact.restore_spec.provider.active_provider.clone();
     restored.last_provider = artifact.restore_spec.provider.last_provider.clone();
@@ -249,6 +250,9 @@ fn build_runtime_restore_plan(
     }
     if current_config.external_skills != target_config.external_skills {
         changed_surfaces.push("external_skills".to_owned());
+    }
+    if current_config.runtime_plugins != target_config.runtime_plugins {
+        changed_surfaces.push("runtime_plugins".to_owned());
     }
     if !managed_skill_actions.is_empty() {
         changed_surfaces.push("managed_skills".to_owned());
@@ -740,6 +744,10 @@ fn verify_runtime_restore(
     if post_snapshot.restore_spec.external_skills != artifact.document.restore_spec.external_skills
     {
         mismatches.push("external_skills".to_owned());
+    }
+    if post_snapshot.restore_spec.runtime_plugins != artifact.document.restore_spec.runtime_plugins
+    {
+        mismatches.push("runtime_plugins".to_owned());
     }
     if post_snapshot.restore_spec.managed_skills != artifact.document.restore_spec.managed_skills {
         mismatches.push("managed_skills".to_owned());

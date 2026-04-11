@@ -294,13 +294,16 @@ async fn integ_malformed_tool_args_returns_error() {
     #[allow(clippy::wildcard_enum_match_arm)]
     match result {
         TurnResult::ToolError(err) => {
+            let mentions_repairable_shape = err.contains("tool input needs repair");
+            let mentions_object_requirement =
+                err.contains("must be an object") || err.contains("must be object");
             assert!(
-                err.contains("must be an object"),
-                "expected 'must be an object' in error, got: {err}"
+                mentions_repairable_shape && mentions_object_requirement,
+                "expected repairable object-shape error, got: {err}"
             );
         }
         other => {
-            panic!("expected ToolError with 'must be an object', got: {other:?}");
+            panic!("expected ToolError with repairable object-shape guidance, got: {other:?}");
         }
     }
 }

@@ -452,12 +452,13 @@ api_key = { env = "PROVIDER_API_KEY" }
 
 Guided onboarding now also lets you choose the default web search backend.
 Supported providers are `duckduckgo`, `brave`, `tavily`, `perplexity`, `exa`,
-and `jina`. If you keep the default choice, LoongClaw uses DuckDuckGo for the
-general case, or Tavily when domestic Chinese locale/network hints suggest it
-is the safer first-run default. When the selected provider requires a key,
-onboarding immediately asks which environment variable should back that
-credential and writes the config as an env reference such as
-`"${TAVILY_API_KEY}"`, instead of asking users to paste the secret inline.
+`firecrawl`, and `jina`. If you keep the default choice, LoongClaw uses
+DuckDuckGo for the general case, or Tavily when domestic Chinese
+locale/network hints suggest it is the safer first-run default. When the
+selected provider requires a key, onboarding immediately asks which environment
+variable should back that credential and writes the config as an env reference
+such as `"${TAVILY_API_KEY}"`, instead of asking users to paste the secret
+inline.
 Non-interactive onboarding also accepts `--web-search-provider <provider>` and
 `--web-search-api-key <ENV_NAME>`. Explicit choices stay explicit: LoongClaw no
 longer silently falls back to DuckDuckGo when the operator explicitly selected
@@ -470,6 +471,7 @@ default_provider = "duckduckgo"
 # tavily_api_key = "${TAVILY_API_KEY}"
 # perplexity_api_key = "${PERPLEXITY_API_KEY}"
 # exa_api_key = "${EXA_API_KEY}"
+# firecrawl_api_key = "${FIRECRAWL_API_KEY}"
 # jina_api_key = "${JINA_API_KEY}"
 # or "${JINA_AUTH_TOKEN}"
 ```
@@ -492,6 +494,43 @@ chat_completions_path = "/api/v3/chat/completions"
 ```
 
 Both `volcengine` and `volcengine_coding` use `api_key = { env = "ARK_API_KEY" }`. LoongClaw resolves that environment variable and sends it as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
+
+OpenCode Zen / Go example:
+
+```bash
+export OPENCODE_API_KEY=your-opencode-api-key
+```
+
+```toml
+active_provider = "opencode_zen"
+
+[providers.opencode_zen]
+kind = "opencode_zen"
+model = "gpt-5.4"
+api_key = { env = "OPENCODE_API_KEY" }
+```
+
+```toml
+active_provider = "opencode_go"
+
+[providers.opencode_go]
+kind = "opencode_go"
+model = "glm-5.1"
+api_key = { env = "OPENCODE_API_KEY" }
+```
+
+LoongClaw treats these as native providers and routes models by OpenCode product semantics:
+
+- `opencode_zen`
+  - `gpt-*` → OpenAI Responses
+  - `claude-*` → Anthropic Messages
+  - `gemini-*` → Google Generate Content
+  - everything else → OpenAI Chat Completions
+- `opencode_go`
+  - `minimax-*` → Anthropic Messages
+  - everything else → OpenAI Chat Completions
+
+Use bare model ids in LoongClaw (`gpt-5.4`, `claude-sonnet-4-6`, `glm-5.1`). LoongClaw strips only the matching OpenCode namespace prefix for the active provider, so `opencode/gpt-5.4` is normalized under `opencode_zen` and `opencode-go/glm-5.1` is normalized under `opencode_go`. Cross-provider prefixes are rejected with guidance to switch provider kinds or remove the copied prefix.
 
 Feishu channel example (webhook mode):
 
@@ -567,12 +606,14 @@ slot and supervise the enabled runtime-backed service-channel subset.
 
 The current gateway slice now includes:
 
+- `loongclaw status` for one operator-readable summary across the gateway
+  owner, ACP runtime, and durable work-unit health
 - `loongclaw gateway run` for the owner lifecycle
 - `loongclaw gateway status` for cross-process owner inspection
 - `loongclaw gateway stop` for cooperative shutdown
 - a localhost-only authenticated control surface that publishes status,
-  channel inventory, runtime snapshot, operator summary, and cooperative stop
-  endpoints from the same `gateway run` owner
+  channel inventory, runtime snapshot, ACP session/operator views, operator
+  summary, and cooperative stop endpoints from the same `gateway run` owner
 
 `gateway run` starts headless by default. Pass `--session` when you want the
 concurrent CLI host attached to the same runtime owner.
@@ -585,8 +626,13 @@ without introducing a second service lifecycle.
 
 The daemon now also carries a reusable localhost gateway client/discovery layer
 that centralizes loopback validation, bearer-token loading, and route helpers
-for `status`, `channels`, `runtime-snapshot`, `operator-summary`, and `stop`.
-That keeps dashboard and Web UI bootstrap logic out of ad-hoc file reads.
+for `status`, `channels`, `runtime-snapshot`, `acp/sessions`, `acp/status`,
+`acp/observability`, `operator-summary`, and `stop`. That keeps dashboard,
+ACP inspection, and Web UI bootstrap logic out of ad-hoc file reads.
+
+```bash
+loongclaw status --config ~/.loongclaw/config.toml --json
+```
 
 ```bash
 loongclaw gateway run --config ~/.loongclaw/config.toml
@@ -661,13 +707,14 @@ blocked_domains = ["*.internal.example"]
 
 [tools.web_search]
 enabled = true
-default_provider = "duckduckgo" # or "ddg", "brave", "tavily", "perplexity", "exa", "jina"
+default_provider = "duckduckgo" # or "ddg", "brave", "tavily", "perplexity", "exa", "firecrawl", "jina"
 timeout_seconds = 30
 max_results = 5
 # brave_api_key = "${BRAVE_API_KEY}"
 # tavily_api_key = "${TAVILY_API_KEY}"
 # perplexity_api_key = "${PERPLEXITY_API_KEY}"
 # exa_api_key = "${EXA_API_KEY}"
+# firecrawl_api_key = "${FIRECRAWL_API_KEY}"
 # jina_api_key = "${JINA_API_KEY}"
 # or "${JINA_AUTH_TOKEN}"
 ```
@@ -684,8 +731,8 @@ prefix_rule(pattern=["cargo", "publish"], decision="deny")
 
 Further references:
 
-- `default_provider` accepts `duckduckgo` (or `ddg`), `brave`, `tavily`, `perplexity` (or `perplexity_search`), `exa`, and `jina` (or `jinaai` / `jina-ai`)
-- `BRAVE_API_KEY`, `TAVILY_API_KEY`, `PERPLEXITY_API_KEY`, `EXA_API_KEY`, `JINA_API_KEY`, and `JINA_AUTH_TOKEN` stay supported as environment fallbacks
+- `default_provider` accepts `duckduckgo` (or `ddg`), `brave`, `tavily`, `perplexity` (or `perplexity_search`), `exa`, `firecrawl`, and `jina` (or `jinaai` / `jina-ai`)
+- `BRAVE_API_KEY`, `TAVILY_API_KEY`, `PERPLEXITY_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`, `JINA_API_KEY`, and `JINA_AUTH_TOKEN` stay supported as environment fallbacks
 - [Tool Surface Spec](docs/product-specs/tool-surface.md)
 - [Product Specs](docs/product-specs/index.md)
 - `loong validate-config --config ~/.loongclaw/config.toml --json`

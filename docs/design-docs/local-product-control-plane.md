@@ -7,7 +7,7 @@ LoongClaw already has the hard parts of a kernel-first system:
 - a governed execution boundary in the kernel
 - a real ACP control plane for backend session lifecycle and routing
 - a durable `SessionRepository` for session lineage, events, approvals, and outcomes
-- operator-facing CLI surfaces such as `onboard`, `doctor`, `acp-status`, and `list-acp-sessions`
+- operator-facing CLI surfaces such as `onboard`, `doctor`, `status`, `acp-status`, and `list-acp-sessions`
 
 What it does not yet have is one written contract for how those pieces become a
 coherent local product platform.

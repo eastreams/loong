@@ -182,6 +182,11 @@ impl PluginSlotClaim {
             mode: self.mode,
         }
     }
+
+    #[must_use]
+    pub fn canonical_label(&self) -> String {
+        format!("{}#{}@{}", self.slot, self.key, self.mode.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

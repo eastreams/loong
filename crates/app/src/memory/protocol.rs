@@ -7,8 +7,9 @@ use serde_json::{Value, json};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::{
-    DerivedMemoryKind, HydratedMemoryContext, MemoryDiagnostics, MemoryRetrievalRequest,
-    MemoryScope, MemoryStageFamily, StageDiagnostics, StageEnvelope, StageOutcome,
+    DerivedMemoryKind, HydratedMemoryContext, MemoryContextProvenance, MemoryDiagnostics,
+    MemoryRecallMode, MemoryRetrievalRequest, MemoryScope, MemoryStageFamily, StageDiagnostics,
+    StageEnvelope, StageOutcome,
 };
 
 pub const MEMORY_OP_APPEND_TURN: &str = "append_turn";
@@ -17,6 +18,54 @@ pub const MEMORY_OP_CLEAR_SESSION: &str = "clear_session";
 pub const MEMORY_OP_READ_CONTEXT: &str = "read_context";
 pub const MEMORY_OP_REPLACE_TURNS: &str = "replace_turns";
 pub const MEMORY_OP_READ_STAGE_ENVELOPE: &str = "read_stage_envelope";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryCoreOperation {
+    AppendTurn,
+    Window,
+    ClearSession,
+    ReadContext,
+    ReplaceTurns,
+    ReadStageEnvelope,
+}
+
+impl MemoryCoreOperation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AppendTurn => MEMORY_OP_APPEND_TURN,
+            Self::Window => MEMORY_OP_WINDOW,
+            Self::ClearSession => MEMORY_OP_CLEAR_SESSION,
+            Self::ReadContext => MEMORY_OP_READ_CONTEXT,
+            Self::ReplaceTurns => MEMORY_OP_REPLACE_TURNS,
+            Self::ReadStageEnvelope => MEMORY_OP_READ_STAGE_ENVELOPE,
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            MEMORY_OP_APPEND_TURN => Some(Self::AppendTurn),
+            MEMORY_OP_WINDOW => Some(Self::Window),
+            MEMORY_OP_CLEAR_SESSION => Some(Self::ClearSession),
+            MEMORY_OP_READ_CONTEXT => Some(Self::ReadContext),
+            MEMORY_OP_REPLACE_TURNS => Some(Self::ReplaceTurns),
+            MEMORY_OP_READ_STAGE_ENVELOPE => Some(Self::ReadStageEnvelope),
+            _ => None,
+        }
+    }
+}
+
+pub fn parse_exact_memory_core_operation(raw: &str) -> Option<MemoryCoreOperation> {
+    let parsed_operation = MemoryCoreOperation::parse_id(raw)?;
+    let canonical_operation = parsed_operation.as_str();
+    let is_exact_match = raw == canonical_operation;
+    if !is_exact_match {
+        return None;
+    }
+
+    Some(parsed_operation)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowTurn {
@@ -30,6 +79,7 @@ pub struct WindowTurn {
 pub enum MemoryContextKind {
     Profile,
     Summary,
+    Derived,
     RetrievedMemory,
     Turn,
 }
@@ -39,6 +89,8 @@ pub struct MemoryContextEntry {
     pub kind: MemoryContextKind,
     pub role: String,
     pub content: String,
+    #[serde(default)]
+    pub provenance: Vec<MemoryContextProvenance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +117,8 @@ struct MemoryDiagnosticsPayload {
     #[serde(default)]
     retrieval_error: Option<String>,
     #[serde(default)]
+    rank_error: Option<String>,
+    #[serde(default)]
     recent_window_count: usize,
     #[serde(default)]
     entry_count: usize,
@@ -83,7 +137,11 @@ struct HydratedMemoryContextPayload {
 struct MemoryRetrievalRequestPayload {
     session_id: String,
     #[serde(default)]
+    memory_system_id: Option<String>,
+    #[serde(default)]
     query: Option<String>,
+    #[serde(default)]
+    recall_mode: Option<MemoryRecallMode>,
     #[serde(default)]
     scopes: Vec<String>,
     #[serde(default)]
@@ -145,6 +203,8 @@ pub fn build_read_context_request(
         payload: json!({
             "session_id": session_id,
             "profile": config.profile.as_str(),
+            "system": config.system.as_str(),
+            "system_id": config.resolved_system_id.as_deref(),
             "sliding_window": config.sliding_window,
             "summary_max_chars": config.summary_max_chars,
             "profile_note": config.profile_note,
@@ -199,6 +259,11 @@ pub fn build_read_stage_envelope_request_with_workspace_root(
     }
 
     payload.insert("profile".to_owned(), json!(config.profile.as_str()));
+    payload.insert("system".to_owned(), json!(config.system.as_str()));
+    payload.insert(
+        "system_id".to_owned(),
+        json!(config.resolved_system_id.as_deref()),
+    );
     payload.insert("sliding_window".to_owned(), json!(config.sliding_window));
     payload.insert(
         "summary_max_chars".to_owned(),
@@ -289,6 +354,7 @@ impl From<&MemoryDiagnostics> for MemoryDiagnosticsPayload {
             degraded: value.degraded,
             derivation_error: value.derivation_error.clone(),
             retrieval_error: value.retrieval_error.clone(),
+            rank_error: value.rank_error.clone(),
             recent_window_count: value.recent_window_count,
             entry_count: value.entry_count,
         }
@@ -313,7 +379,9 @@ impl From<&MemoryRetrievalRequest> for MemoryRetrievalRequestPayload {
     fn from(value: &MemoryRetrievalRequest) -> Self {
         Self {
             session_id: value.session_id.clone(),
+            memory_system_id: Some(value.memory_system_id.clone()),
             query: value.query.clone(),
+            recall_mode: Some(value.recall_mode),
             scopes: value
                 .scopes
                 .iter()
@@ -396,6 +464,7 @@ fn decode_memory_diagnostics_payload(
         degraded: payload.degraded,
         derivation_error: payload.derivation_error,
         retrieval_error: payload.retrieval_error,
+        rank_error: payload.rank_error,
         recent_window_count: payload.recent_window_count,
         entry_count: payload.entry_count,
     })
@@ -410,7 +479,11 @@ fn decode_memory_retrieval_request_payload(
 
     Some(MemoryRetrievalRequest {
         session_id: payload.session_id,
+        memory_system_id: payload
+            .memory_system_id
+            .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned()),
         query: payload.query,
+        recall_mode: payload.recall_mode.unwrap_or_default(),
         scopes: payload
             .scopes
             .into_iter()
@@ -511,6 +584,7 @@ mod tests {
         assert!(!envelope.hydrated.diagnostics.degraded);
         assert_eq!(envelope.hydrated.diagnostics.derivation_error, None);
         assert_eq!(envelope.hydrated.diagnostics.retrieval_error, None);
+        assert_eq!(envelope.hydrated.diagnostics.rank_error, None);
         assert_eq!(envelope.hydrated.diagnostics.recent_window_count, 0);
         assert_eq!(envelope.hydrated.diagnostics.entry_count, 0);
 
@@ -518,7 +592,12 @@ mod tests {
             .retrieval_request
             .expect("retrieval request should decode");
         assert_eq!(retrieval_request.session_id, "session-123");
+        assert_eq!(retrieval_request.memory_system_id, "builtin");
         assert_eq!(retrieval_request.query, None);
+        assert_eq!(
+            retrieval_request.recall_mode,
+            MemoryRecallMode::PromptAssembly
+        );
         assert!(retrieval_request.scopes.is_empty());
         assert_eq!(retrieval_request.budget_items, 0);
         assert!(retrieval_request.allowed_kinds.is_empty());
@@ -532,5 +611,33 @@ mod tests {
         assert_eq!(envelope.diagnostics[0].message, None);
         assert_eq!(envelope.diagnostics[1].family, MemoryStageFamily::Rank);
         assert_eq!(envelope.diagnostics[1].outcome, StageOutcome::Skipped);
+    }
+
+    #[test]
+    fn decode_stage_envelope_preserves_rank_error_when_present() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin",
+                    "rank_error": "rank stage timeout"
+                }
+            },
+            "diagnostics": []
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+        let rank_error = envelope.hydrated.diagnostics.rank_error;
+
+        assert_eq!(rank_error.as_deref(), Some("rank stage timeout"));
+    }
+
+    #[test]
+    fn memory_core_operation_parse_and_render_are_stable() {
+        let operation = MemoryCoreOperation::parse_id(" read_stage_envelope ")
+            .expect("parse memory core operation");
+        let rendered = operation.as_str();
+
+        assert_eq!(operation, MemoryCoreOperation::ReadStageEnvelope);
+        assert_eq!(rendered, "read_stage_envelope");
     }
 }

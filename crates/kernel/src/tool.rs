@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
+use serde::Serialize;
 
 // Re-export data types from contracts
 pub use loongclaw_contracts::{
@@ -8,6 +9,28 @@ pub use loongclaw_contracts::{
 };
 
 use crate::errors::ToolPlaneError;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolConcurrencyClass {
+    ReadOnly,
+    Mutating,
+    Unknown,
+}
+
+impl ToolConcurrencyClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::Mutating => "mutating",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub const fn requires_serial_execution(self) -> bool {
+        !matches!(self, Self::ReadOnly)
+    }
+}
 
 #[async_trait]
 pub trait CoreToolAdapter: Send + Sync {

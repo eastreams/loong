@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWebConnection } from "../../hooks/useWebConnection";
+import { resolveTokenHintEnv, resolveTokenHintPath } from "../../lib/auth/tokenHint";
 
 export function LocalTokenBanner() {
   const { t } = useTranslation();
@@ -26,15 +27,17 @@ export function LocalTokenBanner() {
 
   const title =
     status === "unauthorized" ? t("auth.invalidTitle") : t("auth.bannerTitle");
+  const resolvedTokenPath = resolveTokenHintPath(tokenPath);
+  const resolvedTokenEnv = resolveTokenHintEnv(tokenEnv);
   const body =
     status === "unauthorized"
       ? t("auth.invalidBody", {
-          tokenPath: tokenPath ?? "",
-          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+          tokenPath: resolvedTokenPath,
+          tokenEnv: resolvedTokenEnv,
         })
       : t("auth.bannerBody", {
-          tokenPath: tokenPath ?? "",
-          tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+          tokenPath: resolvedTokenPath,
+          tokenEnv: resolvedTokenEnv,
         });
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {

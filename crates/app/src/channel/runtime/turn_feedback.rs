@@ -53,13 +53,13 @@ struct ChannelTurnFeedbackObserver {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ChannelTurnFeedbackCapture {
+pub(crate) struct ChannelTurnFeedbackCapture {
     policy: ChannelTurnFeedbackPolicy,
     observer: Option<Arc<ChannelTurnFeedbackObserver>>,
 }
 
 impl ChannelTurnFeedbackCapture {
-    pub(super) fn new(policy: ChannelTurnFeedbackPolicy) -> Self {
+    pub(crate) fn new(policy: ChannelTurnFeedbackPolicy) -> Self {
         let observer = if policy.requires_observer() {
             Some(Arc::new(ChannelTurnFeedbackObserver::default()))
         } else {
@@ -69,13 +69,13 @@ impl ChannelTurnFeedbackCapture {
         Self { policy, observer }
     }
 
-    pub(super) fn observer_handle(&self) -> Option<ConversationTurnObserverHandle> {
+    pub(crate) fn observer_handle(&self) -> Option<ConversationTurnObserverHandle> {
         let observer = self.observer.as_ref()?;
         let handle: ConversationTurnObserverHandle = observer.clone();
         Some(handle)
     }
 
-    pub(super) fn render_reply(&self, reply: String) -> String {
+    pub(crate) fn render_reply(&self, reply: String) -> String {
         let Some(observer) = self.observer.as_ref() else {
             return reply;
         };

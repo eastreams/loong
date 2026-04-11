@@ -11,6 +11,25 @@ use crate::secrets::{
     SecretLookup, has_configured_secret_ref, resolve_secret_lookup, secret_ref_env_name,
 };
 
+pub(crate) const GITHUB_COPILOT_EDITOR_VERSION: &str = "vscode/1.85.1";
+pub(crate) const GITHUB_COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot/1.155.0";
+pub(crate) const GITHUB_COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+pub(crate) const GITHUB_COPILOT_USER_AGENT: &str = "GithubCopilot/1.155.0";
+pub(crate) const GITHUB_COPILOT_OAUTH_TOKEN_ENV: &str = "GITHUB_COPILOT_OAUTH_TOKEN";
+pub(crate) const ANTHROPIC_DEFAULT_HEADERS: [(&str, &str); 1] =
+    [("anthropic-version", "2023-06-01")];
+pub(crate) const OPENCODE_API_KEY_ENV: &str = "OPENCODE_API_KEY";
+pub(crate) const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
+pub(crate) const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
+pub(crate) const GITHUB_COPILOT_DEFAULT_HEADERS: [(&str, &str); 3] = [
+    ("Editor-Version", GITHUB_COPILOT_EDITOR_VERSION),
+    (
+        "Editor-Plugin-Version",
+        GITHUB_COPILOT_EDITOR_PLUGIN_VERSION,
+    ),
+    ("Copilot-Integration-Id", GITHUB_COPILOT_INTEGRATION_ID),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderProfile {
     pub kind: ProviderKind,
@@ -28,6 +47,21 @@ pub struct ProviderProfile {
     pub default_oauth_access_token_env: Option<&'static str>,
     pub oauth_access_token_env_aliases: &'static [&'static str],
     pub feature_family: ProviderFeatureFamily,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCatalogEntry {
+    pub kind: String,
+    pub display_name: String,
+    pub default_base_url: String,
+    pub default_chat_path: String,
+    pub default_models_path: Option<String>,
+    pub auth_scheme: String,
+    pub protocol_family: String,
+    pub feature_family: String,
+    pub is_coding_variant: bool,
+    pub aliases: Vec<String>,
+    pub configuration_hint: Option<String>,
 }
 
 impl ProviderProfile {
@@ -88,6 +122,7 @@ impl ProviderProtocolFamily {
 pub enum ProviderAuthScheme {
     Bearer,
     XApiKey,
+    XGoogApiKey,
 }
 
 impl ProviderAuthScheme {
@@ -95,6 +130,7 @@ impl ProviderAuthScheme {
         match self {
             Self::Bearer => "bearer",
             Self::XApiKey => "x_api_key",
+            Self::XGoogApiKey => "x_goog_api_key",
         }
     }
 }
@@ -617,6 +653,8 @@ pub enum ProviderKind {
     KimiCoding,
     #[serde(alias = "groq_compatible")]
     Groq,
+    #[serde(rename = "github-copilot", alias = "github_copilot", alias = "copilot")]
+    GithubCopilot,
     #[serde(alias = "fireworks_compatible", alias = "fireworks-ai")]
     Fireworks,
     #[serde(alias = "mistral_compatible")]
@@ -641,6 +679,10 @@ pub enum ProviderKind {
     #[default]
     #[serde(alias = "openai_compatible")]
     Openai,
+    #[serde(alias = "opencode", alias = "opencode-zen")]
+    OpencodeZen,
+    #[serde(alias = "opencode-go", alias = "opencode_go")]
+    OpencodeGo,
     #[serde(alias = "openrouter_compatible")]
     Openrouter,
     #[serde(alias = "perplexity_compatible")]
@@ -688,6 +730,14 @@ pub enum ProviderKind {
     VolcengineCoding,
     #[serde(alias = "xai_compatible", alias = "grok")]
     Xai,
+    #[serde(
+        alias = "xiaomi_compatible",
+        alias = "xiaomi_mimo",
+        alias = "xiaomi-mimo",
+        alias = "mimo",
+        alias = "mimo_compatible"
+    )]
+    Xiaomi,
     #[serde(alias = "zai_compatible", alias = "z.ai")]
     Zai,
     #[serde(alias = "zhipu_compatible", alias = "glm", alias = "bigmodel")]
@@ -1322,7 +1372,7 @@ impl ProviderConfig {
                 }
                 self.api_key()
             }
-            ProviderAuthScheme::XApiKey => self.api_key(),
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => self.api_key(),
         }
     }
 
@@ -1350,7 +1400,7 @@ impl ProviderConfig {
                 }
                 first_non_empty_env_name(&self.api_key_env_names())
             }
-            ProviderAuthScheme::XApiKey => {
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => {
                 let api_key_env_name = secret_ref_env_name(self.api_key.as_ref());
                 if let Some(api_key_env_name) = api_key_env_name {
                     return Some(api_key_env_name);
@@ -1370,7 +1420,7 @@ impl ProviderConfig {
                 self.push_oauth_access_token_hint_env_names(&mut env_names);
                 self.push_api_key_hint_env_names(&mut env_names);
             }
-            ProviderAuthScheme::XApiKey => {
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => {
                 self.push_api_key_hint_env_names(&mut env_names);
             }
         }
@@ -1983,7 +2033,7 @@ impl ProviderConfig {
             || contains_template_placeholder(resolved_base_url.as_str())
     }
 
-    pub fn configuration_hint(&self) -> Option<String> {
+    pub fn kind_route_mismatch_hint(&self) -> Option<String> {
         if self.kind == ProviderKind::Byteplus && self.uses_byteplus_coding_plan_path() {
             return Some(
                 "byteplus uses the standard ModelArk path and should not target `/api/coding` or `/api/coding/v3`; switch to `kind = \"byteplus_coding\"` for the dedicated OpenAI-compatible Coding Plan endpoint"
@@ -2014,6 +2064,17 @@ impl ProviderConfig {
                     .to_owned(),
             );
         }
+
+        None
+    }
+
+    pub fn configuration_hint(&self) -> Option<String> {
+        if let Some(hint) = self.kind_route_mismatch_hint() {
+            return Some(hint);
+        }
+        if let Some(hint) = self.opencode_configuration_hint() {
+            return Some(hint);
+        }
         if self.has_unresolved_custom_base_url() {
             let template = self.kind.profile().base_url;
             let base = self.kind.configuration_hint().unwrap_or(
@@ -2024,6 +2085,55 @@ impl ProviderConfig {
                 self.kind.as_str()
             ));
         }
+        None
+    }
+
+    fn opencode_configuration_hint(&self) -> Option<String> {
+        let explicit_model = self.explicit_model();
+        let configured_base_url = self.base_url.trim().to_ascii_lowercase();
+        let resolved_base_url = self.resolved_base_url().to_ascii_lowercase();
+
+        if self.kind == ProviderKind::OpencodeZen {
+            if explicit_model.as_deref().is_some_and(|model| {
+                model
+                    .trim()
+                    .to_ascii_lowercase()
+                    .starts_with("opencode-go/")
+            }) {
+                return Some(
+                    "opencode_zen expects Zen model ids; switch to `kind = \"opencode_go\"` for `opencode-go/*` models or remove the copied OpenCode prefix and keep the matching provider kind"
+                        .to_owned(),
+                );
+            }
+            if configured_base_url.contains("/zen/go/") || resolved_base_url.contains("/zen/go/") {
+                return Some(
+                    "opencode_zen should point at the Zen root (`https://opencode.ai/zen/v1`), not the Go path; switch to `kind = \"opencode_go\"` or reset `provider.base_url`"
+                        .to_owned(),
+                );
+            }
+        }
+
+        if self.kind == ProviderKind::OpencodeGo {
+            if explicit_model
+                .as_deref()
+                .is_some_and(|model| model.trim().to_ascii_lowercase().starts_with("opencode/"))
+            {
+                return Some(
+                    "opencode_go expects Go model ids; switch to `kind = \"opencode_zen\"` for `opencode/*` models or remove the copied OpenCode prefix and keep the matching provider kind"
+                        .to_owned(),
+                );
+            }
+            let points_at_zen_root = configured_base_url.ends_with("/zen/v1")
+                || (resolved_base_url.ends_with("/zen/v1")
+                    && !resolved_base_url.contains("/zen/go/"));
+            if points_at_zen_root {
+                return Some(
+                    "opencode_go should point at the Go root (`https://opencode.ai/zen/go/v1`), not the Zen root; switch to `kind = \"opencode_zen\"` or reset `provider.base_url`"
+                        .to_owned(),
+                );
+            }
+        }
+
         None
     }
 
@@ -2286,11 +2396,12 @@ impl ProviderConfig {
                         self.configured_api_key_env_name(),
                     )
                 }),
-            ProviderAuthScheme::XApiKey => self.missing_auth_source_runtime_detail(
-                "api key",
-                self.api_key.as_ref(),
-                self.configured_api_key_env_name(),
-            ),
+            ProviderAuthScheme::XApiKey | ProviderAuthScheme::XGoogApiKey => self
+                .missing_auth_source_runtime_detail(
+                    "api key",
+                    self.api_key.as_ref(),
+                    self.configured_api_key_env_name(),
+                ),
         }
     }
 
@@ -2481,6 +2592,28 @@ fn is_provider_managed_oauth_access_token_env_name(env_name: &str) -> bool {
     })
 }
 
+fn default_models_path_for_kind(kind: ProviderKind) -> Option<String> {
+    let profile = kind.profile();
+    if let Some(path) = profile.models_path {
+        return Some(path.to_owned());
+    }
+
+    let provider = ProviderConfig::fresh_for_kind(kind);
+    let base_url = provider.resolved_base_url();
+    let models_endpoint = provider.models_endpoint();
+    models_endpoint
+        .strip_prefix(base_url.as_str())
+        .map(str::to_owned)
+}
+
+pub fn provider_catalog_entries() -> Vec<ProviderCatalogEntry> {
+    ProviderKind::all_sorted()
+        .iter()
+        .copied()
+        .map(ProviderKind::catalog_entry)
+        .collect()
+}
+
 fn maybe_normalize_custom_chat_path(kind: ProviderKind, base_url: &str, path: &str) -> String {
     let normalized = normalize_api_path(path);
     if kind != ProviderKind::Custom {
@@ -2532,6 +2665,7 @@ impl ProviderKind {
             ProviderKind::Deepseek => "DeepSeek",
             ProviderKind::Fireworks => "Fireworks",
             ProviderKind::Gemini => "Gemini",
+            ProviderKind::GithubCopilot => "GitHub Copilot",
             ProviderKind::Groq => "Groq",
             ProviderKind::Kimi => "Kimi",
             ProviderKind::KimiCoding => "Kimi Coding",
@@ -2543,6 +2677,8 @@ impl ProviderKind {
             ProviderKind::LmStudio => "LM Studio",
             ProviderKind::Ollama => "Ollama",
             ProviderKind::Openai => "OpenAI",
+            ProviderKind::OpencodeZen => "OpenCode Zen",
+            ProviderKind::OpencodeGo => "OpenCode Go",
             ProviderKind::Openrouter => "OpenRouter",
             ProviderKind::Perplexity => "Perplexity",
             ProviderKind::Qianfan => "Qianfan",
@@ -2560,6 +2696,7 @@ impl ProviderKind {
             ProviderKind::Volcengine => "Volcengine",
             ProviderKind::VolcengineCoding => "Volcengine Coding",
             ProviderKind::Xai => "xAI",
+            ProviderKind::Xiaomi => "Xiaomi",
             ProviderKind::Zai => "Z.ai",
             ProviderKind::Zhipu => "Zhipu",
         }
@@ -2583,6 +2720,7 @@ impl ProviderKind {
             deepseek,
             fireworks,
             gemini,
+            github_copilot,
             groq,
             kimi,
             kimi_coding,
@@ -2594,6 +2732,8 @@ impl ProviderKind {
             nvidia,
             ollama,
             openai,
+            opencode_go,
+            opencode_zen,
             openrouter,
             perplexity,
             qianfan,
@@ -2610,6 +2750,7 @@ impl ProviderKind {
             volcengine,
             volcengine_coding,
             xai,
+            xiaomi,
             zai,
             zhipu,
         ] = &PROVIDER_PROFILES;
@@ -2627,6 +2768,7 @@ impl ProviderKind {
             ProviderKind::Deepseek => deepseek,
             ProviderKind::Fireworks => fireworks,
             ProviderKind::Gemini => gemini,
+            ProviderKind::GithubCopilot => github_copilot,
             ProviderKind::Groq => groq,
             ProviderKind::Kimi => kimi,
             ProviderKind::KimiCoding => kimi_coding,
@@ -2638,6 +2780,8 @@ impl ProviderKind {
             ProviderKind::Nvidia => nvidia,
             ProviderKind::Ollama => ollama,
             ProviderKind::Openai => openai,
+            ProviderKind::OpencodeZen => opencode_zen,
+            ProviderKind::OpencodeGo => opencode_go,
             ProviderKind::Openrouter => openrouter,
             ProviderKind::Perplexity => perplexity,
             ProviderKind::Qianfan => qianfan,
@@ -2654,6 +2798,7 @@ impl ProviderKind {
             ProviderKind::Volcengine => volcengine,
             ProviderKind::VolcengineCoding => volcengine_coding,
             ProviderKind::Xai => xai,
+            ProviderKind::Xiaomi => xiaomi,
             ProviderKind::Zai => zai,
             ProviderKind::Zhipu => zhipu,
         }
@@ -2669,6 +2814,37 @@ impl ProviderKind {
 
     pub fn feature_family(self) -> ProviderFeatureFamily {
         self.profile().feature_family
+    }
+
+    pub const fn is_coding_variant(self) -> bool {
+        matches!(
+            self,
+            ProviderKind::BailianCoding
+                | ProviderKind::ByteplusCoding
+                | ProviderKind::KimiCoding
+                | ProviderKind::VolcengineCoding
+        )
+    }
+
+    pub fn catalog_entry(self) -> ProviderCatalogEntry {
+        let profile = self.profile();
+        ProviderCatalogEntry {
+            kind: self.as_str().to_owned(),
+            display_name: self.display_name().to_owned(),
+            default_base_url: profile.base_url.to_owned(),
+            default_chat_path: profile.chat_completions_path.to_owned(),
+            default_models_path: default_models_path_for_kind(self),
+            auth_scheme: self.auth_scheme().as_str().to_owned(),
+            protocol_family: self.protocol_family().as_str().to_owned(),
+            feature_family: self.feature_family().as_str().to_owned(),
+            is_coding_variant: self.is_coding_variant(),
+            aliases: profile
+                .aliases
+                .iter()
+                .map(|alias| (*alias).to_owned())
+                .collect(),
+            configuration_hint: self.configuration_hint().map(str::to_owned),
+        }
     }
 
     pub fn default_headers(self) -> &'static [(&'static str, &'static str)] {
@@ -2833,6 +3009,7 @@ impl ProviderKind {
             | ProviderKind::Fireworks
             | ProviderKind::Gemini
             | ProviderKind::Groq
+            | ProviderKind::GithubCopilot
             | ProviderKind::KimiCoding
             | ProviderKind::Llamacpp
             | ProviderKind::LmStudio
@@ -2841,6 +3018,8 @@ impl ProviderKind {
             | ProviderKind::Nvidia
             | ProviderKind::Ollama
             | ProviderKind::Openai
+            | ProviderKind::OpencodeZen
+            | ProviderKind::OpencodeGo
             | ProviderKind::Openrouter
             | ProviderKind::Perplexity
             | ProviderKind::Qianfan
@@ -2855,7 +3034,8 @@ impl ProviderKind {
             | ProviderKind::Vllm
             | ProviderKind::Volcengine
             | ProviderKind::VolcengineCoding
-            | ProviderKind::Xai => None,
+            | ProviderKind::Xai
+            | ProviderKind::Xiaomi => None,
         }
     }
 
@@ -2872,6 +3052,8 @@ impl ProviderKind {
             Some("deepseek-chat")
         } else if matches!(self, ProviderKind::Minimax) {
             Some("MiniMax-M2.7")
+        } else if matches!(self, ProviderKind::Xiaomi) {
+            Some("mimo-v2-pro")
         } else {
             None
         }
@@ -2991,7 +3173,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 45] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -3004,6 +3186,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
     ProviderKind::Deepseek,
     ProviderKind::Fireworks,
     ProviderKind::Gemini,
+    ProviderKind::GithubCopilot,
     ProviderKind::Groq,
     ProviderKind::Kimi,
     ProviderKind::KimiCoding,
@@ -3015,6 +3198,8 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
     ProviderKind::Nvidia,
     ProviderKind::Ollama,
     ProviderKind::Openai,
+    ProviderKind::OpencodeGo,
+    ProviderKind::OpencodeZen,
     ProviderKind::Openrouter,
     ProviderKind::Perplexity,
     ProviderKind::Qianfan,
@@ -3031,11 +3216,12 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
     ProviderKind::Volcengine,
     ProviderKind::VolcengineCoding,
     ProviderKind::Xai,
+    ProviderKind::Xiaomi,
     ProviderKind::Zai,
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 41] = [
+const PROVIDER_PROFILES: [ProviderProfile; 45] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -3045,7 +3231,7 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
         models_path: Some("/v1/models"),
         protocol_family: ProviderProtocolFamily::AnthropicMessages,
         auth_scheme: ProviderAuthScheme::XApiKey,
-        default_headers: &[("anthropic-version", "2023-06-01")],
+        default_headers: &ANTHROPIC_DEFAULT_HEADERS,
         default_api_key_env: Some("ANTHROPIC_API_KEY"),
         api_key_env_aliases: &[],
         default_user_agent: None,
@@ -3251,6 +3437,23 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
         feature_family: ProviderFeatureFamily::OpenAiCompatible,
     },
     ProviderProfile {
+        kind: ProviderKind::GithubCopilot,
+        id: "github-copilot",
+        aliases: &["github_copilot", "copilot"],
+        base_url: "https://api.githubcopilot.com",
+        chat_completions_path: "/chat/completions",
+        models_path: None,
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &GITHUB_COPILOT_DEFAULT_HEADERS,
+        default_api_key_env: None,
+        api_key_env_aliases: &[],
+        default_user_agent: Some(GITHUB_COPILOT_USER_AGENT),
+        default_oauth_access_token_env: Some(GITHUB_COPILOT_OAUTH_TOKEN_ENV),
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
         kind: ProviderKind::Groq,
         id: "groq",
         aliases: &["groq_compatible"],
@@ -3440,6 +3643,40 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
         default_user_agent: None,
         default_oauth_access_token_env: Some("OPENAI_CODEX_OAUTH_TOKEN"),
         oauth_access_token_env_aliases: &["OPENAI_OAUTH_ACCESS_TOKEN"],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::OpencodeGo,
+        id: "opencode_go",
+        aliases: &["opencode-go"],
+        base_url: OPENCODE_GO_BASE_URL,
+        chat_completions_path: "/chat/completions",
+        models_path: Some("/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some(OPENCODE_API_KEY_ENV),
+        api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::OpencodeZen,
+        id: "opencode_zen",
+        aliases: &["opencode", "opencode-zen"],
+        base_url: OPENCODE_ZEN_BASE_URL,
+        chat_completions_path: "/chat/completions",
+        models_path: Some("/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some(OPENCODE_API_KEY_ENV),
+        api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::OpenAiCompatible,
     },
     ProviderProfile {
@@ -3714,6 +3951,29 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
         default_headers: &[],
         default_api_key_env: Some("XAI_API_KEY"),
         api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::Xiaomi,
+        id: "xiaomi",
+        aliases: &[
+            "xiaomi_compatible",
+            "xiaomi_mimo",
+            "xiaomi-mimo",
+            "mimo",
+            "mimo_compatible",
+        ],
+        base_url: "https://api.xiaomimimo.com",
+        chat_completions_path: "/v1/chat/completions",
+        models_path: Some("/v1/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some("XIAOMI_API_KEY"),
+        api_key_env_aliases: &["MIMO_API_KEY", "XIAOMIMIMO_API_KEY"],
         default_user_agent: None,
         default_oauth_access_token_env: None,
         oauth_access_token_env_aliases: &[],
@@ -4207,6 +4467,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn provider_kind_serializes_github_copilot_using_canonical_hyphenated_id() {
+        let raw = serde_json::to_string(&ProviderKind::GithubCopilot)
+            .expect("provider kind should serialize");
+
+        assert_eq!(raw, "\"github-copilot\"");
     }
 
     #[test]
@@ -4760,6 +5028,10 @@ api_key_env = "OPENAI_API_KEY"
         assert_eq!(
             ProviderKind::Minimax.recommended_onboarding_model(),
             Some("MiniMax-M2.7")
+        );
+        assert_eq!(
+            ProviderKind::Xiaomi.recommended_onboarding_model(),
+            Some("mimo-v2-pro")
         );
         assert_eq!(
             ProviderKind::KimiCoding.recommended_onboarding_model(),

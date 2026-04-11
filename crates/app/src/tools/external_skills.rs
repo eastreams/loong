@@ -735,9 +735,11 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                 })?;
             let bundled_markdown =
                 super::bundled_skills::bundled_external_skill_markdown(&bundled)?;
-            let bundled_dir = super::bundled_skills::bundled_external_skill_dir(&bundled)
-                .ok_or_else(|| {
-                    format!("missing bundled external skill directory for `{bundled_skill_id}`")
+            let bundled_dir =
+                super::bundled_skills::bundled_external_skill_dir(&bundled).map_err(|error| {
+                    format!(
+                        "failed to resolve bundled external skill `{bundled_skill_id}`: {error}"
+                    )
                 })?;
             let skill_id = normalize_skill_id(bundled.skill_id)?;
             let display_name = derive_skill_display_name(bundled_markdown, bundled.skill_id);
@@ -982,7 +984,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     }
 
     if let Some(backup_root) = backup_root {
-        fs::remove_dir_all(&backup_root).map_err(|error| {
+        remove_external_skill_path(&backup_root).map_err(|error| {
             format!(
                 "failed to remove replaced external skill backup {}: {error}",
                 backup_root.display()
@@ -1766,6 +1768,15 @@ impl Drop for ScopedDirCleanup {
             fs::remove_dir_all(path).ok();
         }
     }
+}
+
+fn remove_external_skill_path(path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+    if file_type.is_dir() {
+        return fs::remove_dir_all(path);
+    }
+    fs::remove_file(path)
 }
 
 fn parse_optional_bool(payload: &Map<String, Value>, key: &str) -> Result<Option<bool>, String> {
@@ -5157,6 +5168,41 @@ mod tests {
     }
 
     #[test]
+    fn install_from_bundled_skill_id_copies_packaged_references_for_lark_pack_members() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-bundled-lark-doc");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config = managed_runtime_config(&root);
+
+            let outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "bundled_skill_id": "lark-doc"
+                    }),
+                },
+                &config,
+            )
+            .expect("bundled install should succeed");
+
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["skill_id"], "lark-doc");
+
+            let installed_root = root.join("external-skills-installed").join("lark-doc");
+            assert!(installed_root.join("SKILL.md").exists());
+            assert!(
+                installed_root
+                    .join("references")
+                    .join("lark-doc-create.md")
+                    .exists(),
+                "lark-doc should keep bundled references after pack reorganization"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
     fn install_from_bundled_skill_id_copies_packaged_assets_for_minimax_docx() {
         with_managed_runtime_test(|| {
             let root = unique_temp_dir("loongclaw-ext-skill-install-bundled-minimax-docx");
@@ -6288,12 +6334,9 @@ mod tests {
         });
     }
 
-    #[cfg(unix)]
     #[test]
-    fn provider_surface_skips_unreadable_local_skills_without_failing_discovery() {
+    fn provider_surface_skips_blocked_local_skills_without_failing_discovery() {
         with_managed_runtime_test(|| {
-            use std::os::unix::fs::PermissionsExt;
-
             let root = unique_temp_dir("loongclaw-ext-skill-unreadable-discovery");
             fs::create_dir_all(&root).expect("create fixture root");
             let _home = ScopedHomeFixture::new("loongclaw-ext-skill-unreadable-discovery-home");
@@ -6305,15 +6348,11 @@ mod tests {
             write_file(
                 &root,
                 ".agents/skills/broken-skill/SKILL.md",
-                "---\nname: broken-skill\ndescription: unreadable project skill.\n---\n\nBroken skill instructions.\n",
+                &format!(
+                    "---\nname: broken-skill\ndescription: blocked project skill.\n---\n\n{}\n",
+                    "x".repeat(DEFAULT_MAX_DOWNLOAD_BYTES.saturating_add(1))
+                ),
             );
-
-            let unreadable_path = root.join(".agents/skills/broken-skill/SKILL.md");
-            let mut perms = fs::metadata(&unreadable_path)
-                .expect("read metadata")
-                .permissions();
-            perms.set_mode(0o000);
-            fs::set_permissions(&unreadable_path, perms).expect("set unreadable permissions");
 
             let config = managed_runtime_config(&root);
             let list_outcome = crate::tools::execute_tool_core_with_config(
@@ -6338,24 +6377,15 @@ mod tests {
                 skills
                     .iter()
                     .all(|skill| skill["skill_id"] != "broken-skill"),
-                "unreadable skill should be skipped instead of failing discovery: {skills:?}"
+                "blocked skill should be skipped instead of failing discovery: {skills:?}"
             );
-
-            let mut cleanup_perms = fs::metadata(&unreadable_path)
-                .expect("read metadata for cleanup")
-                .permissions();
-            cleanup_perms.set_mode(0o644);
-            fs::set_permissions(&unreadable_path, cleanup_perms).ok();
             fs::remove_dir_all(&root).ok();
         });
     }
 
-    #[cfg(unix)]
     #[test]
-    fn provider_surface_fails_closed_when_unreadable_user_winner_has_project_fallback() {
+    fn provider_surface_fails_closed_when_blocked_user_winner_has_project_fallback() {
         with_managed_runtime_test(|| {
-            use std::os::unix::fs::PermissionsExt;
-
             let root = unique_temp_dir("loongclaw-ext-skill-unreadable-user-winner");
             let home = unique_temp_dir("loongclaw-ext-skill-unreadable-user-winner-home");
             fs::create_dir_all(&root).expect("create fixture root");
@@ -6368,15 +6398,11 @@ mod tests {
             write_file(
                 &home,
                 ".agents/skills/demo-skill/SKILL.md",
-                "---\nname: demo-skill\ndescription: unreadable user winner.\n---\n\nBroken user instructions.\n",
+                &format!(
+                    "---\nname: demo-skill\ndescription: blocked user winner.\n---\n\n{}\n",
+                    "x".repeat(DEFAULT_MAX_DOWNLOAD_BYTES.saturating_add(1))
+                ),
             );
-
-            let unreadable_path = home.join(".agents/skills/demo-skill/SKILL.md");
-            let mut perms = fs::metadata(&unreadable_path)
-                .expect("read metadata")
-                .permissions();
-            perms.set_mode(0o000);
-            fs::set_permissions(&unreadable_path, perms).expect("set unreadable permissions");
 
             let config = managed_runtime_config(&root);
             let mut env = crate::test_support::ScopedEnv::new();
@@ -6389,7 +6415,7 @@ mod tests {
                 },
                 &config,
             )
-            .expect("list should succeed when the higher-precedence local winner is unreadable");
+            .expect("list should succeed when the higher-precedence local winner is blocked");
 
             assert!(
                 list_outcome.payload["skills"]
@@ -6410,18 +6436,11 @@ mod tests {
                 },
                 &config,
             )
-            .expect_err("invoke should report the unreadable higher-precedence local winner");
+            .expect_err("invoke should report the blocked higher-precedence local winner");
             assert!(
-                error.contains("failed to read external skill source")
-                    || error.contains("failed to inspect external skill source"),
-                "expected unreadable local winner error, got: {error}"
+                error.contains("exceeds the"),
+                "expected blocked local winner error, got: {error}"
             );
-
-            let mut cleanup_perms = fs::metadata(&unreadable_path)
-                .expect("read metadata for cleanup")
-                .permissions();
-            cleanup_perms.set_mode(0o644);
-            fs::set_permissions(&unreadable_path, cleanup_perms).ok();
             fs::remove_dir_all(&root).ok();
             fs::remove_dir_all(&home).ok();
         });
@@ -6833,7 +6852,7 @@ mod tests {
     #[test]
     fn replace_failed_install_preserves_previous_managed_skill() {
         with_managed_runtime_test(|| {
-            use std::os::unix::fs::PermissionsExt;
+            use std::os::unix::fs::symlink;
 
             let root = unique_temp_dir("loongclaw-ext-skill-replace-rollback");
             fs::create_dir_all(&root).expect("create fixture root");
@@ -6847,17 +6866,8 @@ mod tests {
                 "source/demo-skill-v2/SKILL.md",
                 "# Demo Skill\n\nReplacement should fail safely.\n",
             );
-            write_file(
-                &root,
-                "source/demo-skill-v2/private.txt",
-                "copy should fail on unreadable file",
-            );
-            let unreadable_path = root.join("source/demo-skill-v2/private.txt");
-            let mut perms = fs::metadata(&unreadable_path)
-                .expect("read metadata")
-                .permissions();
-            perms.set_mode(0o000);
-            fs::set_permissions(&unreadable_path, perms).expect("set unreadable permissions");
+            let target_path = root.join("source/demo-skill-v2/linked.txt");
+            symlink("missing-target.txt", &target_path).expect("create unsupported symlink entry");
 
             let config = managed_runtime_config(&root);
             crate::tools::execute_tool_core_with_config(
@@ -6885,7 +6895,8 @@ mod tests {
             )
             .expect_err("replacement install should fail");
             assert!(
-                error.contains("failed to copy external skill file"),
+                error.contains("cannot contain symlinks")
+                    || error.contains("does not allow symlinks"),
                 "unexpected replacement failure: {error}"
             );
 
@@ -6924,11 +6935,6 @@ mod tests {
                 "failed replace must clean temporary directories: {transient_entries:?}"
             );
 
-            let mut cleanup_perms = fs::metadata(&unreadable_path)
-                .expect("read metadata for cleanup")
-                .permissions();
-            cleanup_perms.set_mode(0o644);
-            fs::set_permissions(&unreadable_path, cleanup_perms).ok();
             fs::remove_dir_all(&root).ok();
         });
     }

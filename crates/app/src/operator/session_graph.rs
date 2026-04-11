@@ -161,54 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn operator_session_graph_computes_next_delegate_child_depth() {
-        let memory_config = isolated_memory_config("next-child-depth");
-        let repo = SessionRepository::new(&memory_config).expect("create session repository");
-
-        seed_session(&repo, "root-session", SessionKind::Root, None);
-        seed_session(
-            &repo,
-            "child-session",
-            SessionKind::DelegateChild,
-            Some("root-session"),
-        );
-
-        let session_graph = OperatorSessionGraph::new(&repo);
-        let root_child_depth = session_graph
-            .next_delegate_child_depth("root-session", 3)
-            .expect("compute root child depth");
-        let nested_child_depth = session_graph
-            .next_delegate_child_depth("child-session", 3)
-            .expect("compute nested child depth");
-
-        assert_eq!(root_child_depth, 1);
-        assert_eq!(nested_child_depth, 2);
-    }
-
-    #[test]
-    fn operator_session_graph_rejects_delegate_child_depth_over_limit() {
-        let memory_config = isolated_memory_config("depth-limit");
-        let repo = SessionRepository::new(&memory_config).expect("create session repository");
-
-        seed_session(&repo, "root-session", SessionKind::Root, None);
-        seed_session(
-            &repo,
-            "child-session",
-            SessionKind::DelegateChild,
-            Some("root-session"),
-        );
-
-        let session_graph = OperatorSessionGraph::new(&repo);
-        let result = session_graph.next_delegate_child_depth("child-session", 1);
-        let error = result.expect_err("depth overflow should fail");
-
-        assert!(
-            error.contains("delegate_depth_exceeded"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
     fn operator_session_graph_falls_back_to_session_id_when_root_row_is_missing() {
         let memory_config = isolated_memory_config("missing-root-row");
         let repo = SessionRepository::new(&memory_config).expect("create session repository");

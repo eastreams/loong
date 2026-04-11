@@ -187,6 +187,27 @@ fn intersect_private_host_setting(left: Option<bool>, right: Option<bool>) -> Op
     None
 }
 
+pub(crate) fn merge_runtime_narrowing_sources(
+    primary_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    secondary_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+) -> Option<ToolRuntimeNarrowing> {
+    let primary_runtime_narrowing =
+        primary_runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty());
+    let secondary_runtime_narrowing =
+        secondary_runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty());
+
+    match (primary_runtime_narrowing, secondary_runtime_narrowing) {
+        (Some(primary_runtime_narrowing), Some(secondary_runtime_narrowing)) => {
+            let merged_runtime_narrowing =
+                primary_runtime_narrowing.intersect(&secondary_runtime_narrowing);
+            Some(merged_runtime_narrowing)
+        }
+        (Some(primary_runtime_narrowing), None) => Some(primary_runtime_narrowing),
+        (None, Some(secondary_runtime_narrowing)) => Some(secondary_runtime_narrowing),
+        (None, None) => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSkillsRuntimePolicy {
     pub enabled: bool,
@@ -575,6 +596,7 @@ pub struct WebSearchRuntimePolicy {
     pub tavily_api_key: Option<String>,
     pub perplexity_api_key: Option<String>,
     pub exa_api_key: Option<String>,
+    pub firecrawl_api_key: Option<String>,
     pub jina_api_key: Option<String>,
     pub timeout_seconds: u64,
     pub max_results: usize,
@@ -589,6 +611,7 @@ impl Default for WebSearchRuntimePolicy {
             tavily_api_key: None,
             perplexity_api_key: None,
             exa_api_key: None,
+            firecrawl_api_key: None,
             jina_api_key: None,
             timeout_seconds: crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
             max_results: crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS,
@@ -647,6 +670,7 @@ impl ToolExecutionConfig {
 pub struct ToolRuntimeConfig {
     pub file_root: Option<PathBuf>,
     pub memory_sqlite_path: Option<PathBuf>,
+    pub selected_memory_system_id: String,
     pub shell_allow: BTreeSet<String>,
     pub shell_deny: BTreeSet<String>,
     pub shell_default_mode: ShellPolicyDefault,
@@ -673,6 +697,7 @@ impl Default for ToolRuntimeConfig {
         Self {
             file_root: None,
             memory_sqlite_path: None,
+            selected_memory_system_id: crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
             shell_allow: crate::config::DEFAULT_SHELL_ALLOW
                 .iter()
                 .map(|s| (*s).to_owned())
@@ -700,7 +725,21 @@ impl Default for ToolRuntimeConfig {
 }
 
 impl ToolRuntimeConfig {
+    pub fn with_file_root_override(&self, file_root: PathBuf) -> Self {
+        let mut overridden = self.clone();
+        overridden.file_root = Some(file_root);
+        overridden
+    }
+
+    pub fn default_working_directory(&self) -> PathBuf {
+        let configured_root = self.file_root.clone();
+        let fallback_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        configured_root.unwrap_or(fallback_root)
+    }
+
     pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
+        let memory_system_selection = crate::memory::resolve_memory_system_selection(config);
+        let selected_memory_system_id = memory_system_selection.id;
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
         let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
         let browser_companion_allowed_domains =
@@ -727,6 +766,7 @@ impl ToolRuntimeConfig {
         Self {
             file_root: Some(config.tools.resolved_file_root()),
             memory_sqlite_path: Some(config.memory.resolved_sqlite_path()),
+            selected_memory_system_id,
             shell_allow,
             shell_deny,
             shell_default_mode: ShellPolicyDefault::parse(&config.tools.shell_default_mode),
@@ -811,6 +851,12 @@ impl ToolRuntimeConfig {
                         crate::config::WEB_SEARCH_PROVIDER_EXA,
                     ),
                 ),
+                firecrawl_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.firecrawl_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL,
+                    ),
+                ),
                 jina_api_key: resolve_web_search_secret_binding(
                     config.tools.web_search.jina_api_key.as_deref(),
                     crate::config::web_search_provider_api_key_env_names(
@@ -865,6 +911,8 @@ impl ToolRuntimeConfig {
             let default_config = crate::config::LoongClawConfig::default();
             Some(default_config.memory.resolved_sqlite_path())
         });
+        let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
+            .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
         let config_path = std::env::var("LOONGCLAW_CONFIG_PATH")
             .ok()
             .map(PathBuf::from);
@@ -948,6 +996,12 @@ impl ToolRuntimeConfig {
                 crate::config::WEB_SEARCH_PROVIDER_EXA,
             ),
         );
+        let web_search_firecrawl_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL,
+            ),
+        );
         let web_search_jina_api_key = resolve_web_search_secret_binding(
             None,
             crate::config::web_search_provider_api_key_env_names(
@@ -1009,6 +1063,7 @@ impl ToolRuntimeConfig {
         Self {
             file_root,
             memory_sqlite_path,
+            selected_memory_system_id,
             shell_allow,
             shell_deny,
             shell_default_mode: ShellPolicyDefault::Deny,
@@ -1053,6 +1108,7 @@ impl ToolRuntimeConfig {
                 tavily_api_key: web_search_tavily_api_key,
                 perplexity_api_key: web_search_perplexity_api_key,
                 exa_api_key: web_search_exa_api_key,
+                firecrawl_api_key: web_search_firecrawl_api_key,
                 jina_api_key: web_search_jina_api_key,
                 timeout_seconds: web_search_timeout_seconds,
                 max_results: web_search_max_results,
@@ -1653,6 +1709,7 @@ mod tests {
 
     fn clear_tool_runtime_env(env: &mut ScopedEnv) {
         for key in [
+            "LOONG_HOME",
             "LOONGCLAW_CONFIG_PATH",
             "LOONGCLAW_FILE_ROOT",
             "LOONGCLAW_SQLITE_PATH",
@@ -1687,6 +1744,7 @@ mod tests {
             "TAVILY_API_KEY",
             "PERPLEXITY_API_KEY",
             "EXA_API_KEY",
+            "FIRECRAWL_API_KEY",
             "JINA_API_KEY",
             "JINA_AUTH_TOKEN",
             "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
@@ -1916,7 +1974,7 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut env = ScopedEnv::new();
         env.set("HOME", tempdir.path());
-        env.remove("LOONGCLAW_HOME");
+        env.remove("LOONG_HOME");
         let config_path = tempdir.path().join("loongclaw.toml");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
@@ -2160,6 +2218,16 @@ mod tests {
     }
 
     #[test]
+    fn selected_memory_system_id_uses_injected_config() {
+        let mut config = crate::config::LoongClawConfig::default();
+        config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+
+        assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
     fn memory_sqlite_path_from_env_uses_legacy_override() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
@@ -2174,11 +2242,36 @@ mod tests {
     }
 
     #[test]
+    fn selected_memory_system_id_from_env_uses_registered_override() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "workspace_recall");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
+    fn selected_memory_system_id_from_env_falls_back_on_unknown_value() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "unknown_memory_system");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.selected_memory_system_id,
+            crate::memory::DEFAULT_MEMORY_SYSTEM_ID
+        );
+    }
+
+    #[test]
     fn memory_sqlite_path_from_env_falls_back_to_loongclaw_home() {
         let mut env = ScopedEnv::new();
         let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-home");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_HOME", &runtime_home);
+        env.set("LOONG_HOME", &runtime_home);
 
         let runtime = ToolRuntimeConfig::from_env();
 
@@ -2193,7 +2286,7 @@ mod tests {
         let mut env = ScopedEnv::new();
         let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-empty-sqlite-path");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_HOME", &runtime_home);
+        env.set("LOONG_HOME", &runtime_home);
         env.set("LOONGCLAW_SQLITE_PATH", "");
 
         let runtime = ToolRuntimeConfig::from_env();
@@ -2312,10 +2405,13 @@ mod tests {
     #[test]
     fn injected_config_overrides_global() {
         let _env = ScopedEnv::new();
+        let injected_root = tempfile::tempdir().expect("create injected file root");
+        let injected_root_path = injected_root.path().to_path_buf();
+        let config_path = injected_root_path.join("loongclaw.toml");
         let config = ToolRuntimeConfig {
-            file_root: Some(PathBuf::from("/tmp/injected-root")),
+            file_root: Some(injected_root_path),
             shell_allow: BTreeSet::from(["echo".to_owned()]),
-            config_path: Some(PathBuf::from("/tmp/injected-root/loongclaw.toml")),
+            config_path: Some(config_path),
             ..ToolRuntimeConfig::default()
         };
         let result = crate::tools::execute_tool_core_with_config(
@@ -2531,6 +2627,10 @@ mod tests {
         );
         env.set(crate::config::WEB_SEARCH_EXA_API_KEY_ENV, "exa-test-key");
         env.set(
+            crate::config::WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
+            "firecrawl-test-key",
+        );
+        env.set(
             crate::config::WEB_SEARCH_JINA_AUTH_TOKEN_ENV,
             "jina-test-key",
         );
@@ -2558,6 +2658,10 @@ mod tests {
         assert_eq!(
             config.web_search.exa_api_key.as_deref(),
             Some("exa-test-key")
+        );
+        assert_eq!(
+            config.web_search.firecrawl_api_key.as_deref(),
+            Some("firecrawl-test-key")
         );
         assert_eq!(
             config.web_search.jina_api_key.as_deref(),
@@ -2588,6 +2692,32 @@ mod tests {
             runtime.web_search.exa_api_key.as_deref(),
             Some("exa-inline-env")
         );
+    }
+
+    #[test]
+    fn from_loongclaw_config_resolves_inline_env_refs_for_firecrawl_web_search_credentials() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("TEAM_FIRECRAWL_KEY", "firecrawl-inline-env");
+
+        let mut config = LoongClawConfig::default();
+        let provider_id = crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
+        let credential_ref = "${TEAM_FIRECRAWL_KEY}".to_owned();
+
+        config.tools.web_search.default_provider = provider_id;
+        config.tools.web_search.firecrawl_api_key = Some(credential_ref);
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime_provider = runtime.web_search.default_provider.as_str();
+        let runtime_credential = runtime.web_search.firecrawl_api_key.as_deref();
+
+        assert_eq!(
+            runtime_provider,
+            crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL
+        );
+        assert_eq!(runtime_credential, Some("firecrawl-inline-env"));
     }
 
     #[test]
@@ -2990,6 +3120,94 @@ mod tests {
     }
 
     #[test]
+    fn merge_runtime_narrowing_sources_intersects_delegate_and_policy_inputs() {
+        let delegate_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-left.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+        };
+        let policy_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(3),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-right.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+        };
+
+        let effective_runtime_narrowing = merge_runtime_narrowing_sources(
+            Some(delegate_runtime_narrowing),
+            Some(policy_runtime_narrowing),
+        )
+        .expect("effective runtime narrowing");
+
+        assert_eq!(effective_runtime_narrowing.browser.max_sessions, Some(1));
+        assert!(
+            effective_runtime_narrowing
+                .web_fetch
+                .enforce_allowed_domains
+        );
+        assert!(
+            effective_runtime_narrowing
+                .web_fetch
+                .allowed_domains
+                .is_empty()
+        );
+        assert_eq!(
+            effective_runtime_narrowing.web_fetch.blocked_domains,
+            BTreeSet::from([
+                "deny-left.example.com".to_owned(),
+                "deny-right.example.com".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn merge_runtime_narrowing_sources_handles_empty_and_single_source_inputs() {
+        let primary_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+        let empty_runtime_narrowing = ToolRuntimeNarrowing::default();
+
+        let none_result = merge_runtime_narrowing_sources(None, None);
+        let primary_only_result =
+            merge_runtime_narrowing_sources(Some(primary_runtime_narrowing.clone()), None);
+        let secondary_only_result =
+            merge_runtime_narrowing_sources(None, Some(primary_runtime_narrowing.clone()));
+        let empty_primary_result =
+            merge_runtime_narrowing_sources(Some(empty_runtime_narrowing.clone()), None);
+        let empty_primary_with_secondary_result = merge_runtime_narrowing_sources(
+            Some(empty_runtime_narrowing),
+            Some(primary_runtime_narrowing.clone()),
+        );
+
+        assert!(none_result.is_none());
+        assert_eq!(primary_only_result, Some(primary_runtime_narrowing.clone()));
+        assert_eq!(
+            secondary_only_result,
+            Some(primary_runtime_narrowing.clone())
+        );
+        assert!(empty_primary_result.is_none());
+        assert_eq!(
+            empty_primary_with_secondary_result,
+            Some(primary_runtime_narrowing)
+        );
+    }
+
+    #[test]
     fn delegate_child_prompt_summary_returns_none_when_narrowing_is_empty() {
         assert_eq!(
             ToolRuntimeConfig::default().delegate_child_prompt_summary(None),
@@ -3036,6 +3254,7 @@ mod tests {
         };
         let execution = ConstrainedSubagentExecution {
             mode: crate::conversation::ConstrainedSubagentMode::Async,
+            isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
             depth: 1,
             max_depth: 2,
             active_children: 0,
@@ -3043,6 +3262,7 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["web.fetch".to_owned()],
+            workspace_root: None,
             runtime_narrowing: narrowing,
             kernel_bound: false,
             identity: Some(ConstrainedSubagentIdentity {

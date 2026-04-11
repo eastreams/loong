@@ -24,8 +24,10 @@ mod sqlite;
 mod stage;
 mod system;
 mod system_registry;
+mod system_runtime;
 #[cfg(test)]
 mod tests;
+mod workspace_document;
 mod workspace_files;
 
 pub use canonical::{
@@ -37,7 +39,6 @@ pub use canonical::{
 pub use context::load_prompt_context;
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use durable_flush::flush_pre_compaction_durable_memory;
-pub(crate) use durable_recall::load_durable_recall_entries;
 pub use kernel_adapter::MvpMemoryAdapter;
 pub(crate) use orchestrator::run_compact_stage;
 pub use orchestrator::{
@@ -49,11 +50,12 @@ pub use orchestrator::{MemoryOrchestratorTestFaults, ScopedMemoryOrchestratorTes
 pub use protocol::{
     MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_READ_CONTEXT,
     MEMORY_OP_READ_STAGE_ENVELOPE, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW, MemoryContextEntry,
-    MemoryContextKind, WindowTurn, build_append_turn_request, build_read_context_request,
-    build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
-    build_replace_turns_request, build_replace_turns_request_with_expectation,
-    build_window_request, decode_memory_context_entries, decode_stage_envelope,
-    decode_window_turn_count, decode_window_turns, encode_stage_envelope_payload,
+    MemoryContextKind, MemoryCoreOperation, WindowTurn, build_append_turn_request,
+    build_read_context_request, build_read_stage_envelope_request,
+    build_read_stage_envelope_request_with_workspace_root, build_replace_turns_request,
+    build_replace_turns_request_with_expectation, build_window_request,
+    decode_memory_context_entries, decode_stage_envelope, decode_window_turn_count,
+    decode_window_turns, encode_stage_envelope_payload, parse_exact_memory_core_operation,
 };
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use sqlite::CanonicalMemorySearchHit;
@@ -65,22 +67,33 @@ pub use sqlite::{
     clear_session_direct, list_recent_sessions_direct,
 };
 pub use stage::{
-    DerivedMemoryKind, MemoryRetrievalRequest, MemoryStageFamily, StageDiagnostics, StageEnvelope,
-    StageOutcome, builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
+    DerivedMemoryKind, MemoryAuthority, MemoryContextProvenance, MemoryProvenanceSourceKind,
+    MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryStageFamily,
+    MemoryTrustLevel, StageDiagnostics, StageEnvelope, StageOutcome,
+    builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
 };
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
-    MemorySystemCapability, MemorySystemMetadata,
+    MemorySystemCapability, MemorySystemMetadata, MemorySystemRuntimeFallbackKind,
+    RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
+    WorkspaceRecallMemorySystem,
 };
+pub(crate) use system_registry::registered_memory_system_id;
+pub(crate) use system_registry::registered_memory_system_id_from_env;
 pub use system_registry::{
     MEMORY_SYSTEM_ENV, MemorySystemPolicySnapshot, MemorySystemRuntimeSnapshot,
     MemorySystemSelection, MemorySystemSelectionSource, collect_memory_system_runtime_snapshot,
     describe_memory_system, list_memory_system_ids, list_memory_system_metadata,
     memory_system_id_from_env, register_memory_system, resolve_memory_system,
-    resolve_memory_system_selection, supported_memory_system_kind_from_env,
+    resolve_memory_system_runtime, resolve_memory_system_selection,
+    supported_memory_system_kind_from_env,
 };
-pub(crate) use system_registry::{
-    registered_memory_system_id, registered_memory_system_id_from_env,
+pub use system_runtime::{
+    BuiltinMemorySystemRuntime, MemorySystemRuntime, MetadataOnlyMemorySystemRuntime,
+    SystemBackedMemorySystemRuntime,
+};
+pub(crate) use workspace_document::{
+    ParsedWorkspaceMemoryDocument, parse_workspace_memory_document,
 };
 pub(crate) use workspace_files::{
     WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
@@ -100,6 +113,27 @@ pub fn execute_memory_core(request: MemoryCoreRequest) -> Result<MemoryCoreOutco
     execute_memory_core_with_config(request, runtime_config::get_memory_runtime_config())
 }
 
+pub fn supported_memory_core_operations(backend: MemoryBackendKind) -> Vec<MemoryCoreOperation> {
+    match backend {
+        MemoryBackendKind::Sqlite => {
+            let mut operations = Vec::new();
+
+            #[cfg(feature = "memory-sqlite")]
+            {
+                operations.push(MemoryCoreOperation::AppendTurn);
+                operations.push(MemoryCoreOperation::Window);
+                operations.push(MemoryCoreOperation::ClearSession);
+                operations.push(MemoryCoreOperation::ReplaceTurns);
+            }
+
+            operations.push(MemoryCoreOperation::ReadContext);
+            operations.push(MemoryCoreOperation::ReadStageEnvelope);
+
+            operations
+        }
+    }
+}
+
 pub fn execute_memory_core_with_config(
     request: MemoryCoreRequest,
     config: &runtime_config::MemoryRuntimeConfig,
@@ -107,15 +141,27 @@ pub fn execute_memory_core_with_config(
     #[cfg(test)]
     test_support::record_core_dispatch();
 
+    let runtime = resolve_memory_system_runtime(config)?;
+
+    runtime.execute_core(request)
+}
+
+pub(crate) fn execute_builtin_backend_memory_core(
+    request: MemoryCoreRequest,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<MemoryCoreOutcome, String> {
+    let parsed_operation = parse_exact_memory_core_operation(request.operation.as_str());
     match config.backend {
-        MemoryBackendKind::Sqlite => match request.operation.as_str() {
-            MEMORY_OP_APPEND_TURN => append_turn(request, config),
-            MEMORY_OP_WINDOW => load_window(request, config),
-            MEMORY_OP_CLEAR_SESSION => clear_session(request, config),
-            MEMORY_OP_READ_CONTEXT => context::read_context(request, config),
-            MEMORY_OP_REPLACE_TURNS => replace_turns(request, config),
-            MEMORY_OP_READ_STAGE_ENVELOPE => context::read_stage_envelope(request, config),
-            _ => Ok(MemoryCoreOutcome {
+        MemoryBackendKind::Sqlite => match parsed_operation {
+            Some(MemoryCoreOperation::AppendTurn) => append_turn(request, config),
+            Some(MemoryCoreOperation::Window) => load_window(request, config),
+            Some(MemoryCoreOperation::ClearSession) => clear_session(request, config),
+            Some(MemoryCoreOperation::ReadContext) => context::read_context(request, config),
+            Some(MemoryCoreOperation::ReplaceTurns) => replace_turns(request, config),
+            Some(MemoryCoreOperation::ReadStageEnvelope) => {
+                context::read_stage_envelope(request, config)
+            }
+            None => Ok(MemoryCoreOutcome {
                 status: "ok".to_owned(),
                 payload: json!({
                     "adapter": "kv-core",
@@ -220,12 +266,42 @@ pub fn replace_session_turns_direct(
 }
 
 #[cfg(feature = "memory-sqlite")]
+use rusqlite::Connection;
+
+#[cfg(feature = "memory-sqlite")]
 pub fn window_direct(
     session_id: &str,
     limit: usize,
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<Vec<ConversationTurn>, String> {
     sqlite::window_direct(session_id, limit, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub fn transcript_direct_paged(
+    session_id: &str,
+    page_size: usize,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<Vec<ConversationTurn>, String> {
+    sqlite::transcript_direct_paged(session_id, page_size, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn window_direct_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    sqlite::window_direct_with_conn(conn, session_id, limit)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn transcript_direct_paged_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    page_size: usize,
+) -> Result<Vec<ConversationTurn>, String> {
+    sqlite::transcript_direct_paged_with_conn(conn, session_id, page_size)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -273,6 +349,7 @@ pub fn load_prompt_context_with_diagnostics(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<(Vec<MemoryContextEntry>, SqliteContextLoadDiagnostics), String> {
     let mut profile_entry = context::build_profile_entry(config);
+    let selected_system_id = selected_prompt_hydration_system_id(config);
 
     let (snapshot, diagnostics) =
         sqlite::load_context_snapshot_with_diagnostics(session_id, config)?;
@@ -294,6 +371,14 @@ pub fn load_prompt_context_with_diagnostics(
             kind: MemoryContextKind::Summary,
             role: "system".to_owned(),
             content: summary,
+            provenance: vec![MemoryContextProvenance::new(
+                selected_system_id.as_str(),
+                MemoryProvenanceSourceKind::SummaryCheckpoint,
+                Some(session_id.to_owned()),
+                None,
+                Some(MemoryScope::Session),
+                MemoryRecallMode::PromptAssembly,
+            )],
         });
     }
     for turn in snapshot.window_turns {
@@ -301,10 +386,26 @@ pub fn load_prompt_context_with_diagnostics(
             kind: MemoryContextKind::Turn,
             role: turn.role,
             content: turn.content,
+            provenance: vec![MemoryContextProvenance::new(
+                selected_system_id.as_str(),
+                MemoryProvenanceSourceKind::RecentWindowTurn,
+                Some(session_id.to_owned()),
+                None,
+                Some(MemoryScope::Session),
+                MemoryRecallMode::PromptAssembly,
+            )],
         });
     }
 
     Ok((entries, diagnostics))
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn selected_prompt_hydration_system_id(
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> String {
+    let selected_system_id = registered_memory_system_id(Some(config.selected_system_id()));
+    selected_system_id.unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned())
 }
 
 #[cfg(feature = "memory-sqlite")]

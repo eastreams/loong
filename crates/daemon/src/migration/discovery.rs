@@ -426,7 +426,10 @@ fn memory_sqlite_path_looks_default(
         && candidate_path
             .parent()
             .and_then(Path::file_name)
-            .is_some_and(|component| component == ".loongclaw")
+            .is_some_and(|component| {
+                component == mvp::config::HOME_DIR_NAME
+                    || component == mvp::config::LEGACY_HOME_DIR_NAME
+            })
 }
 
 fn map_surface_level(level: ImportSurfaceLevel) -> PreviewStatus {
@@ -686,7 +689,7 @@ mod tests {
     #[test]
     fn cli_import_surface_detects_prompt_pack_metadata_changes() {
         let mut config = mvp::config::LoongClawConfig::default();
-        config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+        config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
 
         let surfaces = collect_import_surfaces(&config);
 

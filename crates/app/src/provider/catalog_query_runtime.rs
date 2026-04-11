@@ -18,6 +18,7 @@ pub(super) async fn fetch_available_models_with_profiles(
 ) -> CliResult<Vec<String>> {
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
+    super::copilot_auth::ensure_provider_copilot_api_key(&config.provider).await?;
     validate_provider_auth_readiness(config).await?;
     let auth_context = super::transport::resolve_request_auth_context(&config.provider).await?;
     let headers = super::transport::build_request_headers_without_provider_auth(&config.provider)?;

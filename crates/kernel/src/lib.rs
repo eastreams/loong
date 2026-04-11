@@ -26,9 +26,10 @@ pub use architecture::{
     ArchitecturePathReport,
 };
 pub use audit::{
-    AuditEvent, AuditEventKind, AuditSink, AuditVerificationReport, ExecutionPlane,
-    FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink, NoopAuditSink, PlaneTier,
-    probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal,
+    AuditEvent, AuditEventKind, AuditRepairOutcome, AuditRepairReport, AuditSink,
+    AuditVerificationReport, ExecutionPlane, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
+    NoopAuditSink, PlaneTier, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
+    verify_jsonl_audit_journal,
 };
 pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
 pub use bootstrap::{
@@ -82,11 +83,20 @@ pub use runtime::{
 };
 pub use task_supervisor::TaskSupervisor;
 pub use tool::{
-    CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
-    ToolExtensionRequest, ToolPlane, ToolTier,
+    CoreToolAdapter, ToolConcurrencyClass, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
+    ToolExtensionOutcome, ToolExtensionRequest, ToolPlane, ToolTier,
 };
 
 pub mod test_support;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn unknown_concurrency_class_requires_serial_execution() {
+    assert!(!ToolConcurrencyClass::ReadOnly.requires_serial_execution());
+    assert!(ToolConcurrencyClass::Mutating.requires_serial_execution());
+    assert!(ToolConcurrencyClass::Unknown.requires_serial_execution());
+    assert_eq!(ToolConcurrencyClass::Unknown.as_str(), "unknown");
+}

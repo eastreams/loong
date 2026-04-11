@@ -176,9 +176,9 @@ impl DetectedEnvironmentGuard {
             })
             .collect::<Vec<_>>();
         let isolated_home = isolated_loongclaw_home("detected-env-home");
-        let saved_loongclaw_home = std::env::var_os("LOONGCLAW_HOME");
+        let saved_loongclaw_home = std::env::var_os("LOONG_HOME");
         unsafe {
-            std::env::set_var("LOONGCLAW_HOME", &isolated_home);
+            std::env::set_var("LOONG_HOME", &isolated_home);
         }
         let isolated_sqlite = isolated_sqlite_path("detected-env-memory");
         let saved_loongclaw_sqlite_path = std::env::var_os("LOONGCLAW_SQLITE_PATH");
@@ -186,7 +186,7 @@ impl DetectedEnvironmentGuard {
             std::env::set_var("LOONGCLAW_SQLITE_PATH", &isolated_sqlite);
         }
         let mut saved = saved;
-        saved.push(("LOONGCLAW_HOME".to_owned(), saved_loongclaw_home));
+        saved.push(("LOONG_HOME".to_owned(), saved_loongclaw_home));
         saved.push((
             "LOONGCLAW_SQLITE_PATH".to_owned(),
             saved_loongclaw_sqlite_path,
@@ -430,10 +430,28 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
                 options.len()
             ));
         }
-        options
+        let direct_match = options
             .iter()
-            .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
-            .ok_or_else(|| format!("invalid scripted selection input: {trimmed}"))
+            .position(|option| option.slug.eq_ignore_ascii_case(trimmed));
+
+        if let Some(index) = direct_match {
+            return Ok(index);
+        }
+
+        let parsed_personality = loongclaw_daemon::onboard_cli::parse_prompt_personality(trimmed);
+
+        if let Some(personality) = parsed_personality {
+            let canonical_slug = loongclaw_daemon::onboard_cli::prompt_personality_id(personality);
+            let canonical_match = options
+                .iter()
+                .position(|option| option.slug.eq_ignore_ascii_case(canonical_slug));
+
+            if let Some(index) = canonical_match {
+                return Ok(index);
+            }
+        }
+
+        Err(format!("invalid scripted selection input: {trimmed}"))
     }
 }
 
@@ -575,17 +593,17 @@ fn default_non_interactive_onboard_options(
 
 #[test]
 fn scripted_onboard_ui_select_one_accepts_slug_input() {
-    let mut ui = ScriptedOnboardUi::new(["friendly_collab"]);
+    let mut ui = ScriptedOnboardUi::new(["hermit"]);
     let options = vec![
         loongclaw_daemon::onboard_cli::SelectOption {
-            label: "calm engineering".to_owned(),
-            slug: "calm_engineering".to_owned(),
+            label: "classicist".to_owned(),
+            slug: "classicist".to_owned(),
             description: String::new(),
             recommended: true,
         },
         loongclaw_daemon::onboard_cli::SelectOption {
-            label: "friendly collab".to_owned(),
-            slug: "friendly_collab".to_owned(),
+            label: "hermit".to_owned(),
+            slug: "hermit".to_owned(),
             description: String::new(),
             recommended: false,
         },
@@ -599,6 +617,37 @@ fn scripted_onboard_ui_select_one_accepts_slug_input() {
         loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
     )
     .expect("scripted selection should accept slug input so integration tests stay aligned");
+
+    assert_eq!(index, 1);
+    assert_eq!(ui.transcript(), vec!["SELECT Personality".to_owned()]);
+}
+
+#[test]
+fn scripted_onboard_ui_select_one_accepts_legacy_personality_alias_input() {
+    let mut ui = ScriptedOnboardUi::new(["friendly_collab"]);
+    let options = vec![
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "classicist".to_owned(),
+            slug: "classicist".to_owned(),
+            description: String::new(),
+            recommended: true,
+        },
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "hermit".to_owned(),
+            slug: "hermit".to_owned(),
+            description: String::new(),
+            recommended: false,
+        },
+    ];
+
+    let index = loongclaw_daemon::onboard_cli::OnboardUi::select_one(
+        &mut ui,
+        "Personality",
+        &options,
+        Some(0),
+        loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
+    )
+    .expect("legacy personality aliases should stay accepted in scripted selection");
 
     assert_eq!(index, 1);
     assert_eq!(ui.transcript(), vec!["SELECT Personality".to_owned()]);
@@ -698,6 +747,18 @@ fn provider_default_env_mapping_is_stable() {
     );
     assert_eq!(
         loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+            mvp::config::ProviderKind::OpencodeZen
+        ),
+        Some("OPENCODE_API_KEY")
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+            mvp::config::ProviderKind::OpencodeGo
+        ),
+        Some("OPENCODE_API_KEY")
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::KimiCoding
         ),
         Some("KIMI_CODING_API_KEY")
@@ -729,6 +790,14 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
         "bedrock"
     );
     assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeZen),
+        "opencode_zen"
+    );
+    assert_eq!(
+        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeGo),
+        "opencode_go"
+    );
+    assert_eq!(
         loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Custom),
         "custom"
     );
@@ -737,16 +806,44 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
 #[test]
 fn parse_prompt_personality_accepts_supported_ids() {
     assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("classicist"),
+        Some(mvp::prompt::PromptPersonality::Classicist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("pragmatist"),
+        Some(mvp::prompt::PromptPersonality::Pragmatist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("idealist"),
+        Some(mvp::prompt::PromptPersonality::Idealist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("romanticist"),
+        Some(mvp::prompt::PromptPersonality::Romanticist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("hermit"),
+        Some(mvp::prompt::PromptPersonality::Hermit)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("cyber_radical"),
+        Some(mvp::prompt::PromptPersonality::CyberRadical)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("nihilist"),
+        Some(mvp::prompt::PromptPersonality::Nihilist)
+    );
+    assert_eq!(
         crate::onboard_cli::parse_prompt_personality("calm_engineering"),
-        Some(mvp::prompt::PromptPersonality::CalmEngineering)
+        Some(mvp::prompt::PromptPersonality::Classicist)
     );
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("friendly_collab"),
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("autonomous_executor"),
-        Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
+        Some(mvp::prompt::PromptPersonality::Pragmatist)
     );
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("unknown"),
@@ -816,7 +913,7 @@ async fn non_interactive_personality_and_memory_profile_are_persisted() {
             api_key_env: Some("OPENAI_API_KEY".to_owned()),
             web_search_provider: None,
             web_search_api_key_env: None,
-            personality: Some("friendly_collab".to_owned()),
+            personality: Some("hermit".to_owned()),
             memory_profile: Some("profile_plus_window".to_owned()),
             system_prompt: None,
             skip_model_probe: true,
@@ -839,11 +936,71 @@ async fn non_interactive_personality_and_memory_profile_are_persisted() {
         .expect("load non-interactive personality/memory config");
     assert_eq!(
         config.cli.personality,
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
     assert_eq!(
         config.memory.profile,
         mvp::config::MemoryProfile::ProfilePlusWindow
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_legacy_personality_alias_still_maps_to_supported_preset() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let output_path = unique_temp_path("non-interactive-legacy-personality-config.toml");
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: Some("openai".to_owned()),
+            model: Some("openai/gpt-5.1".to_owned()),
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: Some("friendly_collab".to_owned()),
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        std::iter::empty::<String>(),
+        None,
+        None,
+    )
+    .await
+    .expect("run non-interactive onboarding with legacy personality alias");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("onboarding complete")),
+        "non-interactive legacy personality path should still complete successfully: {transcript:#?}"
+    );
+
+    let raw_config = std::fs::read_to_string(&output_path).expect("read written config");
+    let canonical_personality = "personality = \"hermit\"";
+    let legacy_personality = "personality = \"friendly_collab\"";
+
+    assert!(
+        raw_config.contains(canonical_personality),
+        "non-interactive onboarding should persist the canonical personality id: {raw_config}"
+    );
+    assert!(
+        !raw_config.contains(legacy_personality),
+        "non-interactive onboarding should not persist the legacy alias: {raw_config}"
+    );
+
+    let (_, config) = mvp::config::load(output_path.to_str())
+        .expect("load non-interactive legacy personality config");
+
+    assert_eq!(
+        config.cli.personality,
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
 }
 
@@ -1090,6 +1247,88 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
         config.provider.authorization_header(),
         Some("Bearer test-openai-key".to_owned()),
         "runtime auth resolution should still fall back to OPENAI_API_KEY when the oauth env is unset"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_persists_github_copilot_oauth_env_binding() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-github-copilot-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+    unsafe {
+        std::env::set_var(
+            "GITHUB_COPILOT_OAUTH_TOKEN",
+            "test-github-copilot-oauth-token",
+        );
+    }
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.provider = Some("github-copilot".to_owned());
+    options.model = Some("copilot-test-model".to_owned());
+    options.skip_model_probe = true;
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context =
+        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("GitHub Copilot onboarding should reuse an existing OAuth token env in non-interactive mode");
+
+    let raw = std::fs::read_to_string(&output).expect("read written onboarding config");
+    assert!(
+        raw.contains("[providers.github-copilot.oauth_access_token]")
+            && raw.contains("env = \"GITHUB_COPILOT_OAUTH_TOKEN\""),
+        "GitHub Copilot onboarding should persist the OAuth env binding in the canonical secret field: {raw}"
+    );
+    assert!(
+        !raw.contains("oauth_access_token_env = "),
+        "GitHub Copilot onboarding should not keep the legacy oauth_access_token_env field: {raw}"
+    );
+
+    let (_, config) = mvp::config::load(Some(output.to_string_lossy().as_ref()))
+        .expect("load written onboarding config");
+    assert_eq!(
+        config.provider.kind,
+        mvp::config::ProviderKind::GithubCopilot
+    );
+    assert_eq!(config.provider.model, "copilot-test-model");
+    assert_eq!(
+        config.provider.oauth_access_token,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "GITHUB_COPILOT_OAUTH_TOKEN".to_owned(),
+        }),
+        "reloaded config should keep the routed OAuth env binding in the canonical oauth_access_token field"
+    );
+    assert_eq!(config.provider.oauth_access_token_env, None);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_rejects_github_copilot_without_oauth_token() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-github-copilot-missing-token-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.provider = Some("github-copilot".to_owned());
+    options.model = Some("copilot-test-model".to_owned());
+    options.skip_model_probe = true;
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context =
+        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    let error = loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect_err("GitHub Copilot onboarding should fail without a reusable OAuth token in non-interactive mode");
+
+    assert!(
+        error.contains("GITHUB_COPILOT_OAUTH_TOKEN"),
+        "missing-token error should name the expected GitHub Copilot env source: {error}"
+    );
+    assert!(
+        error.contains("--non-interactive"),
+        "missing-token error should explain why interactive device login was skipped: {error}"
     );
 }
 
@@ -1629,6 +1868,75 @@ async fn interactive_onboard_web_search_custom_env_persists_explicit_env_referen
         config.tools.web_search.tavily_api_key.as_deref(),
         Some("${TEAM_TAVILY_KEY}"),
         "interactive onboarding should persist the selected web-search env as an explicit env reference"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn interactive_onboard_firecrawl_web_search_custom_env_persists_explicit_env_reference() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let _openai_env = unsafe { EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token") };
+    let _firecrawl_env =
+        unsafe { EnvVarGuard::set_unlocked("TEAM_FIRECRAWL_KEY", "firecrawl-test-token") };
+    let output_path = unique_temp_path("interactive-firecrawl-web-search-env.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "firecrawl".to_owned(),
+            "TEAM_FIRECRAWL_KEY".to_owned(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        None,
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with custom firecrawl web search env");
+
+    let joined = transcript.join("\n");
+    assert!(
+        joined.contains("choose web search credential"),
+        "interactive onboarding should prompt for a web-search credential source when Firecrawl is selected: {transcript:#?}"
+    );
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load onboarding config with firecrawl");
+    assert_eq!(
+        config.tools.web_search.default_provider,
+        mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL
+    );
+    assert_eq!(
+        config.tools.web_search.firecrawl_api_key.as_deref(),
+        Some("${TEAM_FIRECRAWL_KEY}"),
+        "interactive onboarding should persist the selected Firecrawl env as an explicit env reference"
     );
 }
 
@@ -5465,9 +5773,30 @@ fn onboard_system_prompt_screen_wraps_long_current_prompt() {
 #[test]
 fn onboard_personality_selection_screen_shows_native_personality_choices() {
     let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+    config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
 
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
+    let expected_personality_ids = [
+        "classicist",
+        "pragmatist",
+        "idealist",
+        "romanticist",
+        "hermit",
+        "cyber_radical",
+        "nihilist",
+    ];
+    let selector_line_count = lines
+        .iter()
+        .filter(|line| {
+            expected_personality_ids
+                .iter()
+                .any(|personality_id| line.contains(&format!("{personality_id})")))
+        })
+        .count();
+    let experimental_line_count = lines
+        .iter()
+        .filter(|line| line.contains("experimental ·"))
+        .count();
 
     assert_compact_loongclaw_header(&lines, "personality screen");
     assert!(
@@ -5482,12 +5811,30 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
         lines.iter().any(|line| line == "step 4 of 8 · personality"),
         "personality screen should surface the native prompt-pack progress step: {lines:#?}"
     );
-    assert!(
-        lines.iter().any(|line| line.contains("friendly_collab)")),
-        "personality screen should keep the canonical friendly_collab selector visible without bracket syntax: {lines:#?}"
+
+    for personality_id in expected_personality_ids {
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("{personality_id})"))),
+            "personality screen should surface every catalog personality id: {lines:#?}"
+        );
+    }
+
+    assert_eq!(
+        selector_line_count, 7,
+        "personality screen should render exactly seven selector lines from the shared catalog: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| !line.contains("[friendly_collab]")),
+        lines.iter().any(|line| line.contains("experimental ·")),
+        "personality screen should mark sharper presets as experimental in the shared catalog-driven descriptions: {lines:#?}"
+    );
+    assert_eq!(
+        experimental_line_count, 2,
+        "personality screen should label both experimental personalities: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("[hermit]")),
         "personality screen should not imply that brackets are part of the expected selector syntax: {lines:#?}"
     );
 }
@@ -6493,6 +6840,7 @@ async fn onboard_current_setup_shortcut_can_install_minimax_office_pack() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_detected_setup_shortcut_flow_skips_detailed_edit_screens() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("detected-shortcut-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
@@ -6888,7 +7236,7 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             "OPENAI_API_KEY".to_owned(),
-            "2".to_owned(),
+            "hermit".to_owned(),
             String::new(),
             "3".to_owned(),
             String::new(),
@@ -6920,7 +7268,7 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
         .expect("load current-setup personality/memory config");
     assert_eq!(
         config.cli.personality,
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
     assert_eq!(
         config.memory.profile,
@@ -7190,7 +7538,7 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- personality: calm_engineering")),
+            .any(|line| line.contains("- personality: classicist")),
         "review should surface the active native personality during onboarding: {lines:#?}"
     );
     assert!(
@@ -7549,7 +7897,7 @@ fn onboarding_success_summary_uses_compact_header() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- personality: calm_engineering")),
+            .any(|line| line.contains("- personality: classicist")),
         "success summary should include the selected native personality: {lines:#?}"
     );
     assert!(
@@ -7627,7 +7975,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
             value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
-        personality: Some("calm_engineering".to_owned()),
+        personality: Some("classicist".to_owned()),
         prompt_addendum: None,
         memory_profile: "window_only".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),
@@ -7734,7 +8082,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
             value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
-        personality: Some("friendly_collab".to_owned()),
+        personality: Some("hermit".to_owned()),
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),
@@ -7805,7 +8153,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
             value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
-        personality: Some("friendly_collab".to_owned()),
+        personality: Some("hermit".to_owned()),
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),

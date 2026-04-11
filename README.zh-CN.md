@@ -285,7 +285,7 @@ api_key = { env = "PROVIDER_API_KEY" }
 ```
 
 现在 onboarding 也支持选择默认的 web search backend。当前支持
-`duckduckgo`、`brave`、`tavily`、`perplexity`、`exa`、`jina`。
+`duckduckgo`、`brave`、`tavily`、`perplexity`、`exa`、`firecrawl`、`jina`。
 如果你直接接受默认值，LoongClaw 会在通用场景下使用 DuckDuckGo；当本地
 语言/时区/网络特征更像中国大陆环境时，会优先推荐 Tavily。若你选择的
 provider 需要密钥，onboarding 会立刻继续询问“用哪个环境变量承载这份凭据”，
@@ -301,6 +301,7 @@ default_provider = "duckduckgo"
 # tavily_api_key = "${TAVILY_API_KEY}"
 # perplexity_api_key = "${PERPLEXITY_API_KEY}"
 # exa_api_key = "${EXA_API_KEY}"
+# firecrawl_api_key = "${FIRECRAWL_API_KEY}"
 # jina_api_key = "${JINA_API_KEY}"
 # 或 "${JINA_AUTH_TOKEN}"
 ```
@@ -426,13 +427,14 @@ blocked_domains = ["*.internal.example"]
 
 [tools.web_search]
 enabled = true
-default_provider = "duckduckgo" # 也可以用 "ddg"、"brave"、"tavily"、"perplexity"、"exa"、"jina"
+default_provider = "duckduckgo" # 也可以用 "ddg"、"brave"、"tavily"、"perplexity"、"exa"、"firecrawl"、"jina"
 timeout_seconds = 30
 max_results = 5
 # brave_api_key = "${BRAVE_API_KEY}"
 # tavily_api_key = "${TAVILY_API_KEY}"
 # perplexity_api_key = "${PERPLEXITY_API_KEY}"
 # exa_api_key = "${EXA_API_KEY}"
+# firecrawl_api_key = "${FIRECRAWL_API_KEY}"
 # jina_api_key = "${JINA_API_KEY}"
 # 或 "${JINA_AUTH_TOKEN}"
 ```
@@ -449,8 +451,8 @@ prefix_rule(pattern=["cargo", "publish"], decision="deny")
 
 进一步参考：
 
-- `default_provider` 支持 `duckduckgo`（或 `ddg`）、`brave`、`tavily`、`perplexity`（或 `perplexity_search`）、`exa`、`jina`（或 `jinaai` / `jina-ai`）
-- `BRAVE_API_KEY`、`TAVILY_API_KEY`、`PERPLEXITY_API_KEY`、`EXA_API_KEY`、`JINA_API_KEY`、`JINA_AUTH_TOKEN` 都可以作为环境变量回退
+- `default_provider` 支持 `duckduckgo`（或 `ddg`）、`brave`、`tavily`、`perplexity`（或 `perplexity_search`）、`exa`、`firecrawl`、`jina`（或 `jinaai` / `jina-ai`）
+- `BRAVE_API_KEY`、`TAVILY_API_KEY`、`PERPLEXITY_API_KEY`、`EXA_API_KEY`、`FIRECRAWL_API_KEY`、`JINA_API_KEY`、`JINA_AUTH_TOKEN` 都可以作为环境变量回退
 - [工具表面规格](docs/product-specs/tool-surface.md)
 - [产品规格](docs/product-specs/index.md)
 - `loong validate-config --config ~/.loongclaw/config.toml --json`

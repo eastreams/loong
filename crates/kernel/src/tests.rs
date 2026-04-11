@@ -8,10 +8,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use proptest::prelude::*;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::audit::{
-    AuditEvent, AuditEventKind, AuditSink, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
-    probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal,
+    AuditEvent, AuditEventKind, AuditRepairOutcome, AuditSink, FanoutAuditSink, InMemoryAuditSink,
+    JsonlAuditSink, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
+    verify_jsonl_audit_journal,
 };
 use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
@@ -49,6 +51,19 @@ fn sample_audit_event(event_id: &str, timestamp_epoch_s: u64) -> AuditEvent {
             required_capabilities: vec![Capability::InvokeTool],
         },
     }
+}
+
+fn compute_test_entry_hash(event: &AuditEvent, prev_hash: Option<&str>) -> String {
+    let material = serde_json::to_vec(&json!({
+        "event_id": event.event_id,
+        "timestamp_epoch_s": event.timestamp_epoch_s,
+        "agent_id": event.agent_id,
+        "kind": event.kind,
+        "prev_hash": prev_hash,
+    }))
+    .expect("serialize audit chain material");
+    let digest = Sha256::digest(material);
+    hex::encode(digest)
 }
 
 #[test]
@@ -144,6 +159,127 @@ fn verify_jsonl_audit_journal_accepts_legacy_prefix_before_protected_entries() {
     assert_eq!(report.total_events, 2);
     assert_eq!(report.verified_events, 1);
     assert!(report.last_entry_hash.is_some());
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_reports_healthy_for_valid_chain() {
+    let path = fresh_audit_temp_path("jsonl-repair-healthy");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-repair-healthy-1", 600))
+        .expect("first event should record");
+    sink.record(sample_audit_event("evt-repair-healthy-2", 601))
+        .expect("second event should record");
+
+    let original_contents = fs::read_to_string(&path).expect("read original journal");
+    let report = repair_jsonl_audit_journal(&path).expect("repair should succeed");
+    let repaired_contents = fs::read_to_string(&path).expect("read repaired journal");
+
+    assert_eq!(report.total_events, 2);
+    assert_eq!(report.repaired_events, 0);
+    assert_eq!(report.already_valid_events, 2);
+    assert_eq!(report.outcome, AuditRepairOutcome::Healthy);
+    assert_eq!(repaired_contents, original_contents);
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_repairs_legacy_prefix_and_reseals_tail() {
+    let path = fresh_audit_temp_path("jsonl-repair-legacy-prefix");
+    let legacy_event = sample_audit_event("evt-repair-legacy-1", 700);
+    let legacy_line = serde_json::to_string(&legacy_event).expect("serialize legacy event");
+    let legacy_contents = format!("{legacy_line}\n");
+
+    fs::write(&path, legacy_contents).expect("write legacy journal");
+
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-repair-tail-1", 701))
+        .expect("protected event should record");
+
+    let report = repair_jsonl_audit_journal(&path).expect("repair should succeed");
+    let verify_report = verify_jsonl_audit_journal(&path).expect("verify repaired journal");
+
+    assert_eq!(report.total_events, 2);
+    assert_eq!(report.repaired_events, 2);
+    assert_eq!(report.already_valid_events, 0);
+    assert_eq!(report.outcome, AuditRepairOutcome::Repaired);
+    assert!(verify_report.valid);
+    assert_eq!(verify_report.verified_events, 2);
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_refuses_tampered_entry_hash() {
+    let path = fresh_audit_temp_path("jsonl-repair-tamper");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-repair-tamper-1", 800))
+        .expect("first event should record");
+    sink.record(sample_audit_event("evt-repair-tamper-2", 801))
+        .expect("second event should record");
+
+    let original_contents = fs::read_to_string(&path).expect("read audit journal");
+    let tampered_contents =
+        original_contents.replacen("evt-repair-tamper-2", "evt-repair-tamper-x", 1);
+
+    fs::write(&path, &tampered_contents).expect("rewrite tampered audit journal");
+
+    let report = repair_jsonl_audit_journal(&path).expect("repair should report refusal");
+    let after_contents = fs::read_to_string(&path).expect("read journal after refusal");
+
+    assert_eq!(report.total_events, 2);
+    assert_eq!(report.repaired_events, 0);
+    assert_eq!(report.already_valid_events, 1);
+    assert_eq!(
+        report.outcome,
+        AuditRepairOutcome::Refused {
+            line: 2,
+            reason: "entry_hash mismatch — event data may be tampered".to_owned(),
+        }
+    );
+    assert_eq!(after_contents, tampered_contents);
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_refuses_first_protected_row_with_prev_hash() {
+    let path = fresh_audit_temp_path("jsonl-repair-prev-hash");
+    let event = sample_audit_event("evt-repair-prev-hash-1", 900);
+    let prev_hash = "unexpected-prev-hash".to_owned();
+    let entry_hash = compute_test_entry_hash(&event, Some(&prev_hash));
+    let encoded = serde_json::to_string(&json!({
+        "event_id": event.event_id,
+        "timestamp_epoch_s": event.timestamp_epoch_s,
+        "agent_id": event.agent_id,
+        "kind": event.kind,
+        "integrity": {
+            "algorithm": "sha256",
+            "prev_hash": prev_hash,
+            "entry_hash": entry_hash,
+        },
+    }))
+    .expect("serialize protected audit event");
+
+    fs::write(&path, format!("{encoded}\n")).expect("write forged journal");
+
+    let report = repair_jsonl_audit_journal(&path).expect("repair should report refusal");
+
+    assert_eq!(report.total_events, 1);
+    assert_eq!(report.repaired_events, 0);
+    assert_eq!(report.already_valid_events, 0);
+    assert_eq!(
+        report.outcome,
+        AuditRepairOutcome::Refused {
+            line: 1,
+            reason: "prev_hash mismatch in source chain".to_owned(),
+        }
+    );
 
     let _ = fs::remove_file(path);
 }

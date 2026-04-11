@@ -172,6 +172,7 @@
                      "activeProvider":  "当前 Provider",
                      "model":  "模型",
                      "endpoint":  "API 地址",
+                     "catalogLoadFailed":  "Provider 列表加载失败，当前只显示已选项。你本地正在运行的 Web API 很可能还没有 `/api/providers/catalog` 这条路由。",
                      "apiKey":  "API Key",
                      "apiKeyPlaceholder":  "请输入 API Key",
                      "apiKeyPlaceholderConfigured":  "输入新的 API Key（可选）",

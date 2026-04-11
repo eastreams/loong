@@ -1,14 +1,19 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(not(feature = "tool-file"))]
 use std::path::Path;
 use std::sync::OnceLock;
 
+use loongclaw_kernel::ToolConcurrencyClass;
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::Digest;
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ToolConfig;
-use crate::conversation::{ConstrainedSubagentContractView, ConstrainedSubagentProfile};
+use crate::conversation::ConstrainedSubagentContractView;
+#[cfg(test)]
+use crate::conversation::ConstrainedSubagentProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolExecutionKind {
@@ -245,6 +250,7 @@ pub struct ToolDescriptor {
     pub visibility_gate: ToolVisibilityGate,
     capability_action_class: CapabilityActionClass,
     policy: ToolPolicyDescriptor,
+    concurrency_class: ToolConcurrencyClass,
     provider_definition_builder: fn(&ToolDescriptor) -> Value,
 }
 
@@ -293,6 +299,10 @@ impl ToolDescriptor {
         self.policy.scheduling_class
     }
 
+    pub fn concurrency_class(&self) -> ToolConcurrencyClass {
+        self.concurrency_class
+    }
+
     pub fn governance_profile(&self) -> ToolGovernanceProfile {
         self.policy.governance_profile
     }
@@ -320,6 +330,7 @@ pub struct ToolCatalogEntry {
     pub availability: ToolAvailability,
     pub capability_action_class: CapabilityActionClass,
     pub scheduling_class: ToolSchedulingClass,
+    pub concurrency_class: ToolConcurrencyClass,
 }
 
 impl ToolCatalogEntry {
@@ -384,6 +395,18 @@ impl ToolView {
 #[derive(Debug, Clone)]
 pub struct ToolCatalog {
     descriptors: Vec<ToolDescriptor>,
+    descriptor_indices: BTreeMap<&'static str, usize>,
+    resolved_name_indices: BTreeMap<&'static str, usize>,
+    all_entries: Box<[ToolCatalogEntry]>,
+    provider_core_entries: Box<[ToolCatalogEntry]>,
+    discoverable_entries: Box<[ToolCatalogEntry]>,
+    catalog_digest: String,
+}
+
+struct ToolCatalogEntryCaches {
+    all_entries: Box<[ToolCatalogEntry]>,
+    provider_core_entries: Box<[ToolCatalogEntry]>,
+    discoverable_entries: Box<[ToolCatalogEntry]>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -422,19 +445,140 @@ const fn runtime_messaging_tool_availability() -> ToolAvailability {
 
 impl ToolCatalog {
     pub fn descriptor(&self, tool_name: &str) -> Option<&ToolDescriptor> {
-        self.descriptors
-            .iter()
-            .find(|descriptor| descriptor.name == tool_name)
+        let index = self.descriptor_indices.get(tool_name)?;
+        self.descriptors.get(*index)
     }
 
     pub fn resolve(&self, raw_tool_name: &str) -> Option<&ToolDescriptor> {
-        self.descriptors
-            .iter()
-            .find(|descriptor| descriptor.matches_name(raw_tool_name))
+        let index = self.resolved_name_indices.get(raw_tool_name)?;
+        self.descriptors.get(*index)
     }
 
     pub fn descriptors(&self) -> &[ToolDescriptor] {
         &self.descriptors
+    }
+
+    fn all_entries(&self) -> &[ToolCatalogEntry] {
+        &self.all_entries
+    }
+
+    fn provider_core_entries(&self) -> &[ToolCatalogEntry] {
+        &self.provider_core_entries
+    }
+
+    fn discoverable_entries(&self) -> &[ToolCatalogEntry] {
+        &self.discoverable_entries
+    }
+
+    fn catalog_digest(&self) -> &str {
+        self.catalog_digest.as_str()
+    }
+}
+
+fn feishu_declared_concurrency_class(tool_name: &str) -> Option<ToolConcurrencyClass> {
+    if !tool_name.starts_with("feishu.") {
+        return None;
+    }
+
+    if tool_name == "feishu.messages.resource.get" {
+        // This downloads remote content into the configured local file root.
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    let tags = tool_tags(tool_name);
+
+    if tags.contains(&"read") {
+        return Some(ToolConcurrencyClass::ReadOnly);
+    }
+
+    if tags.contains(&"write") {
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    if tags.contains(&"update") {
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    if tags.contains(&"callback") {
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    None
+}
+
+fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
+    let explicit_class = match tool_name {
+        "tool.search"
+        | "external_skills.resolve"
+        | "external_skills.search"
+        | "external_skills.recommend"
+        | "external_skills.source_search"
+        | "external_skills.inspect"
+        | "external_skills.list"
+        | "approval_request_status"
+        | "approval_requests_list"
+        | "session_events"
+        | "session_tool_policy_status"
+        | "session_search"
+        | "session_status"
+        | "session_wait"
+        | "sessions_history"
+        | "sessions_list"
+        | "file.read"
+        | "glob.search"
+        | "content.search"
+        | "memory_search"
+        | "memory_get"
+        | "browser.companion.snapshot"
+        | "browser.companion.wait"
+        | "browser.extract"
+        | "web.fetch"
+        | "web.search" => Some(ToolConcurrencyClass::ReadOnly),
+        "config.import"
+        | "external_skills.fetch"
+        | "external_skills.install"
+        | "external_skills.invoke"
+        | "external_skills.policy"
+        | "external_skills.remove"
+        | "provider.switch"
+        | "approval_request_resolve"
+        | "delegate"
+        | "delegate_async"
+        | "session_archive"
+        | "session_cancel"
+        | "session_tool_policy_set"
+        | "session_tool_policy_clear"
+        | "session_recover"
+        | "sessions_send"
+        | "http.request"
+        | "file.write"
+        | "file.edit"
+        | "shell.exec"
+        | "bash.exec"
+        | "browser.click"
+        | "browser.companion.click"
+        | "browser.companion.navigate"
+        | "browser.companion.session.start"
+        | "browser.companion.session.stop"
+        | "browser.companion.type"
+        | "browser.open" => Some(ToolConcurrencyClass::Mutating),
+        _ => None,
+    };
+
+    if let Some(explicit_class) = explicit_class {
+        return explicit_class;
+    }
+
+    if let Some(feishu_class) = feishu_declared_concurrency_class(tool_name) {
+        return feishu_class;
+    }
+
+    ToolConcurrencyClass::Unknown
+}
+
+fn annotate_tool_concurrency_classes(descriptors: &mut [ToolDescriptor]) {
+    for descriptor in descriptors {
+        descriptor.concurrency_class = declared_concurrency_class(descriptor.name);
     }
 }
 
@@ -451,6 +595,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::Discover,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: tool_search_definition,
         },
         ToolDescriptor {
@@ -464,6 +609,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: tool_invoke_definition,
         },
         ToolDescriptor {
@@ -477,6 +623,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: config_import_definition,
         },
         ToolDescriptor {
@@ -490,6 +637,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityFetch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_fetch_definition,
         },
         ToolDescriptor {
@@ -503,6 +651,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_resolve_definition,
         },
         ToolDescriptor {
@@ -516,6 +665,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_search_definition,
         },
         ToolDescriptor {
@@ -529,6 +679,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_recommend_definition,
         },
         ToolDescriptor {
@@ -542,6 +693,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_source_search_definition,
         },
         ToolDescriptor {
@@ -555,6 +707,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_inspect_definition,
         },
         ToolDescriptor {
@@ -568,6 +721,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityInstall,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_install_definition,
         },
         ToolDescriptor {
@@ -581,6 +735,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityLoad,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_invoke_definition,
         },
         ToolDescriptor {
@@ -594,6 +749,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_list_definition,
         },
         ToolDescriptor {
@@ -607,6 +763,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_policy_definition,
         },
         ToolDescriptor {
@@ -620,6 +777,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_remove_definition,
         },
         ToolDescriptor {
@@ -633,6 +791,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::RuntimeSwitch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: provider_switch_definition,
         },
         ToolDescriptor {
@@ -646,6 +805,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: approval_request_resolve_definition,
         },
         ToolDescriptor {
@@ -659,6 +819,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: approval_request_status_definition,
         },
         ToolDescriptor {
@@ -672,6 +833,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: approval_requests_list_definition,
         },
         ToolDescriptor {
@@ -685,6 +847,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Delegate,
             capability_action_class: CapabilityActionClass::TopologyExpand,
             policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: delegate_definition,
         },
         ToolDescriptor {
@@ -698,6 +861,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Delegate,
             capability_action_class: CapabilityActionClass::TopologyExpand,
             policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: delegate_async_definition,
         },
         ToolDescriptor {
@@ -711,6 +875,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_archive_definition,
         },
         ToolDescriptor {
@@ -724,7 +889,22 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_cancel_definition,
+        },
+        ToolDescriptor {
+            name: "session_continue",
+            provider_name: "session_continue",
+            aliases: &[],
+            description: "Continue a visible delegate child session with a follow-up task",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_continue_definition,
         },
         ToolDescriptor {
             name: "session_events",
@@ -737,6 +917,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_events_definition,
         },
         ToolDescriptor {
@@ -750,6 +931,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_tool_policy_status_definition,
         },
         ToolDescriptor {
@@ -763,6 +945,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_tool_policy_set_definition,
         },
         ToolDescriptor {
@@ -776,6 +959,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_tool_policy_clear_definition,
         },
         ToolDescriptor {
@@ -789,6 +973,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_search_definition,
         },
         ToolDescriptor {
@@ -802,6 +987,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_recover_definition,
         },
         ToolDescriptor {
@@ -815,6 +1001,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_status_definition,
         },
         ToolDescriptor {
@@ -828,6 +1015,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_wait_definition,
         },
         ToolDescriptor {
@@ -841,6 +1029,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: sessions_history_definition,
         },
         ToolDescriptor {
@@ -854,6 +1043,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: sessions_list_definition,
         },
         ToolDescriptor {
@@ -867,6 +1057,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Messages,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: sessions_send_definition,
         },
     ];
@@ -1148,7 +1339,36 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: file_read_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "glob.search",
+            provider_name: "glob_search",
+            aliases: &[],
+            description: "Search the workspace for files matching a glob pattern",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: glob_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "content.search",
+            provider_name: "content_search",
+            aliases: &[],
+            description: "Search workspace file contents for a text match with bounded results",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: content_search_definition,
         });
         descriptors.push(ToolDescriptor {
             name: "memory_search",
@@ -1161,6 +1381,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::MemorySearchCorpus,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: memory_search_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1174,6 +1395,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::MemoryFileRoot,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: memory_get_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1187,6 +1409,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: file_write_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1200,6 +1423,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: file_edit_definition,
         });
     }
@@ -1217,6 +1441,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: shell_exec_definition,
         });
     }
@@ -1234,6 +1459,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BashRuntime,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: bash_exec_definition,
         });
     }
@@ -1251,6 +1477,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Browser,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1264,6 +1491,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1277,6 +1505,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_navigate_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1290,6 +1519,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_session_start_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1303,6 +1533,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_session_stop_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1316,6 +1547,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_snapshot_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1329,6 +1561,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_type_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1342,6 +1575,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_wait_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1355,6 +1589,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Browser,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_extract_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1369,7 +1604,27 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Browser,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_open_definition,
+        });
+    }
+
+    #[cfg(feature = "tool-http")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "http.request",
+            provider_name: "http_request",
+            aliases: &["http_request"],
+            description:
+                "Send a bounded HTTP request with status, headers, and text or binary body output",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::WebFetch,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: http_request_definition,
         });
     }
 
@@ -1386,6 +1641,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::WebFetch,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: web_fetch_definition,
         });
     }
@@ -1404,12 +1660,96 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::WebSearch,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: web_search_definition,
         });
     }
 
+    annotate_tool_concurrency_classes(&mut descriptors);
     descriptors.sort_by(|left, right| left.name.cmp(right.name));
-    ToolCatalog { descriptors }
+
+    let descriptor_indices = build_descriptor_indices(descriptors.as_slice());
+    let resolved_name_indices = build_resolved_name_indices(descriptors.as_slice());
+    let entry_caches = build_tool_catalog_entry_caches(descriptors.as_slice());
+    let all_entries = entry_caches.all_entries;
+    let provider_core_entries = entry_caches.provider_core_entries;
+    let discoverable_entries = entry_caches.discoverable_entries;
+    let catalog_digest = build_tool_catalog_digest(all_entries.as_ref());
+
+    ToolCatalog {
+        descriptors,
+        descriptor_indices,
+        resolved_name_indices,
+        all_entries,
+        provider_core_entries,
+        discoverable_entries,
+        catalog_digest,
+    }
+}
+
+fn build_descriptor_indices(descriptors: &[ToolDescriptor]) -> BTreeMap<&'static str, usize> {
+    let mut descriptor_indices = BTreeMap::new();
+
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        descriptor_indices.insert(descriptor.name, index);
+    }
+
+    descriptor_indices
+}
+
+fn build_resolved_name_indices(descriptors: &[ToolDescriptor]) -> BTreeMap<&'static str, usize> {
+    let mut resolved_name_indices = BTreeMap::new();
+
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        resolved_name_indices
+            .entry(descriptor.name)
+            .or_insert(index);
+        resolved_name_indices
+            .entry(descriptor.provider_name)
+            .or_insert(index);
+
+        for alias in descriptor.aliases {
+            resolved_name_indices.entry(*alias).or_insert(index);
+        }
+    }
+
+    resolved_name_indices
+}
+
+fn build_tool_catalog_entry_caches(descriptors: &[ToolDescriptor]) -> ToolCatalogEntryCaches {
+    let mut all_entries = Vec::new();
+    let mut provider_core_entries = Vec::new();
+    let mut discoverable_entries = Vec::new();
+
+    for descriptor in descriptors {
+        let entry = descriptor_to_entry(descriptor);
+
+        if descriptor.is_provider_core() {
+            provider_core_entries.push(entry);
+        }
+
+        if descriptor.is_discoverable() {
+            discoverable_entries.push(entry);
+        }
+
+        all_entries.push(entry);
+    }
+
+    ToolCatalogEntryCaches {
+        all_entries: all_entries.into_boxed_slice(),
+        provider_core_entries: provider_core_entries.into_boxed_slice(),
+        discoverable_entries: discoverable_entries.into_boxed_slice(),
+    }
+}
+
+fn build_tool_catalog_digest(entries: &[ToolCatalogEntry]) -> String {
+    let payload = serde_json::to_vec(entries).unwrap_or_default();
+    let digest = sha2::Sha256::digest(payload);
+    hex::encode(digest)
+}
+
+pub(crate) fn stable_tool_catalog_digest() -> &'static str {
+    tool_catalog().catalog_digest()
 }
 
 pub fn tool_catalog() -> &'static ToolCatalog {
@@ -1476,41 +1816,15 @@ pub fn planned_delegate_child_tool_view() -> ToolView {
 }
 
 pub fn delegate_child_tool_view_for_config(config: &ToolConfig) -> ToolView {
-    delegate_child_tool_view_for_config_with_delegate(config, false)
+    delegate_child_tool_view_with_constraints(
+        config,
+        &config.delegate.child_tool_allowlist,
+        config.delegate.allow_shell_in_child,
+        false,
+    )
 }
 
-pub fn delegate_child_tool_view_for_contract(
-    config: &ToolConfig,
-    subagent_contract: Option<&ConstrainedSubagentContractView>,
-) -> ToolView {
-    let subagent_profile =
-        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
-    delegate_child_tool_view_for_profile(config, subagent_profile)
-}
-
-pub fn delegate_child_tool_view_for_runtime_config_and_contract(
-    config: &ToolConfig,
-    runtime_config: &ToolRuntimeConfig,
-    subagent_contract: Option<&ConstrainedSubagentContractView>,
-) -> ToolView {
-    let subagent_profile =
-        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
-    let allow_delegate = subagent_profile
-        .map(ConstrainedSubagentProfile::allows_child_delegation)
-        .unwrap_or(false);
-    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
-}
-
-pub fn delegate_child_tool_view_for_profile(
-    config: &ToolConfig,
-    subagent_profile: Option<ConstrainedSubagentProfile>,
-) -> ToolView {
-    let allow_delegate = subagent_profile
-        .map(ConstrainedSubagentProfile::allows_child_delegation)
-        .unwrap_or(false);
-    build_delegate_child_tool_view(config, None, allow_delegate)
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn delegate_child_tool_view_for_runtime_config(
     config: &ToolConfig,
     runtime_config: &ToolRuntimeConfig,
@@ -1522,31 +1836,72 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
     config: &ToolConfig,
     allow_delegate: bool,
 ) -> ToolView {
-    build_delegate_child_tool_view(config, None, allow_delegate)
+    build_delegate_child_tool_view(
+        config,
+        None,
+        &config.delegate.child_tool_allowlist,
+        config.delegate.allow_shell_in_child,
+        allow_delegate,
+    )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn delegate_child_tool_view_for_runtime_config_with_delegate(
     config: &ToolConfig,
     runtime_config: &ToolRuntimeConfig,
     allow_delegate: bool,
 ) -> ToolView {
-    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
+    build_delegate_child_tool_view(
+        config,
+        Some(runtime_config),
+        &config.delegate.child_tool_allowlist,
+        config.delegate.allow_shell_in_child,
+        allow_delegate,
+    )
+}
+
+pub fn delegate_child_tool_view_with_constraints(
+    config: &ToolConfig,
+    child_tool_allowlist: &[String],
+    allow_shell_in_child: bool,
+    allow_delegate: bool,
+) -> ToolView {
+    build_delegate_child_tool_view(
+        config,
+        None,
+        child_tool_allowlist,
+        allow_shell_in_child,
+        allow_delegate,
+    )
+}
+
+pub fn delegate_child_tool_view_for_contract(
+    config: &ToolConfig,
+    contract: Option<&ConstrainedSubagentContractView>,
+) -> ToolView {
+    let Some(contract) = contract else {
+        return delegate_child_tool_view_for_config_with_delegate(config, false);
+    };
+    let allow_delegate = contract.allows_child_delegation();
+    let allow_shell_in_child = contract.allow_shell_in_child.unwrap_or(false);
+    delegate_child_tool_view_with_constraints(
+        config,
+        &contract.child_tool_allowlist,
+        allow_shell_in_child,
+        allow_delegate,
+    )
 }
 
 fn build_delegate_child_tool_view(
     config: &ToolConfig,
     runtime_config: Option<&ToolRuntimeConfig>,
+    child_tool_allowlist: &[String],
+    allow_shell_in_child: bool,
     allow_delegate: bool,
 ) -> ToolView {
     let catalog = tool_catalog();
     let mut names = Vec::new();
-    let allowlist = BTreeSet::<&str>::from_iter(
-        config
-            .delegate
-            .child_tool_allowlist
-            .iter()
-            .map(String::as_str),
-    );
+    let allowlist = BTreeSet::<&str>::from_iter(child_tool_allowlist.iter().map(String::as_str));
 
     for descriptor in catalog.descriptors().iter().filter(|descriptor| {
         descriptor.execution_kind == ToolExecutionKind::Core
@@ -1556,7 +1911,7 @@ fn build_delegate_child_tool_view(
             "shell.exec" =>
             {
                 #[cfg(feature = "tool-shell")]
-                if config.delegate.allow_shell_in_child {
+                if allow_shell_in_child {
                     names.push(descriptor.name);
                 }
             }
@@ -1621,33 +1976,24 @@ fn tool_visibility_gate_enabled_for_delegate_child(
 }
 
 pub fn provider_core_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .filter(|descriptor| descriptor.is_provider_core())
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().provider_core_entries().to_vec()
 }
 
 pub fn discoverable_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .filter(|descriptor| descriptor.is_discoverable())
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().discoverable_entries().to_vec()
 }
 
 pub fn all_tool_catalog() -> Vec<ToolCatalogEntry> {
-    tool_catalog()
-        .descriptors()
-        .iter()
-        .map(descriptor_to_entry)
-        .collect()
+    tool_catalog().all_entries().to_vec()
 }
 
 pub fn find_tool_catalog_entry(name: &str) -> Option<ToolCatalogEntry> {
-    tool_catalog().resolve(name).map(descriptor_to_entry)
+    let catalog = tool_catalog();
+    let descriptor = catalog.resolve(name)?;
+    let index = catalog.descriptor_indices.get(descriptor.name)?;
+    let entry = catalog.all_entries().get(*index)?;
+
+    Some(*entry)
 }
 
 fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
@@ -1664,6 +2010,7 @@ fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
         availability: descriptor.availability,
         capability_action_class: descriptor.capability_action_class(),
         scheduling_class: descriptor.scheduling_class(),
+        concurrency_class: descriptor.concurrency_class(),
     }
 }
 
@@ -1788,7 +2135,7 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "English natural-language description of the tool capability you need."
+                        "description": "Natural-language description of the tool capability you need. Any language is acceptable."
                     },
                     "exact_tool_id": {
                         "type": "string",
@@ -1800,10 +2147,6 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
                     }
                 },
                 "required": [],
-                "anyOf": [
-                    { "required": ["query"] },
-                    { "required": ["exact_tool_id"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -2279,10 +2622,6 @@ fn external_skills_fetch_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Maximum download size in bytes. Defaults to 5242880 and is capped at 20971520."
                     }
                 },
-                "anyOf": [
-                    { "required": ["reference"] },
-                    { "required": ["url"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -2452,10 +2791,6 @@ fn external_skills_install_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Replace an existing installed skill with the same id. Defaults to false."
                     }
                 },
-                "anyOf": [
-                    { "required": ["path"] },
-                    { "required": ["bundled_skill_id"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -2567,9 +2902,93 @@ fn file_write_definition(descriptor: &ToolDescriptor) -> Value {
                     "create_dirs": {
                         "type": "boolean",
                         "description": "Create parent directories when missing. Defaults to true."
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Allow replacing an existing file. Defaults to false."
                     }
                 },
                 "required": ["path", "content"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn glob_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern to match against workspace-relative paths."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path. Defaults to the configured file root."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Optional maximum number of matches to return. Defaults to 50."
+                    },
+                    "include_directories": {
+                        "type": "boolean",
+                        "description": "Include matching directories in addition to files. Defaults to false."
+                    }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn content_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Text to search for inside workspace files."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path. Defaults to the configured file root."
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional glob filter applied to workspace-relative file paths before content scanning."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Optional maximum number of matches to return. Defaults to 20."
+                    },
+                    "max_bytes_per_file": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1_048_576,
+                        "description": "Optional per-file scan budget in bytes. Defaults to 262144."
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Use case-sensitive matching. Defaults to false."
+                    }
+                },
+                "required": ["query"],
                 "additionalProperties": false
             }
         }
@@ -2671,7 +3090,52 @@ fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
-#[cfg(feature = "tool-webfetch")]
+fn http_request_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS URL to request."
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method to send. Defaults to GET."
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "description": "Optional request headers."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional request body."
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Optional Content-Type header for the request body."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
+                        "description": "Optional maximum response bytes to return. Cannot exceed the configured runtime max."
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn web_fetch_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -3064,10 +3528,6 @@ fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Visible session identifiers to inspect in one request."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3189,10 +3649,6 @@ fn session_tool_policy_set_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     "runtime_narrowing": session_tool_runtime_narrowing_schema()
                 },
-                "anyOf": [
-                    { "required": ["tool_ids"] },
-                    { "required": ["runtime_narrowing"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3245,10 +3701,6 @@ fn session_recover_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "When true, preview which targets are recoverable without mutating state."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3281,10 +3733,6 @@ fn session_archive_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "When true, preview which targets are archivable without mutating state."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3317,10 +3765,37 @@ fn session_cancel_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "When true, preview which targets are cancellable without mutating state."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn session_continue_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible delegate child session identifier to continue."
+                    },
+                    "input": {
+                        "type": "string",
+                        "description": "Follow-up user input to execute inside the target child session."
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Optional bounded timeout override for the continued child turn."
+                    }
+                },
+                "required": ["session_id", "input"],
                 "additionalProperties": false
             }
         }
@@ -3359,10 +3834,6 @@ fn session_wait_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Bounded wait timeout in milliseconds."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3411,9 +3882,15 @@ fn delegate_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
                     },
-                    "specialization": {
+                    "profile": {
                         "type": "string",
-                        "description": "Optional bounded specialization hint carried on the child handle."
+                        "enum": ["research", "plan", "verify"],
+                        "description": "Optional builtin child profile preset. `research`, `plan`, and `verify` apply bounded delegate role defaults."
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["shared", "worktree"],
+                        "description": "Optional child workspace isolation mode. `shared` reuses the current workspace root. `worktree` is reserved for a dedicated git worktree-backed child root and currently returns a not-supported error until that runtime lane lands."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -3446,9 +3923,15 @@ fn delegate_async_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
                     },
-                    "specialization": {
+                    "profile": {
                         "type": "string",
-                        "description": "Optional bounded specialization hint carried on the child handle."
+                        "enum": ["research", "plan", "verify"],
+                        "description": "Optional builtin child profile preset. `research`, `plan`, and `verify` apply bounded delegate role defaults."
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["shared", "worktree"],
+                        "description": "Optional child workspace isolation mode. `shared` reuses the current workspace root. `worktree` is reserved for a dedicated git worktree-backed child root and currently returns a not-supported error until that runtime lane lands."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -3483,6 +3966,7 @@ fn push_feishu_tool_descriptor(
         visibility_gate: ToolVisibilityGate::Feishu,
         capability_action_class: CapabilityActionClass::ExecuteExisting,
         policy,
+        concurrency_class: ToolConcurrencyClass::Unknown,
         provider_definition_builder: feishu_definition,
     });
 }
@@ -3640,26 +4124,29 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "browser.companion.session.stop" => "session_id:string",
         "browser.companion.click" => "session_id:string,selector:string",
         "browser.companion.type" => "session_id:string,selector:string,text:string",
+        "http.request" => {
+            "url:string,method?:string,headers?:object,body?:string,content_type?:string,max_bytes?:integer"
+        }
         "file.read" => "path:string,max_bytes?:integer",
+        "glob.search" => {
+            "pattern:string,root?:string,max_results?:integer,include_directories?:boolean"
+        }
+        "content.search" => {
+            "query:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean"
+        }
         "memory_search" => "query:string,max_results?:integer",
         "memory_get" => "path:string,from?:integer,lines?:integer",
-        "file.write" => "path:string,content:string,create_dirs?:boolean",
+        "file.write" => "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
         "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
         "delegate" | "delegate_async" => {
-            "task:string,label?:string,specialization?:string,timeout_seconds?:integer"
-        }
-        "session_tool_policy_status" | "session_tool_policy_clear" => "session_id?:string",
-        "session_tool_policy_set" => {
-            "session_id?:string,tool_ids?:string[],runtime_narrowing?:object"
+            "task:string,label?:string,profile?:string,isolation?:string,timeout_seconds?:integer"
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
-        "session_search" => {
-            "query:string,session_id?:string,max_results?:integer,include_archived?:boolean,include_turns?:boolean,include_events?:boolean"
-        }
+        "session_continue" => "session_id:string,input:string,timeout_seconds?:integer",
         "sessions_list" => "limit?:integer,offset?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
@@ -3673,7 +4160,16 @@ fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
             "discover a non-core tool for the task or refresh a known tool card by exact tool id"
         }
         "tool.invoke" => "invoke a discovered non-core tool with a valid short-lived lease",
+        "http.request" => {
+            "send a bounded http request, inspect status and headers, fetch text or binary responses"
+        }
         "file.read" => "read a workspace file, inspect file contents, open a repo text file",
+        "glob.search" => {
+            "find workspace files by glob pattern, list files in a directory, browse folder contents, search repo paths, match files under a root"
+        }
+        "content.search" => {
+            "search workspace file contents, find text in repo files, grep text in the project"
+        }
         "file.write" => {
             "write a workspace file, save file content, create or overwrite a repo file"
         }
@@ -4039,6 +4535,14 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("selector", "string"),
             ("text", "string"),
         ],
+        "http.request" => &[
+            ("url", "string"),
+            ("method", "string"),
+            ("headers", "object"),
+            ("body", "string"),
+            ("content_type", "string"),
+            ("max_bytes", "integer"),
+        ],
         "external_skills.policy" => &[
             ("action", "string"),
             ("enabled", "boolean"),
@@ -4046,6 +4550,20 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("blocked_domains", "array"),
         ],
         "file.read" => &[("path", "string"), ("max_bytes", "integer")],
+        "glob.search" => &[
+            ("pattern", "string"),
+            ("root", "string"),
+            ("max_results", "integer"),
+            ("include_directories", "boolean"),
+        ],
+        "content.search" => &[
+            ("query", "string"),
+            ("root", "string"),
+            ("glob", "string"),
+            ("max_results", "integer"),
+            ("max_bytes_per_file", "integer"),
+            ("case_sensitive", "boolean"),
+        ],
         "memory_search" => &[("query", "string"), ("max_results", "integer")],
         "memory_get" => &[
             ("path", "string"),
@@ -4056,6 +4574,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("path", "string"),
             ("content", "string"),
             ("create_dirs", "boolean"),
+            ("overwrite", "boolean"),
         ],
         "file.edit" => &[
             ("path", "string"),
@@ -4078,7 +4597,13 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         "delegate" | "delegate_async" => &[
             ("task", "string"),
             ("label", "string"),
-            ("specialization", "string"),
+            ("profile", "string"),
+            ("isolation", "string"),
+            ("timeout_seconds", "integer"),
+        ],
+        "session_continue" => &[
+            ("session_id", "string"),
+            ("input", "string"),
             ("timeout_seconds", "integer"),
         ],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[("session_id", "string")],
@@ -4165,7 +4690,10 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         | "browser.companion.session.stop" => &["session_id"],
         "browser.companion.click" => &["session_id", "selector"],
         "browser.companion.type" => &["session_id", "selector", "text"],
+        "http.request" => &["url"],
         "file.read" => &["path"],
+        "glob.search" => &["pattern"],
+        "content.search" => &["query"],
         "memory_search" => &["query"],
         "memory_get" => &["path"],
         "file.write" => &["path", "content"],
@@ -4177,7 +4705,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "session_tool_policy_set" => &[],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
-        "session_search" => &["query"],
+        "session_continue" => &["session_id", "input"],
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
@@ -4245,7 +4773,20 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "browser.companion.click" | "browser.companion.type" => {
             &["browser", "companion", "write", "approval"]
         }
+        "http.request" => &["http", "request", "web", "network", "external"],
         "file.read" => &["file", "read", "filesystem", "repo"],
+        "glob.search" => &[
+            "file",
+            "search",
+            "glob",
+            "filesystem",
+            "repo",
+            "directory",
+            "folder",
+            "list",
+            "browse",
+        ],
+        "content.search" => &["file", "search", "content", "filesystem", "repo"],
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
         "file.write" => &["file", "write", "filesystem"],
@@ -4261,7 +4802,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
             &["session", "history", "runtime"]
         }
-        "session_search" => &["session", "search", "history", "memory", "canonical"],
+        "session_continue" => &["session", "continue", "delegate", "child"],
         "sessions_send" => &["session", "message", "channel"],
         "web.search" => &["web", "search", "discover", "external"],
         _ => &[],
@@ -4720,6 +5261,169 @@ mod tests {
     }
 
     #[test]
+    fn tool_catalog_entries_expose_concurrency_class() {
+        let search = find_tool_catalog_entry("tool.search").expect("tool.search catalog entry");
+        assert_eq!(search.scheduling_class, ToolSchedulingClass::ParallelSafe);
+        assert_eq!(search.concurrency_class, ToolConcurrencyClass::ReadOnly);
+
+        let invoke = find_tool_catalog_entry("tool.invoke").expect("tool.invoke catalog entry");
+        assert_eq!(invoke.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(invoke.concurrency_class, ToolConcurrencyClass::Unknown);
+
+        let delegate_async =
+            find_tool_catalog_entry("delegate_async").expect("delegate_async catalog entry");
+        assert_eq!(
+            delegate_async.scheduling_class,
+            ToolSchedulingClass::SerialOnly
+        );
+        assert_eq!(
+            delegate_async.concurrency_class,
+            ToolConcurrencyClass::Mutating
+        );
+
+        #[cfg(feature = "tool-http")]
+        {
+            let http_request =
+                find_tool_catalog_entry("http.request").expect("http.request catalog entry");
+            assert_eq!(
+                http_request.scheduling_class,
+                ToolSchedulingClass::SerialOnly
+            );
+            assert_eq!(
+                http_request.concurrency_class,
+                ToolConcurrencyClass::Mutating
+            );
+        }
+
+        let file_write = find_tool_catalog_entry("file.write").expect("file.write catalog entry");
+        assert_eq!(file_write.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(file_write.concurrency_class, ToolConcurrencyClass::Mutating);
+
+        let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
+        assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
+    }
+
+    #[test]
+    fn tool_catalog_resolve_preserves_canonical_provider_and_alias_lookup() {
+        let catalog = tool_catalog();
+
+        let canonical = catalog.resolve("tool.search").expect("canonical lookup");
+        let provider_name = catalog.resolve("tool_search").expect("provider lookup");
+        let alias = catalog.resolve("shell").expect("alias lookup");
+
+        assert_eq!(canonical.name, "tool.search");
+        assert_eq!(provider_name.name, "tool.search");
+        assert_eq!(alias.name, "shell.exec");
+    }
+
+    #[test]
+    fn cached_catalog_entry_partitions_match_descriptor_filters() {
+        let catalog = tool_catalog();
+
+        let expected_all_entries = descriptor_identity_list(catalog.descriptors().iter());
+        let expected_provider_core_entries = descriptor_identity_list(
+            catalog
+                .descriptors()
+                .iter()
+                .filter(|descriptor| descriptor.is_provider_core()),
+        );
+        let expected_discoverable_entries = descriptor_identity_list(
+            catalog
+                .descriptors()
+                .iter()
+                .filter(|descriptor| descriptor.is_discoverable()),
+        );
+
+        let actual_all_entries = entry_identity_list(all_tool_catalog().iter());
+        let actual_provider_core_entries = entry_identity_list(provider_core_tool_catalog().iter());
+        let actual_discoverable_entries = entry_identity_list(discoverable_tool_catalog().iter());
+
+        assert_eq!(actual_all_entries, expected_all_entries);
+        assert_eq!(actual_provider_core_entries, expected_provider_core_entries);
+        assert_eq!(actual_discoverable_entries, expected_discoverable_entries);
+    }
+
+    fn descriptor_identity_list<'a>(
+        descriptors: impl Iterator<Item = &'a ToolDescriptor>,
+    ) -> Vec<(&'static str, &'static str, ToolExposureClass)> {
+        let mut identities = Vec::new();
+
+        for descriptor in descriptors {
+            let identity = (
+                descriptor.name,
+                descriptor.provider_name,
+                descriptor.exposure,
+            );
+            identities.push(identity);
+        }
+
+        identities
+    }
+
+    fn entry_identity_list<'a>(
+        entries: impl Iterator<Item = &'a ToolCatalogEntry>,
+    ) -> Vec<(&'static str, &'static str, ToolExposureClass)> {
+        let mut identities = Vec::new();
+
+        for entry in entries {
+            let identity = (
+                entry.canonical_name,
+                entry.provider_function_name,
+                entry.exposure,
+            );
+            identities.push(identity);
+        }
+
+        identities
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn feishu_tool_catalog_entries_expose_explicit_concurrency_class() {
+        let catalog = tool_catalog();
+        let feishu_descriptors: Vec<&ToolDescriptor> = catalog
+            .descriptors()
+            .iter()
+            .filter(|descriptor| descriptor.name.starts_with("feishu."))
+            .collect();
+
+        assert!(!feishu_descriptors.is_empty());
+
+        for descriptor in feishu_descriptors {
+            assert_ne!(
+                descriptor.concurrency_class(),
+                ToolConcurrencyClass::Unknown,
+                "{} should expose an explicit concurrency class",
+                descriptor.name
+            );
+        }
+
+        let calendar_list =
+            find_tool_catalog_entry("feishu.calendar.list").expect("feishu.calendar.list entry");
+        assert_eq!(
+            calendar_list.concurrency_class,
+            ToolConcurrencyClass::ReadOnly
+        );
+
+        let messages_send =
+            find_tool_catalog_entry("feishu.messages.send").expect("feishu.messages.send entry");
+        assert_eq!(
+            messages_send.concurrency_class,
+            ToolConcurrencyClass::Mutating
+        );
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "tool-file"))]
+    #[test]
+    fn feishu_resource_download_catalog_entry_is_mutating() {
+        let entry = find_tool_catalog_entry("feishu.messages.resource.get")
+            .expect("feishu.messages.resource.get entry");
+
+        assert_eq!(entry.concurrency_class, ToolConcurrencyClass::Mutating);
+    }
+
+    #[test]
     fn governance_profile_follows_descriptor_declared_policy() {
         let catalog = tool_catalog();
 
@@ -4873,6 +5577,7 @@ mod tests {
             ),
             ("session_archive", CapabilityActionClass::SessionMutation),
             ("session_cancel", CapabilityActionClass::SessionMutation),
+            ("session_continue", CapabilityActionClass::SessionMutation),
             ("session_events", CapabilityActionClass::ExecuteExisting),
             (
                 "session_tool_policy_status",
@@ -4900,15 +5605,28 @@ mod tests {
 
     #[test]
     fn autonomy_capability_action_catalog_entries_expose_serializable_metadata() {
-        let entry =
+        let delegate_async =
             find_tool_catalog_entry("delegate_async").expect("delegate_async catalog entry");
-        let value = serde_json::to_value(entry).expect("serialize catalog entry");
+        let delegate_async_value =
+            serde_json::to_value(delegate_async).expect("serialize delegate_async catalog entry");
+        let search = find_tool_catalog_entry("tool.search").expect("tool.search catalog entry");
+        let search_value =
+            serde_json::to_value(search).expect("serialize tool.search catalog entry");
+        let invoke = find_tool_catalog_entry("tool.invoke").expect("tool.invoke catalog entry");
+        let invoke_value =
+            serde_json::to_value(invoke).expect("serialize tool.invoke catalog entry");
 
         assert_eq!(
-            entry.capability_action_class,
+            delegate_async.capability_action_class,
             CapabilityActionClass::TopologyExpand
         );
-        assert_eq!(value["capability_action_class"], "topology_expand");
+        assert_eq!(
+            delegate_async_value["capability_action_class"],
+            "topology_expand"
+        );
+        assert_eq!(delegate_async_value["concurrency_class"], "mutating");
+        assert_eq!(search_value["concurrency_class"], "read_only");
+        assert_eq!(invoke_value["concurrency_class"], "unknown");
     }
 
     #[test]

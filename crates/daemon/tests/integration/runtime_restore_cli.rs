@@ -105,6 +105,10 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
     config.external_skills.auto_expose_installed = true;
     config.external_skills.allowed_domains = vec!["skills.sh".to_owned()];
     config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    let runtime_plugin_root = root.join("runtime-plugins");
+    fs::create_dir_all(&runtime_plugin_root).expect("create runtime plugin root");
+    config.runtime_plugins.enabled = true;
+    config.runtime_plugins.roots = vec![runtime_plugin_root.display().to_string()];
 
     config.acp.enabled = true;
     config.acp.dispatch.enabled = true;
@@ -241,6 +245,9 @@ fn mutate_runtime_restore_config(config_path: &Path, root: &Path) {
     config.external_skills.require_download_approval = true;
     config.external_skills.auto_expose_installed = false;
     config.external_skills.allowed_domains.clear();
+    config.runtime_plugins.enabled = false;
+    config.runtime_plugins.roots =
+        vec![root.join("disabled-runtime-plugins").display().to_string()];
 
     config.acp.enabled = false;
     config.acp.dispatch.enabled = false;
@@ -309,6 +316,86 @@ fn runtime_snapshot_artifact_json_includes_lineage_and_restore_spec() {
         payload["restore_spec"]["managed_skills"]["skills"][0]["source_kind"],
         "directory"
     );
+    assert_eq!(payload["restore_spec"]["runtime_plugins"]["enabled"], true);
+    assert_eq!(
+        payload["restore_spec"]["runtime_plugins"]["roots"],
+        json!([root.join("runtime-plugins").display().to_string()])
+    );
+    assert_eq!(payload["runtime_plugins"]["enabled"], true);
+    assert_eq!(
+        payload["runtime_plugins"]["roots"],
+        json!([root.join("runtime-plugins").display().to_string()])
+    );
+}
+
+#[test]
+fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_restore_field() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-legacy-runtime-plugins");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, config) = write_runtime_restore_config(&root);
+    install_demo_skill(&root, &config, &config_path);
+    let (_artifact_path, _snapshot, mut payload) = write_snapshot_artifact(&root, &config_path);
+
+    let restore_spec = payload["restore_spec"]
+        .as_object_mut()
+        .expect("restore_spec should be an object");
+    restore_spec.remove("runtime_plugins");
+    let artifact_path = write_snapshot_artifact_payload(
+        &root,
+        "artifacts/runtime-snapshot-legacy-runtime-plugins.json",
+        &payload,
+    );
+
+    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect("legacy runtime restore artifact should still plan successfully");
+
+    assert!(execution.plan.can_apply);
+}
+
+#[test]
+fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_top_level_field() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-legacy-runtime-plugins-top-level");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, config) = write_runtime_restore_config(&root);
+    install_demo_skill(&root, &config, &config_path);
+    let (_artifact_path, _snapshot, mut payload) = write_snapshot_artifact(&root, &config_path);
+
+    let payload_object = payload
+        .as_object_mut()
+        .expect("artifact payload should be an object");
+    payload_object.remove("runtime_plugins");
+    let artifact_path = write_snapshot_artifact_payload(
+        &root,
+        "artifacts/runtime-snapshot-legacy-runtime-plugins-top-level.json",
+        &payload,
+    );
+
+    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect("legacy runtime snapshot artifact should still plan successfully");
+
+    assert!(execution.plan.can_apply);
 }
 
 #[test]
@@ -682,6 +769,11 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
         .expect("reload restored config");
     assert_eq!(reloaded.active_provider_id(), Some("deepseek-lab"));
     assert!(reloaded.external_skills.enabled);
+    assert!(reloaded.runtime_plugins.enabled);
+    assert_eq!(
+        reloaded.runtime_plugins.roots,
+        vec![root.join("runtime-plugins").display().to_string()]
+    );
     assert_eq!(
         reloaded.memory.profile,
         mvp::config::MemoryProfile::WindowPlusSummary
@@ -705,6 +797,11 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
         payload["external_skills"]["policy"]["enabled"]
             .as_bool()
             .expect("enabled should be boolean")
+    );
+    assert_eq!(payload["runtime_plugins"]["enabled"], true);
+    assert_eq!(
+        payload["runtime_plugins"]["roots"],
+        json!([root.join("runtime-plugins").display().to_string()])
     );
     assert!(
         payload["external_skills"]["inventory"]["skills"]
@@ -776,23 +873,36 @@ fn runtime_restore_apply_reports_verification_failure_without_reverting_applied_
 
 #[test]
 fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fails() {
+    #[cfg(unix)]
+    if integration_permission_test_running_as_root() {
+        eprintln!("skipping runtime restore config write failure test under uid 0");
+        return;
+    }
+
     let root = unique_temp_dir("loongclaw-runtime-restore-rollback");
-    let _env = RuntimeRestoreEnvGuard::set(&[
+    let (config_path, config) = write_runtime_restore_config(&root);
+    let config_path_text = config_path.to_string_lossy().to_string();
+    let artifact_path = {
+        let _runtime_env = RuntimeRestoreEnvGuard::set(&[
+            ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+            ("OPENAI_API_KEY", None),
+            ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+        ]);
+        install_demo_skill(&root, &config, &config_path);
+        let (artifact_path, _snapshot, _payload) = write_snapshot_artifact(&root, &config_path);
+        artifact_path
+    };
+
+    mutate_runtime_restore_config(&config_path, &root);
+    let _apply_env = RuntimeRestoreEnvGuard::set(&[
         ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+        (
+            "LOONGCLAW_TEST_FAIL_CONFIG_WRITE_PATH",
+            Some(config_path_text.as_str()),
+        ),
     ]);
-    let (config_path, config) = write_runtime_restore_config(&root);
-    install_demo_skill(&root, &config, &config_path);
-    let (artifact_path, _snapshot, _payload) = write_snapshot_artifact(&root, &config_path);
-
-    mutate_runtime_restore_config(&config_path, &root);
-
-    let metadata = fs::metadata(&config_path).expect("read config metadata");
-    let original_permissions = metadata.permissions();
-    let mut readonly_permissions = original_permissions.clone();
-    readonly_permissions.set_readonly(true);
-    fs::set_permissions(&config_path, readonly_permissions).expect("mark config read-only");
 
     let apply_error = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
         loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
@@ -803,8 +913,6 @@ fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fail
         },
     )
     .expect_err("apply should fail when config persistence fails");
-
-    fs::set_permissions(&config_path, original_permissions).expect("restore config write access");
 
     assert!(apply_error.contains("persist runtime restore config"));
     assert!(

@@ -72,6 +72,9 @@ loongclaw web remove   # 卸载前端
 
 默认地址：`http://127.0.0.1:4318/`
 
+当前 Web 运行态默认读取 `~/.loong/`（Windows 为 `%USERPROFILE%\.loong\`）下的
+`config.toml`、`memory.sqlite3` 与 `web-api-token`。
+
 ## 相关文档
 
 - `docs/STACK.zh-CN.md`：技术栈、目录与运行约定

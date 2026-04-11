@@ -8,7 +8,7 @@ import {
   readProviderValidationFailure,
   usePreferencesForm,
   useProviderConfigForm,
-} from "../providerConfig";
+} from "../provider/providerConfig";
 import type { WebSessionContextValue } from "../../../contexts/WebSessionContext";
 
 interface UseOnboardingFlowParams {

@@ -29,6 +29,30 @@ fn render_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+fn compact_cli_output_for_assertion(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            if character.is_whitespace() {
+                return false;
+            }
+
+            !matches!(character, '│' | '╭' | '╰' | '─')
+        })
+        .collect()
+}
+
+fn stdout_contains_compacted_hint(stdout: &str, expected_hint: &str) -> bool {
+    let compacted_stdout = compact_cli_output_for_assertion(stdout);
+    let compacted_expected_hint = compact_cli_output_for_assertion(expected_hint);
+    let bulleted_expected_hint = format!("-{compacted_expected_hint}");
+
+    let matches_plain_hint = compacted_stdout.contains(&compacted_expected_hint);
+    let matches_bulleted_hint = compacted_stdout.contains(&bulleted_expected_hint);
+
+    matches_plain_hint || matches_bulleted_hint
+}
+
 fn invoked_chat_cli_command_name() -> &'static str {
     mvp::config::detect_invoked_cli_command_name_from_arg0(Some(OsStr::new(env!(
         "CARGO_BIN_EXE_loongclaw"
@@ -113,7 +137,7 @@ impl ChatCliFixture {
             .arg("chat")
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
-            .env("LOONGCLAW_HOME", &loongclaw_home)
+            .env("LOONG_HOME", &loongclaw_home)
             .env_remove("LOONGCLAW_CONFIG_PATH")
             .env_remove("USERPROFILE")
             .stdin(Stdio::piped())
@@ -234,8 +258,6 @@ fn chat_without_config_decline_hint_preserves_explicit_config_path() {
         invoked_chat_cli_command_name(),
         explicit_config.display()
     );
-    let compacted_stdout = stdout.split_whitespace().collect::<String>();
-    let compacted_expected_hint = expected_hint.split_whitespace().collect::<String>();
 
     assert!(
         output.status.success(),
@@ -247,7 +269,7 @@ fn chat_without_config_decline_hint_preserves_explicit_config_path() {
         fixture.onboard_log()
     );
     assert!(
-        compacted_stdout.contains(&compacted_expected_hint),
+        stdout_contains_compacted_hint(&stdout, &expected_hint),
         "decline hint should preserve the explicit config path: {stdout:?}"
     );
 }
@@ -263,8 +285,6 @@ fn chat_without_config_treats_explicit_no_as_decline() {
         "You can run '{} onboard' later to get started.",
         invoked_chat_cli_command_name()
     );
-    let compacted_stdout = stdout.split_whitespace().collect::<String>();
-    let compacted_expected_hint = expected_hint.split_whitespace().collect::<String>();
 
     assert!(
         output.status.success(),
@@ -276,7 +296,7 @@ fn chat_without_config_treats_explicit_no_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        compacted_stdout.contains(&compacted_expected_hint),
+        stdout_contains_compacted_hint(&stdout, &expected_hint),
         "explicit no should leave a follow-up hint: {stdout:?}"
     );
 }
@@ -292,8 +312,6 @@ fn chat_without_config_treats_eof_as_decline() {
         "You can run '{} onboard' later to get started.",
         invoked_chat_cli_command_name()
     );
-    let compacted_stdout = stdout.split_whitespace().collect::<String>();
-    let compacted_expected_hint = expected_hint.split_whitespace().collect::<String>();
 
     assert!(
         output.status.success(),
@@ -305,7 +323,7 @@ fn chat_without_config_treats_eof_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        compacted_stdout.contains(&compacted_expected_hint),
+        stdout_contains_compacted_hint(&stdout, &expected_hint),
         "eof should still leave the follow-up hint: {stdout:?}"
     );
 }
@@ -330,17 +348,17 @@ fn chat_without_config_reports_onboard_failure() {
 
 #[test]
 fn chat_without_config_surfaces_config_path_access_errors() {
+    #[cfg(unix)]
+    if integration_permission_test_running_as_root() {
+        eprintln!("skipping config access permission test under uid 0");
+        return;
+    }
+
     let fixture = ChatCliFixture::new("config-access-error");
 
-    let blocked_dir = fixture.root.join("blocked");
-    std::fs::create_dir_all(&blocked_dir).expect("create blocked directory");
-    let _reset_guard = PermissionsResetGuard::new(&blocked_dir);
-    let mut permissions = std::fs::metadata(&blocked_dir)
-        .expect("blocked directory metadata")
-        .permissions();
-    permissions.set_mode(0o000);
-    std::fs::set_permissions(&blocked_dir, permissions).expect("lock blocked directory");
-    let blocked_config = blocked_dir.join("loongclaw.toml");
+    let blocked_parent = fixture.root.join("blocked");
+    std::fs::write(&blocked_parent, b"not a directory").expect("create blocking parent file");
+    let blocked_config = blocked_parent.join("loongclaw.toml");
 
     let output = fixture.run_chat_command(Some(&blocked_config), None);
     let stdout = render_output(&output.stdout);

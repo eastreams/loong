@@ -18,6 +18,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local file="$1"
+  local needle="$2"
+  if grep -Fq "$needle" "$file"; then
+    echo "did not expect to find '$needle' in $file" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
 assert_installed_binary_pair() {
   local install_dir="$1"
   local expected_output="$2"
@@ -96,6 +106,7 @@ if [[ "\${1:-}" == "onboard" ]]; then
     printf 'onboard\n'
     printf 'web_search_provider=%s\n' "\${selected_provider:-}"
   } >> "\${ONBOARD_MARKER:?}"
+  exit "\${ONBOARD_EXIT_CODE:-0}"
 fi
 printf '%s\n' "$binary_label"
 EOF
@@ -615,6 +626,7 @@ run_release_override_install_and_onboard_test() {
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
       EXA_API_KEY="" \
+      FIRECRAWL_API_KEY="" \
       JINA_API_KEY="" \
       JINA_AUTH_TOKEN="" \
       LOONGCLAW_WEB_SEARCH_PROVIDER="" \
@@ -626,6 +638,156 @@ run_release_override_install_and_onboard_test() {
   assert_contains "$output_file" "Installed compatible loongclaw command to"
   assert_contains "$output_file" "Running guided onboarding"
   assert_contains "$marker" "onboard"
+}
+
+run_release_install_adds_path_to_bashrc_and_prints_source_hint_test() {
+  local fixture
+  local home_dir
+  local install_dir
+  local output_file
+  local bashrc_file
+  local expected_path_line
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  home_dir="$fixture/home"
+  install_dir="$fixture/install"
+  output_file="$fixture/install-bashrc.out"
+  bashrc_file="$home_dir/.bashrc"
+  expected_path_line="export PATH=\"$install_dir:\$PATH\""
+  mkdir -p "$home_dir"
+
+  (
+    cd "$REPO_ROOT"
+    HOME="$home_dir" \
+      SHELL="/bin/bash" \
+      PATH="/usr/bin:/bin" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  assert_installed_binary_pair "$install_dir" "fixture-binary"
+  assert_contains "$bashrc_file" "# Added by Loong installer"
+  assert_contains "$bashrc_file" "$expected_path_line"
+  assert_contains "$output_file" "Added $install_dir to PATH in $bashrc_file"
+  assert_contains "$output_file" "source \"$bashrc_file\""
+}
+
+run_release_install_skips_source_hint_when_path_is_already_available_test() {
+  local fixture
+  local home_dir
+  local install_dir
+  local output_file
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  home_dir="$fixture/home"
+  install_dir="$fixture/install"
+  output_file="$fixture/install-path-present.out"
+  mkdir -p "$home_dir"
+
+  (
+    cd "$REPO_ROOT"
+    HOME="$home_dir" \
+      SHELL="/bin/bash" \
+      PATH="$install_dir:/usr/bin:/bin" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  assert_installed_binary_pair "$install_dir" "fixture-binary"
+  assert_not_contains "$output_file" "source \"$home_dir/.bashrc\""
+  assert_not_contains "$output_file" "Add to PATH if needed:"
+}
+
+run_release_install_keeps_source_hint_when_rc_already_has_path_entry_test() {
+  local fixture
+  local home_dir
+  local install_dir
+  local output_file
+  local bashrc_file
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  home_dir="$fixture/home"
+  install_dir="$fixture/install"
+  output_file="$fixture/install-rc-already-set.out"
+  bashrc_file="$home_dir/.bashrc"
+  mkdir -p "$home_dir"
+  printf 'export PATH="%s:$PATH"\n' "$install_dir" >"$bashrc_file"
+
+  (
+    cd "$REPO_ROOT"
+    HOME="$home_dir" \
+      SHELL="/bin/bash" \
+      PATH="/usr/bin:/bin" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  assert_installed_binary_pair "$install_dir" "fixture-binary"
+  assert_contains "$output_file" "PATH entry already present in $bashrc_file"
+  assert_contains "$output_file" "source \"$bashrc_file\""
+}
+
+run_release_install_unsupported_shell_uses_manual_path_hint_only_test() {
+  local fixture
+  local home_dir
+  local install_dir
+  local output_file
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  home_dir="$fixture/home"
+  install_dir="$fixture/install"
+  output_file="$fixture/install-fish-shell.out"
+  mkdir -p "$home_dir"
+
+  (
+    cd "$REPO_ROOT"
+    HOME="$home_dir" \
+      SHELL="/usr/bin/fish" \
+      PATH="/usr/bin:/bin" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  assert_installed_binary_pair "$install_dir" "fixture-binary"
+  assert_contains "$output_file" "Add to PATH if needed:"
+  assert_not_contains "$output_file" 'source "$HOME/.profile"'
+}
+
+run_release_override_install_and_onboard_failure_preserves_install_test() {
+  local fixture
+  local install_dir
+  local output_file
+  local marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-onboard-failure.out"
+  marker="$fixture/onboard-failure.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      ONBOARD_EXIT_CODE="130" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="" \
+      PERPLEXITY_API_KEY="" \
+      EXA_API_KEY="" \
+      FIRECRAWL_API_KEY="" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_installed_binary_pair "$install_dir" "fixture-binary"
+  assert_contains "$marker" "onboard"
+  assert_contains "$output_file" "Onboarding exited with code 130"
+  assert_contains "$output_file" "You can run 'loong onboard' later to complete setup"
+  assert_contains "$output_file" "Done. Try:"
 }
 
 run_release_override_install_and_onboard_detects_duckduckgo_default_test() {
@@ -649,6 +811,7 @@ run_release_override_install_and_onboard_detects_duckduckgo_default_test() {
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
       EXA_API_KEY="" \
+      FIRECRAWL_API_KEY="" \
       JINA_API_KEY="" \
       JINA_AUTH_TOKEN="" \
       LOONGCLAW_WEB_SEARCH_PROVIDER="" \
@@ -680,6 +843,7 @@ run_release_override_install_and_onboard_prefers_tavily_for_domestic_hosts_test(
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
       EXA_API_KEY="" \
+      FIRECRAWL_API_KEY="" \
       JINA_API_KEY="" \
       JINA_AUTH_TOKEN="" \
       LOONGCLAW_WEB_SEARCH_PROVIDER="" \
@@ -711,6 +875,7 @@ run_release_override_install_and_onboard_prefers_unique_ready_credential_test() 
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="perplexity-test-token" \
       EXA_API_KEY="" \
+      FIRECRAWL_API_KEY="" \
       JINA_API_KEY="" \
       JINA_AUTH_TOKEN="" \
       LOONGCLAW_WEB_SEARCH_PROVIDER="" \
@@ -719,6 +884,70 @@ run_release_override_install_and_onboard_prefers_unique_ready_credential_test() 
 
   assert_contains "$output_file" "Onboarding web search default: Perplexity Search (detected credential)"
   assert_contains "$marker" "web_search_provider=perplexity"
+}
+
+run_release_override_install_and_onboard_prefers_unique_ready_firecrawl_credential_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-firecrawl.out"
+  marker="$fixture/onboard-web-search-firecrawl.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="C.UTF-8" \
+      TZ="UTC" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="" \
+      PERPLEXITY_API_KEY="" \
+      EXA_API_KEY="" \
+      FIRECRAWL_API_KEY="firecrawl-test-token" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: Firecrawl Search (detected credential)"
+  assert_contains "$marker" "web_search_provider=firecrawl"
+}
+
+run_release_override_install_and_onboard_preserves_signal_source_when_firecrawl_and_exa_both_exist_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-firecrawl-exa-ambiguous.out"
+  marker="$fixture/onboard-web-search-firecrawl-exa-ambiguous.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="C.UTF-8" \
+      TZ="UTC" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="" \
+      PERPLEXITY_API_KEY="" \
+      EXA_API_KEY="exa-test-token" \
+      FIRECRAWL_API_KEY="firecrawl-test-token" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: DuckDuckGo (detected)"
+  assert_contains "$marker" "web_search_provider=duckduckgo"
 }
 
 run_release_override_install_and_onboard_preserves_signal_source_when_multiple_credentials_exist_test() {
@@ -742,6 +971,7 @@ run_release_override_install_and_onboard_preserves_signal_source_when_multiple_c
       TAVILY_API_KEY="tavily-test-token" \
       PERPLEXITY_API_KEY="perplexity-test-token" \
       EXA_API_KEY="" \
+      FIRECRAWL_API_KEY="" \
       JINA_API_KEY="" \
       JINA_AUTH_TOKEN="" \
       LOONGCLAW_WEB_SEARCH_PROVIDER="" \
@@ -829,9 +1059,16 @@ run_standalone_linux_arm64_install_rejects_missing_glibc_test() {
 }
 
 run_release_override_install_and_onboard_test
+run_release_install_adds_path_to_bashrc_and_prints_source_hint_test
+run_release_install_skips_source_hint_when_path_is_already_available_test
+run_release_install_keeps_source_hint_when_rc_already_has_path_entry_test
+run_release_install_unsupported_shell_uses_manual_path_hint_only_test
+run_release_override_install_and_onboard_failure_preserves_install_test
 run_release_override_install_and_onboard_detects_duckduckgo_default_test
 run_release_override_install_and_onboard_prefers_tavily_for_domestic_hosts_test
 run_release_override_install_and_onboard_prefers_unique_ready_credential_test
+run_release_override_install_and_onboard_prefers_unique_ready_firecrawl_credential_test
+run_release_override_install_and_onboard_preserves_signal_source_when_firecrawl_and_exa_both_exist_test
 run_release_override_install_and_onboard_preserves_signal_source_when_multiple_credentials_exist_test
 run_checksum_mismatch_fails_test
 run_missing_release_guidance_test

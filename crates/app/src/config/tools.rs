@@ -3,6 +3,7 @@ use std::{
     path::PathBuf,
 };
 
+use loongclaw_kernel::{BridgeSupportMatrix, PluginBridgeKind};
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
@@ -18,7 +19,9 @@ pub const DEFAULT_BROWSER_MAX_TEXT_CHARS: usize = 6000;
 pub const DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 20_000;
 pub const DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 150_000;
+pub const DEFAULT_DELEGATE_MAX_FROZEN_BYTES: usize = 256 * 1024;
 pub const DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES: [&str; 1] = ["*.clawhub.io"];
+pub(crate) const MIN_DELEGATE_MAX_FROZEN_BYTES: usize = 1;
 pub(crate) const MIN_WEB_FETCH_MAX_BYTES: usize = 1024;
 pub const MAX_WEB_FETCH_MAX_BYTES: usize = 5 * 1024 * 1024;
 pub(crate) const MIN_WEB_FETCH_TIMEOUT_SECONDS: usize = 1;
@@ -34,6 +37,15 @@ pub(crate) const MIN_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 256;
 pub const MAX_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 100_000;
 pub(crate) const MIN_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 1_024;
 pub const MAX_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 500_000;
+pub(crate) const RUNTIME_PLUGIN_SUPPORTED_BRIDGE_LABELS: &[&str] = &[
+    "http_json",
+    "process_stdio",
+    "native_ffi",
+    "wasm_component",
+    "mcp_server",
+    "acp_bridge",
+    "acp_runtime",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolConfig {
@@ -207,6 +219,12 @@ pub struct DelegateToolConfig {
     pub child_tool_allowlist: Vec<String>,
     #[serde(default)]
     pub allow_shell_in_child: bool,
+    #[serde(default = "default_delegate_max_frozen_bytes")]
+    pub max_frozen_bytes: usize,
+    #[serde(default = "default_delegate_announce_debounce_ms")]
+    pub announce_debounce_ms: u64,
+    #[serde(default = "default_delegate_announce_max_batch")]
+    pub announce_max_batch: usize,
     #[serde(default)]
     pub child_runtime: DelegateChildRuntimeConfig,
 }
@@ -316,6 +334,7 @@ pub const WEB_SEARCH_PROVIDER_BRAVE: &str = "brave";
 pub const WEB_SEARCH_PROVIDER_TAVILY: &str = "tavily";
 pub const WEB_SEARCH_PROVIDER_PERPLEXITY: &str = "perplexity";
 pub const WEB_SEARCH_PROVIDER_EXA: &str = "exa";
+pub const WEB_SEARCH_PROVIDER_FIRECRAWL: &str = "firecrawl";
 pub const WEB_SEARCH_PROVIDER_JINA: &str = "jina";
 pub const DEFAULT_WEB_SEARCH_PROVIDER: &str = WEB_SEARCH_PROVIDER_DUCKDUCKGO;
 #[cfg(feature = "tool-websearch")]
@@ -327,15 +346,17 @@ pub(crate) const WEB_SEARCH_PROVIDER_SCHEMA_VALUES: &[&str] = &[
     WEB_SEARCH_PROVIDER_PERPLEXITY,
     "perplexity_search",
     WEB_SEARCH_PROVIDER_EXA,
+    WEB_SEARCH_PROVIDER_FIRECRAWL,
     WEB_SEARCH_PROVIDER_JINA,
     "jinaai",
     "jina-ai",
 ];
-pub const WEB_SEARCH_PROVIDER_VALID_VALUES: &str = "duckduckgo (or ddg), brave, tavily, perplexity (or perplexity_search), exa, jina (or jinaai / jina-ai)";
+pub const WEB_SEARCH_PROVIDER_VALID_VALUES: &str = "duckduckgo (or ddg), brave, tavily, perplexity (or perplexity_search), exa, firecrawl, jina (or jinaai / jina-ai)";
 pub const WEB_SEARCH_BRAVE_API_KEY_ENV: &str = "BRAVE_API_KEY";
 pub const WEB_SEARCH_TAVILY_API_KEY_ENV: &str = "TAVILY_API_KEY";
 pub const WEB_SEARCH_PERPLEXITY_API_KEY_ENV: &str = "PERPLEXITY_API_KEY";
 pub const WEB_SEARCH_EXA_API_KEY_ENV: &str = "EXA_API_KEY";
+pub const WEB_SEARCH_FIRECRAWL_API_KEY_ENV: &str = "FIRECRAWL_API_KEY";
 pub const WEB_SEARCH_JINA_API_KEY_ENV: &str = "JINA_API_KEY";
 pub const WEB_SEARCH_JINA_AUTH_TOKEN_ENV: &str = "JINA_AUTH_TOKEN";
 pub(crate) const MIN_WEB_SEARCH_TIMEOUT_SECONDS: usize = 1;
@@ -358,6 +379,7 @@ const WEB_SEARCH_BRAVE_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_BRAVE_API_KEY_E
 const WEB_SEARCH_TAVILY_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_TAVILY_API_KEY_ENV];
 const WEB_SEARCH_PERPLEXITY_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_PERPLEXITY_API_KEY_ENV];
 const WEB_SEARCH_EXA_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_EXA_API_KEY_ENV];
+const WEB_SEARCH_FIRECRAWL_API_KEY_ENV_NAMES: &[&str] = &[WEB_SEARCH_FIRECRAWL_API_KEY_ENV];
 const WEB_SEARCH_JINA_API_KEY_ENV_NAMES: &[&str] =
     &[WEB_SEARCH_JINA_API_KEY_ENV, WEB_SEARCH_JINA_AUTH_TOKEN_ENV];
 
@@ -403,6 +425,14 @@ const WEB_SEARCH_PROVIDER_DESCRIPTORS: &[WebSearchProviderDescriptor] = &[
         api_key_env_names: WEB_SEARCH_EXA_API_KEY_ENV_NAMES,
     },
     WebSearchProviderDescriptor {
+        id: WEB_SEARCH_PROVIDER_FIRECRAWL,
+        display_name: "Firecrawl Search",
+        description: "search API with optional scraped result content from Firecrawl",
+        requires_api_key: true,
+        default_api_key_env: Some(WEB_SEARCH_FIRECRAWL_API_KEY_ENV),
+        api_key_env_names: WEB_SEARCH_FIRECRAWL_API_KEY_ENV_NAMES,
+    },
+    WebSearchProviderDescriptor {
         id: WEB_SEARCH_PROVIDER_JINA,
         display_name: "Jina Search",
         description: "grounded search digest via s.jina.ai",
@@ -430,6 +460,8 @@ pub struct WebSearchToolConfig {
     pub perplexity_api_key: Option<String>,
     #[serde(default)]
     pub exa_api_key: Option<String>,
+    #[serde(default)]
+    pub firecrawl_api_key: Option<String>,
     #[serde(default)]
     pub jina_api_key: Option<String>,
 }
@@ -491,6 +523,18 @@ pub struct ExternalSkillsConfig {
     pub install_root: Option<String>,
     #[serde(default = "default_auto_expose_installed")]
     pub auto_expose_installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RuntimePluginsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub roots: Vec<String>,
+    #[serde(default)]
+    pub supported_bridges: Vec<String>,
+    #[serde(default)]
+    pub supported_adapter_families: Vec<String>,
 }
 
 impl Default for ToolConfig {
@@ -571,6 +615,9 @@ impl Default for DelegateToolConfig {
             timeout_seconds: default_delegate_timeout_seconds(),
             child_tool_allowlist: default_delegate_child_tool_allowlist(),
             allow_shell_in_child: false,
+            max_frozen_bytes: default_delegate_max_frozen_bytes(),
+            announce_debounce_ms: default_delegate_announce_debounce_ms(),
+            announce_max_batch: default_delegate_announce_max_batch(),
             child_runtime: DelegateChildRuntimeConfig::default(),
         }
     }
@@ -625,6 +672,7 @@ impl Default for WebSearchToolConfig {
             tavily_api_key: None,
             perplexity_api_key: None,
             exa_api_key: None,
+            firecrawl_api_key: None,
             jina_api_key: None,
         }
     }
@@ -783,6 +831,22 @@ impl ToolConfig {
         {
             issues.push(*issue);
         }
+        if let Err(issue) = validate_numeric_range(
+            "tools.delegate.max_frozen_bytes",
+            self.delegate.max_frozen_bytes,
+            MIN_DELEGATE_MAX_FROZEN_BYTES,
+            usize::MAX,
+        ) {
+            issues.push(*issue);
+        }
+        if let Err(issue) = validate_numeric_range(
+            "tools.delegate.announce_max_batch",
+            self.delegate.announce_max_batch,
+            1,
+            usize::MAX,
+        ) {
+            issues.push(*issue);
+        }
         let timeout_as_usize = usize::try_from(self.web_search.timeout_seconds).map_err(|_e| {
             let mut vars = std::collections::BTreeMap::new();
             vars.insert(
@@ -868,6 +932,7 @@ pub fn normalize_web_search_provider(raw: &str) -> Option<&'static str> {
         "tavily" => Some(WEB_SEARCH_PROVIDER_TAVILY),
         "perplexity" | "perplexity_search" => Some(WEB_SEARCH_PROVIDER_PERPLEXITY),
         "exa" => Some(WEB_SEARCH_PROVIDER_EXA),
+        "firecrawl" => Some(WEB_SEARCH_PROVIDER_FIRECRAWL),
         "jina" | "jinaai" | "jina-ai" => Some(WEB_SEARCH_PROVIDER_JINA),
         _ => None,
     }
@@ -906,7 +971,7 @@ pub fn parse_autonomy_profile(raw: &str) -> Option<AutonomyProfile> {
 #[cfg(feature = "tool-websearch")]
 pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
-        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
+        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, Firecrawl, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.firecrawl_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_FIRECRAWL_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
     )
 }
 
@@ -934,6 +999,180 @@ impl ExternalSkillsConfig {
     }
 }
 
+impl RuntimePluginsConfig {
+    pub fn resolved_roots(&self) -> Vec<PathBuf> {
+        self.roots
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|root| !root.is_empty())
+            .map(expand_path)
+            .collect()
+    }
+
+    pub fn resolved_supported_bridges(&self) -> Result<Vec<PluginBridgeKind>, String> {
+        let invalid_bridge_labels = self.invalid_supported_bridge_labels();
+        if !invalid_bridge_labels.is_empty() {
+            return Err(format!(
+                "runtime_plugins.supported_bridges contains invalid bridge labels: {}",
+                invalid_bridge_labels.join(", ")
+            ));
+        }
+
+        let mut bridge_kinds = BTreeSet::new();
+        for raw_bridge in &self.supported_bridges {
+            let trimmed_bridge = raw_bridge.trim();
+            if trimmed_bridge.is_empty() {
+                continue;
+            }
+
+            let Some(bridge_kind) = PluginBridgeKind::parse_label(trimmed_bridge) else {
+                continue;
+            };
+            if bridge_kind == PluginBridgeKind::Unknown {
+                continue;
+            }
+
+            bridge_kinds.insert(bridge_kind);
+        }
+
+        Ok(bridge_kinds.into_iter().collect())
+    }
+
+    pub fn normalized_supported_adapter_families(&self) -> Vec<String> {
+        let mut families = BTreeSet::new();
+        for raw_family in &self.supported_adapter_families {
+            let trimmed_family = raw_family.trim();
+            if trimmed_family.is_empty() {
+                continue;
+            }
+
+            families.insert(trimmed_family.to_owned());
+        }
+
+        families.into_iter().collect()
+    }
+
+    pub fn readiness_evaluation_label(&self) -> &'static str {
+        let bridge_policy_configured = self
+            .supported_bridges
+            .iter()
+            .any(|raw_bridge| !raw_bridge.trim().is_empty());
+        let adapter_policy_configured = self
+            .supported_adapter_families
+            .iter()
+            .any(|raw_family| !raw_family.trim().is_empty());
+
+        if bridge_policy_configured || adapter_policy_configured {
+            return "configured_bridge_support_matrix";
+        }
+
+        "default_bridge_support_matrix"
+    }
+
+    pub fn resolved_bridge_support_matrix(&self) -> Result<BridgeSupportMatrix, String> {
+        let default_matrix = BridgeSupportMatrix::default();
+        let configured_bridge_kinds = self
+            .resolved_supported_bridges()?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let supported_bridges = if configured_bridge_kinds.is_empty() {
+            default_matrix.supported_bridges
+        } else {
+            configured_bridge_kinds
+        };
+        let supported_adapter_families = self
+            .normalized_supported_adapter_families()
+            .into_iter()
+            .collect();
+
+        Ok(BridgeSupportMatrix {
+            supported_bridges,
+            supported_adapter_families,
+            supported_compatibility_modes: default_matrix.supported_compatibility_modes,
+            supported_compatibility_shims: default_matrix.supported_compatibility_shims,
+            supported_compatibility_shim_profiles: default_matrix
+                .supported_compatibility_shim_profiles,
+        })
+    }
+
+    pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+
+        let has_non_empty_root = self.roots.iter().any(|root| !root.trim().is_empty());
+        if self.enabled && !has_non_empty_root {
+            let mut extra_message_variables = BTreeMap::new();
+            extra_message_variables.insert(
+                "invalid_reason".to_owned(),
+                "runtime_plugins.enabled requires at least one non-empty root".to_owned(),
+            );
+            extra_message_variables.insert(
+                "suggested_fix".to_owned(),
+                "set runtime_plugins.roots to one or more plugin discovery directories".to_owned(),
+            );
+            issues.push(ConfigValidationIssue {
+                severity: super::shared::ConfigValidationSeverity::Error,
+                code: super::shared::ConfigValidationCode::InvalidValue,
+                field_path: "runtime_plugins.roots".to_owned(),
+                inline_field_path: "runtime_plugins.roots".to_owned(),
+                example_env_name: String::new(),
+                suggested_env_name: None,
+                extra_message_variables,
+            });
+        }
+
+        let invalid_bridge_labels = self.invalid_supported_bridge_labels();
+        if !invalid_bridge_labels.is_empty() {
+            let mut extra_message_variables = BTreeMap::new();
+            extra_message_variables.insert(
+                "invalid_reason".to_owned(),
+                format!(
+                    "unsupported bridge labels: {}",
+                    invalid_bridge_labels.join(", ")
+                ),
+            );
+            extra_message_variables.insert(
+                "suggested_fix".to_owned(),
+                format!(
+                    "use only: {}",
+                    RUNTIME_PLUGIN_SUPPORTED_BRIDGE_LABELS.join(", ")
+                ),
+            );
+            issues.push(ConfigValidationIssue {
+                severity: super::shared::ConfigValidationSeverity::Error,
+                code: super::shared::ConfigValidationCode::InvalidValue,
+                field_path: "runtime_plugins.supported_bridges".to_owned(),
+                inline_field_path: "runtime_plugins.supported_bridges".to_owned(),
+                example_env_name: String::new(),
+                suggested_env_name: None,
+                extra_message_variables,
+            });
+        }
+
+        issues
+    }
+
+    fn invalid_supported_bridge_labels(&self) -> Vec<String> {
+        let mut invalid_labels = BTreeSet::new();
+        for raw_bridge in &self.supported_bridges {
+            let trimmed_bridge = raw_bridge.trim();
+            if trimmed_bridge.is_empty() {
+                continue;
+            }
+
+            let parsed_bridge_kind = PluginBridgeKind::parse_label(trimmed_bridge);
+            let bridge_kind_is_invalid = parsed_bridge_kind.is_none()
+                || parsed_bridge_kind == Some(PluginBridgeKind::Unknown);
+            if bridge_kind_is_invalid {
+                invalid_labels.insert(trimmed_bridge.to_owned());
+            }
+        }
+
+        invalid_labels.into_iter().collect()
+    }
+}
+
 impl WebToolConfig {
     pub fn normalized_allowed_domains(&self) -> Vec<String> {
         normalize_domain_entries(&self.allowed_domains)
@@ -941,6 +1180,43 @@ impl WebToolConfig {
 
     pub fn normalized_blocked_domains(&self) -> Vec<String> {
         normalize_domain_entries(&self.blocked_domains)
+    }
+}
+
+impl WebSearchToolConfig {
+    pub fn configured_api_key_for_provider(&self, provider: &str) -> Option<&str> {
+        let normalized_provider = normalize_web_search_provider(provider).unwrap_or(provider);
+
+        match normalized_provider {
+            WEB_SEARCH_PROVIDER_BRAVE => self.brave_api_key.as_deref(),
+            WEB_SEARCH_PROVIDER_TAVILY => self.tavily_api_key.as_deref(),
+            WEB_SEARCH_PROVIDER_PERPLEXITY => self.perplexity_api_key.as_deref(),
+            WEB_SEARCH_PROVIDER_EXA => self.exa_api_key.as_deref(),
+            WEB_SEARCH_PROVIDER_FIRECRAWL => self.firecrawl_api_key.as_deref(),
+            WEB_SEARCH_PROVIDER_JINA => self.jina_api_key.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn set_configured_api_key_for_provider(
+        &mut self,
+        provider: &str,
+        value: Option<String>,
+    ) -> bool {
+        let normalized_provider = normalize_web_search_provider(provider).unwrap_or(provider);
+
+        let configured_api_key_slot = match normalized_provider {
+            WEB_SEARCH_PROVIDER_BRAVE => &mut self.brave_api_key,
+            WEB_SEARCH_PROVIDER_TAVILY => &mut self.tavily_api_key,
+            WEB_SEARCH_PROVIDER_PERPLEXITY => &mut self.perplexity_api_key,
+            WEB_SEARCH_PROVIDER_EXA => &mut self.exa_api_key,
+            WEB_SEARCH_PROVIDER_FIRECRAWL => &mut self.firecrawl_api_key,
+            WEB_SEARCH_PROVIDER_JINA => &mut self.jina_api_key,
+            _ => return false,
+        };
+
+        *configured_api_key_slot = value;
+        true
     }
 }
 
@@ -997,6 +1273,18 @@ const fn default_delegate_max_active_children() -> usize {
 
 const fn default_delegate_timeout_seconds() -> u64 {
     60
+}
+
+const fn default_delegate_max_frozen_bytes() -> usize {
+    DEFAULT_DELEGATE_MAX_FROZEN_BYTES
+}
+
+const fn default_delegate_announce_debounce_ms() -> u64 {
+    500
+}
+
+const fn default_delegate_announce_max_batch() -> usize {
+    20
 }
 
 const fn default_browser_max_sessions() -> usize {
@@ -1089,6 +1377,12 @@ mod tests {
         assert_eq!(config.delegate.max_active_children, 5);
         assert_eq!(config.delegate.timeout_seconds, 60);
         assert_eq!(
+            config.delegate.max_frozen_bytes,
+            DEFAULT_DELEGATE_MAX_FROZEN_BYTES
+        );
+        assert_eq!(config.delegate.announce_debounce_ms, 500);
+        assert_eq!(config.delegate.announce_max_batch, 20);
+        assert_eq!(
             config.delegate.child_tool_allowlist,
             vec![
                 "file.read".to_owned(),
@@ -1141,6 +1435,7 @@ mod tests {
         assert!(config.web_search.tavily_api_key.is_none());
         assert!(config.web_search.perplexity_api_key.is_none());
         assert!(config.web_search.exa_api_key.is_none());
+        assert!(config.web_search.firecrawl_api_key.is_none());
         assert!(config.web_search.jina_api_key.is_none());
     }
 
@@ -1190,13 +1485,19 @@ mod tests {
             Some("perplexity")
         );
         assert_eq!(normalize_web_search_provider("exa"), Some("exa"));
+        assert_eq!(
+            normalize_web_search_provider("firecrawl"),
+            Some("firecrawl")
+        );
         assert_eq!(normalize_web_search_provider("jina-ai"), Some("jina"));
         assert_eq!(normalize_web_search_provider("unknown"), None);
         assert_eq!(DEFAULT_WEB_SEARCH_PROVIDER, WEB_SEARCH_PROVIDER_DUCKDUCKGO);
         assert!(WEB_SEARCH_PROVIDER_SCHEMA_VALUES.contains(&"perplexity_search"));
+        assert!(WEB_SEARCH_PROVIDER_SCHEMA_VALUES.contains(&"firecrawl"));
         assert!(WEB_SEARCH_PROVIDER_SCHEMA_VALUES.contains(&"jinaai"));
         assert!(WEB_SEARCH_PROVIDER_SCHEMA_VALUES.contains(&"jina-ai"));
         assert!(WEB_SEARCH_PROVIDER_VALID_VALUES.contains("perplexity_search"));
+        assert!(WEB_SEARCH_PROVIDER_VALID_VALUES.contains("firecrawl"));
         assert!(WEB_SEARCH_PROVIDER_VALID_VALUES.contains("jinaai / jina-ai"));
     }
 
@@ -1213,6 +1514,12 @@ mod tests {
             Some(WEB_SEARCH_TAVILY_API_KEY_ENV)
         );
 
+        let firecrawl = web_search_provider_descriptor("firecrawl").expect("firecrawl descriptor");
+        assert_eq!(
+            firecrawl.default_api_key_env,
+            Some(WEB_SEARCH_FIRECRAWL_API_KEY_ENV)
+        );
+
         let jina = web_search_provider_descriptor("jina").expect("jina descriptor");
         assert_eq!(jina.api_key_env_names, WEB_SEARCH_JINA_API_KEY_ENV_NAMES);
     }
@@ -1226,11 +1533,13 @@ mod tests {
         assert!(description.contains("tools.web_search.tavily_api_key"));
         assert!(description.contains("tools.web_search.perplexity_api_key"));
         assert!(description.contains("tools.web_search.exa_api_key"));
+        assert!(description.contains("tools.web_search.firecrawl_api_key"));
         assert!(description.contains("tools.web_search.jina_api_key"));
         assert!(description.contains(WEB_SEARCH_BRAVE_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_TAVILY_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_PERPLEXITY_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_EXA_API_KEY_ENV));
+        assert!(description.contains(WEB_SEARCH_FIRECRAWL_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(description.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
         assert!(description.contains(DEFAULT_WEB_SEARCH_PROVIDER));
@@ -1323,6 +1632,36 @@ mod tests {
                 .iter()
                 .any(|issue| issue.field_path == "tools.tool_execution.default_timeout_seconds"),
             "expected default timeout validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_delegate_max_frozen_bytes() {
+        let mut config = ToolConfig::default();
+        config.delegate.max_frozen_bytes = 0;
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.delegate.max_frozen_bytes"),
+            "expected delegate max_frozen_bytes validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_delegate_announce_max_batch() {
+        let mut config = ToolConfig::default();
+        config.delegate.announce_max_batch = 0;
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.delegate.announce_max_batch"),
+            "expected delegate announce_max_batch validation issue, got {issues:?}"
         );
     }
 
@@ -1440,6 +1779,9 @@ max_depth = 2
 max_active_children = 4
 timeout_seconds = 90
 allow_shell_in_child = true
+max_frozen_bytes = 131072
+announce_debounce_ms = 250
+announce_max_batch = 7
 child_tool_allowlist = ["file.read", "shell.exec"]
 
 [tools.delegate.child_runtime.web]
@@ -1480,6 +1822,9 @@ max_text_chars = 1024
         assert_eq!(parsed.tools.delegate.max_active_children, 4);
         assert_eq!(parsed.tools.delegate.timeout_seconds, 90);
         assert!(parsed.tools.delegate.allow_shell_in_child);
+        assert_eq!(parsed.tools.delegate.max_frozen_bytes, 131072);
+        assert_eq!(parsed.tools.delegate.announce_debounce_ms, 250);
+        assert_eq!(parsed.tools.delegate.announce_max_batch, 7);
         assert_eq!(
             parsed.tools.delegate.child_tool_allowlist,
             vec!["file.read".to_owned(), "shell.exec".to_owned()]
@@ -1776,6 +2121,150 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 .resolved_install_root()
                 .expect("install root should resolve")
                 .ends_with("demo-skills")
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_defaults_to_safe_off_mode() {
+        let config = RuntimePluginsConfig::default();
+        assert!(!config.enabled);
+        assert!(config.roots.is_empty());
+        assert!(config.supported_bridges.is_empty());
+        assert!(config.supported_adapter_families.is_empty());
+        assert_eq!(
+            config.readiness_evaluation_label(),
+            "default_bridge_support_matrix"
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_resolved_roots_expand_user_home() {
+        let home = tempfile::tempdir().expect("create temp home");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.path());
+
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["~/runtime-plugins".to_owned()],
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+        };
+
+        let roots = config.resolved_roots();
+        let expected_root = home.path().join("runtime-plugins");
+
+        assert_eq!(roots, vec![expected_root]);
+    }
+
+    #[test]
+    fn runtime_plugins_resolved_roots_skip_blank_entries() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec![
+                "   ".to_owned(),
+                "runtime-plugins".to_owned(),
+                "".to_owned(),
+            ],
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+        };
+
+        let roots = config.resolved_roots();
+
+        assert_eq!(roots, vec![PathBuf::from("runtime-plugins")]);
+    }
+
+    #[test]
+    fn runtime_plugins_bridge_support_matrix_uses_configured_policy() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["~/runtime-plugins".to_owned()],
+            supported_bridges: vec![
+                " http ".to_owned(),
+                "acpx".to_owned(),
+                "http_json".to_owned(),
+            ],
+            supported_adapter_families: vec![
+                " web-search ".to_owned(),
+                "python-stdio-adapter".to_owned(),
+                "web-search".to_owned(),
+            ],
+        };
+        let default_matrix = BridgeSupportMatrix::default();
+
+        let matrix = config
+            .resolved_bridge_support_matrix()
+            .expect("configured runtime plugin bridge policy should resolve");
+
+        assert_eq!(
+            config.readiness_evaluation_label(),
+            "configured_bridge_support_matrix"
+        );
+        assert!(
+            matrix
+                .supported_bridges
+                .contains(&PluginBridgeKind::HttpJson)
+        );
+        assert!(
+            matrix
+                .supported_bridges
+                .contains(&PluginBridgeKind::AcpRuntime)
+        );
+        assert!(
+            matrix
+                .supported_adapter_families
+                .contains("python-stdio-adapter")
+        );
+        assert!(matrix.supported_adapter_families.contains("web-search"));
+        assert_eq!(
+            matrix.supported_compatibility_modes,
+            default_matrix.supported_compatibility_modes
+        );
+        assert_eq!(
+            matrix.supported_compatibility_shims,
+            default_matrix.supported_compatibility_shims
+        );
+        assert_eq!(
+            matrix.supported_compatibility_shim_profiles,
+            default_matrix.supported_compatibility_shim_profiles
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_validate_rejects_invalid_bridge_labels() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["/tmp/runtime-plugins".to_owned()],
+            supported_bridges: vec!["bogus".to_owned(), "unknown".to_owned()],
+            supported_adapter_families: Vec::new(),
+        };
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "runtime_plugins.supported_bridges"),
+            "expected runtime_plugins.supported_bridges validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_validate_rejects_enabled_mode_without_roots() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["   ".to_owned()],
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+        };
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "runtime_plugins.roots"),
+            "expected runtime_plugins.roots validation issue, got {issues:?}"
         );
     }
 
