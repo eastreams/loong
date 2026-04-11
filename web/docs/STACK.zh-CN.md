@@ -70,8 +70,8 @@
 
 安装目录：
 
-- `~/.loongclaw/web/dist/`
-- 清单：`~/.loongclaw/web/install.json`
+- `~/.loong/web/dist/`
+- 清单：`~/.loong/web/install.json`
 
 ## 4. 当前目录
 
@@ -180,7 +180,8 @@ web/
 
 - `components/OnboardingStatusPanel.tsx`
 - `hooks/useOnboardingFlow.ts`
-- `providerConfig.ts`
+- `provider/providerConfig.ts`
+- `provider/providerCatalog.ts`
 
 ### `web/src/contexts/` 与 `web/src/hooks/`
 
@@ -248,10 +249,10 @@ web/
 
 运行日志统一落在用户目录，不再写回仓库：
 
-- `%USERPROFILE%\\.loongclaw\\logs\\web-dev.log`
-- `%USERPROFILE%\\.loongclaw\\logs\\web-dev.err.log`
-- `%USERPROFILE%\\.loongclaw\\logs\\web-api.log`
-- `%USERPROFILE%\\.loongclaw\\logs\\web-api.err.log`
+- `%USERPROFILE%\\.loong\\logs\\web-dev.log`
+- `%USERPROFILE%\\.loong\\logs\\web-dev.err.log`
+- `%USERPROFILE%\\.loong\\logs\\web-api.log`
+- `%USERPROFILE%\\.loong\\logs\\web-api.err.log`
 
 ## 9. 专项 review 后的当前重点
 

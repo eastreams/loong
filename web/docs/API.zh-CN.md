@@ -61,6 +61,7 @@
 - `activeModel`
 - `providerBaseUrl`
 - `providerEndpoint`
+- `providerEndpointExplicit`
 - `apiKeyConfigured`
 - `personality`
 - `memoryProfile`
@@ -107,7 +108,23 @@
 
 - 先按候选配置做最小验证
 - 仅验证通过时才正式落盘
+- 若 `kind` 与 route 明显错配（如标准 `volcengine` 指向 coding plan 路径），会直接返回 `400`
 - 返回验证结果与最新 onboarding 状态
+
+### `GET /api/providers/catalog`
+
+提供完整 provider catalog，供 onboarding / dashboard 下拉与默认 route 回填使用。常用字段：
+
+- `kind`
+- `displayName`
+- `defaultBaseUrl`
+- `defaultChatPath`
+- `defaultModelsPath`
+- `authScheme`
+- `featureFamily`
+- `isCodingVariant`
+- `aliases`
+- `configurationHint`
 
 ### `POST /api/onboard/preferences`
 
@@ -182,6 +199,8 @@
 - `activeProvider`
 - `lastProvider`
 - `model`
+- `providerBaseUrl`
+- `providerEndpointExplicit`
 - `endpoint`
 - `apiKeyConfigured`
 - `apiKeyMasked`

@@ -26,7 +26,7 @@ npm install
 # 在 web/ 目录内
 npm run build
 
-# 安装到 ~/.loongclaw/web/（Windows 为 %USERPROFILE%\.loongclaw\web\）
+# 安装到 ~/.loong/web/（Windows 为 %USERPROFILE%\.loong\web\）
 loongclaw web install --source ./dist
 ```
 
@@ -67,8 +67,13 @@ loongclaw web remove --force
 
 安装目录：
 
-- Windows：`%USERPROFILE%\.loongclaw\web\`
-- macOS / Linux：`~/.loongclaw/web/`
+- Windows：`%USERPROFILE%\.loong\web\`
+- macOS / Linux：`~/.loong/web/`
+
+当前运行态默认也会读取同一根目录下的本地数据文件：
+- `config.toml`
+- `memory.sqlite3`
+- `web-api-token`
 
 ## 4. 开发分离模式
 
@@ -126,8 +131,8 @@ npm run build
 
 日志默认写入用户目录：
 
-- Windows：`%USERPROFILE%\.loongclaw\logs\`
-- macOS / Linux：`~/.loongclaw/logs/`
+- Windows：`%USERPROFILE%\.loong\logs\`
+- macOS / Linux：`~/.loong/logs/`
 
 常见日志文件：
 
