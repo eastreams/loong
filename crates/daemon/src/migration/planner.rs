@@ -755,7 +755,11 @@ fn memory_summary(config: &mvp::config::MemoryConfig, supplemented_from: &[Strin
 fn tool_summary(config: &mvp::config::ToolConfig, supplemented_from: &[String]) -> String {
     let default = mvp::config::ToolConfig::default();
     let mut parts = Vec::new();
-    if config.file_root != default.file_root {
+    let configured_file_root = config.configured_file_root();
+    let default_configured_file_root = default.configured_file_root();
+    let explicit_file_root_changed = configured_file_root != default_configured_file_root;
+
+    if explicit_file_root_changed {
         parts.push(format!(
             "workspace root {}",
             config.resolved_file_root().display()

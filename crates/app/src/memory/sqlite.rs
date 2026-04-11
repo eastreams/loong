@@ -9931,19 +9931,6 @@ mod test_support {
             .unwrap_or_default()
     }
 
-    #[allow(dead_code)]
-    pub(super) fn record_summary_normalization() {
-        let current_thread = std::thread::current().id();
-        let mut capture = lock_sqlite_metric_capture();
-        if capture.active_thread == Some(current_thread) {
-            let entry = capture
-                .summary_materialization_counts
-                .entry("normalization")
-                .or_insert(0);
-            *entry += 1;
-        }
-    }
-
     pub(super) fn summary_normalization_count() -> usize {
         let capture = lock_sqlite_metric_capture();
         capture

@@ -1,18 +1,18 @@
 {
   "eyebrow": "Web Chat",
   "title": "对话界面",
-  "subtitle": "通过浏览器外壳复用现有 LoongClaw runtime。",
+  "subtitle": "通过浏览器优先的界面复用现有 LoongClaw runtime。",
   "newSession": "新建会话",
   "deleteSession": "删除会话",
   "deleting": "删除中...",
   "generating": "生成中...",
   "loadingSessions": "加载会话中...",
-  "noSessions": "暂无保存的会话。",
+  "noSessions": "还没有保存的会话。",
   "untitledSession": "未命名会话",
   "noHistory": "暂无历史",
-  "emptyState": "新建对话或打开已有会话。",
+  "emptyState": "新建一段对话，或打开已有会话。",
   "loadingHistory": "加载历史中...",
-  "inputPlaceholder": "向 LoongClaw 询问 runtime、工具或工作流问题...",
+  "inputPlaceholder": "向 LoongClaw 询问 runtime、工具或工作流...",
   "send": "发送",
   "panels": {
     "sessions": "会话",
@@ -33,7 +33,7 @@
     "label": "当前模型",
     "pending": "读取模型中",
     "provider": "Provider：{{provider}}",
-    "providerPending": "Provider 读取中"
+    "providerPending": "读取 Provider 中"
   },
   "inspector": {
     "sessionLoaded": "会话已加载",
@@ -43,15 +43,16 @@
   },
   "recentTools": {
     "detail": {
-      "ok": "已完成",
+      "ok": "已成功完成",
       "error": "执行失败",
-      "interrupted": "中途中断",
+      "interrupted": "中途被打断",
       "pending": "等待工具活动"
     }
   },
   "errors": {
     "providerHostFallback": "当前 provider 域名",
-    "transportFailure": "连接 {{host}} 时发生了 provider 传输失败。如果你开启了代理，建议先给这个域名单独配置 DIRECT，并加入 fake-ip-filter。你也可以到 Runtime console > Provider 路由 里查看当前诊断结果。"
+    "transportFailure": "连接 {{host}} 时发生了 provider 传输失败。如果你开启了代理，建议先给这个域名单独配置 DIRECT，并加入 fake-ip-filter。你也可以到 Runtime console > Provider 路由里查看当前诊断结果。",
+    "streamEndedUnexpectedly": "这次流式连接在到达终态之前就结束了。页面已经尝试从本地历史恢复，如果这一轮还没有显示完整结果，请再刷新一次会话。"
   },
   "loading": {
     "connectingA": "LoongClaw 正在接入航线",
@@ -63,8 +64,8 @@
     "streamingA": "LoongClaw 正在落字",
     "streamingB": "LoongClaw 正在展开回答",
     "streamingC": "LoongClaw 正在继续飞行",
-    "hintConnecting": "还在连接 provider，只要没有报错，这一轮就还有机会。",
-    "hintThinking": "请求已经发出，LoongClaw 还在等待或组织回复。",
+    "hintConnecting": "还在连接 provider，只要还没有报错，这一轮就还有机会完成。",
+    "hintThinking": "请求已经发出，LoongClaw 还在等待或组织回答。",
     "hintStreaming": "已经收到增量文本，这一轮仍在继续生成。"
   }
 }

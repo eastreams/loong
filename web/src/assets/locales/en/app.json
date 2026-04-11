@@ -99,13 +99,18 @@
                                            "memoryProfileWindowOnly":  "Window only",
                                            "memoryProfileWindowPlusSummary":  "Window plus summary",
                                            "memoryProfileProfilePlusWindow":  "Profile plus window",
+                                           "slidingWindow":  "Memory window turns",
+                                           "slidingWindowHelper":  "Range: 1 to 128. Common values: 12 or 24.",
                                            "promptAddendum":  "Prompt addendum",
                                            "promptAddendumPlaceholder":  "Optional extra instruction for future conversations",
-                                           "helper":  "These settings are optional. They shape later conversations, but they do not block entry.",
+                                           "helper":  "Blank means unset. Memory window range: 1 to 128.",
                                            "save":  "Save optional settings",
                                            "savePending":  "Saving...",
                                            "saved":  "Optional settings saved.",
-                                           "saveFailed":  "Optional settings could not be saved."
+                                           "saveFailed":  "Optional settings could not be saved.",
+                                           "errors":  {
+                                                          "slidingWindowInvalid":  "Memory window turns must be an integer between 1 and 128."
+                                                      }
                                        },
                        "validation":  {
                                           "required":  "Run one quick provider validation before entering Web.",

@@ -105,7 +105,7 @@ fn build_base_prompt_projection_with_tool_runtime_config(
         return BasePromptProjection::default();
     }
 
-    let workspace_root = tool_runtime_config.file_root.as_deref();
+    let workspace_root = tool_runtime_config.effective_workspace_root();
     let runtime_self_model = workspace_root.map(|workspace_root| {
         runtime_self::load_runtime_self_model_with_config(workspace_root, tool_runtime_config)
     });
@@ -148,7 +148,7 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
         return BasePromptProjection::default();
     }
 
-    let workspace_root = tool_runtime_config.file_root.as_deref();
+    let workspace_root = tool_runtime_config.effective_workspace_root();
     let runtime_self_model = match workspace_root {
         Some(workspace_root) => Some(
             load_runtime_self_model_with_binding(workspace_root, tool_runtime_config, binding)
@@ -617,13 +617,11 @@ pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
 
 #[cfg(feature = "memory-sqlite")]
 fn resolved_workspace_root(config: &LoongClawConfig) -> Option<std::path::PathBuf> {
-    config
-        .tools
-        .file_root
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|_| config.tools.resolved_file_root())
+    let tool_runtime_config =
+        tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+    let workspace_root = tool_runtime_config.effective_workspace_root()?;
+    let workspace_root = workspace_root.to_path_buf();
+    Some(workspace_root)
 }
 
 pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
@@ -1067,7 +1065,52 @@ mod tests {
 
         assert_eq!(
             tool_plane_event_count, 1,
-            "kernel-bound runtime-self loading should only read the existing AGENTS.md source"
+            "only existing runtime-self files should trigger tool reads"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_base_messages_with_binding_prefers_runtime_workspace_root_over_file_root() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let decoy_tool_root = harness.temp_dir.join("tool-root-decoy");
+        let agents_path = harness.temp_dir.join("AGENTS.md");
+        let agents_text = "Runtime self should follow the runtime workspace root.";
+        let mut config = LoongClawConfig::default();
+
+        std::fs::create_dir_all(&decoy_tool_root).expect("create decoy tool root");
+        std::fs::write(&agents_path, agents_text).expect("write AGENTS");
+
+        config.tools.file_root = Some(decoy_tool_root.display().to_string());
+        config.tools.runtime_workspace_root = Some(harness.temp_dir.display().to_string());
+
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let runtime_self_content = runtime_self_system_content(&messages);
+
+        assert!(runtime_self_content.contains(agents_text));
+
+        let audit_events = harness.audit.snapshot();
+        let tool_plane_event_count = audit_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                        plane: loongclaw_contracts::ExecutionPlane::Tool,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert_eq!(
+            tool_plane_event_count, 1,
+            "runtime-self loading should use the runtime workspace root, not the decoy tool root"
         );
     }
 
@@ -1517,6 +1560,56 @@ mod tests {
 
         assert!(durable_recall_content.contains("Remember the deploy freeze window."));
         assert!(durable_recall_content.contains("Customer migration starts tomorrow."));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn message_builder_prefers_runtime_workspace_root_for_durable_recall_files() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path().join("workspace-root");
+        let decoy_tool_root = temp_dir.path().join("tool-root");
+        let memory_dir = workspace_root.join("memory");
+        let curated_memory_path = workspace_root.join("MEMORY.md");
+        let recent_daily_path = memory_dir.join("2026-03-23.md");
+        let db_path = temp_dir.path().join("provider-durable-recall-env.sqlite3");
+        let mut config = LoongClawConfig::default();
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::create_dir_all(&decoy_tool_root).expect("create decoy tool root");
+
+        std::fs::write(
+            &curated_memory_path,
+            "# Durable Notes\n\nPrefer the workspace-root durable recall.\n",
+        )
+        .expect("write curated memory");
+        std::fs::write(
+            &recent_daily_path,
+            "## Durable Recall\n\nFollow the workspace-root timeline.\n",
+        )
+        .expect("write daily durable memory");
+
+        config.tools.file_root = Some(decoy_tool_root.display().to_string());
+        config.tools.runtime_workspace_root = Some(workspace_root.display().to_string());
+        config.memory.sqlite_path = db_path.display().to_string();
+
+        let messages = build_messages_for_session(&config, "durable-recall-env-session", true)
+            .expect("build messages");
+
+        let durable_recall_message = messages
+            .iter()
+            .find(|message| {
+                message["role"] == "system"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("## Advisory Durable Recall"))
+            })
+            .expect("durable recall system message");
+        let durable_recall_content = durable_recall_message["content"]
+            .as_str()
+            .expect("durable recall content");
+
+        assert!(durable_recall_content.contains("Prefer the workspace-root durable recall."));
+        assert!(durable_recall_content.contains("Follow the workspace-root timeline."));
     }
 
     #[cfg(feature = "memory-sqlite")]

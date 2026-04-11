@@ -144,7 +144,7 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
     #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics(
             &runtime.config,
             &runtime.session_id,
             crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
@@ -194,7 +194,7 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
     #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics(
             &runtime.config,
             &runtime.session_id,
             crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
@@ -779,7 +779,7 @@ pub(super) async fn load_manual_compaction_result(
     let before_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
     let before_turns = resolve_manual_compaction_turn_count(&before_snapshot);
     let report = turn_coordinator
-        .compact_session(config, session_id, binding)
+        .compact_production_session(config, session_id, binding)
         .await?;
     let after_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
     let after_turns = resolve_manual_compaction_turn_count(&after_snapshot);

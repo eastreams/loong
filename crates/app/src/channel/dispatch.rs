@@ -163,8 +163,7 @@ use crate::conversation::{
 use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
 pub(super) use super::commands::{
-    ChannelCommandContext, ChannelResolvedRuntimeAccount, ChannelSendCommandSpec,
-    run_channel_send_command,
+    ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command,
 };
 #[cfg(any(
     feature = "channel-telegram",
@@ -3047,7 +3046,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
     let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
     let observer = feedback_capture.observer_handle();
     let reply = ConversationTurnCoordinator::new()
-        .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
             config,
             &address,
             &message.text,
@@ -3171,13 +3170,6 @@ pub(crate) async fn process_inbound_with_provider(
     result
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 pub(super) fn reload_channel_turn_config(
     config: &LoongClawConfig,
     resolved_path: Option<&std::path::Path>,

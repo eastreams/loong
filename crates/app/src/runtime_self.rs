@@ -207,6 +207,12 @@ fn read_runtime_self_source(
     Some(trimmed.to_owned())
 }
 
+#[cfg(test)]
+pub(crate) fn should_attempt_runtime_self_source_read(workspace_root: &Path, path: &Path) -> bool {
+    let request_path = runtime_self_source_request_path(workspace_root, path);
+    request_path.is_some()
+}
+
 pub(crate) fn runtime_self_source_request_path(
     workspace_root: &Path,
     path: &Path,
@@ -763,6 +769,21 @@ mod tests {
 
         assert!(rendered_user_context.contains("runtime self truncated"));
         assert!(!rendered_user_context.contains(raw_user_prefix));
+    }
+
+    #[test]
+    fn should_attempt_runtime_self_source_read_skips_missing_optional_files() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let missing_tools_path = workspace_root.join("TOOLS.md");
+
+        let should_attempt =
+            should_attempt_runtime_self_source_read(workspace_root, &missing_tools_path);
+
+        assert!(
+            !should_attempt,
+            "missing optional runtime-self files should be skipped before tool execution"
+        );
     }
 
     #[cfg(unix)]

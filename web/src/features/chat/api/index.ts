@@ -32,6 +32,16 @@ export type ChatTurnStreamEvent =
       createdAt: string;
     }
   | {
+      type: "turn.phase";
+      turnId: string;
+      phase: string;
+      providerRound?: number;
+      lane?: string;
+      toolCallCount?: number;
+      messageCount?: number;
+      estimatedTokens?: number;
+    }
+  | {
       type: "message.delta";
       turnId: string;
       role: "assistant" | string;
@@ -49,6 +59,7 @@ export type ChatTurnStreamEvent =
       toolId: string;
       label: string;
       outcome: "ok" | "error" | string;
+      detail?: string;
     }
   | {
       type: "turn.completed";

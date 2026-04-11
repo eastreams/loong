@@ -361,6 +361,43 @@ fn bash_exec_falls_back_to_file_root_when_current_dir_is_unavailable() {
 
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
+fn bash_exec_defaults_cwd_to_configured_file_root() {
+    use std::fs;
+    use std::path::Path;
+
+    let root = unique_tool_temp_dir("loongclaw-bash-default-cwd");
+    fs::create_dir_all(&root).expect("create root");
+
+    let mut config = test_tool_runtime_config(root.clone());
+    config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
+    config.bash_exec = ready_bash_exec_runtime_policy();
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "bash.exec".to_owned(),
+            payload: json!({
+                "command": "pwd",
+            }),
+        },
+        &config,
+    )
+    .expect("bash command should default to configured file root");
+
+    let stdout = outcome.payload["stdout"]
+        .as_str()
+        .expect("bash.exec should return stdout");
+    let actual_cwd = fs::canonicalize(Path::new(stdout)).expect("canonicalize actual cwd");
+    let expected_cwd = fs::canonicalize(&root).expect("canonicalize expected cwd");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["cwd"], root.display().to_string());
+    assert_eq!(actual_cwd, expected_cwd);
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
 fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
     use std::fs;
 
@@ -618,6 +655,7 @@ fn bash_exec_honors_cwd() {
 
     let root = unique_tool_temp_dir("loongclaw-bash-exec-cwd");
     let nested = root.join("nested");
+    let requested_cwd = "nested";
     fs::create_dir_all(&nested).expect("create nested dir");
 
     let mut config = test_tool_runtime_config(root.clone());
@@ -629,7 +667,7 @@ fn bash_exec_honors_cwd() {
             tool_name: "bash.exec".to_owned(),
             payload: json!({
                 "command": "pwd",
-                "cwd": nested,
+                "cwd": requested_cwd,
             }),
         },
         &config,
@@ -646,6 +684,41 @@ fn bash_exec_honors_cwd() {
     assert_eq!(actual_cwd, expected_cwd);
 
     fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn bash_exec_rejects_cwd_that_escapes_configured_file_root() {
+    use std::fs;
+
+    let root = unique_tool_temp_dir("loongclaw-bash-cwd-root");
+    let outside = unique_tool_temp_dir("loongclaw-bash-cwd-outside");
+    fs::create_dir_all(&root).expect("create root");
+    fs::create_dir_all(&outside).expect("create outside");
+
+    let mut config = test_tool_runtime_config(root.clone());
+    config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
+    config.bash_exec = ready_bash_exec_runtime_policy();
+
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "bash.exec".to_owned(),
+            payload: json!({
+                "command": "pwd",
+                "cwd": outside.display().to_string(),
+            }),
+        },
+        &config,
+    )
+    .expect_err("bash cwd outside file root should fail");
+
+    assert!(
+        error.contains("escapes configured file root"),
+        "expected file_root confinement failure, got: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&outside).ok();
 }
 
 #[cfg(all(feature = "tool-shell", unix))]

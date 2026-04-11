@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
-use super::{ChannelCommandContext, LoongClawConfig};
 use crate::CliResult;
+use crate::config::LoongClawConfig;
 use crate::config::{self, ResolvedSignalChannelConfig};
+
+use super::commands::ChannelCommandContext;
 
 pub(super) fn load_signal_command_context(
     config_path: Option<&str>,

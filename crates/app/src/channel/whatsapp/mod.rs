@@ -6,9 +6,10 @@ use std::sync::Arc;
 use axum::{Router, routing::get};
 use serde_json::{Value, json};
 
+use super::commands::context::ChannelResolvedRuntimeAccount;
 use super::dispatch::{
-    ChannelCommandContext, ChannelResolvedRuntimeAccount, ChannelServeCommandSpec,
-    build_whatsapp_command_context, run_channel_serve_command_with_stop,
+    ChannelCommandContext, ChannelServeCommandSpec, build_whatsapp_command_context,
+    run_channel_serve_command_with_stop,
 };
 use super::runtime::serve::ChannelServeStopHandle;
 use super::{ChannelOutboundTargetKind, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR};

@@ -256,6 +256,7 @@ export function buildProviderSavePayload(input: {
 export interface PreferencesFormSource {
   personality: string;
   memoryProfile: string;
+  slidingWindow: number;
   promptAddendum: string;
 }
 
@@ -270,13 +271,16 @@ export function usePreferencesForm(source: PreferencesFormSource) {
     normalizePersonalityForUi(source.personality),
   );
   const [memoryProfile, setMemoryProfile] = useState(source.memoryProfile);
+  const [slidingWindow, setSlidingWindow] = useState(String(source.slidingWindow));
   const [promptAddendum, setPromptAddendum] = useState(source.promptAddendum);
   const [personalityDirty, setPersonalityDirty] = useState(false);
   const [memoryProfileDirty, setMemoryProfileDirty] = useState(false);
+  const [slidingWindowDirty, setSlidingWindowDirty] = useState(false);
   const [promptAddendumDirty, setPromptAddendumDirty] = useState(false);
 
   const personalityDirtyRef = useRef(false);
   const memoryProfileDirtyRef = useRef(false);
+  const slidingWindowDirtyRef = useRef(false);
   const promptAddendumDirtyRef = useRef(false);
 
   function updatePersonalityDirty(nextDirty: boolean) {
@@ -287,6 +291,11 @@ export function usePreferencesForm(source: PreferencesFormSource) {
   function updateMemoryProfileDirty(nextDirty: boolean) {
     memoryProfileDirtyRef.current = nextDirty;
     setMemoryProfileDirty(nextDirty);
+  }
+
+  function updateSlidingWindowDirty(nextDirty: boolean) {
+    slidingWindowDirtyRef.current = nextDirty;
+    setSlidingWindowDirty(nextDirty);
   }
 
   function updatePromptAddendumDirty(nextDirty: boolean) {
@@ -316,6 +325,13 @@ export function usePreferencesForm(source: PreferencesFormSource) {
       }
     }
 
+    if (force || !slidingWindowDirtyRef.current) {
+      setSlidingWindow(String(nextSource.slidingWindow));
+      if (force) {
+        updateSlidingWindowDirty(false);
+      }
+    }
+
     if (force || !promptAddendumDirtyRef.current) {
       setPromptAddendum(nextSource.promptAddendum);
       if (force) {
@@ -326,7 +342,12 @@ export function usePreferencesForm(source: PreferencesFormSource) {
 
   useEffect(() => {
     resetFromSource(source);
-  }, [source.memoryProfile, source.personality, source.promptAddendum]);
+  }, [
+    source.memoryProfile,
+    source.personality,
+    source.promptAddendum,
+    source.slidingWindow,
+  ]);
 
   function setPersonalityValue(nextPersonality: string) {
     setPersonality(nextPersonality);
@@ -340,6 +361,11 @@ export function usePreferencesForm(source: PreferencesFormSource) {
     updateMemoryProfileDirty(nextMemoryProfile !== sourceRef.current.memoryProfile);
   }
 
+  function setSlidingWindowValue(nextSlidingWindow: string) {
+    setSlidingWindow(nextSlidingWindow);
+    updateSlidingWindowDirty(nextSlidingWindow !== String(sourceRef.current.slidingWindow));
+  }
+
   function setPromptAddendumValue(nextPromptAddendum: string) {
     setPromptAddendum(nextPromptAddendum);
     updatePromptAddendumDirty(
@@ -350,11 +376,17 @@ export function usePreferencesForm(source: PreferencesFormSource) {
   return {
     personality,
     memoryProfile,
+    slidingWindow,
     promptAddendum,
-    isDirty: personalityDirty || memoryProfileDirty || promptAddendumDirty,
+    isDirty:
+      personalityDirty ||
+      memoryProfileDirty ||
+      slidingWindowDirty ||
+      promptAddendumDirty,
     resetFromSource,
     setPersonality: setPersonalityValue,
     setMemoryProfile: setMemoryProfileValue,
+    setSlidingWindow: setSlidingWindowValue,
     setPromptAddendum: setPromptAddendumValue,
   };
 }
@@ -362,11 +394,23 @@ export function usePreferencesForm(source: PreferencesFormSource) {
 export function buildPreferencesSavePayload(input: {
   personality: string;
   memoryProfile: string;
+  slidingWindow: string;
   promptAddendum: string;
-}): SaveOnboardingPreferencesRequest {
+}, t: TFunction): SaveOnboardingPreferencesRequest {
+  const normalizedSlidingWindow = input.slidingWindow.trim();
+  if (!/^\d+$/.test(normalizedSlidingWindow)) {
+    throw new Error(t("onboarding.preferences.errors.slidingWindowInvalid"));
+  }
+
+  const slidingWindow = Number(normalizedSlidingWindow);
+  if (!Number.isInteger(slidingWindow) || slidingWindow < 1 || slidingWindow > 128) {
+    throw new Error(t("onboarding.preferences.errors.slidingWindowInvalid"));
+  }
+
   const payload: SaveOnboardingPreferencesRequest = {
     personality: input.personality,
     memoryProfile: input.memoryProfile,
+    slidingWindow,
   };
 
   const normalizedPromptAddendum = input.promptAddendum.trim();
@@ -392,6 +436,9 @@ export function readProviderSaveError(
   fallbackKey: string,
 ): string {
   if (error instanceof ApiRequestError) {
+    return error.message;
+  }
+  if (error instanceof Error) {
     return error.message;
   }
   return t(fallbackKey);

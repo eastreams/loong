@@ -155,14 +155,9 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         ));
     }
 
-    if config
-        .tools
-        .file_root
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
-    {
+    let mut file_root_resolution = config.tools.file_root_resolution();
+    let uses_file_root_fallback = file_root_resolution.uses_current_working_directory_fallback();
+    if uses_file_root_fallback {
         checks.push(DoctorCheck {
             name: "tool file root policy".to_owned(),
             level: DoctorCheckLevel::Warn,
@@ -174,6 +169,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
                 .display()
                 .to_string();
             config.tools.file_root = Some(suggested_root.clone());
+            file_root_resolution = config.tools.file_root_resolution();
             config_mutated = true;
             fixes.push(format!("set tools.file_root={suggested_root}"));
         }
@@ -184,7 +180,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
             detail: "tools.file_root is configured".to_owned(),
         });
     }
-    let effective_tool_root = config.tools.resolved_file_root();
+    let effective_tool_root = file_root_resolution.path().clone();
     checks.push(check_directory_ready(
         "tool file root",
         &effective_tool_root,

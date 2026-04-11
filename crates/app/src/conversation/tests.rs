@@ -12485,6 +12485,97 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_direct_binding_denies_sessions_send_before_dispatch() {
+    use async_trait::async_trait;
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+
+    #[derive(Default)]
+    struct GovernedAppBarrierDispatcher {
+        executed: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl crate::conversation::AppToolDispatcher for GovernedAppBarrierDispatcher {
+        async fn execute_app_tool(
+            &self,
+            _session_context: &crate::conversation::SessionContext,
+            request: ToolCoreRequest,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            let tool_name = request.tool_name;
+            self.executed
+                .lock()
+                .expect("dispatcher executed lock")
+                .push(tool_name.clone());
+
+            let payload = json!({
+                "tool_name": tool_name,
+            });
+
+            let outcome = ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload,
+            };
+
+            Ok(outcome)
+        }
+    }
+
+    let dispatcher = GovernedAppBarrierDispatcher::default();
+    let engine = TurnEngine::new(1);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![provider_tool_intent(
+            "sessions_send",
+            json!({
+                "session_id": "target-session",
+                "text": "hello",
+            }),
+            "root-session",
+            "turn-app-governed-direct",
+            "call-app-governed-direct",
+        )],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::planned_root_tool_view(),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(failure.code.as_str(), "no_kernel_context");
+            assert_eq!(failure.reason.as_str(), "no_kernel_context");
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied(no_kernel_context), got: {other:?}")
+        }
+    }
+
+    let executed = dispatcher
+        .executed
+        .lock()
+        .expect("dispatcher executed lock");
+
+    assert!(executed.is_empty(), "governed app tool should not dispatch");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_requires_governed_approval_before_later_app_intent_execution() {
     use async_trait::async_trait;
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};

@@ -668,6 +668,10 @@
   font: inherit;
   font-size: 0.9rem;
   line-height: 1.4;
+  transition:
+    border-color var(--transition-base),
+    box-shadow var(--transition-base),
+    background-color var(--transition-base);
 }
 
 .settings-select-shell {
@@ -807,6 +811,7 @@
 .settings-input:focus {
   outline: 2px solid rgba(139, 148, 158, 0.18);
   border-color: var(--color-border-medium);
+  box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--color-border-medium) 55%, transparent);
 }
 
 .settings-input:-webkit-autofill,

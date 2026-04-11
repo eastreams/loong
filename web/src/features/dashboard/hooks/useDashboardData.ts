@@ -136,6 +136,7 @@ export function useDashboardData({
     return {
       personality: snapshot.config.personality || "calm_engineering",
       memoryProfile: snapshot.config.memoryProfile || "window_only",
+      slidingWindow: snapshot.config.slidingWindow ?? 12,
       promptAddendum:
         options?.promptAddendum ?? snapshot.config.promptAddendum ?? "",
     };
@@ -354,6 +355,12 @@ export function useDashboardData({
     setIsSavingSettings(true);
     let providerApplied = false;
     try {
+      const savedPreferences = buildPreferencesSavePayload({
+        personality: preferencesForm.personality,
+        memoryProfile: preferencesForm.memoryProfile,
+        slidingWindow: preferencesForm.slidingWindow,
+        promptAddendum: preferencesForm.promptAddendum,
+      }, t);
       setSettingsModal({
         phase: "pending",
         title: t("dashboard.settings.applyPending"),
@@ -370,11 +377,6 @@ export function useDashboardData({
       if (result.passed) {
         providerApplied = true;
         acceptValidatedOnboardingStatus(result.status);
-        const savedPreferences = buildPreferencesSavePayload({
-          personality: preferencesForm.personality,
-          memoryProfile: preferencesForm.memoryProfile,
-          promptAddendum: preferencesForm.promptAddendum,
-        });
         await onboardingApi.savePreferences(savedPreferences);
         refreshOnboardingStatus();
         await reloadDashboardData({

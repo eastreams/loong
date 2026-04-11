@@ -18,6 +18,7 @@ pub(super) struct OnboardStatusPayload {
     api_key_configured: bool,
     personality: String,
     memory_profile: String,
+    sliding_window: usize,
     prompt_addendum: String,
     config_path: String,
     blocking_stage: &'static str,
@@ -38,6 +39,7 @@ pub(super) struct OnboardProviderWriteRequest {
 pub(super) struct OnboardPreferencesWriteRequest {
     personality: String,
     memory_profile: String,
+    sliding_window: Option<usize>,
     prompt_addendum: Option<String>,
 }
 
@@ -357,6 +359,9 @@ pub(super) async fn onboard_preferences(
 
     config.cli.personality = Some(personality);
     config.memory.profile = memory_profile;
+    if let Some(sliding_window) = request.sliding_window {
+        config.memory.sliding_window = validate_memory_sliding_window(sliding_window)?;
+    }
     config.cli.system_prompt_addendum = request
         .prompt_addendum
         .as_deref()
@@ -377,6 +382,13 @@ pub(super) async fn onboard_preferences(
         vec![
             format!("personality={}", request.personality.trim()),
             format!("memory_profile={}", request.memory_profile.trim()),
+            format!(
+                "sliding_window={}",
+                request
+                    .sliding_window
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| config.memory.sliding_window.to_string())
+            ),
             format!(
                 "prompt_addendum={}",
                 request
@@ -537,6 +549,7 @@ async fn build_onboard_status_payload(
         api_key_configured: false,
         personality: "calm_engineering".to_owned(),
         memory_profile: "window_only".to_owned(),
+        sliding_window: mvp::config::MemoryConfig::default().sliding_window,
         prompt_addendum: String::new(),
         config_path: config_path_display,
         blocking_stage: if state.web_install_mode == "same_origin_static" {
@@ -574,6 +587,7 @@ async fn build_onboard_status_payload(
             payload.memory_profile =
                 crate::onboard_cli::memory_profile_id(snapshot.config.memory.resolved_profile())
                     .to_owned();
+            payload.sliding_window = snapshot.config.memory.sliding_window;
             payload.prompt_addendum = snapshot
                 .config
                 .cli
@@ -618,6 +632,16 @@ async fn build_onboard_status_payload(
     payload.blocking_stage = blocking_stage;
     payload.next_action = next_action;
     payload
+}
+
+fn validate_memory_sliding_window(sliding_window: usize) -> Result<usize, WebApiError> {
+    if !(1..=128).contains(&sliding_window) {
+        return Err(WebApiError::bad_request(format!(
+            "memory sliding window must be between 1 and 128 turns, got `{sliding_window}`"
+        )));
+    }
+
+    Ok(sliding_window)
 }
 
 fn looks_like_provider_endpoint(value: &str) -> bool {
