@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-10T16:14:16Z
+- Generated at: 2026-04-11T13:36:35Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -14,7 +14,7 @@
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|
 | spec_runtime | `foundation` | `crates/spec/src/spec_runtime.rs` | 3528 | 3600 | 72 | 65 | 65 | 0 | 100.0% | TIGHT | 3455 | 2.1% | PASS | 65 |
 | spec_execution | `foundation` | `crates/spec/src/spec_execution.rs` | 3573 | 3700 | 127 | 48 | 80 | 32 | 96.6% | TIGHT | 3547 | 0.7% | PASS | 43 |
-| provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 405 | 1000 | 595 | 11 | 20 | 9 | 55.0% | HEALTHY | 375 | 8.0% | PASS | 10 |
+| provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 409 | 1000 | 591 | 11 | 20 | 9 | 55.0% | HEALTHY | 375 | 9.1% | PASS | 10 |
 | memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 456 | 650 | 194 | 16 | 16 | 0 | 100.0% | TIGHT | 356 | 28.1% | BREACH | 14 |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3476 | 3600 | 124 | 12 | 12 | 0 | 100.0% | TIGHT | 3383 | 2.7% | PASS | 8 |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2641 | 2800 | 159 | 49 | 65 | 16 | 94.3% | WATCH | 2698 | -2.1% | PASS | 56 |
@@ -60,7 +60,7 @@
 
 <!-- arch-hotspot key=spec_runtime lines=3528 functions=65 -->
 <!-- arch-hotspot key=spec_execution lines=3573 functions=48 -->
-<!-- arch-hotspot key=provider_mod lines=405 functions=11 -->
+<!-- arch-hotspot key=provider_mod lines=409 functions=11 -->
 <!-- arch-hotspot key=memory_mod lines=456 functions=16 -->
 <!-- arch-hotspot key=acp_manager lines=3476 functions=12 -->
 <!-- arch-hotspot key=acpx_runtime lines=2641 functions=49 -->
