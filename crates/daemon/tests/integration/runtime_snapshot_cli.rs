@@ -308,6 +308,10 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
     )
     .expect("active provider profile should be present");
     assert_eq!(active_profile["credential_resolved"], true);
+    assert!(payload["provider"]["transport_runtime"]["http_client_cache_entries"].is_number());
+    assert!(payload["provider"]["transport_runtime"]["http_client_cache_hits"].is_number());
+    assert!(payload["provider"]["transport_runtime"]["http_client_cache_misses"].is_number());
+    assert!(payload["provider"]["transport_runtime"]["built_http_clients"].is_number());
     assert!(array_contains_string(
         &payload["tools"]["visible_tool_names"],
         "external_skills.list"
@@ -590,6 +594,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     );
     assert!(rendered.contains("runtime snapshot"));
     assert!(rendered.contains("provider active_profile=deepseek-lab"));
+    assert!(rendered.contains("provider transport cache_entries="));
     assert!(rendered.contains("context_engine selected="));
     assert!(rendered.contains("memory selected="));
     assert!(rendered.contains("acp enabled=true"));

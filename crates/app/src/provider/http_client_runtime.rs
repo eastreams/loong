@@ -6,6 +6,14 @@ use crate::CliResult;
 
 use super::policy;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderHttpClientRuntimeMetricsSnapshot {
+    pub cache_entry_count: usize,
+    pub cache_hit_count: u64,
+    pub cache_miss_count: u64,
+    pub built_client_count: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ProviderHttpClientCacheKey {
     timeout_ms: u64,
@@ -24,10 +32,30 @@ struct ProviderHttpClientCache {
     entries: HashMap<ProviderHttpClientCacheKey, reqwest::Client>,
 }
 
+#[derive(Debug, Default)]
+struct ProviderHttpClientRuntimeMetrics {
+    cache_hit_count: u64,
+    cache_miss_count: u64,
+    built_client_count: u64,
+}
+
 fn with_provider_http_client_cache<R>(run: impl FnOnce(&mut ProviderHttpClientCache) -> R) -> R {
     let cache =
         PROVIDER_HTTP_CLIENT_CACHE.get_or_init(|| Mutex::new(ProviderHttpClientCache::default()));
     let mut guard = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    run(&mut guard)
+}
+
+fn with_provider_http_client_runtime_metrics<R>(
+    run: impl FnOnce(&mut ProviderHttpClientRuntimeMetrics) -> R,
+) -> R {
+    let metrics = PROVIDER_HTTP_CLIENT_RUNTIME_METRICS
+        .get_or_init(|| Mutex::new(ProviderHttpClientRuntimeMetrics::default()));
+    let mut guard = match metrics.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
@@ -72,10 +100,7 @@ fn build_provider_http_client(cache_key: ProviderHttpClientCacheKey) -> CliResul
         .build()
         .map_err(|error| format!("build provider http client failed: {error}"))?;
 
-    #[cfg(test)]
-    {
-        record_provider_http_client_build(cache_key);
-    }
+    record_provider_http_client_build();
 
     Ok(built_client)
 }
@@ -86,9 +111,11 @@ pub(super) fn build_http_client(
     let cache_key = ProviderHttpClientCacheKey::from_request_policy(request_policy);
 
     if let Some(cached_client) = load_cached_provider_http_client(cache_key) {
+        record_provider_http_client_cache_hit();
         return Ok(cached_client);
     }
 
+    record_provider_http_client_cache_miss();
     let built_client = build_provider_http_client(cache_key)?;
     let cached_client = store_provider_http_client(cache_key, built_client);
 
@@ -96,17 +123,44 @@ pub(super) fn build_http_client(
 }
 
 static PROVIDER_HTTP_CLIENT_CACHE: OnceLock<Mutex<ProviderHttpClientCache>> = OnceLock::new();
+static PROVIDER_HTTP_CLIENT_RUNTIME_METRICS: OnceLock<Mutex<ProviderHttpClientRuntimeMetrics>> =
+    OnceLock::new();
 
-#[cfg(test)]
-static PROVIDER_HTTP_CLIENT_BUILD_COUNTS: OnceLock<Mutex<HashMap<u64, usize>>> = OnceLock::new();
+pub fn provider_http_client_runtime_metrics_snapshot() -> ProviderHttpClientRuntimeMetricsSnapshot {
+    let cache_entry_count = with_provider_http_client_cache(|cache| cache.entries.len());
+    with_provider_http_client_runtime_metrics(|metrics| ProviderHttpClientRuntimeMetricsSnapshot {
+        cache_entry_count,
+        cache_hit_count: metrics.cache_hit_count,
+        cache_miss_count: metrics.cache_miss_count,
+        built_client_count: metrics.built_client_count,
+    })
+}
+
+fn record_provider_http_client_cache_hit() {
+    with_provider_http_client_runtime_metrics(|metrics| {
+        metrics.cache_hit_count = metrics.cache_hit_count.saturating_add(1);
+    });
+}
+
+fn record_provider_http_client_cache_miss() {
+    with_provider_http_client_runtime_metrics(|metrics| {
+        metrics.cache_miss_count = metrics.cache_miss_count.saturating_add(1);
+    });
+}
+
+fn record_provider_http_client_build() {
+    with_provider_http_client_runtime_metrics(|metrics| {
+        metrics.built_client_count = metrics.built_client_count.saturating_add(1);
+    });
+}
 
 #[cfg(test)]
 fn clear_provider_http_client_cache() {
     with_provider_http_client_cache(|cache| {
         cache.entries.clear();
     });
-    with_provider_http_client_build_counts(|build_counts| {
-        build_counts.clear();
+    with_provider_http_client_runtime_metrics(|metrics| {
+        *metrics = ProviderHttpClientRuntimeMetrics::default();
     });
 }
 
@@ -115,32 +169,6 @@ fn provider_http_client_cache_contains_timeout(timeout_ms: u64) -> bool {
     let cache_key = ProviderHttpClientCacheKey { timeout_ms };
 
     with_provider_http_client_cache(|cache| cache.entries.contains_key(&cache_key))
-}
-
-#[cfg(test)]
-fn with_provider_http_client_build_counts<R>(run: impl FnOnce(&mut HashMap<u64, usize>) -> R) -> R {
-    let build_counts = PROVIDER_HTTP_CLIENT_BUILD_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = match build_counts.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    run(&mut guard)
-}
-
-#[cfg(test)]
-fn record_provider_http_client_build(cache_key: ProviderHttpClientCacheKey) {
-    with_provider_http_client_build_counts(|build_counts| {
-        let build_count = build_counts.entry(cache_key.timeout_ms).or_default();
-        *build_count += 1;
-    });
-}
-
-#[cfg(test)]
-fn provider_http_client_build_count_for_timeout(timeout_ms: u64) -> usize {
-    with_provider_http_client_build_counts(|build_counts| {
-        build_counts.get(&timeout_ms).copied().unwrap_or_default()
-    })
 }
 
 #[cfg(test)]
@@ -175,10 +203,13 @@ mod tests {
         let _second_client = build_http_client(&request_policy).expect("second cached client");
 
         let contains_timeout = provider_http_client_cache_contains_timeout(timeout_ms);
-        let build_count = provider_http_client_build_count_for_timeout(timeout_ms);
+        let metrics = provider_http_client_runtime_metrics_snapshot();
 
         assert!(contains_timeout);
-        assert_eq!(build_count, 1);
+        assert_eq!(metrics.cache_entry_count, 1);
+        assert_eq!(metrics.cache_hit_count, 1);
+        assert_eq!(metrics.cache_miss_count, 1);
+        assert_eq!(metrics.built_client_count, 1);
     }
 
     #[test]
@@ -197,12 +228,13 @@ mod tests {
 
         let contains_fast_timeout = provider_http_client_cache_contains_timeout(fast_timeout_ms);
         let contains_slow_timeout = provider_http_client_cache_contains_timeout(slow_timeout_ms);
-        let fast_build_count = provider_http_client_build_count_for_timeout(fast_timeout_ms);
-        let slow_build_count = provider_http_client_build_count_for_timeout(slow_timeout_ms);
+        let metrics = provider_http_client_runtime_metrics_snapshot();
 
         assert!(contains_fast_timeout);
         assert!(contains_slow_timeout);
-        assert_eq!(fast_build_count, 1);
-        assert_eq!(slow_build_count, 1);
+        assert_eq!(metrics.cache_entry_count, 2);
+        assert_eq!(metrics.cache_hit_count, 0);
+        assert_eq!(metrics.cache_miss_count, 2);
+        assert_eq!(metrics.built_client_count, 2);
     }
 }
