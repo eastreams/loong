@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -321,32 +320,31 @@ fn write_tool_lease_secret_if_missing(
     secret_path: &Path,
     secret: &str,
 ) -> Result<(), CreateToolLeaseSecretError> {
-    let mut options = OpenOptions::new();
-    options.write(true);
-    options.create_new(true);
-
-    let file = options.open(secret_path);
-    let mut file = match file {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(CreateToolLeaseSecretError::AlreadyExists);
-        }
+    let parent = secret_path.parent().unwrap_or_else(|| Path::new("."));
+    let staged_file_result = tempfile::NamedTempFile::new_in(parent);
+    let mut staged_file = match staged_file_result {
+        Ok(staged_file) => staged_file,
         Err(error) => return Err(CreateToolLeaseSecretError::Io(error)),
     };
 
-    let write_result = writeln!(file, "{secret}");
+    let write_result = writeln!(staged_file, "{secret}");
     if let Err(error) = write_result {
-        let _ = fs::remove_file(secret_path);
         return Err(CreateToolLeaseSecretError::Io(error));
     }
 
-    let sync_result = file.sync_all();
+    let sync_result = staged_file.as_file_mut().sync_all();
     if let Err(error) = sync_result {
-        let _ = fs::remove_file(secret_path);
         return Err(CreateToolLeaseSecretError::Io(error));
     }
 
-    Ok(())
+    let persist_result = staged_file.persist_noclobber(secret_path);
+    match persist_result {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(CreateToolLeaseSecretError::AlreadyExists)
+        }
+        Err(error) => Err(CreateToolLeaseSecretError::Io(error.error)),
+    }
 }
 
 fn cached_tool_lease_secret(secret_path: &Path) -> Option<String> {
@@ -438,6 +436,40 @@ mod tests {
         let validation_result = validate_tool_lease("file.read", &lease, &payload);
 
         validation_result.expect("lease should survive authority reload");
+    }
+
+    #[test]
+    fn issue_tool_lease_parallel_first_use_keeps_secret_readable() {
+        use std::sync::Arc;
+        use std::sync::Barrier;
+
+        let (_temp_home, _env) = scoped_tool_lease_home();
+        clear_tool_lease_secret_cache_for_tests();
+
+        let thread_count = 8;
+        let barrier = Arc::new(Barrier::new(thread_count));
+        let mut handles = Vec::new();
+
+        for _ in 0..thread_count {
+            let barrier = Arc::clone(&barrier);
+            let handle = std::thread::spawn(move || {
+                let payload = serde_json::Map::new();
+                barrier.wait();
+                issue_tool_lease("file.read", &payload)
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let join_result = handle.join().expect("join tool lease thread");
+            join_result.expect("lease should issue without exposing an empty secret file");
+        }
+
+        let secret_path = default_tool_lease_secret_path();
+        let persisted_secret =
+            read_tool_lease_secret_file(secret_path.as_path()).expect("persisted secret");
+
+        assert!(persisted_secret.is_some());
     }
 
     #[test]
