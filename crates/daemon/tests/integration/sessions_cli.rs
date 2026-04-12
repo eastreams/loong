@@ -32,6 +32,16 @@ fn append_session_turn(
         .expect("append session turn");
 }
 
+fn append_session_conversation_event(
+    root: &super::tasks_cli::TempDirGuard,
+    session_id: &str,
+    payload: Value,
+) {
+    let serialized_payload =
+        serde_json::to_string(&payload).expect("serialize session conversation event");
+    append_session_turn(root, session_id, "assistant", &serialized_payload);
+}
+
 #[test]
 fn sessions_list_cli_parses_global_flags_after_subcommand() {
     let cli = try_parse_cli([
@@ -301,18 +311,80 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
             }
         }
     });
-    let prompt_frame_event =
-        serde_json::to_string(&prompt_frame_event).expect("serialize prompt frame event");
-    mvp::memory::append_turn_direct(
+    append_session_conversation_event(&root, "delegate:session-1", prompt_frame_event);
+    append_session_conversation_event(
+        &root,
         "delegate:session-1",
-        "assistant",
-        &prompt_frame_event,
-        &mvp::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(root.path().join("memory.sqlite3")),
-            ..mvp::memory::runtime_config::MemoryRuntimeConfig::default()
-        },
-    )
-    .expect("append prompt frame event");
+        json!({
+            "type": "conversation_event",
+            "event": "plan_round_started",
+            "payload": {
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 0,
+                    "rounds_failed": 0,
+                    "verify_failures": 0,
+                    "replans_triggered": 0,
+                    "total_attempts_used": 1
+                },
+                "health_signal": {
+                    "severity": "warn",
+                    "flags": ["warmup"]
+                }
+            }
+        }),
+    );
+    append_session_conversation_event(
+        &root,
+        "delegate:session-1",
+        json!({
+            "type": "conversation_event",
+            "event": "final_status",
+            "payload": {
+                "status": "succeeded",
+                "route_decision": "return",
+                "route_reason": "completed",
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 1,
+                    "rounds_failed": 0,
+                    "verify_failures": 0,
+                    "replans_triggered": 0,
+                    "total_attempts_used": 1
+                },
+                "health_signal": {
+                    "severity": "warn",
+                    "flags": ["warmup"]
+                }
+            }
+        }),
+    );
+    append_session_conversation_event(
+        &root,
+        "delegate:session-1",
+        json!({
+            "type": "conversation_event",
+            "event": "turn_checkpoint",
+            "payload": {
+                "schema_version": 1,
+                "stage": "finalized",
+                "checkpoint": {
+                    "lane": {
+                        "lane": "safe",
+                        "result_kind": "final_text"
+                    },
+                    "finalization": {
+                        "persistence_mode": "success"
+                    }
+                },
+                "finalization_progress": {
+                    "after_turn": "completed",
+                    "compaction": "completed"
+                },
+                "failure": null
+            }
+        }),
+    );
 
     let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
         loongclaw_daemon::sessions_cli::SessionsCommandOptions {
@@ -349,7 +421,7 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         execution.payload["detail"]["workflow"]["binding"]["worktree"]["worktree_id"],
         "delegate:session-1"
     );
-    assert_eq!(execution.payload["detail"]["session"]["turn_count"], 3);
+    assert_eq!(execution.payload["detail"]["session"]["turn_count"], 6);
     assert_eq!(
         execution.payload["detail"]["prompt_frame"]["summary"]["latest_phase"],
         "initial"
@@ -357,6 +429,22 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
     assert_eq!(
         execution.payload["detail"]["prompt_frame"]["summary"]["latest_total_estimated_tokens"],
         42
+    );
+    assert_eq!(
+        execution.payload["detail"]["safe_lane"]["summary"]["final_status"],
+        "succeeded"
+    );
+    assert_eq!(
+        execution.payload["detail"]["safe_lane"]["summary"]["round_started_events"],
+        1
+    );
+    assert_eq!(
+        execution.payload["detail"]["turn_checkpoint"]["summary"]["session_state"],
+        "finalized"
+    );
+    assert_eq!(
+        execution.payload["detail"]["turn_checkpoint"]["summary"]["checkpoint_durable"],
+        true
     );
     let recipes = execution.payload["recipes"]
         .as_array()
@@ -427,6 +515,22 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
     assert!(
         rendered.contains("stable_prefix=prefix-a"),
         "status render should surface prompt-frame stable prefix hash: {rendered}"
+    );
+    assert!(
+        rendered.contains("safe_lane: status=succeeded rounds_started=1"),
+        "status render should surface safe-lane summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("health=warn"),
+        "status render should surface safe-lane health: {rendered}"
+    );
+    assert!(
+        rendered.contains("turn_checkpoint: session_state=finalized durable=yes"),
+        "status render should surface turn-checkpoint durability: {rendered}"
+    );
+    assert!(
+        rendered.contains("stage=finalized after_turn=completed compaction=completed"),
+        "status render should surface turn-checkpoint stage detail: {rendered}"
     );
 }
 

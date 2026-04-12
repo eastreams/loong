@@ -305,7 +305,7 @@ async fn execute_status_command(
     tool_config: &mvp::config::ToolConfig,
     session_id: &str,
 ) -> CliResult<Value> {
-    let detail = load_session_status_payload_with_prompt_frame(
+    let detail = load_session_status_payload_with_runtime_summaries(
         memory_config,
         tool_config,
         current_session_id,
@@ -326,7 +326,7 @@ async fn execute_status_command(
     }))
 }
 
-async fn load_session_status_payload_with_prompt_frame(
+async fn load_session_status_payload_with_runtime_summaries(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
@@ -339,11 +339,21 @@ async fn load_session_status_payload_with_prompt_frame(
         session_id,
     )
     .await;
+    let safe_lane =
+        crate::session_runtime_truth_cli::load_session_safe_lane_payload(memory_config, session_id)
+            .await;
+    let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
+        memory_config,
+        session_id,
+    )
+    .await;
 
     let detail_object = detail
         .as_object_mut()
         .ok_or_else(|| "session status payload must be an object".to_owned())?;
     detail_object.insert("prompt_frame".to_owned(), prompt_frame);
+    detail_object.insert("safe_lane".to_owned(), safe_lane);
+    detail_object.insert("turn_checkpoint".to_owned(), turn_checkpoint);
 
     Ok(detail)
 }
@@ -638,7 +648,7 @@ pub fn render_sessions_cli_text(execution: &SessionsCommandExecution) -> CliResu
     Ok(rendered)
 }
 
-fn sanitize_terminal_text(value: &str) -> String {
+pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     let mut sanitized = String::new();
     for character in value.chars() {
         if character.is_control() {
@@ -1105,6 +1115,13 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     let prompt_frame_summary =
         crate::session_prompt_frame_cli::render_prompt_frame_summary(detail.get("prompt_frame"));
     let prompt_frame_summary = sanitize_terminal_text(prompt_frame_summary.as_str());
+    let safe_lane_summary =
+        crate::session_runtime_truth_cli::render_safe_lane_summary(detail.get("safe_lane"));
+    let safe_lane_summary = sanitize_terminal_text(safe_lane_summary.as_str());
+    let turn_checkpoint_summary = crate::session_runtime_truth_cli::render_turn_checkpoint_summary(
+        detail.get("turn_checkpoint"),
+    );
+    let turn_checkpoint_summary = sanitize_terminal_text(turn_checkpoint_summary.as_str());
     let delegate_mode = detail
         .get("delegate_lifecycle")
         .and_then(|value| value.get("mode"))
@@ -1189,6 +1206,8 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("lineage_depth: {lineage_depth}"));
     lines.push(format!("runtime_self_continuity: {continuity}"));
     lines.push(format!("prompt_frame: {prompt_frame_summary}"));
+    lines.push(format!("safe_lane: {safe_lane_summary}"));
+    lines.push(format!("turn_checkpoint: {turn_checkpoint_summary}"));
     lines.push(format!("turn_count: {turn_count}"));
     lines.push(format!("last_turn_at: {last_turn_at}"));
     lines.push(format!("last_error: {sanitized_last_error}"));

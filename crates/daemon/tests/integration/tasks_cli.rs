@@ -313,6 +313,12 @@ fn append_tasks_session_turn(config_path: &Path, session_id: &str, role: &str, c
         .expect("append tasks session turn");
 }
 
+fn append_tasks_conversation_event(config_path: &Path, session_id: &str, payload: Value) {
+    let serialized_payload =
+        serde_json::to_string(&payload).expect("serialize tasks conversation event");
+    append_tasks_session_turn(config_path, session_id, "assistant", &serialized_payload);
+}
+
 fn open_tasks_test_connection(config_path: &Path) -> Connection {
     let loaded =
         mvp::config::load(Some(config_path.to_string_lossy().as_ref())).expect("load config");
@@ -588,13 +594,127 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
             }
         }
     });
-    let prompt_frame_event =
-        serde_json::to_string(&prompt_frame_event).expect("serialize prompt frame event");
-    append_tasks_session_turn(
+    append_tasks_conversation_event(&config_path, "delegate:task-1", prompt_frame_event);
+    append_tasks_conversation_event(
         &config_path,
         "delegate:task-1",
-        "assistant",
-        &prompt_frame_event,
+        json!({
+            "type": "conversation_event",
+            "event": "plan_round_started",
+            "payload": {
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 0,
+                    "rounds_failed": 0,
+                    "verify_failures": 0,
+                    "replans_triggered": 0,
+                    "total_attempts_used": 1
+                },
+                "health_signal": {
+                    "severity": "warn",
+                    "flags": ["warmup"]
+                }
+            }
+        }),
+    );
+    append_tasks_conversation_event(
+        &config_path,
+        "delegate:task-1",
+        json!({
+            "type": "conversation_event",
+            "event": "verify_failed",
+            "payload": {
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 0,
+                    "rounds_failed": 0,
+                    "verify_failures": 1,
+                    "replans_triggered": 0,
+                    "total_attempts_used": 1
+                },
+                "health_signal": {
+                    "severity": "critical",
+                    "flags": ["verify"]
+                }
+            }
+        }),
+    );
+    append_tasks_conversation_event(
+        &config_path,
+        "delegate:task-1",
+        json!({
+            "type": "conversation_event",
+            "event": "replan_triggered",
+            "payload": {
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 0,
+                    "rounds_failed": 0,
+                    "verify_failures": 1,
+                    "replans_triggered": 1,
+                    "total_attempts_used": 1
+                },
+                "health_signal": {
+                    "severity": "critical",
+                    "flags": ["verify"]
+                }
+            }
+        }),
+    );
+    append_tasks_conversation_event(
+        &config_path,
+        "delegate:task-1",
+        json!({
+            "type": "conversation_event",
+            "event": "final_status",
+            "payload": {
+                "status": "failed",
+                "failure_code": "safe_lane_backpressure_limit",
+                "route_decision": "terminal",
+                "route_reason": "session_governor_failed_threshold",
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 0,
+                    "rounds_failed": 1,
+                    "verify_failures": 1,
+                    "replans_triggered": 1,
+                    "total_attempts_used": 2
+                },
+                "health_signal": {
+                    "severity": "critical",
+                    "flags": ["verify"]
+                }
+            }
+        }),
+    );
+    append_tasks_conversation_event(
+        &config_path,
+        "delegate:task-1",
+        json!({
+            "type": "conversation_event",
+            "event": "turn_checkpoint",
+            "payload": {
+                "schema_version": 1,
+                "stage": "finalization_failed",
+                "checkpoint": {
+                    "lane": {
+                        "lane": "safe",
+                        "result_kind": "tool_call"
+                    },
+                    "finalization": {
+                        "persistence_mode": "inline_provider_error"
+                    }
+                },
+                "finalization_progress": {
+                    "after_turn": "completed",
+                    "compaction": "failed"
+                },
+                "failure": {
+                    "step": "compaction",
+                    "error": "compact failure"
+                }
+            }
+        }),
     );
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
@@ -650,6 +770,26 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         execution.payload["task"]["prompt_frame"]["summary"]["latest_total_estimated_tokens"],
         64
     );
+    assert_eq!(
+        execution.payload["task"]["safe_lane"]["summary"]["final_status"],
+        "failed"
+    );
+    assert_eq!(
+        execution.payload["task"]["safe_lane"]["summary"]["verify_failed_events"],
+        1
+    );
+    assert_eq!(
+        execution.payload["task"]["safe_lane"]["summary"]["replan_triggered_events"],
+        1
+    );
+    assert_eq!(
+        execution.payload["task"]["turn_checkpoint"]["summary"]["session_state"],
+        "finalization_failed"
+    );
+    assert_eq!(
+        execution.payload["task"]["turn_checkpoint"]["summary"]["requires_recovery"],
+        true
+    );
 
     let rendered = loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution)
         .expect("render tasks status");
@@ -688,6 +828,26 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert!(
         rendered.contains("stable_prefix=prefix-task"),
         "status render should surface prompt-frame stable prefix: {rendered}"
+    );
+    assert!(
+        rendered.contains("safe_lane: status=failed rounds_started=1 verify_failed=1 replans=1"),
+        "status render should surface safe-lane summary: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "failure_code=safe_lane_backpressure_limit route=terminal/session_governor_failed_threshold health=critical"
+        ),
+        "status render should surface safe-lane failure context: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "turn_checkpoint: session_state=finalization_failed durable=yes reply_durable=yes requires_recovery=yes"
+        ),
+        "status render should surface turn-checkpoint recovery context: {rendered}"
+    );
+    assert!(
+        rendered.contains("stage=finalization_failed after_turn=completed compaction=failed"),
+        "status render should surface turn-checkpoint stage detail: {rendered}"
     );
 }
 
@@ -1097,6 +1257,119 @@ async fn execute_tasks_command_events_and_wait_surface_incremental_payloads() {
     assert!(
         rendered.contains("task_next_action: resolve_request"),
         "wait render should surface next action: {rendered}"
+    );
+}
+
+#[test]
+fn render_tasks_status_text_escapes_control_characters() {
+    let execution = loongclaw_daemon::tasks_cli::TasksCommandExecution {
+        resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+        current_session_id: "ops-root".to_owned(),
+        payload: json!({
+            "command": "status",
+            "task": {
+                "task_id": "delegate:\u{1b}[31mchild",
+                "scope_session_id": "ops-root\nnext",
+                "label": "line1\nline2",
+                "session_state": "running",
+                "phase": "queued",
+                "owner_kind": "background_task_host",
+                "timeout_seconds": 60,
+                "last_error": "boom\u{1b}[0m",
+                "approval": {
+                    "matched_count": 1,
+                    "attention_summary": {
+                        "needs_attention_count": 1
+                    }
+                },
+                "tool_policy": {
+                    "effective_tool_ids": ["file.read\nnext"],
+                    "effective_runtime_narrowing": {
+                        "allow": "line1\nline2"
+                    }
+                },
+                "prompt_frame": {
+                    "available": false,
+                    "error": "prompt\nmissing"
+                },
+                "safe_lane": {
+                    "available": false,
+                    "error": "lane\nmissing"
+                },
+                "turn_checkpoint": {
+                    "available": false,
+                    "error": "checkpoint\nmissing"
+                }
+            }
+        }),
+    };
+
+    let rendered =
+        loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks");
+
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "rendered status should not contain raw escape characters: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("scope_session_id: ops-root\\nnext"),
+        "expected escaped scope session id: {rendered}"
+    );
+    assert!(
+        rendered.contains("label: line1\\nline2"),
+        "expected escaped label: {rendered}"
+    );
+    assert!(
+        rendered.contains("last_error: boom\\u{1b}[0m"),
+        "expected escaped last_error: {rendered}"
+    );
+    assert!(
+        rendered.contains("prompt_frame: unavailable error=prompt\\nmissing"),
+        "expected escaped prompt-frame error: {rendered}"
+    );
+    assert!(
+        rendered.contains("safe_lane: unavailable error=lane\\nmissing"),
+        "expected escaped safe-lane error: {rendered}"
+    );
+    assert!(
+        rendered.contains("turn_checkpoint: unavailable error=checkpoint\\nmissing"),
+        "expected escaped turn-checkpoint error: {rendered}"
+    );
+}
+
+#[test]
+fn render_tasks_events_text_escapes_control_characters() {
+    let execution = loongclaw_daemon::tasks_cli::TasksCommandExecution {
+        resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+        current_session_id: "ops-root".to_owned(),
+        payload: json!({
+            "command": "events",
+            "task_id": "delegate:\u{1b}[31mchild",
+            "next_after_id": 7,
+            "events": [
+                {
+                    "id": 1,
+                    "event_kind": "delegate_queued\nnext",
+                    "ts": 123
+                }
+            ]
+        }),
+    };
+
+    let rendered =
+        loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render events");
+
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "rendered events should not contain raw escape characters: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("events for `delegate:\\u{1b}[31mchild`"),
+        "expected escaped task id: {rendered}"
+    );
+    assert!(
+        rendered.contains("- #1 delegate_queued\\nnext ts=123"),
+        "expected escaped event kind: {rendered}"
     );
 }
 

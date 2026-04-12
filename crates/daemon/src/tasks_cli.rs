@@ -858,6 +858,14 @@ async fn build_task_detail(
     let prompt_frame =
         crate::session_prompt_frame_cli::load_session_prompt_frame_payload(memory_config, task_id)
             .await;
+    let safe_lane =
+        crate::session_runtime_truth_cli::load_session_safe_lane_payload(memory_config, task_id)
+            .await;
+    let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
+        memory_config,
+        task_id,
+    )
+    .await;
 
     let detail = json!({
         "task_id": task_id,
@@ -890,6 +898,8 @@ async fn build_task_detail(
         "recent_events": recent_events,
         "task_status": task_status,
         "prompt_frame": prompt_frame,
+        "safe_lane": safe_lane,
+        "turn_checkpoint": turn_checkpoint,
     });
     Ok(detail)
 }
@@ -1404,14 +1414,15 @@ fn render_tasks_create_text(payload: &Value) -> CliResult<String> {
         .get("next_steps")
         .and_then(Value::as_array)
         .ok_or_else(|| "tasks create payload missing next_steps".to_owned())?;
+    let scope = payload
+        .get("current_session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
 
     let mut lines = Vec::new();
+    let sanitized_scope = crate::sessions_cli::sanitize_terminal_text(scope);
     lines.push(format!(
-        "background task queued in session `{}`",
-        payload
-            .get("current_session_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
+        "background task queued in session `{sanitized_scope}`"
     ));
     lines.extend(render_task_detail_lines(task)?);
     append_task_lookup_error_line(payload, &mut lines);
@@ -1419,7 +1430,8 @@ fn render_tasks_create_text(payload: &Value) -> CliResult<String> {
     if !recipes.is_empty() {
         for recipe in recipes {
             let text = recipe.as_str().unwrap_or("");
-            lines.push(format!("- {text}"));
+            let sanitized_text = crate::sessions_cli::sanitize_terminal_text(text);
+            lines.push(format!("- {sanitized_text}"));
         }
     }
 
@@ -1427,7 +1439,8 @@ fn render_tasks_create_text(payload: &Value) -> CliResult<String> {
     if !next_steps.is_empty() {
         for step in next_steps {
             let text = step.as_str().unwrap_or("");
-            next_lines.push(format!("- {text}"));
+            let sanitized_text = crate::sessions_cli::sanitize_terminal_text(text);
+            next_lines.push(format!("- {sanitized_text}"));
         }
     }
 
@@ -1466,8 +1479,9 @@ fn render_tasks_list_text(payload: &Value) -> CliResult<String> {
         .unwrap_or("unknown");
 
     let mut lines = Vec::new();
+    let sanitized_scope = crate::sessions_cli::sanitize_terminal_text(scope);
     lines.push(format!(
-        "visible background tasks from session `{scope}`: {returned_count}/{matched_count}"
+        "visible background tasks from session `{sanitized_scope}`: {returned_count}/{matched_count}"
     ));
     if tasks.is_empty() {
         lines.push("No async background tasks are currently visible.".to_owned());
@@ -1532,8 +1546,9 @@ fn render_tasks_events_text(payload: &Value) -> CliResult<String> {
         .unwrap_or(0);
 
     let mut lines = Vec::new();
+    let sanitized_task_id = crate::sessions_cli::sanitize_terminal_text(task_id);
     lines.push(format!(
-        "events for `{task_id}` (next_after_id={next_after_id})"
+        "events for `{sanitized_task_id}` (next_after_id={next_after_id})"
     ));
     if events.is_empty() {
         lines.push("No newer events.".to_owned());
@@ -1553,7 +1568,8 @@ fn render_tasks_events_text(payload: &Value) -> CliResult<String> {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let ts = event.get("ts").and_then(Value::as_i64).unwrap_or_default();
-        lines.push(format!("- #{event_id} {event_kind} ts={ts}"));
+        let sanitized_event_kind = crate::sessions_cli::sanitize_terminal_text(event_kind);
+        lines.push(format!("- #{event_id} {sanitized_event_kind} ts={ts}"));
     }
 
     Ok(render_tasks_surface(
@@ -1595,7 +1611,8 @@ fn render_tasks_wait_text(payload: &Value) -> CliResult<String> {
                 .get("event_kind")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            lines.push(format!("- #{event_id} {event_kind}"));
+            let sanitized_event_kind = crate::sessions_cli::sanitize_terminal_text(event_kind);
+            lines.push(format!("- #{event_id} {sanitized_event_kind}"));
         }
     }
 
@@ -1627,10 +1644,12 @@ fn render_tasks_mutation_text(payload: &Value) -> CliResult<String> {
     let mut lines = Vec::new();
     lines.push(format!("{command} dry_run={dry_run}"));
     if let Some(result) = result {
-        lines.push(format!("result: {result}"));
+        let sanitized_result = crate::sessions_cli::sanitize_terminal_text(result);
+        lines.push(format!("result: {sanitized_result}"));
     }
     if let Some(message) = message {
-        lines.push(format!("message: {message}"));
+        let sanitized_message = crate::sessions_cli::sanitize_terminal_text(message);
+        lines.push(format!("message: {sanitized_message}"));
     }
     if !action.is_null() {
         let rendered_action = serde_json::to_string_pretty(&action)
@@ -1726,8 +1745,11 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .and_then(Value::as_array)
         .map(|values| render_string_array(values))
         .unwrap_or_else(|| "-".to_owned());
+    let sanitized_task_id = crate::sessions_cli::sanitize_terminal_text(task_id.as_str());
+    let sanitized_label = crate::sessions_cli::sanitize_terminal_text(label);
+    let sanitized_owner_kind = crate::sessions_cli::sanitize_terminal_text(owner_kind);
     let line = format!(
-        "{task_id} status={status_display} blocked={blocked} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={label} owner_kind={owner_kind} approval_attention={approval_attention} signals={signals}"
+        "{sanitized_task_id} status={status_display} blocked={blocked} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={sanitized_label} owner_kind={sanitized_owner_kind} approval_attention={approval_attention} signals={signals}"
     );
     Ok(line)
 }
@@ -1860,17 +1882,36 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .unwrap_or(Value::Null);
     let prompt_frame_summary =
         crate::session_prompt_frame_cli::render_prompt_frame_summary(task.get("prompt_frame"));
+    let safe_lane_summary =
+        crate::session_runtime_truth_cli::render_safe_lane_summary(task.get("safe_lane"));
+    let turn_checkpoint_summary = crate::session_runtime_truth_cli::render_turn_checkpoint_summary(
+        task.get("turn_checkpoint"),
+    );
     let rendered_runtime_narrowing = if effective_runtime_narrowing.is_null() {
         "-".to_owned()
     } else {
         serde_json::to_string(&effective_runtime_narrowing)
             .map_err(|error| format!("render runtime narrowing failed: {error}"))?
     };
+    let sanitized_task_id = crate::sessions_cli::sanitize_terminal_text(task_id.as_str());
+    let sanitized_scope_session_id = crate::sessions_cli::sanitize_terminal_text(scope_session_id);
+    let sanitized_label = crate::sessions_cli::sanitize_terminal_text(label);
+    let sanitized_last_error = crate::sessions_cli::sanitize_terminal_text(last_error);
+    let sanitized_effective_tool_ids =
+        crate::sessions_cli::sanitize_terminal_text(effective_tool_ids.as_str());
+    let sanitized_runtime_narrowing =
+        crate::sessions_cli::sanitize_terminal_text(rendered_runtime_narrowing.as_str());
+    let sanitized_prompt_frame_summary =
+        crate::sessions_cli::sanitize_terminal_text(prompt_frame_summary.as_str());
+    let sanitized_safe_lane_summary =
+        crate::sessions_cli::sanitize_terminal_text(safe_lane_summary.as_str());
+    let sanitized_turn_checkpoint_summary =
+        crate::sessions_cli::sanitize_terminal_text(turn_checkpoint_summary.as_str());
 
     let mut lines = Vec::new();
-    lines.push(format!("task_id: {task_id}"));
-    lines.push(format!("scope_session_id: {scope_session_id}"));
-    lines.push(format!("label: {label}"));
+    lines.push(format!("task_id: {sanitized_task_id}"));
+    lines.push(format!("scope_session_id: {sanitized_scope_session_id}"));
+    lines.push(format!("label: {sanitized_label}"));
     lines.push(format!("task_status: {task_status_display}"));
     lines.push(format!("task_blocked: {blocked}"));
     lines.push(format!("task_needs_attention: {needs_attention}"));
@@ -1899,14 +1940,20 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("phase: {phase}"));
     lines.push(format!("owner_kind: {owner_kind}"));
     lines.push(format!("timeout_seconds: {timeout_seconds}"));
-    lines.push(format!("last_error: {last_error}"));
+    lines.push(format!("last_error: {sanitized_last_error}"));
     lines.push(format!("approval_requests: {approval_total}"));
     lines.push(format!("approval_attention: {approval_attention}"));
-    lines.push(format!("effective_tool_ids: {effective_tool_ids}"));
     lines.push(format!(
-        "effective_runtime_narrowing: {rendered_runtime_narrowing}"
+        "effective_tool_ids: {sanitized_effective_tool_ids}"
     ));
-    lines.push(format!("prompt_frame: {prompt_frame_summary}"));
+    lines.push(format!(
+        "effective_runtime_narrowing: {sanitized_runtime_narrowing}"
+    ));
+    lines.push(format!("prompt_frame: {sanitized_prompt_frame_summary}"));
+    lines.push(format!("safe_lane: {sanitized_safe_lane_summary}"));
+    lines.push(format!(
+        "turn_checkpoint: {sanitized_turn_checkpoint_summary}"
+    ));
     Ok(lines)
 }
 
@@ -1914,7 +1961,9 @@ fn append_task_lookup_error_line(payload: &Value, lines: &mut Vec<String>) {
     let Some(task_lookup_error) = payload.get("task_lookup_error").and_then(Value::as_str) else {
         return;
     };
-    lines.push(format!("task_lookup_error: {task_lookup_error}"));
+    let sanitized_task_lookup_error =
+        crate::sessions_cli::sanitize_terminal_text(task_lookup_error);
+    lines.push(format!("task_lookup_error: {sanitized_task_lookup_error}"));
 }
 
 fn render_string_array(values: &[Value]) -> String {
