@@ -111,7 +111,9 @@ pub(super) fn collect_usage_update(events: &[Value]) -> Option<Value> {
 
 pub(super) fn collect_stop_reason(events: &[Value]) -> Option<AcpTurnStopReason> {
     for event in events.iter().rev() {
-        let event_type = raw_string(event, "type")?;
+        let Some(event_type) = raw_string(event, "type") else {
+            continue;
+        };
         if event_type == "done" {
             let reason = raw_string(event, "stopReason")
                 .or_else(|| raw_string(event, "stop_reason"))
@@ -182,12 +184,17 @@ pub(super) fn normalized_non_empty(value: &str) -> Option<String> {
 
 pub(super) fn event_error_message(events: &[Value], ignore_no_session: bool) -> Option<String> {
     for event in events.iter().rev() {
-        let event_type = raw_string(event, "type")?;
+        let Some(event_type) = raw_string(event, "type") else {
+            continue;
+        };
         if !matches!(event_type.as_str(), "error" | "failed") {
             continue;
         }
         let code = event_code(std::slice::from_ref(event));
-        if ignore_no_session && code.as_deref() == Some("no_session") {
+        let should_ignore_no_session = code
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("no_session"));
+        if ignore_no_session && should_ignore_no_session {
             continue;
         }
         if let Some(message) = raw_string(event, "message")
@@ -215,5 +222,47 @@ pub(super) fn map_status_state(raw: Option<&str>) -> AcpSessionState {
         "error" | "failed" => AcpSessionState::Error,
         "closed" | "stopped" => AcpSessionState::Closed,
         _ => AcpSessionState::Ready,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_stop_reason_ignores_typeless_tail_events() {
+        let events = vec![
+            json!({"type": "done", "stopReason": "cancelled"}),
+            json!({"usage": {"used": 12}}),
+        ];
+
+        let stop_reason = collect_stop_reason(&events);
+
+        assert_eq!(stop_reason, Some(AcpTurnStopReason::Cancelled));
+    }
+
+    #[test]
+    fn event_error_message_ignores_typeless_tail_events() {
+        let events = vec![
+            json!({"type": "error", "message": "session exploded"}),
+            json!({"usage": {"used": 12}}),
+        ];
+
+        let error_message = event_error_message(&events, false);
+
+        assert_eq!(error_message.as_deref(), Some("session exploded"));
+    }
+
+    #[test]
+    fn event_error_message_ignores_no_session_case_insensitively() {
+        let events = vec![json!({
+            "type": "failed",
+            "code": "NO_SESSION",
+            "message": "session missing"
+        })];
+
+        let error_message = event_error_message(&events, true);
+
+        assert_eq!(error_message, None);
     }
 }

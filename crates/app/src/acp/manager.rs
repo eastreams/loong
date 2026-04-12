@@ -712,6 +712,11 @@ mod tests {
         id: &'static str,
     }
 
+    struct CloseFailureBackend {
+        id: &'static str,
+        state: Arc<CloseFailureState>,
+    }
+
     struct QueuedTurnBackend {
         id: &'static str,
         state: Arc<QueuedTurnState>,
@@ -765,6 +770,11 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct CloseFailureState {
+        close_calls: AtomicUsize,
+    }
+
+    #[derive(Default)]
     struct StreamingSinkState {
         sink_calls: AtomicUsize,
     }
@@ -815,6 +825,30 @@ mod tests {
                 abort_observed: AtomicUsize::new(0),
             }
         }
+    }
+
+    async fn wait_for_actor_counts(
+        manager: &AcpSessionManager,
+        actor_key: &str,
+        expected_ref_count: usize,
+        expected_pending_turns: usize,
+    ) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let ref_count = manager
+                    .actor_ref_count(actor_key)
+                    .expect("actor ref count should read");
+                let pending_turns = manager
+                    .pending_turn_count(actor_key)
+                    .expect("pending turn count should read");
+                if ref_count == expected_ref_count && pending_turns == expected_pending_turns {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("actor counts should converge");
     }
 
     struct StreamingSinkBackend {
@@ -1010,6 +1044,69 @@ mod tests {
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl AcpRuntimeBackend for CloseFailureBackend {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn metadata(&self) -> AcpBackendMetadata {
+            AcpBackendMetadata::new(
+                self.id(),
+                [AcpCapability::SessionLifecycle],
+                "Close failure ACP backend for manager tests",
+            )
+        }
+
+        async fn ensure_session(
+            &self,
+            _config: &LoongClawConfig,
+            request: &AcpSessionBootstrap,
+        ) -> CliResult<AcpSessionHandle> {
+            Ok(AcpSessionHandle {
+                session_key: request.session_key.clone(),
+                backend_id: self.id().to_owned(),
+                runtime_session_name: format!("close-failure-{}", request.session_key),
+                working_directory: request.working_directory.clone(),
+                backend_session_id: None,
+                agent_session_id: None,
+                binding: request.binding.clone(),
+            })
+        }
+
+        async fn run_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session: &AcpSessionHandle,
+            request: &AcpTurnRequest,
+        ) -> CliResult<AcpTurnResult> {
+            Ok(AcpTurnResult {
+                output_text: request.input.clone(),
+                state: AcpSessionState::Ready,
+                usage: None,
+                events: Vec::new(),
+                stop_reason: Some(AcpTurnStopReason::Completed),
+            })
+        }
+
+        async fn cancel(
+            &self,
+            _config: &LoongClawConfig,
+            _session: &AcpSessionHandle,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+
+        async fn close(
+            &self,
+            _config: &LoongClawConfig,
+            _session: &AcpSessionHandle,
+        ) -> CliResult<()> {
+            self.state.close_calls.fetch_add(1, Ordering::SeqCst);
+            Err("synthetic ACP close failure".to_owned())
         }
     }
 
@@ -2652,6 +2749,130 @@ mod tests {
             .await
             .expect("set_mode join should succeed")
             .expect("set_mode should succeed");
+    }
+
+    #[tokio::test]
+    async fn cleanup_idle_sessions_keeps_session_when_backend_close_fails() {
+        let shared = Arc::new(CloseFailureState::default());
+        register_acp_backend("manager-close-failure", {
+            let shared = shared.clone();
+            move || {
+                Box::new(CloseFailureBackend {
+                    id: "manager-close-failure",
+                    state: shared.clone(),
+                })
+            }
+        })
+        .expect("register close-failure backend");
+
+        let manager = Arc::new(AcpSessionManager::default());
+        let config = Arc::new(LoongClawConfig {
+            acp: AcpConfig {
+                backend: Some("manager-close-failure".to_owned()),
+                session_idle_ttl_ms: Some(1),
+                ..AcpConfig::default()
+            },
+            ..LoongClawConfig::default()
+        });
+        let bootstrap = AcpSessionBootstrap {
+            session_key: "session-close-failure".to_owned(),
+            conversation_id: Some("conv-close-failure".to_owned()),
+            binding: None,
+            working_directory: None,
+            initial_prompt: None,
+            mode: Some(AcpSessionMode::Interactive),
+            mcp_servers: Vec::new(),
+            metadata: BTreeMap::new(),
+        };
+
+        manager
+            .ensure_session(config.as_ref(), &bootstrap)
+            .await
+            .expect("ensure close-failure session");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        manager
+            .cleanup_idle_sessions(config.as_ref())
+            .await
+            .expect("idle cleanup should keep failed-close session");
+
+        let sessions = manager.list_sessions().expect("list sessions");
+        let snapshot = manager
+            .observability_snapshot(config.as_ref())
+            .await
+            .expect("observability snapshot after close failure");
+
+        assert_eq!(shared.close_calls.load(Ordering::SeqCst), 2);
+        assert!(
+            sessions
+                .iter()
+                .any(|entry| entry.session_key == "session-close-failure"),
+            "failed idle close must keep the session metadata"
+        );
+        assert_eq!(snapshot.runtime_cache.active_sessions, 1);
+        assert_eq!(snapshot.runtime_cache.evicted_total, 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_waiting_turn_queue_guard_rolls_back_counts() {
+        let manager = Arc::new(AcpSessionManager::default());
+        let actor_key = "queued-turn-roll-back";
+
+        let held_guard = manager
+            .acquire_turn_queue_guard(actor_key.to_owned())
+            .await
+            .expect("initial turn queue guard");
+
+        let waiting_guard = {
+            let manager = manager.clone();
+            tokio::spawn(
+                async move { manager.acquire_turn_queue_guard(actor_key.to_owned()).await },
+            )
+        };
+
+        wait_for_actor_counts(manager.as_ref(), actor_key, 2, 2).await;
+
+        waiting_guard.abort();
+        let join_result = waiting_guard.await;
+        assert!(join_result.is_err(), "aborted waiter should not complete");
+
+        wait_for_actor_counts(manager.as_ref(), actor_key, 1, 1).await;
+
+        drop(held_guard);
+
+        wait_for_actor_counts(manager.as_ref(), actor_key, 0, 0).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_waiting_session_actor_guard_rolls_back_ref_count() {
+        let manager = Arc::new(AcpSessionManager::default());
+        let actor_key = "session-actor-roll-back";
+
+        let held_guard = manager
+            .acquire_session_actor_guard(actor_key.to_owned())
+            .await
+            .expect("initial session actor guard");
+
+        let waiting_guard = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .acquire_session_actor_guard(actor_key.to_owned())
+                    .await
+            })
+        };
+
+        wait_for_actor_counts(manager.as_ref(), actor_key, 2, 0).await;
+
+        waiting_guard.abort();
+        let join_result = waiting_guard.await;
+        assert!(join_result.is_err(), "aborted waiter should not complete");
+
+        wait_for_actor_counts(manager.as_ref(), actor_key, 1, 0).await;
+
+        drop(held_guard);
+
+        wait_for_actor_counts(manager.as_ref(), actor_key, 0, 0).await;
     }
 
     #[tokio::test]

@@ -130,8 +130,20 @@ impl AcpSessionManager {
                 continue;
             }
 
-            if let Ok(backend) = resolve_acp_backend(Some(metadata.backend_id.as_str())) {
-                let _ = backend.close(config, &metadata.to_handle()).await;
+            let close_result = match resolve_acp_backend(Some(metadata.backend_id.as_str())) {
+                Ok(backend) => backend.close(config, &metadata.to_handle()).await,
+                Err(error) => Err(error),
+            };
+            if let Err(error) = close_result {
+                self.record_error(error.as_str())?;
+                tracing::warn!(
+                    target: "loongclaw.acp",
+                    session_key = %metadata.session_key,
+                    backend_id = %metadata.backend_id,
+                    error = %error,
+                    "failed to close idle ACP session; keeping metadata for reuse or follow-up cancellation"
+                );
+                continue;
             }
             let _ = self.store.remove(metadata.session_key.as_str());
             self.record_eviction(now)?;

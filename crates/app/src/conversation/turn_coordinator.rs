@@ -2859,9 +2859,25 @@ async fn load_turn_checkpoint_tail_runtime_eligibility<R: ConversationRuntime + 
     }
 
     let repair_plan = build_turn_checkpoint_repair_plan(summary);
-    let assembled = runtime
+    let assembled = match runtime
         .build_context(config, session_id, true, binding)
-        .await?;
+        .await
+    {
+        Ok(assembled) => assembled,
+        Err(error) => {
+            tracing::warn!(
+                target: "loongclaw.conversation",
+                session_id = %session_id,
+                error = %error,
+                "failed to assemble runtime context for turn checkpoint tail repair; degrading to manual inspection"
+            );
+            return Ok(TurnCheckpointTailRuntimeEligibility::Manual {
+                action: TurnCheckpointRecoveryAction::InspectManually,
+                reason: TurnCheckpointTailRepairReason::CheckpointStateRequiresManualInspection,
+                source: TurnCheckpointTailRepairSource::Runtime,
+            });
+        }
+    };
     match TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &entry.checkpoint) {
         Ok(resume_input) => Ok(TurnCheckpointTailRuntimeEligibility::Runnable {
             action,
