@@ -1,22 +1,121 @@
 use super::*;
 
+fn increment_registry_entry(
+    registry: &RwLock<BTreeMap<String, usize>>,
+    actor_key: &str,
+    error_message: &str,
+) -> CliResult<()> {
+    let mut guard = registry
+        .write()
+        .map_err(|_error| error_message.to_owned())?;
+    let count = guard.entry(actor_key.to_owned()).or_insert(0);
+    *count += 1;
+    Ok(())
+}
+
+fn decrement_registry_entry(
+    registry: &RwLock<BTreeMap<String, usize>>,
+    actor_key: &str,
+    error_message: &str,
+) -> CliResult<()> {
+    let mut guard = registry
+        .write()
+        .map_err(|_error| error_message.to_owned())?;
+    if let Some(count) = guard.get_mut(actor_key) {
+        if *count <= 1 {
+            guard.remove(actor_key);
+        } else {
+            *count -= 1;
+        }
+    }
+    Ok(())
+}
+
+struct PendingSessionActorRegistration {
+    actor_key: String,
+    actor_ref_counts: Arc<RwLock<BTreeMap<String, usize>>>,
+    pending_turns: Arc<RwLock<BTreeMap<String, usize>>>,
+    count_pending_turn: bool,
+    armed: bool,
+}
+
+impl PendingSessionActorRegistration {
+    fn new(
+        manager: &AcpSessionManager,
+        actor_key: &str,
+        count_pending_turn: bool,
+    ) -> CliResult<Self> {
+        increment_registry_entry(
+            manager.actor_ref_counts.as_ref(),
+            actor_key,
+            "ACP actor reference registry lock poisoned",
+        )?;
+        if count_pending_turn {
+            let pending_result = increment_registry_entry(
+                manager.pending_turns.as_ref(),
+                actor_key,
+                "ACP pending turn registry lock poisoned",
+            );
+            if let Err(error) = pending_result {
+                let _ = decrement_registry_entry(
+                    manager.actor_ref_counts.as_ref(),
+                    actor_key,
+                    "ACP actor reference registry lock poisoned",
+                );
+                return Err(error);
+            }
+        }
+
+        Ok(Self {
+            actor_key: actor_key.to_owned(),
+            actor_ref_counts: manager.actor_ref_counts.clone(),
+            pending_turns: manager.pending_turns.clone(),
+            count_pending_turn,
+            armed: true,
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingSessionActorRegistration {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        if self.count_pending_turn {
+            let _ = decrement_registry_entry(
+                self.pending_turns.as_ref(),
+                self.actor_key.as_str(),
+                "ACP pending turn registry lock poisoned",
+            );
+        }
+
+        let _ = decrement_registry_entry(
+            self.actor_ref_counts.as_ref(),
+            self.actor_key.as_str(),
+            "ACP actor reference registry lock poisoned",
+        );
+    }
+}
+
 impl AcpSessionManager {
     pub(super) async fn acquire_session_actor_guard(
         &self,
         actor_key: String,
     ) -> CliResult<SessionActorGuard> {
-        self.increment_actor_ref_count(actor_key.as_str())?;
-        let queue_lock = match self.get_or_insert_session_actor(actor_key.as_str()) {
-            Ok(lock) => lock,
-            Err(error) => {
-                let _ = self.decrement_actor_ref_count(actor_key.as_str());
-                return Err(error);
-            }
-        };
+        let mut registration =
+            PendingSessionActorRegistration::new(self, actor_key.as_str(), false)?;
+        let queue_lock = self.get_or_insert_session_actor(actor_key.as_str())?;
+        let actor_guard = queue_lock.lock_owned().await;
+        registration.disarm();
 
         Ok(SessionActorGuard {
             actor_key,
-            actor_guard: Some(queue_lock.lock_owned().await),
+            actor_guard: Some(actor_guard),
             session_actor_locks: self.session_actor_locks.clone(),
             actor_ref_counts: self.actor_ref_counts.clone(),
             pending_turns: self.pending_turns.clone(),
@@ -28,23 +127,15 @@ impl AcpSessionManager {
         &self,
         actor_key: String,
     ) -> CliResult<SessionActorGuard> {
-        self.increment_actor_ref_count(actor_key.as_str())?;
-        if let Err(error) = self.increment_pending_turn(actor_key.as_str()) {
-            let _ = self.decrement_actor_ref_count(actor_key.as_str());
-            return Err(error);
-        }
-        let queue_lock = match self.get_or_insert_session_actor(actor_key.as_str()) {
-            Ok(lock) => lock,
-            Err(error) => {
-                let _ = self.decrement_pending_turn(actor_key.as_str());
-                let _ = self.decrement_actor_ref_count(actor_key.as_str());
-                return Err(error);
-            }
-        };
+        let mut registration =
+            PendingSessionActorRegistration::new(self, actor_key.as_str(), true)?;
+        let queue_lock = self.get_or_insert_session_actor(actor_key.as_str())?;
+        let actor_guard = queue_lock.lock_owned().await;
+        registration.disarm();
 
         Ok(SessionActorGuard {
             actor_key,
-            actor_guard: Some(queue_lock.lock_owned().await),
+            actor_guard: Some(actor_guard),
             session_actor_locks: self.session_actor_locks.clone(),
             actor_ref_counts: self.actor_ref_counts.clone(),
             pending_turns: self.pending_turns.clone(),
@@ -64,54 +155,6 @@ impl AcpSessionManager {
             .entry(actor_key.to_owned())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone())
-    }
-
-    pub(super) fn increment_actor_ref_count(&self, actor_key: &str) -> CliResult<()> {
-        let mut guard = self
-            .actor_ref_counts
-            .write()
-            .map_err(|_error| "ACP actor reference registry lock poisoned".to_owned())?;
-        *guard.entry(actor_key.to_owned()).or_insert(0) += 1;
-        Ok(())
-    }
-
-    pub(super) fn decrement_actor_ref_count(&self, actor_key: &str) -> CliResult<()> {
-        let mut guard = self
-            .actor_ref_counts
-            .write()
-            .map_err(|_error| "ACP actor reference registry lock poisoned".to_owned())?;
-        if let Some(count) = guard.get_mut(actor_key) {
-            if *count <= 1 {
-                guard.remove(actor_key);
-            } else {
-                *count -= 1;
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn increment_pending_turn(&self, actor_key: &str) -> CliResult<()> {
-        let mut guard = self
-            .pending_turns
-            .write()
-            .map_err(|_error| "ACP pending turn registry lock poisoned".to_owned())?;
-        *guard.entry(actor_key.to_owned()).or_insert(0) += 1;
-        Ok(())
-    }
-
-    pub(super) fn decrement_pending_turn(&self, actor_key: &str) -> CliResult<()> {
-        let mut guard = self
-            .pending_turns
-            .write()
-            .map_err(|_error| "ACP pending turn registry lock poisoned".to_owned())?;
-        if let Some(count) = guard.get_mut(actor_key) {
-            if *count <= 1 {
-                guard.remove(actor_key);
-            } else {
-                *count -= 1;
-            }
-        }
-        Ok(())
     }
 
     pub(super) fn pending_turn_count_for_metadata(
@@ -237,39 +280,31 @@ impl Drop for SessionActorGuard {
     fn drop(&mut self) {
         self.actor_guard.take();
 
-        if self.count_pending_turn
-            && let Ok(mut guard) = self.pending_turns.write()
-        {
-            match guard.get_mut(self.actor_key.as_str()) {
-                Some(count) if *count <= 1 => {
-                    guard.remove(self.actor_key.as_str());
-                }
-                Some(count) => {
-                    *count -= 1;
-                }
-                None => {}
-            }
+        if self.count_pending_turn {
+            let _ = decrement_registry_entry(
+                self.pending_turns.as_ref(),
+                self.actor_key.as_str(),
+                "ACP pending turn registry lock poisoned",
+            );
         }
 
-        if let Ok(mut guard) = self.actor_ref_counts.write() {
-            match guard.get_mut(self.actor_key.as_str()) {
-                Some(count) if *count <= 1 => {
-                    guard.remove(self.actor_key.as_str());
-                }
-                Some(count) => {
-                    *count -= 1;
-                }
-                None => {}
-            }
-        }
+        let _ = decrement_registry_entry(
+            self.actor_ref_counts.as_ref(),
+            self.actor_key.as_str(),
+            "ACP actor reference registry lock poisoned",
+        );
 
-        let should_remove_actor = self
-            .actor_ref_counts
-            .read()
-            .map(|guard| !guard.contains_key(self.actor_key.as_str()))
-            .unwrap_or(false);
-        if should_remove_actor && let Ok(mut guard) = self.session_actor_locks.write() {
-            guard.remove(self.actor_key.as_str());
+        if let Ok(mut guard) = self.session_actor_locks.write() {
+            // Keep the registry write lock across the emptiness check and removal so a
+            // new waiter cannot clone the old mutex from a stale snapshot.
+            let should_remove_actor = self
+                .actor_ref_counts
+                .read()
+                .map(|counts| !counts.contains_key(self.actor_key.as_str()))
+                .unwrap_or(false);
+            if should_remove_actor {
+                guard.remove(self.actor_key.as_str());
+            }
         }
     }
 }
