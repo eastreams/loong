@@ -773,10 +773,18 @@ async fn build_task_detail(
     let status_payload =
         load_task_status_payload(memory_config, tool_config, current_session_id, task_id)?;
     ensure_background_task_status_payload(&status_payload, task_id)?;
-    let approvals_payload =
-        load_task_approvals_payload(memory_config, tool_config, current_session_id, task_id)?;
-    let tool_policy_payload =
-        load_task_tool_policy_payload(memory_config, tool_config, current_session_id, task_id)?;
+    let (approvals_payload, approval_lookup_error) = load_best_effort_task_approvals_payload(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+    );
+    let (tool_policy_payload, tool_policy_lookup_error) = load_best_effort_task_tool_policy_payload(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+    );
 
     let session = status_payload
         .get("session")
@@ -867,40 +875,39 @@ async fn build_task_detail(
     )
     .await;
 
-    let detail = json!({
-        "task_id": task_id,
-        "session_id": task_id,
-        "scope_session_id": current_session_id,
-        "label": label,
-        "session_state": session_state,
-        "phase": phase,
-        "mode": mode,
-        "owner_kind": owner_kind,
-        "timeout_seconds": timeout_seconds,
-        "workflow": workflow,
-        "created_at": created_at,
-        "updated_at": updated_at,
-        "archived": archived,
-        "last_error": last_error,
-        "approval": {
-            "matched_count": approval_matched_count,
-            "returned_count": approval_returned_count,
-            "attention_summary": approval_attention_summary,
-            "requests": approval_requests,
-        },
-        "tool_policy": tool_policy,
-        "session": session,
-        "delegate": delegate,
-        "terminal_outcome_state": terminal_outcome_state,
-        "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
-        "recovery": recovery,
-        "terminal_outcome": terminal_outcome,
-        "recent_events": recent_events,
-        "task_status": task_status,
-        "prompt_frame": prompt_frame,
-        "safe_lane": safe_lane,
-        "turn_checkpoint": turn_checkpoint,
-    });
+    let detail = compose_task_detail_payload(
+        current_session_id,
+        task_id,
+        session,
+        delegate,
+        label,
+        session_state,
+        phase,
+        mode,
+        owner_kind,
+        timeout_seconds,
+        workflow,
+        created_at,
+        updated_at,
+        archived,
+        last_error,
+        approval_requests,
+        approval_attention_summary,
+        approval_matched_count,
+        approval_returned_count,
+        approval_lookup_error,
+        tool_policy,
+        tool_policy_lookup_error,
+        task_status,
+        terminal_outcome_state,
+        terminal_outcome_missing_reason,
+        recovery,
+        terminal_outcome,
+        recent_events,
+        prompt_frame,
+        safe_lane,
+        turn_checkpoint,
+    );
     Ok(detail)
 }
 
@@ -931,9 +938,13 @@ fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
         "label": Value::Null,
         "session_state": Value::Null,
         "phase": Value::Null,
+        "mode": Value::Null,
         "owner_kind": Value::Null,
         "timeout_seconds": Value::Null,
         "workflow": Value::Null,
+        "created_at": Value::Null,
+        "updated_at": Value::Null,
+        "archived": Value::Null,
         "last_error": Value::Null,
         "approval": {
             "matched_count": 0,
@@ -941,8 +952,20 @@ fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
             "attention_summary": Value::Null,
             "requests": [],
         },
+        "approval_lookup_error": Value::Null,
         "tool_policy": Value::Null,
+        "tool_policy_lookup_error": Value::Null,
         "task_status": task_status,
+        "session": Value::Null,
+        "delegate": Value::Null,
+        "terminal_outcome_state": Value::Null,
+        "terminal_outcome_missing_reason": Value::Null,
+        "recovery": Value::Null,
+        "terminal_outcome": Value::Null,
+        "recent_events": [],
+        "prompt_frame": Value::Null,
+        "safe_lane": Value::Null,
+        "turn_checkpoint": Value::Null,
     })
 }
 
@@ -1319,6 +1342,18 @@ fn load_task_approvals_payload(
     Ok(outcome.payload)
 }
 
+fn load_best_effort_task_approvals_payload(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    task_id: &str,
+) -> (Value, Value) {
+    let result =
+        load_task_approvals_payload(memory_config, tool_config, current_session_id, task_id);
+    let fallback_payload = fallback_task_approvals_payload();
+    best_effort_task_lookup_payload(result, fallback_payload)
+}
+
 fn load_task_tool_policy_payload(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -1336,6 +1371,109 @@ fn load_task_tool_policy_payload(
         payload,
     )?;
     Ok(outcome.payload)
+}
+
+fn load_best_effort_task_tool_policy_payload(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    task_id: &str,
+) -> (Value, Value) {
+    let result =
+        load_task_tool_policy_payload(memory_config, tool_config, current_session_id, task_id);
+    let fallback_payload = Value::Null;
+    best_effort_task_lookup_payload(result, fallback_payload)
+}
+
+fn best_effort_task_lookup_payload(
+    result: CliResult<Value>,
+    fallback_payload: Value,
+) -> (Value, Value) {
+    match result {
+        Ok(payload) => (payload, Value::Null),
+        Err(error) => (fallback_payload, Value::String(error)),
+    }
+}
+
+fn fallback_task_approvals_payload() -> Value {
+    json!({
+        "matched_count": 0,
+        "returned_count": 0,
+        "attention_summary": Value::Null,
+        "requests": [],
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compose_task_detail_payload(
+    current_session_id: &str,
+    task_id: &str,
+    session: Value,
+    delegate: Value,
+    label: Value,
+    session_state: Value,
+    phase: Value,
+    mode: Value,
+    owner_kind: Value,
+    timeout_seconds: Value,
+    workflow: Value,
+    created_at: Value,
+    updated_at: Value,
+    archived: Value,
+    last_error: Value,
+    approval_requests: Value,
+    approval_attention_summary: Value,
+    approval_matched_count: Value,
+    approval_returned_count: Value,
+    approval_lookup_error: Value,
+    tool_policy: Value,
+    tool_policy_lookup_error: Value,
+    task_status: Value,
+    terminal_outcome_state: Value,
+    terminal_outcome_missing_reason: Value,
+    recovery: Value,
+    terminal_outcome: Value,
+    recent_events: Value,
+    prompt_frame: Value,
+    safe_lane: Value,
+    turn_checkpoint: Value,
+) -> Value {
+    json!({
+        "task_id": task_id,
+        "session_id": task_id,
+        "scope_session_id": current_session_id,
+        "label": label,
+        "session_state": session_state,
+        "phase": phase,
+        "mode": mode,
+        "owner_kind": owner_kind,
+        "timeout_seconds": timeout_seconds,
+        "workflow": workflow,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "archived": archived,
+        "last_error": last_error,
+        "approval": {
+            "matched_count": approval_matched_count,
+            "returned_count": approval_returned_count,
+            "attention_summary": approval_attention_summary,
+            "requests": approval_requests,
+        },
+        "approval_lookup_error": approval_lookup_error,
+        "tool_policy": tool_policy,
+        "tool_policy_lookup_error": tool_policy_lookup_error,
+        "task_status": task_status,
+        "session": session,
+        "delegate": delegate,
+        "terminal_outcome_state": terminal_outcome_state,
+        "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
+        "recovery": recovery,
+        "terminal_outcome": terminal_outcome,
+        "recent_events": recent_events,
+        "prompt_frame": prompt_frame,
+        "safe_lane": safe_lane,
+        "turn_checkpoint": turn_checkpoint,
+    })
 }
 
 fn build_task_recipes(
@@ -1907,6 +2045,14 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         crate::sessions_cli::sanitize_terminal_text(safe_lane_summary.as_str());
     let sanitized_turn_checkpoint_summary =
         crate::sessions_cli::sanitize_terminal_text(turn_checkpoint_summary.as_str());
+    let approval_lookup_error = task
+        .get("approval_lookup_error")
+        .and_then(Value::as_str)
+        .map(crate::sessions_cli::sanitize_terminal_text);
+    let tool_policy_lookup_error = task
+        .get("tool_policy_lookup_error")
+        .and_then(Value::as_str)
+        .map(crate::sessions_cli::sanitize_terminal_text);
 
     let mut lines = Vec::new();
     lines.push(format!("task_id: {sanitized_task_id}"));
@@ -1954,6 +2100,14 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     lines.push(format!(
         "turn_checkpoint: {sanitized_turn_checkpoint_summary}"
     ));
+    if let Some(approval_lookup_error) = approval_lookup_error {
+        lines.push(format!("approval_lookup_error: {approval_lookup_error}"));
+    }
+    if let Some(tool_policy_lookup_error) = tool_policy_lookup_error {
+        lines.push(format!(
+            "tool_policy_lookup_error: {tool_policy_lookup_error}"
+        ));
+    }
     Ok(lines)
 }
 
@@ -2155,5 +2309,123 @@ mod tests {
         assert!(rendered.contains("status=approval_pending"));
         assert!(rendered.contains("blocked=true"));
         assert!(rendered.contains("signals=approval_pending"));
+    }
+
+    #[test]
+    fn best_effort_task_approvals_payload_falls_back_when_session_tools_are_disabled() {
+        let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::default();
+        let mut tool_config = mvp::config::ToolConfig::default();
+        tool_config.sessions.enabled = false;
+
+        let (payload, lookup_error) = load_best_effort_task_approvals_payload(
+            &memory_config,
+            &tool_config,
+            "ops-root",
+            "delegate:task-1",
+        );
+
+        assert_eq!(payload["matched_count"], 0);
+        assert_eq!(payload["returned_count"], 0);
+        assert_eq!(payload["requests"], json!([]));
+        assert!(
+            lookup_error
+                .as_str()
+                .expect("lookup error")
+                .contains("session tools are disabled"),
+            "expected degraded approval lookup error, got: {lookup_error:?}"
+        );
+    }
+
+    #[test]
+    fn best_effort_task_tool_policy_payload_falls_back_when_session_tools_are_disabled() {
+        let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::default();
+        let mut tool_config = mvp::config::ToolConfig::default();
+        tool_config.sessions.enabled = false;
+
+        let (payload, lookup_error) = load_best_effort_task_tool_policy_payload(
+            &memory_config,
+            &tool_config,
+            "ops-root",
+            "delegate:task-1",
+        );
+
+        assert!(
+            payload.is_null(),
+            "expected null fallback payload, got: {payload:?}"
+        );
+        assert!(
+            lookup_error
+                .as_str()
+                .expect("lookup error")
+                .contains("session tools are disabled"),
+            "expected degraded tool-policy lookup error, got: {lookup_error:?}"
+        );
+    }
+
+    #[test]
+    fn compose_task_detail_payload_keeps_core_status_truth_when_secondary_lookups_degrade() {
+        let session = json!({
+            "session_id": "delegate:task-1",
+            "kind": "delegate_child",
+            "state": "running",
+            "created_at": 10,
+            "updated_at": 20,
+            "archived": false,
+            "label": "Release Check",
+            "last_error": Value::Null,
+        });
+        let delegate = json!({
+            "mode": "async",
+            "phase": "running",
+            "execution": {
+                "owner_kind": "background_task_host"
+            },
+            "timeout_seconds": 60
+        });
+        let detail = compose_task_detail_payload(
+            "ops-root",
+            "delegate:task-1",
+            session.clone(),
+            delegate.clone(),
+            json!("Release Check"),
+            json!("running"),
+            json!("running"),
+            json!("async"),
+            json!("background_task_host"),
+            json!(60),
+            Value::Null,
+            json!(10),
+            json!(20),
+            json!(false),
+            Value::Null,
+            json!([]),
+            Value::Null,
+            json!(0),
+            json!(0),
+            json!("approval lookup failed"),
+            Value::Null,
+            json!("tool policy lookup failed"),
+            unknown_task_status_payload(),
+            json!("missing"),
+            json!("not_terminal"),
+            Value::Null,
+            Value::Null,
+            json!([]),
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        );
+
+        assert_eq!(detail["session"], session);
+        assert_eq!(detail["delegate"], delegate);
+        assert_eq!(detail["task_id"], "delegate:task-1");
+        assert_eq!(detail["approval_lookup_error"], "approval lookup failed");
+        assert_eq!(
+            detail["tool_policy_lookup_error"],
+            "tool policy lookup failed"
+        );
+        assert_eq!(detail["tool_policy"], Value::Null);
+        assert_eq!(detail["approval"]["matched_count"], 0);
+        assert_eq!(detail["terminal_outcome_state"], "missing");
     }
 }
