@@ -1,4 +1,4 @@
-# 🐉 Loong - Rust Foundation for Vertical AI Agents
+# 🐉 Loong - Rust Base for Vertical AI Agents
 
 <p align="center">
   <picture>
@@ -25,7 +25,7 @@
   <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
-***Secure, extensible, and sustainably evolvable*** — Loong is an agent foundation for vertical AI agents, built in Rust. On a secure and controlled foundation, it supports longer-horizon workflow construction, compound task execution, and closed-loop improvement — enabling people and AI to collaborate in real-world scenarios.
+***Secure, extensible, and sustainably evolvable*** — Loong is an agent base for vertical AI agents, built in Rust. On a secure and controlled base, it supports longer-horizon workflow construction, compound task execution, and closed-loop improvement — enabling people and AI to collaborate in real-world scenarios.
 
 <p align="center">
   <a href="README.md">English</a> |
@@ -48,7 +48,7 @@
 
 - **🚀 Rich configuration out of the box**: 42+ built-in providers, 25+ channels — up and running in a few commands.
 - **👀 Transparent and controllable**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are all exposed as directly usable commands.
-- **🛡️ Secure and controllable foundation**: provider selection, tools, memory, channels, approvals, policy, and audit operate within explicit runtime boundaries.
+- **🛡️ Secure and controllable base**: provider selection, tools, memory, channels, approvals, policy, and audit operate within explicit runtime boundaries.
 
 **Also because whether you are a beginner or a power user, it fits you:**
 
