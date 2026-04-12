@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
-use std::sync::Mutex;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::CliResult;
@@ -38,7 +38,9 @@ impl TurnMiddlewareRegistration {
 static TURN_MIDDLEWARE_REGISTRY: OnceLock<RwLock<BTreeMap<String, TurnMiddlewareRegistration>>> =
     OnceLock::new();
 #[cfg(test)]
-static TURN_MIDDLEWARE_ENV_OVERRIDE: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+std::thread_local! {
+    static TURN_MIDDLEWARE_ENV_OVERRIDE: RefCell<Option<Option<String>>> = const { RefCell::new(None) };
+}
 
 fn registry() -> &'static RwLock<BTreeMap<String, TurnMiddlewareRegistration>> {
     TURN_MIDDLEWARE_REGISTRY.get_or_init(|| {
@@ -77,8 +79,8 @@ where
 }
 
 #[cfg(test)]
-fn env_override() -> &'static Mutex<Option<Option<String>>> {
-    TURN_MIDDLEWARE_ENV_OVERRIDE.get_or_init(|| Mutex::new(None))
+fn env_override() -> Option<Option<String>> {
+    TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| override_cell.borrow().clone())
 }
 
 pub fn register_turn_middleware<F>(id: &str, factory: F) -> CliResult<()>
@@ -200,7 +202,7 @@ pub fn describe_turn_middlewares(ids: &[String]) -> CliResult<Vec<TurnMiddleware
 pub fn turn_middleware_ids_from_env() -> Option<Vec<String>> {
     #[cfg(test)]
     {
-        if let Some(override_value) = env_override().lock().ok().and_then(|guard| guard.clone()) {
+        if let Some(override_value) = env_override() {
             return override_value.and_then(|raw| {
                 let normalized = normalize_middleware_ids(raw.split(','));
                 (!normalized.is_empty()).then_some(normalized)
@@ -216,16 +218,16 @@ pub fn turn_middleware_ids_from_env() -> Option<Vec<String>> {
 
 #[cfg(test)]
 pub(crate) fn set_turn_middleware_env_override(value: Option<&str>) {
-    if let Ok(mut guard) = env_override().lock() {
-        *guard = Some(value.map(str::to_owned));
-    }
+    TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
+        *override_cell.borrow_mut() = Some(value.map(str::to_owned));
+    });
 }
 
 #[cfg(test)]
 pub(crate) fn clear_turn_middleware_env_override() {
-    if let Ok(mut guard) = env_override().lock() {
-        *guard = None;
-    }
+    TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
+        *override_cell.borrow_mut() = None;
+    });
 }
 
 #[cfg(test)]
@@ -236,11 +238,10 @@ struct ScopedTurnMiddlewareEnvOverride {
 #[cfg(test)]
 impl ScopedTurnMiddlewareEnvOverride {
     fn set(value: Option<&str>) -> Self {
-        let mut guard = env_override()
-            .lock()
-            .expect("turn middleware env override lock");
-        let previous = guard.clone();
-        *guard = Some(value.map(str::to_owned));
+        let previous = env_override();
+        TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
+            *override_cell.borrow_mut() = Some(value.map(str::to_owned));
+        });
         Self { previous }
     }
 }
@@ -248,9 +249,9 @@ impl ScopedTurnMiddlewareEnvOverride {
 #[cfg(test)]
 impl Drop for ScopedTurnMiddlewareEnvOverride {
     fn drop(&mut self) {
-        if let Ok(mut guard) = env_override().lock() {
-            *guard = self.previous.clone();
-        }
+        TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
+            *override_cell.borrow_mut() = self.previous.clone();
+        });
     }
 }
 
