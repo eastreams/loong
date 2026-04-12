@@ -92,7 +92,7 @@ When local `.docs/` artifacts exist, they must exactly match the tracked release
 
 Canonical public repository links in release docs and issue templates must point to:
 
-- `https://github.com/loongclaw-ai/loongclaw`
+- `https://github.com/eastreams/loong`
 
 This is enforced by `scripts/check-docs.sh`.
 

@@ -40,18 +40,18 @@ like a primary reader-facing product doc.
 ## Artifacts
 | Asset | Size (bytes) | SHA256 | Download |
 |---|---:|---|---|
-| loong-vX.Y.Z[-suffix]-x86_64-unknown-linux-gnu.tar.gz | 0 | <sha256> | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/vX.Y.Z[-suffix]/<asset>) |
-| loong.bash | 0 | n/a | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/vX.Y.Z[-suffix]/loong.bash) |
-| _loong | 0 | n/a | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/vX.Y.Z[-suffix]/_loong) |
-| loong.fish | 0 | n/a | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/vX.Y.Z[-suffix]/loong.fish) |
-| loong.ps1 | 0 | n/a | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/vX.Y.Z[-suffix]/loong.ps1) |
-| loong.elv | 0 | n/a | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/vX.Y.Z[-suffix]/loong.elv) |
+| loong-vX.Y.Z[-suffix]-x86_64-unknown-linux-gnu.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong.bash | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.bash) |
+| _loong | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/_loong) |
+| loong.fish | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.fish) |
+| loong.ps1 | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.ps1) |
+| loong.elv | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.elv) |
 
 ## Verification
 | Check | Result | Evidence |
 |---|---|---|
-| Release workflow completed | PASS/FAIL | [workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/<id>) |
-| Release is not draft | PASS/FAIL | [release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/vX.Y.Z[-suffix]) |
+| Release workflow completed | PASS/FAIL | [workflow run](https://github.com/eastreams/loong/actions/runs/<id>) |
+| Release is not draft | PASS/FAIL | [release page](https://github.com/eastreams/loong/releases/tag/vX.Y.Z[-suffix]) |
 
 ## Refactor Budget
 - Hotspot metric paid down:
@@ -67,8 +67,8 @@ like a primary reader-facing product doc.
 
 ## Detail Links
 - [Changelog entry](../../../CHANGELOG.md)
-- [Release workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/<id>)
-- [GitHub release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/vX.Y.Z[-suffix])
+- [Release workflow run](https://github.com/eastreams/loong/actions/runs/<id>)
+- [GitHub release page](https://github.com/eastreams/loong/releases/tag/vX.Y.Z[-suffix])
 - [Release workflow definition](../../../.github/workflows/release.yml)
 - Trace directory: `.docs/traces/<timestamp>-<command>-<tag>-<trace-id>`
 - Local debug log: `.docs/releases/vX.Y.Z[-suffix]-debug.md`
