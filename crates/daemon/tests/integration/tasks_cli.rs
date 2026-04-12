@@ -991,6 +991,12 @@ async fn execute_tasks_command_create_returns_queued_outcome_when_task_hydration
     assert_eq!(execution.payload["command"], "create");
     assert_eq!(execution.payload["task"]["task_id"], queued_task_id);
     assert_eq!(execution.payload["task"]["scope_session_id"], "ops-root");
+    assert!(execution.payload["task"]["session"].is_null());
+    assert!(execution.payload["task"]["delegate"].is_null());
+    assert_eq!(execution.payload["task"]["recent_events"], json!([]));
+    assert!(execution.payload["task"]["prompt_frame"].is_null());
+    assert!(execution.payload["task"]["safe_lane"].is_null());
+    assert!(execution.payload["task"]["turn_checkpoint"].is_null());
     assert!(
         execution.payload["task_lookup_error"]
             .as_str()
@@ -1282,12 +1288,14 @@ fn render_tasks_status_text_escapes_control_characters() {
                         "needs_attention_count": 1
                     }
                 },
+                "approval_lookup_error": "approval\nmissing",
                 "tool_policy": {
                     "effective_tool_ids": ["file.read\nnext"],
                     "effective_runtime_narrowing": {
                         "allow": "line1\nline2"
                     }
                 },
+                "tool_policy_lookup_error": "policy\nmissing",
                 "prompt_frame": {
                     "available": false,
                     "error": "prompt\nmissing"
@@ -1334,6 +1342,14 @@ fn render_tasks_status_text_escapes_control_characters() {
     assert!(
         rendered.contains("turn_checkpoint: unavailable error=checkpoint\\nmissing"),
         "expected escaped turn-checkpoint error: {rendered}"
+    );
+    assert!(
+        rendered.contains("approval_lookup_error: approval\\nmissing"),
+        "expected escaped approval lookup error: {rendered}"
+    );
+    assert!(
+        rendered.contains("tool_policy_lookup_error: policy\\nmissing"),
+        "expected escaped tool-policy lookup error: {rendered}"
     );
 }
 
