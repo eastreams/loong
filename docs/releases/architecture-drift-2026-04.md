@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-12T13:00:15Z
+- Generated at: 2026-04-12T16:20:38Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -19,18 +19,18 @@
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 2871 | 3600 | 729 | 0 | 12 | 12 | 79.8% | HEALTHY | 3383 | -15.1% | PASS | 8 |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 1775 | 2800 | 1025 | 7 | 65 | 58 | 63.4% | HEALTHY | 2698 | -34.2% | PASS | 56 |
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 9449 | 10500 | 1051 | 72 | 90 | 18 | 90.0% | WATCH | 9922 | -4.8% | PASS | 88 |
-| channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9684 | 9800 | 116 | 87 | 90 | 3 | 98.8% | TIGHT | 9796 | -1.1% | PASS | 90 |
+| channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 8697 | 9800 | 1103 | 17 | 90 | 73 | 88.7% | WATCH | 9796 | -11.2% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6594 | 7300 | 706 | 95 | 160 | 65 | 90.3% | WATCH | 6936 | -4.9% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1836 | 6400 | 4564 | 0 | 110 | 110 | 28.7% | HEALTHY | 1779 | 3.2% | PASS | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 8408 | 11200 | 2792 | 36 | 120 | 84 | 75.1% | HEALTHY | 10831 | -22.4% | PASS | 98 |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14204 | 15000 | 796 | 42 | 70 | 28 | 94.7% | WATCH | 14472 | -1.9% | PASS | 54 |
-| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6474 | 6500 | 26 | 198 | 210 | 12 | 99.6% | TIGHT | 6324 | 2.4% | PASS | 210 |
-| onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9787 | 9800 | 13 | 237 | 250 | 13 | 99.9% | TIGHT | 9519 | 2.8% | PASS | 228 |
+| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5637 | 6500 | 863 | 174 | 210 | 36 | 86.7% | WATCH | 6324 | -10.9% | PASS | 210 |
+| onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9202 | 9800 | 598 | 205 | 250 | 45 | 93.9% | WATCH | 9519 | -3.3% | PASS | 228 |
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.6%), memory_mod (100.0%), channel_config (98.8%), daemon_lib (99.6%), onboard_cli (99.9%)
-- WATCH hotspots (>=85% and <95% of any tracked budget): channel_registry (90.0%), chat_runtime (90.3%), tools_mod (94.7%)
+- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.6%), memory_mod (100.0%)
+- WATCH hotspots (>=85% and <95% of any tracked budget): channel_registry (90.0%), channel_config (88.7%), chat_runtime (90.3%), tools_mod (94.7%), daemon_lib (86.7%), onboard_cli (93.9%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
 ## Boundary Checks
@@ -65,13 +65,13 @@
 <!-- arch-hotspot key=acp_manager lines=2871 functions=0 -->
 <!-- arch-hotspot key=acpx_runtime lines=1775 functions=7 -->
 <!-- arch-hotspot key=channel_registry lines=9449 functions=72 -->
-<!-- arch-hotspot key=channel_config lines=9684 functions=87 -->
+<!-- arch-hotspot key=channel_config lines=8697 functions=17 -->
 <!-- arch-hotspot key=chat_runtime lines=6594 functions=95 -->
 <!-- arch-hotspot key=channel_mod lines=1836 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=8408 functions=36 -->
 <!-- arch-hotspot key=tools_mod lines=14204 functions=42 -->
-<!-- arch-hotspot key=daemon_lib lines=6474 functions=198 -->
-<!-- arch-hotspot key=onboard_cli lines=9787 functions=237 -->
+<!-- arch-hotspot key=daemon_lib lines=5637 functions=174 -->
+<!-- arch-hotspot key=onboard_cli lines=9202 functions=205 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
 <!-- arch-boundary key=conversation_provider_optional_binding_roundtrip status=PASS -->
