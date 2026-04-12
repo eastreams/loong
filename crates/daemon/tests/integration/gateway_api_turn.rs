@@ -170,6 +170,7 @@ fn gateway_turn_loaded_config_fixture(
     backend_id: &str,
 ) -> LoadedSupervisorConfig {
     let mut config = LoongClawConfig::default();
+    config.gateway.port = 0;
     let sqlite_path_text = sqlite_path.display().to_string();
     config.memory.sqlite_path = sqlite_path_text;
     config.acp = AcpConfig {

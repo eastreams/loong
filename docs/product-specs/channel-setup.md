@@ -549,6 +549,9 @@ the attached compatibility wrapper rather than the long-term product noun:
 
 - `gateway run` can claim the persisted owner slot headless or attach a CLI
   host when `--session` is provided
+- the loopback control surface defaults to `127.0.0.1:26306`, while
+  `--port`, `LOONGCLAW_GATEWAY_PORT`, or an explicit `--port 0` lab override
+  can change the effective listener without changing the single-owner contract
 - `gateway status` can inspect the persisted owner snapshot from another CLI
   process
 - `gateway stop` can request cooperative shutdown from another CLI process

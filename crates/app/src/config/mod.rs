@@ -103,7 +103,7 @@ pub(crate) use runtime::inject_test_config_write_failure;
 pub use runtime::{
     AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
     AcpDispatchThreadRoutingMode, AcpxBackendConfig, AcpxMcpServerConfig,
-    ConfigValidationDiagnostic, ControlPlaneConfig, LoongClawConfig,
+    ConfigValidationDiagnostic, ControlPlaneConfig, GatewayConfig, LoongClawConfig,
     PROVIDER_SELECTOR_COMPACT_NOTE, PROVIDER_SELECTOR_HUMAN_SUMMARY, PROVIDER_SELECTOR_NOTE,
     PROVIDER_SELECTOR_PLACEHOLDER, PROVIDER_SELECTOR_TARGET_SUMMARY, ProviderSelectorProfileRef,
     ProviderSelectorResolution, accepted_provider_selectors, default_config_path,
@@ -2832,6 +2832,28 @@ MCP_LOG = "warn"
         let config = ControlPlaneConfig::default();
         assert!(!config.allow_remote);
         assert_eq!(config.resolved_shared_token(), Ok(None));
+    }
+
+    #[test]
+    fn gateway_defaults_use_port_26306() {
+        let config = GatewayConfig::default();
+        let actual_port = config.port;
+
+        assert_eq!(actual_port, 26_306);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn gateway_port_parses_from_toml() {
+        let raw = r#"
+[gateway]
+port = 26316
+"#;
+
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse gateway config");
+        let actual_port = parsed.gateway.port;
+
+        assert_eq!(actual_port, 26_316);
     }
 
     #[test]

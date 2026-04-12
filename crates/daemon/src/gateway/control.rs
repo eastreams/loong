@@ -49,6 +49,7 @@ const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
 const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 const GATEWAY_ACP_SESSION_LIST_DEFAULT_LIMIT: usize = 50;
 const GATEWAY_ACP_SESSION_LIST_MAX_LIMIT: usize = 200;
+const GATEWAY_CONTROL_PORT_ENV: &str = "LOONGCLAW_GATEWAY_PORT";
 
 type GatewayControlJsonResponse = (StatusCode, Json<Value>);
 
@@ -215,6 +216,7 @@ pub async fn start_gateway_control_surface(
     runtime_dir: &Path,
     loaded_config: &LoadedSupervisorConfig,
     acp_manager: Option<Arc<AcpSessionManager>>,
+    port_override: Option<u16>,
 ) -> CliResult<GatewayControlSurface> {
     let channel_inventory = build_gateway_channel_inventory_read_model(loaded_config)?;
     let runtime_snapshot = build_gateway_runtime_snapshot_read_model(loaded_config)?;
@@ -223,12 +225,16 @@ pub async fn start_gateway_control_surface(
 
     write_gateway_control_token_file(token_path.as_path(), bearer_token.as_str())?;
 
-    let listener_address = gateway_control_listener_address();
+    let listener_address =
+        resolve_gateway_control_listener_address(&loaded_config.config, port_override)?;
     let listener_result = TcpListener::bind(listener_address).await;
     let listener = match listener_result {
         Ok(listener) => listener,
         Err(error) => {
-            let bind_error = format!("bind gateway control surface failed: {error}");
+            let bind_error = format!(
+                "bind gateway control surface failed on {}: {error}",
+                listener_address
+            );
             let cleanup_result = remove_gateway_control_token_file(token_path.as_path());
             let final_error = merge_gateway_control_errors(bind_error, cleanup_result.err());
             return Err(final_error);
@@ -778,10 +784,53 @@ fn serialize_json_value<T: Serialize>(value: &T, context: &str) -> CliResult<Val
     serde_json::to_value(value).map_err(|error| format!("serialize {context} failed: {error}"))
 }
 
-fn gateway_control_listener_address() -> SocketAddrV4 {
+fn default_gateway_control_listener_address(config: &LoongClawConfig) -> SocketAddrV4 {
     let bind_address = Ipv4Addr::LOCALHOST;
-    let bind_port = 0_u16;
+    let bind_port = config.gateway.port;
     SocketAddrV4::new(bind_address, bind_port)
+}
+
+fn resolve_gateway_control_listener_address(
+    config: &LoongClawConfig,
+    port_override: Option<u16>,
+) -> CliResult<SocketAddrV4> {
+    let bind_address = Ipv4Addr::LOCALHOST;
+    let bind_port = resolve_gateway_control_listener_port(config, port_override)?;
+    let listener_address = SocketAddrV4::new(bind_address, bind_port);
+    Ok(listener_address)
+}
+
+fn resolve_gateway_control_listener_port(
+    config: &LoongClawConfig,
+    port_override: Option<u16>,
+) -> CliResult<u16> {
+    let env_port = resolve_gateway_control_listener_port_from_env()?;
+    let resolved_port = port_override.or(env_port);
+    let Some(port_value) = resolved_port else {
+        let default_address = default_gateway_control_listener_address(config);
+        let default_port = default_address.port();
+        return Ok(default_port);
+    };
+
+    Ok(port_value)
+}
+
+fn resolve_gateway_control_listener_port_from_env() -> CliResult<Option<u16>> {
+    let raw_value = std::env::var_os(GATEWAY_CONTROL_PORT_ENV);
+    let Some(raw_value) = raw_value else {
+        return Ok(None);
+    };
+
+    let raw_value = raw_value.to_string_lossy();
+    let trimmed_value = raw_value.trim();
+    if trimmed_value.is_empty() {
+        return Ok(None);
+    }
+
+    let parsed_port = trimmed_value.parse::<u16>().map_err(|error| {
+        format!("parse {GATEWAY_CONTROL_PORT_ENV}=`{trimmed_value}` failed: {error}")
+    })?;
+    Ok(Some(parsed_port))
 }
 
 fn new_gateway_control_bearer_token() -> String {
@@ -1009,4 +1058,74 @@ pub fn build_gateway_acp_test_router(
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
         .with_state(app_state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GATEWAY_CONTROL_PORT_ENV, resolve_gateway_control_listener_address,
+        resolve_gateway_control_listener_port,
+    };
+    use crate::mvp::config::LoongClawConfig;
+    use crate::test_support::ScopedEnv;
+
+    #[test]
+    fn gateway_control_listener_port_defaults_to_26306() {
+        let mut env = ScopedEnv::new();
+        env.remove(GATEWAY_CONTROL_PORT_ENV);
+
+        let config = LoongClawConfig::default();
+        let listener_address =
+            resolve_gateway_control_listener_address(&config, None).expect("address");
+        let actual_ip = *listener_address.ip();
+        let actual_port = listener_address.port();
+
+        assert_eq!(actual_ip, std::net::Ipv4Addr::LOCALHOST);
+        assert_eq!(actual_port, 26_306);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_uses_env_override() {
+        let mut env = ScopedEnv::new();
+        env.set(GATEWAY_CONTROL_PORT_ENV, "26316");
+
+        let config = LoongClawConfig::default();
+        let resolved_port = resolve_gateway_control_listener_port(&config, None).expect("port");
+
+        assert_eq!(resolved_port, 26_316);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_prefers_explicit_override() {
+        let mut env = ScopedEnv::new();
+        env.set(GATEWAY_CONTROL_PORT_ENV, "26316");
+
+        let config = LoongClawConfig::default();
+        let resolved_port =
+            resolve_gateway_control_listener_port(&config, Some(26_326)).expect("port");
+
+        assert_eq!(resolved_port, 26_326);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_accepts_ephemeral_zero() {
+        let mut env = ScopedEnv::new();
+        env.remove(GATEWAY_CONTROL_PORT_ENV);
+
+        let config = LoongClawConfig::default();
+        let resolved_port = resolve_gateway_control_listener_port(&config, Some(0)).expect("port");
+
+        assert_eq!(resolved_port, 0);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_rejects_invalid_env_override() {
+        let mut env = ScopedEnv::new();
+        env.set(GATEWAY_CONTROL_PORT_ENV, "invalid");
+
+        let config = LoongClawConfig::default();
+        let error = resolve_gateway_control_listener_port(&config, None).expect_err("invalid env");
+
+        assert!(error.contains(GATEWAY_CONTROL_PORT_ENV));
+    }
 }

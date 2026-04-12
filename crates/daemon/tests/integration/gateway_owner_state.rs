@@ -62,6 +62,7 @@ fn headless_loaded_config_fixture() -> LoadedSupervisorConfig {
     let config_path = runtime_root.join("loongclaw.toml");
     let sqlite_path = runtime_root.join("memory.sqlite3");
     let mut config = mvp::config::LoongClawConfig::default();
+    config.gateway.port = 0;
     config.memory.sqlite_path = sqlite_path.display().to_string();
 
     LoadedSupervisorConfig {
@@ -75,6 +76,7 @@ fn telegram_loaded_config_fixture() -> LoadedSupervisorConfig {
     let config_path = runtime_root.join("loongclaw.toml");
     let sqlite_path = runtime_root.join("memory.sqlite3");
     let mut config = mvp::config::LoongClawConfig::default();
+    config.gateway.port = 0;
     config.telegram.enabled = true;
     config.memory.sqlite_path = sqlite_path.display().to_string();
     LoadedSupervisorConfig {
@@ -84,7 +86,8 @@ fn telegram_loaded_config_fixture() -> LoadedSupervisorConfig {
 }
 
 fn plugin_backed_loaded_config_fixture() -> LoadedSupervisorConfig {
-    let config = super::mixed_account_weixin_plugin_bridge_config();
+    let mut config = super::mixed_account_weixin_plugin_bridge_config();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
         resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
