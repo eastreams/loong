@@ -62,7 +62,7 @@ libc = "0.2"
 async-trait.workspace = true
 axum = { workspace = true, features = ["query"] }
 clap.workspace = true
-clap_complete = "4.5"
+clap_complete = "4.6"
 dialoguer.workspace = true
 kernel = { package = "loongclaw-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
 loongclaw-bench = { version = "0.1.0-alpha.3", path = "../bench" }
