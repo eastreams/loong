@@ -940,31 +940,29 @@ async fn process_cli_chat_input(
         ChatCommandMatchResult::NotMatched => {}
     }
 
-    let agent_runtime = crate::agent_runtime::AgentRuntime::new();
-    let turn_result = agent_runtime
-        .run_turn_with_runtime(
-            runtime,
-            &crate::agent_runtime::AgentTurnRequest {
-                message: input.to_owned(),
-                turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
-                channel_id: runtime.session_address.channel_id.clone(),
-                account_id: runtime.session_address.account_id.clone(),
-                conversation_id: runtime.session_address.conversation_id.clone(),
-                participant_id: runtime.session_address.participant_id.clone(),
-                thread_id: runtime.session_address.thread_id.clone(),
-                metadata: BTreeMap::new(),
-                acp: runtime.explicit_acp_request,
-                acp_event_stream: event_sink.is_some(),
-                acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
-                acp_cwd: runtime
-                    .effective_working_directory
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
-                live_surface_enabled: true,
-            },
-            event_sink,
-        )
-        .await?;
+    let turn_request = crate::agent_runtime::AgentTurnRequest {
+        message: input.to_owned(),
+        turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+        channel_id: runtime.session_address.channel_id.clone(),
+        account_id: runtime.session_address.account_id.clone(),
+        conversation_id: runtime.session_address.conversation_id.clone(),
+        thread_id: runtime.session_address.thread_id.clone(),
+        metadata: BTreeMap::new(),
+        acp: runtime.explicit_acp_request,
+        acp_event_stream: event_sink.is_some(),
+        acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
+        acp_cwd: runtime
+            .effective_working_directory
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        live_surface_enabled: true,
+    };
+    let turn_options = crate::agent_runtime::TurnExecutionOptions {
+        event_sink,
+        ..Default::default()
+    };
+    let turn_service = crate::agent_runtime::RuntimeTurnExecutionService::new(runtime);
+    let turn_result = turn_service.execute(&turn_request, turn_options).await?;
 
     Ok(CliChatLoopControl::AssistantText(turn_result.output_text))
 }

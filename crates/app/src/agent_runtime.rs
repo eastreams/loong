@@ -118,6 +118,11 @@ pub struct TurnExecutionOptions<'a> {
     pub provider_error_mode: crate::conversation::ProviderErrorMode,
 }
 
+pub(crate) struct RuntimeTurnExecutionService<'a> {
+    runtime: &'a crate::chat::CliTurnRuntime,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+}
+
 impl Default for TurnExecutionOptions<'_> {
     fn default() -> Self {
         Self {
@@ -127,6 +132,44 @@ impl Default for TurnExecutionOptions<'_> {
             provenance: AcpTurnProvenance::default(),
             provider_error_mode: crate::conversation::ProviderErrorMode::InlineMessage,
         }
+    }
+}
+
+impl<'a> RuntimeTurnExecutionService<'a> {
+    pub(crate) fn new(runtime: &'a crate::chat::CliTurnRuntime) -> Self {
+        Self {
+            runtime,
+            acp_manager: None,
+        }
+    }
+
+    pub(crate) fn execute(
+        &'a self,
+        request: &'a AgentTurnRequest,
+        options: TurnExecutionOptions<'a>,
+    ) -> Pin<Box<dyn Future<Output = CliResult<AgentTurnResult>> + 'a>> {
+        let runtime = AgentRuntime::new();
+        let event_sink = options.event_sink;
+        let observer = options.observer;
+        let ingress = options.ingress;
+        let provenance = options.provenance;
+        let provider_error_mode = options.provider_error_mode;
+        let acp_manager = self.acp_manager.clone();
+
+        Box::pin(async move {
+            runtime
+                .run_turn_with_runtime_and_context_and_manager(
+                    self.runtime,
+                    request,
+                    event_sink,
+                    observer,
+                    ingress,
+                    provenance,
+                    provider_error_mode,
+                    acp_manager,
+                )
+                .await
+        })
     }
 }
 
@@ -301,68 +344,6 @@ impl AgentRuntime {
             None,
             AcpTurnProvenance::default(),
             crate::conversation::ProviderErrorMode::InlineMessage,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn run_turn_with_runtime_and_observer(
-        &self,
-        runtime: &crate::chat::CliTurnRuntime,
-        request: &AgentTurnRequest,
-        event_sink: Option<&dyn AcpTurnEventSink>,
-        observer: Option<crate::conversation::ConversationTurnObserverHandle>,
-    ) -> CliResult<AgentTurnResult> {
-        self.run_turn_with_runtime_and_observer_and_context(
-            runtime,
-            request,
-            event_sink,
-            observer,
-            None,
-            AcpTurnProvenance::default(),
-        )
-        .await
-    }
-
-    pub(crate) async fn run_turn_with_runtime_and_observer_and_context(
-        &self,
-        runtime: &crate::chat::CliTurnRuntime,
-        request: &AgentTurnRequest,
-        event_sink: Option<&dyn AcpTurnEventSink>,
-        observer: Option<crate::conversation::ConversationTurnObserverHandle>,
-        ingress: Option<&ConversationIngressContext>,
-        provenance: AcpTurnProvenance<'_>,
-    ) -> CliResult<AgentTurnResult> {
-        self.run_turn_with_runtime_and_observer_and_context_and_error_mode(
-            runtime,
-            request,
-            event_sink,
-            observer,
-            ingress,
-            provenance,
-            crate::conversation::ProviderErrorMode::InlineMessage,
-        )
-        .await
-    }
-
-    pub(crate) async fn run_turn_with_runtime_and_observer_and_context_and_error_mode(
-        &self,
-        runtime: &crate::chat::CliTurnRuntime,
-        request: &AgentTurnRequest,
-        event_sink: Option<&dyn AcpTurnEventSink>,
-        observer: Option<crate::conversation::ConversationTurnObserverHandle>,
-        ingress: Option<&ConversationIngressContext>,
-        provenance: AcpTurnProvenance<'_>,
-        provider_error_mode: crate::conversation::ProviderErrorMode,
-    ) -> CliResult<AgentTurnResult> {
-        self.run_turn_with_runtime_and_context_and_manager(
-            runtime,
-            request,
-            event_sink,
-            observer,
-            ingress,
-            provenance,
-            provider_error_mode,
             None,
         )
         .await
