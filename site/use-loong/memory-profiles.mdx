@@ -1,0 +1,77 @@
+---
+title: Memory Profiles
+description: Choose how Loong preserves continuity without turning memory into a second authority.
+---
+
+# Memory Profiles
+
+Loong exposes memory as an operator-visible choice rather than one hidden
+global mode.
+
+The public contract is intentionally narrow: memory should help continuity, but
+it should not silently become a second runtime authority.
+
+## Current Public Profiles
+
+| Profile | What it keeps | Good default for |
+| --- | --- | --- |
+| `window_only` | only the active conversation window | short, bounded work where persistence is unnecessary |
+| `window_plus_summary` | active window plus a rolling summary of earlier turns | longer conversations that need continuity without full profile memory |
+| `profile_plus_window` | active window plus operator profile memory | assistant paths that need durable operator context across sessions |
+
+## How To Choose
+
+| If you want... | Choose... |
+| --- | --- |
+| the simplest and safest default | `window_only` |
+| longer-running conversation continuity without full durable profile memory | `window_plus_summary` |
+| durable operator context across sessions | `profile_plus_window` |
+
+## Public Configuration Shape
+
+```toml
+[memory]
+profile = "window_only"
+```
+
+The first-run path is expected to help with this selection, but the profile
+itself remains a normal operator-facing runtime setting.
+
+## What Public Memory Does
+
+- preserves continuity through an explicit profile choice
+- keeps profile memory advisory rather than identity-overriding
+- stays visible in onboarding and runtime config instead of hiding behind prompt magic
+- helps operators choose the right continuity cost for the job
+
+## What Public Memory Does Not Claim
+
+- a full retrieval platform in the public first-run story
+- silent replacement of runtime identity through imported memory
+- automatic long-range autonomy just because persistence exists
+- a requirement that every assistant path use durable memory on day one
+
+## Profile Note And Durable Context
+
+`profile_plus_window` is the durable advisory lane.
+
+That matters because:
+
+- profile memory can preserve preferences, working habits, or imported context
+- it should enrich the assistant without becoming a second authority over the runtime
+- future richer recall can build on this lane without changing the public truth
+  that operator-visible runtime identity stays explicit
+
+## Recommended Progression
+
+1. Start with `window_only` unless you already know you need continuity.
+2. Move to `window_plus_summary` when the conversation window alone becomes too shallow.
+3. Use `profile_plus_window` when repeated sessions genuinely need durable operator context.
+
+## Continue Reading
+
+- Go to [Tools And Memory](/use-loong/tools-and-memory) for the combined governed-capability overview.
+- Go to [Configuration Patterns](/use-loong/configuration-patterns) if you
+  want to see memory in the wider public config shape.
+- Go to [Tool Surface](/use-loong/tool-surface) if you want the truthful visible-tool contract.
+- Go to [First Run](/get-started/first-run) if you still need the shortest path to a working local assistant.

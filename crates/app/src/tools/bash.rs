@@ -419,7 +419,7 @@ mod tests {
         }
 
         let root = tempfile::tempdir().expect("tempdir");
-        let root_path = root.path().to_path_buf();
+        let root_path = std::fs::canonicalize(root.path()).expect("canonicalize tempdir");
         let mut config = ToolRuntimeConfig {
             file_root: Some(root_path.clone()),
             shell_allow: ["printf".to_owned()].into_iter().collect(),

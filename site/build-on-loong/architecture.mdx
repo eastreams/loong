@@ -1,0 +1,134 @@
+---
+title: Architecture
+description: The public architecture contract for contributors and integrators.
+---
+
+# Architecture
+
+Use this page when you want the public system map before opening the deeper
+repository-native design docs.
+
+Loong is organized as a 7-crate Rust workspace with a strict dependency DAG.
+This page stays intentionally short: it explains the boundaries builders should
+preserve, not the full internal authoring trail.
+
+These boundaries describe the current public architecture contract, not a claim
+that every crate split or layer label is frozen forever. If the system evolves,
+the contract can evolve too, but it should do so explicitly and with review
+rather than through gradual undocumented drift.
+
+## Start Here If
+
+| If you are trying to... | Start here | Then continue to... |
+| --- | --- | --- |
+| understand the public crate and layer model first | this page | [Contributing](/build-on-loong/contributing) or the deeper references below |
+| decide which crate or layer should own a change | this page | [Contribution Workflow](/build-on-loong/contribution-workflow) once the ownership is clear |
+| inspect the fuller repository-native architecture map | [ARCHITECTURE.md](https://github.com/eastreams/loong/blob/dev/ARCHITECTURE.md) | the deeper design docs linked at the end |
+| edit docs placement or public docs boundaries | [Docs Workflow](/build-on-loong/docs-workflow) | [Documentation Policy](/reference/documentation-policy) |
+
+## What This Page Covers
+
+- the crate DAG and what each crate owns publicly
+- the layered execution model and the boundaries it protects
+- the usual starting point for common change types
+- the common architecture smells that signal a boundary problem
+
+Publicly, the useful split is: stable contracts, a governed kernel, a
+product/runtime layer, deterministic spec and benchmark rails, and the daemon
+assembly layer that turns those lower layers into runnable operator entrypoints.
+
+```text
+direct dependency DAG
+
+contracts  (stable contract vocabulary)
+├── kernel   -> contracts
+├── protocol (independent transport foundation)
+├── app      -> contracts, kernel
+├── spec     -> contracts, kernel, protocol
+├── bench    -> kernel, spec
+└── daemon   -> app, bench, contracts, kernel, spec
+```
+
+## Crate Roles
+
+| Crate | Public role |
+| --- | --- |
+| `contracts` | shared contract vocabulary for capability, policy, audit, and execution request-outcome types |
+| `kernel` | governed execution core for policy, audit, planes, harness, plugin, and integration control |
+| `protocol` | transport and route foundation used by the spec rail |
+| `app` | product/runtime layer for providers, channels, tools, memory, conversation, config, and presentation |
+| `spec` | deterministic execution rail and bootstrap/test runtime |
+| `bench` | performance and pressure rail on top of spec/kernel |
+| `daemon` | operator CLI and service assembly layer over the lower crates |
+
+## Layered Execution Model
+
+The crate DAG is only half of the public architecture story. The runtime is
+also layered so governance and execution stay explicit.
+
+| Layer | Public meaning |
+| --- | --- |
+| L0 Contract | stable request, outcome, capability, and route contracts |
+| L1 Security And Governance | capability checks, policy, approval, and audit gates |
+| L2 Execution Planes | runtime, tool, memory, and connector planes with core/extension split |
+| L3 Orchestration | kernel and harness coordination over the governed planes |
+| L4 Observability | audit and deterministic clocking for testable behavior |
+| L5 Specialization | pack-driven vertical shaping without forking the kernel |
+| L5.5 Protocol Foundation | transport and route contracts that stay out of daemon business logic |
+| L6 Integration Control Plane | governed provider, channel, and plugin integration workflows |
+| L7 Plugin Translation | language-specific plugin metadata normalized into a stable integration contract |
+
+## Public Principles
+
+- governance-first execution
+- additive evolution for public contracts
+- small core, rich extension seams
+- no internal dependency cycles
+
+## What The Boundary Buys You
+
+- Policy stays in the real runtime path instead of becoming documentation-only intent.
+- New product surfaces can reuse the same governed execution model instead of inventing sidecar rules.
+- Specialization happens through packs, adapters, and integration lanes rather than repeated kernel rewrites.
+- Builders can reason about where a change belongs before they touch code.
+
+## Where Changes Usually Belong
+
+| If you are changing... | Usually start in... |
+| --- | --- |
+| capability, policy, or audit boundaries | `kernel` |
+| shared request or outcome types | `contracts` |
+| provider, tool, memory, or channel adapters | `app` |
+| CLI entrypoints or operator presentation | `daemon` |
+| deterministic scenario coverage | `spec` |
+| benchmark and performance gates | `bench` |
+
+## Non-Negotiable Boundary Rules
+
+- Do not introduce dependency cycles.
+- Do not bypass kernel-governed capability, policy, and audit paths with shadow execution routes.
+- Prefer additive growth to breaking public contract rewrites.
+- Keep runtime-backed product surfaces on the same governed model instead of inventing one-off sidecar systems.
+
+Those rules are intentionally strict for the current architecture posture. When
+maintainers decide the posture itself should change, the expectation is an
+explicit architecture update, not an exception that quietly becomes the new
+shape.
+
+## Common Architecture Smells
+
+- a new feature wants to talk around the kernel instead of through it
+- a product surface introduces its own private policy or audit logic
+- a crate starts absorbing domain behavior that belongs in adapters or packs
+- a contribution adds coupling across crates because the boundary feels inconvenient
+- a public contract is "simplified" by deleting explicit runtime truth
+
+If a change smells like one of those, the architecture is usually telling you to
+reshape the contribution rather than pushing through the boundary.
+
+## Go Deeper
+
+- [ARCHITECTURE.md](https://github.com/eastreams/loong/blob/dev/ARCHITECTURE.md)
+- [Core Beliefs](https://github.com/eastreams/loong/blob/dev/docs/design-docs/core-beliefs.md)
+- [Layered Kernel Design](https://github.com/eastreams/loong/blob/dev/docs/design-docs/layered-kernel-design.md)
+- [Harness Engineering](https://github.com/eastreams/loong/blob/dev/docs/design-docs/harness-engineering.md)

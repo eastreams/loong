@@ -1,0 +1,84 @@
+---
+title: WeCom
+description: Configure the WeCom channel surface in Loong.
+---
+
+# WeCom
+
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `wecom` |
+| Config key | `wecom` |
+| Implementation status | `runtime_backed` |
+| Transport | `wecom_aibot_long_connection` |
+| Aliases | `wechat-work`, `qywx` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[wecom]
+enabled = true
+bot_id_env = "WECOM_BOT_ID"
+secret_env = "WECOM_SECRET"
+allowed_conversation_ids = ["group_demo"]
+```
+
+## Smoke Test
+
+```bash
+loong wecom-send --target "wmxxxxxxxxxxxxxxxx" --text "hello from loong"
+loong wecom-serve
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| proactive send | `wecom-send` | Usage: loong wecom-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| long connection reply loop | `wecom-serve` | Usage: loong wecom-serve [OPTIONS] |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `wecom.enabled`<br/>`wecom.accounts.<account>.enabled` | none | none |
+| aibot bot id | `wecom.bot_id`<br/>`wecom.accounts.<account>.bot_id` | `wecom.bot_id_env`<br/>`wecom.accounts.<account>.bot_id_env` | `WECOM_BOT_ID` |
+| aibot secret | `wecom.secret`<br/>`wecom.accounts.<account>.secret` | `wecom.secret_env`<br/>`wecom.accounts.<account>.secret_env` | `WECOM_SECRET` |
+
+## Required Fields For Serve
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `wecom.enabled`<br/>`wecom.accounts.<account>.enabled` | none | none |
+| aibot bot id | `wecom.bot_id`<br/>`wecom.accounts.<account>.bot_id` | `wecom.bot_id_env`<br/>`wecom.accounts.<account>.bot_id_env` | `WECOM_BOT_ID` |
+| aibot secret | `wecom.secret`<br/>`wecom.accounts.<account>.secret` | `wecom.secret_env`<br/>`wecom.accounts.<account>.secret_env` | `WECOM_SECRET` |
+| allowed conversation ids | `wecom.allowed_conversation_ids`<br/>`wecom.accounts.<account>.allowed_conversation_ids` | none | none |
+
+## Optional Transport Tuning
+
+| Tuning field | Config paths | Why it exists |
+| --- | --- | --- |
+| websocket url override | `wecom.websocket_url`<br/>`wecom.accounts.<account>.websocket_url` | controlled environments, bridge setups, or diagnostics |
+| ping interval seconds | `wecom.ping_interval_s`<br/>`wecom.accounts.<account>.ping_interval_s` | tune keepalive cadence for the network path |
+| reconnect interval seconds | `wecom.reconnect_interval_s`<br/>`wecom.accounts.<account>.reconnect_interval_s` | tune retry behavior after disconnects |
+
+## Gateway And Ownership
+
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+
+## Operator Notes
+
+- Loong documents WeCom as the official AIBot long-connection lane. Do not describe a webhook callback mode as if it were the same shipped contract.
+- `websocket_url`, `ping_interval_s`, and `reconnect_interval_s` are tuning knobs, not day-zero requirements for a basic rollout.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) when this surface needs longer-lived runtime ownership.

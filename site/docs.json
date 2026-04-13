@@ -1,0 +1,151 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Loong",
+  "description": "Public documentation for Loong, the Rust foundation for vertical AI agents.",
+  "colors": {
+    "primary": "#0F766E",
+    "light": "#CCFBF1",
+    "dark": "#042F2E"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Overview",
+        "pages": [
+          "index"
+        ]
+      },
+      {
+        "group": "Get Started",
+        "pages": [
+          "get-started/overview",
+          "get-started/installation",
+          "get-started/first-run",
+          "get-started/doctor-and-health"
+        ]
+      },
+      {
+        "group": "Use Loong",
+        "pages": [
+          "use-loong/overview",
+          "use-loong/common-setups",
+          "use-loong/configuration-patterns",
+          "use-loong/managed-skills",
+          "use-loong/browser-and-web-boundaries",
+          "use-loong/volcengine-feishu-lark-playbook",
+          "use-loong/wecom-rollout-playbook",
+          "use-loong/byteplus-coding-telegram-playbook",
+          "use-loong/local-outbound-playbook",
+          "use-loong/gateway-rollout-playbook",
+          "use-loong/providers-and-models",
+          {
+            "group": "Provider Guides",
+            "pages": [
+              "use-loong/provider-guides/index",
+              "use-loong/provider-guides/volcengine",
+              "use-loong/provider-guides/byteplus",
+              "use-loong/provider-guides/openai",
+              "use-loong/provider-guides/anthropic",
+              "use-loong/provider-guides/gemini",
+              "use-loong/provider-guides/deepseek",
+              "use-loong/provider-guides/minimax",
+              "use-loong/provider-guides/mistral",
+              "use-loong/provider-guides/cohere",
+              "use-loong/provider-guides/xai",
+              "use-loong/provider-guides/zai",
+              "use-loong/provider-guides/zhipu",
+              "use-loong/provider-guides/qwen",
+              "use-loong/provider-guides/kimi",
+              "use-loong/provider-guides/groq",
+              "use-loong/provider-guides/fireworks",
+              "use-loong/provider-guides/together",
+              "use-loong/provider-guides/perplexity",
+              "use-loong/provider-guides/qianfan",
+              "use-loong/provider-guides/cerebras",
+              "use-loong/provider-guides/nvidia",
+              "use-loong/provider-guides/sambanova",
+              "use-loong/provider-guides/novita",
+              "use-loong/provider-guides/siliconflow",
+              "use-loong/provider-guides/stepfun",
+              "use-loong/provider-guides/venice",
+              "use-loong/provider-guides/volcengine-coding",
+              "use-loong/provider-guides/byteplus-coding",
+              "use-loong/provider-guides/kimi-coding",
+              "use-loong/provider-guides/step-plan",
+              "use-loong/provider-guides/bailian-coding",
+              "use-loong/provider-guides/openrouter",
+              "use-loong/provider-guides/cloudflare-ai-gateway",
+              "use-loong/provider-guides/vercel-ai-gateway",
+              "use-loong/provider-guides/bedrock",
+              "use-loong/provider-guides/custom",
+              "use-loong/provider-guides/ollama",
+              "use-loong/provider-guides/lm-studio",
+              "use-loong/provider-guides/llamacpp",
+              "use-loong/provider-guides/vllm",
+              "use-loong/provider-guides/sglang"
+            ]
+          },
+          "use-loong/provider-recipes",
+          "use-loong/channels",
+          {
+            "group": "Channel Guides",
+            "pages": [
+              "use-loong/channel-guides/index",
+              "use-loong/channel-guides/feishu",
+              "use-loong/channel-guides/telegram",
+              "use-loong/channel-guides/matrix",
+              "use-loong/channel-guides/whatsapp",
+              "use-loong/channel-guides/wecom",
+              "use-loong/channel-guides/discord",
+              "use-loong/channel-guides/slack",
+              "use-loong/channel-guides/line",
+              "use-loong/channel-guides/dingtalk",
+              "use-loong/channel-guides/email",
+              "use-loong/channel-guides/webhook",
+              "use-loong/channel-guides/google-chat",
+              "use-loong/channel-guides/signal",
+              "use-loong/channel-guides/twitch",
+              "use-loong/channel-guides/teams",
+              "use-loong/channel-guides/mattermost",
+              "use-loong/channel-guides/nextcloud-talk",
+              "use-loong/channel-guides/synology-chat",
+              "use-loong/channel-guides/irc",
+              "use-loong/channel-guides/imessage",
+              "use-loong/channel-guides/nostr",
+              "use-loong/channel-guides/tlon"
+            ]
+          },
+          "use-loong/channel-recipes",
+          "use-loong/channel-setup",
+          "use-loong/gateway-and-supervision",
+          "use-loong/tools-and-memory",
+          "use-loong/tool-surface",
+          "use-loong/memory-profiles"
+        ]
+      },
+      {
+        "group": "Build On Loong",
+        "pages": [
+          "build-on-loong/overview",
+          "build-on-loong/architecture",
+          "build-on-loong/contributing",
+          "build-on-loong/contribution-workflow",
+          "build-on-loong/docs-workflow",
+          "build-on-loong/contribution-areas"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/overview",
+          "reference/why-loong",
+          "reference/roadmap-and-product",
+          "reference/documentation-policy",
+          "reference/security-and-reliability",
+          "reference/releases"
+        ]
+      }
+    ]
+  }
+}

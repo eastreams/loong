@@ -7,7 +7,7 @@ that I can get an answer immediately without entering an interactive shell.
 
 ## Acceptance Criteria
 
-- [ ] LoongClaw exposes `loong ask --message "..."` as a first-class CLI
+- [ ] Loong exposes `loong ask --message "..."` as a first-class CLI
       command.
 - [ ] `ask` reuses the same config load, provider routing, memory behavior, and
       ACP options as CLI chat.

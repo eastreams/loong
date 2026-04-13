@@ -1,0 +1,67 @@
+---
+title: BytePlus
+description: Configure the BytePlus provider profile in Loong.
+---
+
+# BytePlus
+
+Common hosted first-run lanes when you want a short reviewed path without hiding the provider family. This page covers the built-in `byteplus` provider kind directly.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `byteplus` |
+| Provider group | Platform-First Hosted |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `volcengine` |
+| Auth scheme | `bearer` |
+| Credential envs | BYTEPLUS_API_KEY, ARK_API_KEY |
+| Aliases | `byteplus_compatible` |
+| Default base URL | `https://ark.ap-southeast.bytepluses.com/api/v3` |
+| Request endpoint | `https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions` |
+| Models endpoint | `https://ark.ap-southeast.bytepluses.com/api/v3/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "byteplus"
+
+[providers.byteplus]
+kind = "byteplus"
+api_key = { env = "BYTEPLUS_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `BYTEPLUS_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions` |
+| Primary model-catalog route | `https://ark.ap-southeast.bytepluses.com/api/v3/models` |
+
+## Operator Notes
+
+- Loong's BytePlus OpenAI-compatible path uses `provider.api_key` / `BYTEPLUS_API_KEY` and sends `Authorization: Bearer <BYTEPLUS_API_KEY>`; AK/SK request signing is not used on this path.
+- This is the general hosted BytePlus lane. Use `byteplus_coding` when coding traffic should stay on the dedicated coding route.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

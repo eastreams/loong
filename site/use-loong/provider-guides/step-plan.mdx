@@ -1,0 +1,71 @@
+---
+title: Step Plan
+description: Configure the Step Plan provider profile in Loong.
+---
+
+# Step Plan
+
+Dedicated coding lanes that keep coding quota, pricing, or route ownership separate from the general assistant lane. This page covers the built-in `step_plan` provider kind directly.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `step_plan` |
+| Provider group | Coding-Specialized Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | STEP_API_KEY |
+| Aliases | `stepfun_step_plan` |
+| Default base URL | `https://api.stepfun.com` |
+| Request endpoint | `https://api.stepfun.com/step_plan/v1/chat/completions` |
+| Models endpoint | `https://api.stepfun.com/step_plan/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "step_plan"
+
+[providers.step_plan]
+kind = "step_plan"
+api_key = { env = "STEP_API_KEY" }
+model = "your-reviewed-coding-model"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `STEP_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://api.stepfun.com/step_plan/v1/chat/completions` |
+| Primary model-catalog route | `https://api.stepfun.com/step_plan/v1/models` |
+
+## Region Endpoints
+
+| Variant | Base URL |
+| --- | --- |
+| CN | `https://api.stepfun.com` |
+| Global | `https://api.stepfun.ai` |
+
+Stepfun region endpoint: CN default (`https://api.stepfun.com`); switch `provider.base_url` to `https://api.stepfun.ai` for Global accounts
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

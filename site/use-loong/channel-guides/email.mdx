@@ -1,0 +1,68 @@
+---
+title: Email
+description: Configure the Email channel surface in Loong.
+---
+
+# Email
+
+This is a shipped config-backed outbound surface. Email IMAP reply-loop serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `email` |
+| Config key | `email` |
+| Implementation status | `config_backed` |
+| Transport | `smtp_imap` |
+| Aliases | `smtp`, `imap` |
+| Default send target kind | `address` |
+
+## Minimal Config
+
+```toml
+[email]
+enabled = true
+smtp_host = "smtp.example.com"
+smtp_username_env = "EMAIL_SMTP_USERNAME"
+smtp_password_env = "EMAIL_SMTP_PASSWORD"
+from_address = "loong@example.com"
+```
+
+## Smoke Test
+
+```bash
+loong email-send --target "ops@example.com" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| smtp send | `email-send` | Usage: loong email-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| imap reply loop | `email-serve` | email IMAP reply-loop serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `email.enabled`<br/>`email.accounts.<account>.enabled` | none | none |
+| smtp host | `email.smtp_host`<br/>`email.accounts.<account>.smtp_host` | none | none |
+| smtp username | `email.smtp_username`<br/>`email.accounts.<account>.smtp_username` | `email.smtp_username_env`<br/>`email.accounts.<account>.smtp_username_env` | `EMAIL_SMTP_USERNAME` |
+| smtp password | `email.smtp_password`<br/>`email.accounts.<account>.smtp_password` | `email.smtp_password_env`<br/>`email.accounts.<account>.smtp_password_env` | `EMAIL_SMTP_PASSWORD` |
+| from address | `email.from_address`<br/>`email.accounts.<account>.from_address` | none | none |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- This surface is SMTP send today. The catalog still tracks an IMAP-style serve contract, but it is not a shipped runtime surface yet.
+- The outbound subject is derived from the first non-empty line of the body.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

@@ -206,7 +206,8 @@ PY
 assert_not_contains_regex "$REPO_ROOT/.github/labeler.yml" '(^|[[:space:]])"?rust"?[[:space:]]*:'
 assert_not_contains "$REPO_ROOT/docs/references/github-collaboration.md" "area:"
 assert_not_contains "$REPO_ROOT/docs/references/github-collaboration.md" "domain:"
-assert_not_contains "$REPO_ROOT/docs/plans/2026-03-19-github-label-taxonomy-implementation-plan.md" "For Claude:"
+assert_not_contains "$REPO_ROOT/docs/design-docs/index.md" "For Claude:"
+assert_contains "$REPO_ROOT/docs/references/github-collaboration.md" "## Route By Audience"
 assert_contains "$REPO_ROOT/docs/references/github-collaboration.md" "## CI and Promotion Gates"
 assert_contains "$REPO_ROOT/docs/references/github-collaboration.md" 'release` and `release/*` branches are optional release-hardening lanes'
 assert_contains "$REPO_ROOT/docs/references/github-collaboration.md" "enforce-dev-to-main"

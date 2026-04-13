@@ -1,0 +1,63 @@
+---
+title: Webhook
+description: Configure the Webhook channel surface in Loong.
+---
+
+# Webhook
+
+This is a shipped config-backed outbound surface. Generic webhook serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `webhook` |
+| Config key | `webhook` |
+| Implementation status | `config_backed` |
+| Transport | `generic_webhook` |
+| Aliases | `http-webhook` |
+| Default send target kind | `endpoint` |
+
+## Minimal Config
+
+```toml
+[webhook]
+enabled = true
+payload_format = "json_text"
+payload_text_field = "text"
+endpoint_url_env = "WEBHOOK_ENDPOINT_URL"
+```
+
+## Smoke Test
+
+```bash
+loong webhook-send --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| http post send | `webhook-send` | Usage: loong webhook-send [OPTIONS] --text &lt;TEXT&gt; |
+| inbound webhook service | `webhook-serve` | generic webhook serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `webhook.enabled`<br/>`webhook.accounts.<account>.enabled` | none | none |
+| endpoint url | `webhook.endpoint_url`<br/>`webhook.accounts.<account>.endpoint_url` | `webhook.endpoint_url_env`<br/>`webhook.accounts.<account>.endpoint_url_env` | `WEBHOOK_ENDPOINT_URL` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- Use `[outbound_http] allow_private_hosts = true` when you intentionally post to a loopback or private bridge endpoint.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

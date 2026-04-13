@@ -1,10 +1,10 @@
-# LoongClaw SDK Strategy
+# Loong SDK Strategy
 
 ## Purpose
 
-This document defines the current SDK strategy for LoongClaw.
+This document defines the current SDK strategy for Loong.
 
-LoongClaw should not frame its SDK as a generic plugin story.
+Loong should not frame its SDK as a generic plugin story.
 It should frame its SDK as a product-governed capability system that serves:
 
 - internal repository-owned integration work
@@ -22,7 +22,7 @@ Companion documents:
 
 ## Current Direction
 
-LoongClaw is no longer best described as a `discovery-first` product.
+Loong is no longer best described as a `discovery-first` product.
 
 The current direction is:
 
@@ -36,7 +36,7 @@ That distinction matters because the SDK must serve more than tool lookup.
 
 ## Core Thesis
 
-LoongClaw's SDK should be defined by the contracts that let capability:
+Loong's SDK should be defined by the contracts that let capability:
 
 1. be authored
 2. be integrated
@@ -137,7 +137,7 @@ The next public families should converge around:
 
 ## Practical Implication
 
-When LoongClaw says "SDK", it should not mean one helper crate.
+When Loong says "SDK", it should not mean one helper crate.
 It should mean one coherent capability lifecycle across:
 
 - product vocabulary

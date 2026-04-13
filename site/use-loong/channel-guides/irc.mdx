@@ -1,0 +1,65 @@
+---
+title: IRC
+description: Configure the IRC channel surface in Loong.
+---
+
+# IRC
+
+This is a shipped config-backed outbound surface. Irc relay-loop serve is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `irc` |
+| Config key | `irc` |
+| Implementation status | `config_backed` |
+| Transport | `irc_socket` |
+| Aliases | none |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[irc]
+enabled = true
+server = "irc.libera.chat:6697"
+nickname = "loongbot"
+server_env = "IRC_SERVER"
+nickname_env = "IRC_NICKNAME"
+```
+
+## Smoke Test
+
+```bash
+loong irc-send --target "#ops" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| message send | `irc-send` | Usage: loong irc-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| relay loop | `irc-serve` | irc relay-loop serve is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `irc.enabled`<br/>`irc.accounts.<account>.enabled` | none | none |
+| server | `irc.server`<br/>`irc.accounts.<account>.server` | `irc.server_env`<br/>`irc.accounts.<account>.server_env` | `IRC_SERVER` |
+| nickname | `irc.nickname`<br/>`irc.accounts.<account>.nickname` | `irc.nickname_env`<br/>`irc.accounts.<account>.nickname_env` | `IRC_NICKNAME` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- IRC stays outbound-only today even though the catalog tracks a future relay-loop surface.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

@@ -1,58 +1,62 @@
 # Product Specs
 
-User-facing product requirements and specifications for LoongClaw.
+This directory is the repository-native map for Loong's source-facing
+product contracts.
 
-## Structure
+The public reader path lives under `site/`. This index exists for maintainers,
+contributors, and source readers who need the markdown contracts behind those
+public docs.
 
-Product specs describe **what** the product does from the user's perspective, not implementation internals or scheduling details.
+## Read This Index When
 
-## Specs
+- you are editing the source-level contract behind a public operator workflow
+- you need to see which repository markdown files define the current public
+  product surface
+- you want the source contract, not the Mintlify tutorial or playbook layer
 
-- [Installation](installation.md)
-- [Onboarding](onboarding.md)
-- [One-Shot Ask](one-shot-ask.md)
-- [Doctor](doctor.md)
-- [Browser Automation](browser-automation.md)
-- [Browser Automation Companion](browser-automation-companion.md)
-- [Channel Setup](channel-setup.md)
-- [Tool Surface](tool-surface.md)
-- [Runtime Experiment](runtime-experiment.md)
-- [Runtime Capability](runtime-capability.md)
-- [Local Product Control Plane](local-product-control-plane.md)
-- [Web UI](web-ui.md)
-- [Prompt And Personality](prompt-and-personality.md)
-- [Background Tasks](background-tasks.md)
-- [Skills Discovery](skills-discovery.md)
-- [Personalization](personalization.md)
-- [Memory Profiles](memory-profiles.md)
-- [Memory Retrieval](memory-retrieval.md)
-- [Runtime-Self Continuity](runtime-self-continuity.md)
-- [Session Recall](session-recall.md)
-- [Shell Completion](shell-completion.md)
+## What Lives Here
 
-## Notes
+Product specs describe **what** the product does from the user's perspective,
+not implementation internals, backlog staging, or private productization notes.
 
-- `Installation`, `Onboarding`, `One-Shot Ask`, `Doctor`, `Browser Automation`, `Tool Surface`, `Channel Setup`, and `Session Recall` define the shipped first-run and support journey for the current MVP.
-- `Runtime Experiment` defines the shipped local experiment-record surface layered on top of runtime snapshot and restore artifacts.
-- `Runtime Capability` defines the shipped local capability-candidate review surface layered on top of runtime experiment artifacts.
-- `Local Product Control Plane` defines the shared localhost-only product substrate that future HTTP and Web UI surfaces must consume instead of inventing a second runtime.
-- `Background Tasks`, `Skills Discovery`, and `Memory Retrieval` define the next operator-facing productization surfaces that should be built on top of already-shipped runtime substrate.
-- `Memory Profiles`, `Memory Retrieval`, and `Runtime-Self Continuity` together define the public continuity boundary: bounded advisory memory, explicit retrieval, and strict runtime-self identity separation.
-- `Personalization` defines the shipped optional operator-preference capture surface layered on top of the advisory session-profile lane.
-- `Browser Automation Companion` and `Web UI` remain expectation-setting specs for the next user-facing surfaces. They should not be documented as generally available before the implementation exists.
+Preview-only, future-facing, and internal productization specs are no longer
+mirrored in the OSS repository by default. This directory stays focused on
+shipped or near-shipped public journeys that still need a repository-native
+source contract.
 
-Template for new specs:
+## Route By Audience
 
-```markdown
-# [Feature Name]
+| If you are trying to... | Start here | Why |
+| --- | --- | --- |
+| read the public operator-facing docs first | [`../../site/use-loong/overview.mdx`](../../site/use-loong/overview.mdx) | `site/` is the main reader-facing docs surface |
+| read first-run docs like a public reader | [`../../site/get-started/overview.mdx`](../../site/get-started/overview.mdx) | tutorials and onboarding flows belong there |
+| edit the source-level product contract in the repository | this index | this directory is the source-facing contract map |
+| understand the broader repository docs split | [`../README.md`](../README.md) | it explains the repo-native docs layering |
 
-## User Story
-As a [role], I want [capability] so that [benefit].
+## Source Specs By Operating Area
 
-## Acceptance Criteria
-- [ ] Criterion 1
-- [ ] Criterion 2
+| Area | Source specs | Read them when... |
+| --- | --- | --- |
+| first-run and local success path | [Installation](installation.md), [Onboarding](onboarding.md), [One-Shot Ask](one-shot-ask.md), [Doctor](doctor.md), [Shell Completion](shell-completion.md) | you are editing the base setup and recovery contract |
+| shipped runtime surfaces and operator controls | [Browser Automation](browser-automation.md), [Channel Setup](channel-setup.md), [Tool Surface](tool-surface.md) | you are editing surface-specific setup, controls, or field-level behavior |
+| runtime behavior and continuity | [Prompt And Personality](prompt-and-personality.md), [Memory Profiles](memory-profiles.md) | you are editing day-to-day operator behavior, tone, or continuity rules |
 
-## Out of Scope
-- Item 1
-```
+## Public Contract Notes
+
+- `Installation`, `Onboarding`, `One-Shot Ask`, `Doctor`, `Browser Automation`,
+  `Tool Surface`, and `Channel Setup` define the shipped first-run and support
+  journey for the current MVP.
+- `Prompt And Personality`, `Memory Profiles`, and `Shell Completion` remain
+  public because they affect the current operator-facing setup and runtime
+  experience directly.
+- Future browser companion, Web UI, task UX, discovery UX, retrieval UX, and
+  control-plane productization specs stay out of this repository index until
+  they are ready to become public contracts.
+
+## Do Not Put Here By Default
+
+- new walkthrough-style onboarding, recipes, or playbooks that belong in
+  `site/`
+- preview-only productization packages, backlog specs, or longer-horizon notes
+- duplicate mirrors of Mintlify navigation pages
+- internal planning bundles that should live outside the OSS docs flow

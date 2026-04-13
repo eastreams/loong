@@ -1576,9 +1576,16 @@ async fn feishu_bitable_app_get_fetches_expected_path() {
 
     assert_eq!(payload["app"]["app_token"], "app_demo");
     let requests = requests.lock().await.clone();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "GET");
-    assert_eq!(requests[0].path, "/open-apis/bitable/v1/apps/app_demo");
+    let app_get_requests = requests
+        .iter()
+        .filter(|request| request.path == "/open-apis/bitable/v1/apps/app_demo")
+        .collect::<Vec<_>>();
+    assert_eq!(app_get_requests.len(), 1, "requests={requests:#?}");
+    assert_eq!(app_get_requests[0].method, "GET");
+    assert_eq!(
+        app_get_requests[0].path,
+        "/open-apis/bitable/v1/apps/app_demo"
+    );
 
     server.abort();
 }

@@ -1,7 +1,7 @@
 # Shell Completion
 
 ## User Story
-As a LoongClaw user on bash, zsh, fish, powershell, or elvish,
+As a Loong user on bash, zsh, fish, powershell, or elvish,
 I want to generate a shell completion script so that I can
 tab-complete subcommands and flags without memorizing them.
 

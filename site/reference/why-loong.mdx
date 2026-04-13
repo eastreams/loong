@@ -1,0 +1,123 @@
+---
+title: Why Loong
+description: Why Loong exists, what stance it takes, and what kind of runtime it is trying to become.
+---
+
+# Why Loong
+
+This page exists so the project's "why" does not stay split across slogans,
+README fragments, and builder-facing design docs.
+
+Loong starts from assistant capabilities, but it is not meant to end as a
+thin model wrapper or a terminal-only demo. The project is being shaped as a
+governed runtime base that teams can actually run first, then keep
+extending across providers, tools, memory, channels, policy, and longer-lived
+workflows as real work becomes more demanding.
+
+## Use This Page To Answer
+
+| Question | Start here |
+| --- | --- |
+| Why does Loong exist beyond "yet another assistant"? | [The Core Bet](#the-core-bet) |
+| What kind of product stance shapes the public surface? | [Product Stance](#product-stance) |
+| What is Loong explicitly not trying to be? | [What Loong Is Not](#what-loong-is-not) |
+| How does that philosophy already show up in the product today? | [How The Why Shows Up Today](#how-the-why-shows-up-today) |
+| Where should I read the deeper supporting material? | [Continue Reading](#continue-reading) |
+
+## The Core Bet
+
+Loong is built around one core bet:
+
+- useful assistant behavior should be runnable before teams are forced to learn
+  the entire architecture
+- the runtime behind that assistant should stay truthful, inspectable, and
+  governable instead of hiding its real boundaries
+- the same governed runtime should be able to grow from a local operator path
+  into richer delivery surfaces and more capable workflow systems over time
+
+That is why the project starts with `onboard`, `ask`, `chat`, and `doctor`, but
+does not stop there. The short path matters because first value matters. The
+deeper runtime model matters because teams eventually need something they can
+inspect, operate, extend, and trust.
+
+## Product Stance
+
+Several product choices follow from that bet:
+
+- **First value fast**: new users should reach a useful result before they are
+  asked to read source-level architecture material.
+- **Truthful public contracts**: local assistant flow, gateway ownership,
+  runtime-backed reply surfaces, and outbound-only delivery should not be
+  flattened into one vague support claim.
+- **Governed capability exposure**: tools, approvals, audit, memory behavior,
+  and policy stay in the real runtime path instead of being bolted on as
+  afterthoughts.
+- **Progressive disclosure**: common paths stay short, while deeper config,
+  rollout, and architecture material moves into docs rather than the README.
+- **Extensibility through seams**: providers, channels, tools, memory, and
+  policy should be visible extension boundaries rather than accidental coupling
+  points.
+- **Longer-horizon direction**: the project should be able to grow from
+  isolated assistant turns toward compound task execution, workflow
+  construction, and closed-loop improvement.
+
+## What Loong Is Not
+
+This page is also here to keep the public story honest by contrast.
+
+Loong is not trying to be:
+
+- a generic framework that asks teams to assemble everything from primitives
+  before they can run anything useful
+- a thin API wrapper whose product story ends once one prompt succeeds
+- a terminal-only toy that hides most runtime concerns until later
+- a bag of adapters marketed as if every surface had the same runtime contract
+- an autonomy-first black box that treats governance, approvals, and audit as
+  optional polish
+
+Those lines matter because the project is trying to balance two things at once:
+usable assistant behavior now, and a runtime base that can survive deeper team
+use later.
+
+## How The Why Shows Up Today
+
+The public shape already reflects that stance in concrete ways:
+
+- **Runnable operator path**: `loong onboard`, `loong ask`, `loong chat`, and
+  `loong doctor` are treated as the shortest supported success path.
+- **Operator-visible runtime surface**: commands such as `audit`, `tasks`,
+  `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are
+  part of the public product rather than hidden internal machinery.
+- **Explicit runtime boundaries**: provider selection, tools, memory, delivery
+  surfaces, approvals, policy, and audit stay behind named runtime contracts.
+- **Docs split by depth**: the README stays compact, Mintlify carries the main
+  reader path, and repo `docs/` keeps the deeper source-facing public material.
+
+That is the practical meaning of the project stance: users can start from a
+short path, but the system they are stepping into is already structured as a
+broader governed runtime.
+
+## Why This Matters For The Roadmap
+
+The roadmap should be read through this lens:
+
+- near-term work should make the current operator path cleaner, more truthful,
+  and easier to run
+- expansion work should deepen governed surfaces, not create shadow systems
+- future workflow and self-improvement ambitions should build on the same
+  runtime model rather than replacing it with a separate stack
+
+In other words, the "why" is not separate from the implementation strategy. It
+is the reason the project cares about boundaries, contracts, docs placement,
+policy, and operator-visible runtime surfaces in the first place.
+
+## Continue Reading
+
+- Go to [Roadmap And Product](/reference/roadmap-and-product) for the current
+  public roadmap and product-principles summary.
+- Go to [Use Loong](/use-loong/overview) for the current operator-facing
+  runtime surface.
+- Go to [Build On Loong](/build-on-loong/overview) for the builder and
+  architecture-facing extension contract.
+- Go to the repository-native [Core Beliefs](https://github.com/eastreams/loong/blob/dev/docs/design-docs/core-beliefs.md)
+  when you want the deeper engineering principles that support this page.

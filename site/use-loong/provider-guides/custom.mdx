@@ -1,0 +1,69 @@
+---
+title: Custom
+description: Configure the Custom provider profile in Loong.
+---
+
+# Custom
+
+Use this when the real endpoint is OpenAI-compatible but does not map cleanly to one of Loong's built-in provider families.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `custom` |
+| Provider group | Gateway And Compatibility Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | CUSTOM_PROVIDER_API_KEY |
+| Aliases | `openai_custom`, `custom_openai` |
+| Default base URL | `https://<openai-compatible-host>/v1` |
+| Request endpoint | `https://<openai-compatible-host>/v1/chat/completions` |
+| Models endpoint | `https://<openai-compatible-host>/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "custom"
+
+[providers.custom]
+kind = "custom"
+base_url = "https://<openai-compatible-host>/v1"
+api_key = { env = "CUSTOM_PROVIDER_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `CUSTOM_PROVIDER_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://<openai-compatible-host>/v1/chat/completions` |
+| Primary model-catalog route | `https://<openai-compatible-host>/v1/models` |
+
+## Operator Notes
+
+- custom requires tenant-scoped base_url configuration: replace `<openai-compatible-host>` in `provider.base_url` with your real OpenAI-compatible endpoint root such as `https://api.example.com/v1`; current template: `https://<openai-compatible-host>/v1`.
+- Alternative auth path: add `Authorization` / `X-API-Key` in `provider.headers`.
+- Use `provider.headers` only when the upstream auth contract does not fit the default bearer-token path.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.
