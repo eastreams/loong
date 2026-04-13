@@ -9805,6 +9805,107 @@ mod tests {
 
     #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn feishu_messages_send_tool_uses_tenant_token_and_card_mode() {
+        use std::fs;
+
+        use axum::{
+            Json, Router,
+            extract::{Request, State},
+            routing::post,
+        };
+
+        let temp_dir = unique_feishu_tool_temp_dir("messages-send-card");
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let requests =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<FeishuToolMockRequest>::new()));
+        let state = FeishuToolMockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                post({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "tenant_access_token": "t-token-send-card"
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/im/v1/messages",
+                post({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "data": {
+                                    "message_id": "om_sent_card_1",
+                                    "root_id": "om_sent_card_1"
+                                }
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, server) = spawn_feishu_tool_mock_server(router).await;
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-send-card",
+            &["offline_access", "im:message:send_as_bot"],
+        );
+        let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
+
+        let outcome = execute_tool_core_with_config(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "feishu.messages.send".to_owned(),
+                payload: serde_json::json!({
+                    "receive_id": "oc_demo",
+                    "text": "ship it",
+                    "as_card": true
+                }),
+            },
+            &config,
+        )
+        .expect("feishu messages send tool should succeed in card mode");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["delivery"]["message_id"], "om_sent_card_1");
+        assert_eq!(outcome.payload["delivery"]["mode"], "send");
+        assert_eq!(outcome.payload["delivery"]["msg_type"], "interactive");
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].path, "/open-apis/im/v1/messages");
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer t-token-send-card")
+        );
+        let request_body = requests[1].body.as_str();
+        assert!(request_body.contains("\"msg_type\":\"interactive\""));
+        assert!(request_body.contains("\\\"schema\\\":\\\"2.0\\\""));
+        assert!(request_body.contains("\\\"tag\\\":\\\"markdown\\\""));
+        assert!(request_body.contains("\\\"content\\\":\\\"ship it\\\""));
+        assert!(
+            !request_body.contains("\\\"card\\\":"),
+            "interactive send should serialize the card directly without a card wrapper"
+        );
+
+        server.abort();
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn feishu_messages_send_tool_defaults_receive_id_and_account_from_internal_ingress() {
         use std::fs;
 
@@ -10832,9 +10933,15 @@ mod tests {
             requests[1].authorization.as_deref(),
             Some("Bearer t-token-reply")
         );
-        assert!(requests[1].body.contains("\"msg_type\":\"interactive\""));
-        assert!(requests[1].body.contains("\\\"tag\\\":\\\"markdown\\\""));
-        assert!(requests[1].body.contains("\\\"content\\\":\\\"on it\\\""));
+        let request_body = requests[1].body.as_str();
+        assert!(request_body.contains("\"msg_type\":\"interactive\""));
+        assert!(request_body.contains("\\\"schema\\\":\\\"2.0\\\""));
+        assert!(request_body.contains("\\\"tag\\\":\\\"markdown\\\""));
+        assert!(request_body.contains("\\\"content\\\":\\\"on it\\\""));
+        assert!(
+            !request_body.contains("\\\"card\\\":"),
+            "interactive reply should serialize the card directly without a card wrapper"
+        );
 
         server.abort();
     }
