@@ -71,7 +71,7 @@ use super::analytics::{
 use super::announce::DelegateAnnounceSettings;
 #[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
-use super::context_engine::AssembledConversationContext;
+use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
     enqueue_delegate_result_announce_with_memory_config,
@@ -100,8 +100,7 @@ use super::plan_verifier::{
     PlanVerificationReport, verify_output,
 };
 use super::runtime::{
-    AsyncDelegateSpawnRequest, BoxedDefaultConversationRuntime, ConversationRuntime,
-    SessionContext, load_default_conversation_runtime,
+    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
 };
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::safe_lane_failure::{
@@ -115,8 +114,7 @@ use super::session_history::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentOwnerKind,
-    ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
 use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
 use super::trust_projection::{
@@ -126,6 +124,10 @@ use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
 };
+
+type DefaultTurnRuntime = DefaultConversationRuntime<Box<dyn ConversationContextEngine>>;
+#[cfg(test)]
+use super::turn_checkpoint::TurnCheckpointResultKind;
 use super::turn_checkpoint::{
     ContextCompactionOutcome, TurnCheckpointDiagnostics, TurnCheckpointFailure,
     TurnCheckpointFailureStep, TurnCheckpointFinalizationProgress, TurnCheckpointIdentity,
@@ -1040,8 +1042,10 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.compact_session_with_runtime(config, session_id, &runtime, binding)
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
+        self.compact_session_with_runtime(config, session_id, &runtime, effective_binding)
             .await
     }
 
@@ -1051,8 +1055,9 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
 
         self.compact_session_with_runtime(config, session_id, &runtime, production_binding)
             .await
@@ -1151,7 +1156,9 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id(session_id);
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             &address,
@@ -1159,7 +1166,7 @@ impl ConversationTurnCoordinator {
             error_mode,
             &runtime,
             &acp_options,
-            binding,
+            effective_binding,
             ingress,
         )
         .await
@@ -1192,9 +1199,16 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.repair_turn_checkpoint_tail_with_runtime(config, session_id, &runtime, binding)
-            .await
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
+        self.repair_turn_checkpoint_tail_with_runtime(
+            config,
+            session_id,
+            &runtime,
+            effective_binding,
+        )
+        .await
     }
 
     pub async fn repair_production_turn_checkpoint_tail(
@@ -1203,8 +1217,9 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
 
         self.repair_turn_checkpoint_tail_with_runtime(
             config,
@@ -1221,13 +1236,15 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config,
             session_id,
             config.memory.sliding_window,
             &runtime,
-            binding,
+            effective_binding,
         )
         .await
     }
@@ -1238,10 +1255,17 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-
-        self.load_turn_checkpoint_diagnostics(config, session_id, production_binding)
-            .await
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
+        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
+            config,
+            session_id,
+            config.memory.sliding_window,
+            &runtime,
+            production_binding,
+        )
+        .await
     }
 
     pub(crate) async fn load_turn_checkpoint_diagnostics_with_limit(
@@ -1251,9 +1275,15 @@ impl ConversationTurnCoordinator {
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config, session_id, limit, &runtime, binding,
+            config,
+            session_id,
+            limit,
+            &runtime,
+            effective_binding,
         )
         .await
     }
@@ -1265,12 +1295,14 @@ impl ConversationTurnCoordinator {
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-
-        self.load_turn_checkpoint_diagnostics_with_limit(
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
+        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config,
             session_id,
             limit,
+            &runtime,
             production_binding,
         )
         .await
@@ -1282,13 +1314,15 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
             session_id,
             config.memory.sliding_window,
             &runtime,
-            binding,
+            effective_binding,
         )
         .await
     }
@@ -1299,8 +1333,9 @@ impl ConversationTurnCoordinator {
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
 
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
@@ -1319,9 +1354,15 @@ impl ConversationTurnCoordinator {
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config, session_id, limit, &runtime, binding,
+            config,
+            session_id,
+            limit,
+            &runtime,
+            effective_binding,
         )
         .await
     }
@@ -1333,8 +1374,9 @@ impl ConversationTurnCoordinator {
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
 
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
@@ -1418,7 +1460,9 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
@@ -1426,7 +1470,7 @@ impl ConversationTurnCoordinator {
             error_mode,
             &runtime,
             acp_options,
-            binding,
+            effective_binding,
             ingress,
         )
         .await
@@ -1441,7 +1485,9 @@ impl ConversationTurnCoordinator {
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
@@ -1449,7 +1495,7 @@ impl ConversationTurnCoordinator {
             error_mode,
             &runtime,
             acp_options,
-            binding,
+            effective_binding,
             None,
         )
         .await
@@ -1492,7 +1538,10 @@ impl ConversationTurnCoordinator {
         observer: Option<ConversationTurnObserverHandle>,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, observer.as_ref())?;
+        let prepared =
+            Self::build_default_runtime_with_binding(config, binding, observer.as_ref())?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
@@ -1500,7 +1549,7 @@ impl ConversationTurnCoordinator {
             error_mode,
             &runtime,
             acp_options,
-            binding,
+            effective_binding,
             ingress,
             observer,
             acp_manager,
@@ -1565,16 +1614,13 @@ impl ConversationTurnCoordinator {
         observer: Option<ConversationTurnObserverHandle>,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
-        let observer_ref = observer.as_ref();
-        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
-
         self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
             error_mode,
             acp_options,
-            production_binding,
+            require_production_kernel_binding(binding, observer.as_ref())?,
             None,
             observer,
             acp_manager,
@@ -1585,11 +1631,11 @@ impl ConversationTurnCoordinator {
     fn build_default_runtime_or_observe_failure(
         config: &LoongConfig,
         observer: Option<&ConversationTurnObserverHandle>,
-    ) -> CliResult<BoxedDefaultConversationRuntime> {
+    ) -> CliResult<DefaultTurnRuntime> {
         // Keep runtime-construction failures visible to the turn observer so
         // operator surfaces receive the same failed phase signal as execution
         // errors later in the turn pipeline.
-        let runtime_result = load_default_conversation_runtime(config);
+        let runtime_result = DefaultConversationRuntime::from_config_or_env(config);
         let runtime = match runtime_result {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -1599,6 +1645,28 @@ impl ConversationTurnCoordinator {
             }
         };
         Ok(runtime)
+    }
+
+    fn build_default_runtime_with_binding<'a>(
+        config: &LoongClawConfig,
+        binding: ConversationRuntimeBinding<'a>,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<(DefaultTurnRuntime, ConversationRuntimeBinding<'a>)> {
+        let runtime = Self::build_default_runtime_or_observe_failure(config, observer)?;
+        let effective_binding = binding;
+
+        Ok((runtime, effective_binding))
+    }
+
+    fn build_default_runtime_with_production_binding<'a>(
+        config: &LoongClawConfig,
+        binding: ConversationRuntimeBinding<'a>,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<(DefaultTurnRuntime, ConversationRuntimeBinding<'a>)> {
+        let production_binding = require_production_kernel_binding(binding, observer)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, observer)?;
+
+        Ok((runtime, production_binding))
     }
 
     pub(crate) async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
@@ -2468,8 +2536,7 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
-        let observer_ref = observer.as_ref();
-        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
+        let production_binding = require_production_kernel_binding(binding, observer.as_ref())?;
 
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
             config,
@@ -3096,8 +3163,7 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
     if let Some(observer) = observer
         && provider_turn_observer_supports_streaming(config, Some(observer))
     {
-        let request_started_at = std::time::Instant::now();
-        let on_token = build_observer_streaming_token_callback(observer, request_started_at);
+        let on_token = build_observer_streaming_token_callback(observer);
         return runtime
             .request_turn_streaming_with_retry_progress(
                 config,
@@ -4844,7 +4910,6 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                     let execution_policy = DelegateChildExecutionPolicy {
                         isolation: delegate_policy.isolation,
                         profile: delegate_policy.profile,
-                        owner_kind: None,
                         timeout_seconds: delegate_policy.timeout_seconds,
                         allow_shell_in_child: delegate_policy.allow_shell_in_child,
                         child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -4925,7 +4990,6 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
-        ConstrainedSubagentOwnerKind::AsyncDelegateSpawner,
         binding,
     )
     .await?;
@@ -4966,7 +5030,6 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
-        ConstrainedSubagentOwnerKind::BackgroundTaskHost,
         binding,
     )
     .await?;
@@ -5025,7 +5088,6 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     session_context: &SessionContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
-    owner_kind: ConstrainedSubagentOwnerKind,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
@@ -5054,7 +5116,6 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                 let execution_policy = DelegateChildExecutionPolicy {
                     isolation: delegate_policy.isolation,
                     profile: delegate_policy.profile,
-                    owner_kind: Some(owner_kind),
                     timeout_seconds: delegate_policy.timeout_seconds,
                     allow_shell_in_child: delegate_policy.allow_shell_in_child,
                     child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -7321,7 +7382,6 @@ mod tests {
         assert_eq!(token_events.len(), 1);
         assert_eq!(token_events[0].event_type, "text_delta");
         assert_eq!(token_events[0].delta.text.as_deref(), Some("draft"));
-        assert!(token_events[0].elapsed_ms.is_some());
     }
 
     #[tokio::test]
@@ -8040,7 +8100,6 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
-            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -8173,7 +8232,6 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
-            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
