@@ -135,7 +135,10 @@ fn bootstrap_kernel_context_with_audit_sink(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config = crate::memory::runtime_config::get_memory_runtime_config().clone();
+        let mem_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
+                &config.memory,
+            );
         kernel
             .register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(mem_config));
         kernel
