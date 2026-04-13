@@ -156,7 +156,6 @@ impl<'a> RuntimeTurnExecutionService<'a> {
         request: &'a AgentTurnRequest,
         options: TurnExecutionOptions<'a>,
     ) -> Pin<Box<dyn Future<Output = CliResult<AgentTurnResult>> + Send + 'a>> {
-        let runtime = AgentRuntime::new();
         let event_sink = options.event_sink;
         let observer = options.observer;
         let ingress = options.ingress;
@@ -165,18 +164,97 @@ impl<'a> RuntimeTurnExecutionService<'a> {
         let acp_manager = self.acp_manager.clone();
 
         Box::pin(async move {
-            runtime
-                .run_turn_with_runtime_and_context_and_manager(
-                    self.runtime,
-                    request,
+            if request.message.trim().is_empty() {
+                return Err("agent runtime message must not be empty".to_owned());
+            }
+
+            let runtime = self.runtime;
+            let message = request.message.as_str();
+            let turn_address = resolved_session_address(runtime, request);
+            let explicit_acp_request = runtime.explicit_acp_request
+                || request.acp
+                || matches!(request.turn_mode, AgentTurnMode::Acp);
+
+            if explicit_acp_request {
+                let turn_config = load_runtime_turn_config(runtime)?;
+                let effective_acp_manager = match acp_manager {
+                    Some(manager) => manager,
+                    None => crate::acp::shared_acp_session_manager(&turn_config)?,
+                };
+                let acp_options = acp_turn_options_from_runtime(runtime, event_sink, request)
+                    .with_provenance(provenance);
+                let execution = crate::acp::execute_acp_conversation_turn_for_address_with_manager(
+                    &turn_config,
+                    &turn_address,
+                    message,
+                    &acp_options,
+                    effective_acp_manager,
+                )
+                .await?;
+                let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
+                let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
+
+                return match execution.outcome {
+                    crate::acp::AcpConversationTurnExecutionOutcome::Succeeded(success) => {
+                        Ok(AgentTurnResult {
+                            session_id: runtime.session_id.clone(),
+                            output_text: success.result.output_text,
+                            turn_mode: request.turn_mode,
+                            governed_session_mode: ConversationRuntimeBinding::kernel(
+                                &runtime.kernel_ctx,
+                            )
+                            .session_mode(),
+                            state: Some(acp_session_state_label(success.result.state).to_owned()),
+                            stop_reason: success
+                                .result
+                                .stop_reason
+                                .map(acp_turn_stop_reason_label)
+                                .map(ToOwned::to_owned),
+                            usage: success.result.usage,
+                            event_count: success.runtime_events.len(),
+                            prompt_assembly,
+                            prompt_cache,
+                        })
+                    }
+                    crate::acp::AcpConversationTurnExecutionOutcome::Failed(failure) => {
+                        Err(failure.error)
+                    }
+                };
+            }
+
+            let (effective_ingress, effective_provenance) =
+                effective_turn_context(ingress, provenance);
+            let output_text =
+                crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_and_acp_manager(
+                    runtime,
+                    &turn_address,
+                    message,
                     event_sink,
-                    observer,
-                    ingress,
-                    provenance,
+                    request.live_surface_enabled,
+                    Some(&request.metadata),
+                    effective_ingress,
+                    effective_provenance,
                     provider_error_mode,
+                    observer,
                     acp_manager,
                 )
-                .await
+                .await?;
+            let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
+            let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
+
+            Ok(AgentTurnResult {
+                session_id: runtime.session_id.clone(),
+                output_text,
+                turn_mode: request.turn_mode,
+                governed_session_mode: ConversationRuntimeBinding::kernel(&runtime.kernel_ctx)
+                    .session_mode(),
+                state: None,
+                stop_reason: None,
+                usage: None,
+                event_count: 0,
+                prompt_assembly,
+                prompt_cache,
+            })
         })
     }
 }
@@ -298,106 +376,6 @@ impl AgentRuntime {
         turn_service
             .execute(session_hint, request, turn_options)
             .await
-    }
-
-    async fn run_turn_with_runtime_and_context_and_manager(
-        &self,
-        runtime: &crate::chat::CliTurnRuntime,
-        request: &AgentTurnRequest,
-        event_sink: Option<&dyn AcpTurnEventSink>,
-        observer: Option<crate::conversation::ConversationTurnObserverHandle>,
-        ingress: Option<&ConversationIngressContext>,
-        provenance: AcpTurnProvenance<'_>,
-        provider_error_mode: crate::conversation::ProviderErrorMode,
-        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
-    ) -> CliResult<AgentTurnResult> {
-        if request.message.trim().is_empty() {
-            return Err("agent runtime message must not be empty".to_owned());
-        }
-        let message = request.message.as_str();
-
-        let turn_address = resolved_session_address(runtime, request);
-        let explicit_acp_request = runtime.explicit_acp_request
-            || request.acp
-            || matches!(request.turn_mode, AgentTurnMode::Acp);
-
-        if explicit_acp_request {
-            // ACP turns reuse the same runtime shell/session identity but swap
-            // the execution lane entirely: they reload provider-facing config,
-            // resolve ACP routing metadata, and bypass the normal provider
-            // coordinator path below.
-            let turn_config = load_runtime_turn_config(runtime)?;
-            let acp_manager = match acp_manager {
-                Some(manager) => manager,
-                None => crate::acp::shared_acp_session_manager(&turn_config)?,
-            };
-            let acp_options = acp_turn_options_from_runtime(runtime, event_sink, request)
-                .with_provenance(provenance);
-            let execution = crate::acp::execute_acp_conversation_turn_for_address_with_manager(
-                &turn_config,
-                &turn_address,
-                message,
-                &acp_options,
-                acp_manager,
-            )
-            .await?;
-            let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
-            let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
-            return match execution.outcome {
-                crate::acp::AcpConversationTurnExecutionOutcome::Succeeded(success) => {
-                    Ok(AgentTurnResult {
-                        session_id: runtime.session_id.clone(),
-                        output_text: success.result.output_text,
-                        turn_mode: request.turn_mode,
-                        governed_session_mode: runtime.conversation_binding().session_mode(),
-                        state: Some(acp_session_state_label(success.result.state).to_owned()),
-                        stop_reason: success
-                            .result
-                            .stop_reason
-                            .map(acp_turn_stop_reason_label)
-                            .map(ToOwned::to_owned),
-                        usage: success.result.usage,
-                        event_count: success.runtime_events.len(),
-                        prompt_assembly,
-                        prompt_cache,
-                    })
-                }
-                crate::acp::AcpConversationTurnExecutionOutcome::Failed(failure) => {
-                    Err(failure.error)
-                }
-            };
-        }
-
-        let (effective_ingress, effective_provenance) = effective_turn_context(ingress, provenance);
-        let turn_outcome = crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
-            runtime,
-            &turn_address,
-            message,
-            event_sink,
-            request.live_surface_enabled,
-            Some(&request.metadata),
-            effective_ingress,
-            effective_provenance,
-            provider_error_mode,
-            observer,
-            acp_manager,
-        )
-        .await?;
-        let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
-        let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
-
-        Ok(AgentTurnResult {
-            session_id: runtime.session_id.clone(),
-            output_text: turn_outcome.reply,
-            turn_mode: request.turn_mode,
-            governed_session_mode: runtime.conversation_binding().session_mode(),
-            state: None,
-            stop_reason: None,
-            usage: turn_outcome.usage,
-            event_count: 0,
-            prompt_assembly,
-            prompt_cache,
-        })
     }
 
     pub async fn resume_turn(
