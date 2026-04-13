@@ -20,7 +20,7 @@ release review. It is not part of the primary public release trail.
   repository's current architecture boundaries
 
 ## Summary
-- Generated at: 2026-04-13T16:15:05Z
+- Generated at: 2026-04-13T16:48:53Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/support/architecture-drift-2026-03.md
 - Hotspots tracked: 14
