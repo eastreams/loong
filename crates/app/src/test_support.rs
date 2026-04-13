@@ -107,8 +107,8 @@ fn set_scoped_env_depth(value: usize) {
 
 #[cfg(test)]
 pub struct ScopedLoongClawHome {
-    env: ScopedEnv,
-    temp_home: tempfile::TempDir,
+    _temp_home: Option<tempfile::TempDir>,
+    path: PathBuf,
 }
 
 #[cfg(test)]
@@ -118,22 +118,30 @@ impl ScopedLoongClawHome {
             .prefix(prefix)
             .tempdir()
             .expect("create scoped loongclaw home");
-        let mut env = ScopedEnv::new();
-        env.set("LOONG_HOME", temp_home.path());
+        let path = temp_home.path().to_path_buf();
+        crate::config::push_default_loongclaw_home_override_for_tests(path.clone());
         crate::tools::reset_runtime_home_state_for_tests();
-        Self { env, temp_home }
+        Self {
+            _temp_home: Some(temp_home),
+            path,
+        }
+    }
+
+    pub fn from_existing(path: PathBuf) -> Self {
+        crate::config::push_default_loongclaw_home_override_for_tests(path.clone());
+        crate::tools::reset_runtime_home_state_for_tests();
+        Self {
+            _temp_home: None,
+            path,
+        }
     }
 
     pub fn path(&self) -> &Path {
-        self.temp_home.path()
+        &self.path
     }
 
     pub fn join(&self, relative: impl AsRef<Path>) -> PathBuf {
         self.path().join(relative)
-    }
-
-    pub fn env(&self) -> &ScopedEnv {
-        &self.env
     }
 }
 
@@ -141,6 +149,7 @@ impl ScopedLoongClawHome {
 impl Drop for ScopedLoongClawHome {
     fn drop(&mut self) {
         crate::tools::reset_runtime_home_state_for_tests();
+        crate::config::pop_default_loongclaw_home_override_for_tests();
     }
 }
 

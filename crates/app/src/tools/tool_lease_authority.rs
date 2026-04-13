@@ -422,14 +422,18 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Barrier;
 
-        let _home = scoped_tool_lease_home("loongclaw-tool-lease-parallel-home");
+        let home = scoped_tool_lease_home("loongclaw-tool-lease-parallel-home");
+        let home_path = home.path().to_path_buf();
         let thread_count = 8;
         let barrier = Arc::new(Barrier::new(thread_count));
         let mut handles = Vec::new();
 
         for _ in 0..thread_count {
             let barrier = Arc::clone(&barrier);
+            let home_path = home_path.clone();
             let handle = std::thread::spawn(move || {
+                let _thread_home =
+                    crate::test_support::ScopedLoongClawHome::from_existing(home_path);
                 let payload = serde_json::Map::new();
                 barrier.wait();
                 issue_tool_lease("file.read", &payload)
@@ -447,6 +451,8 @@ mod tests {
             read_tool_lease_secret_file(secret_path.as_path()).expect("persisted secret");
 
         assert!(persisted_secret.is_some());
+
+        drop(home);
     }
 
     #[test]

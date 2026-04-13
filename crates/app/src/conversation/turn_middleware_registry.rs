@@ -271,7 +271,7 @@ mod tests {
     fn registry_test_guard() -> MutexGuard<'static, ()> {
         super::super::context_engine_registry::conversation_selector_env_lock()
             .lock()
-            .expect("registry test lock")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     struct StaticIdTurnMiddleware {

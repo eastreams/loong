@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::{
     collections::BTreeMap,
     env,
@@ -537,7 +539,38 @@ pub fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static DEFAULT_LOONGCLAW_HOME_OVERRIDE: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn default_loongclaw_home_override_for_tests() -> Option<PathBuf> {
+    DEFAULT_LOONGCLAW_HOME_OVERRIDE.with(|stack| stack.borrow().last().cloned())
+}
+
+#[cfg(test)]
+pub(crate) fn push_default_loongclaw_home_override_for_tests(path: PathBuf) {
+    DEFAULT_LOONGCLAW_HOME_OVERRIDE.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        stack.push(path);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn pop_default_loongclaw_home_override_for_tests() {
+    DEFAULT_LOONGCLAW_HOME_OVERRIDE.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        stack.pop();
+    });
+}
+
 pub(super) fn default_loongclaw_home() -> PathBuf {
+    #[cfg(test)]
+    if let Some(override_path) = default_loongclaw_home_override_for_tests() {
+        return override_path;
+    }
+
     get_loongclaw_home()
 }
 
