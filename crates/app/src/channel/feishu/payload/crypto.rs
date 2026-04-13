@@ -1,6 +1,6 @@
 use aes::Aes256;
 use base64::Engine;
-use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use cbc::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -48,7 +48,7 @@ fn decrypt_feishu_event_payload(encrypted_payload: &str, encrypt_key: &str) -> C
     let key = Sha256::digest(encrypt_key.as_bytes());
     let decrypted = cbc::Decryptor::<Aes256>::new_from_slices(&key, iv)
         .map_err(|error| format!("initialize feishu decryptor failed: {error}"))?
-        .decrypt_padded_mut::<Pkcs7>(&mut cipher_text)
+        .decrypt_padded::<Pkcs7>(&mut cipher_text)
         .map_err(|error| format!("decrypt feishu payload failed: {error}"))?;
 
     serde_json::from_slice::<Value>(decrypted)
