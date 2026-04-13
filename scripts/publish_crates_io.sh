@@ -5,13 +5,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 PACKAGES=(
-  loongclaw-contracts
-  loongclaw-protocol
-  loongclaw-kernel
-  loongclaw-spec
-  loongclaw-bench
-  loongclaw-app
-  loongclaw
+  loong-contracts
+  loong-protocol
+  loong-kernel
+  loong-spec
+  loong-bench
+  loong-app
+  loong
 )
 
 mode="dry-run"
@@ -28,7 +28,7 @@ Real publish mode:
   scripts/publish_crates_io.sh --publish
 
 Resume from a package in the publish chain:
-  scripts/publish_crates_io.sh --from loongclaw-spec
+  scripts/publish_crates_io.sh --from loong-spec
 EOF
 }
 

@@ -1,0 +1,64 @@
+---
+title: Signal
+description: Configure the Signal channel surface in Loong.
+---
+
+# Signal
+
+This is a shipped config-backed outbound surface. Signal serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `signal` |
+| Config key | `signal` |
+| Implementation status | `config_backed` |
+| Transport | `signal_cli_rest_api` |
+| Aliases | `signal-cli` |
+| Default send target kind | `address` |
+
+## Minimal Config
+
+```toml
+[signal]
+enabled = true
+service_url = "http://127.0.0.1:8080"
+service_url_env = "SIGNAL_SERVICE_URL"
+account_env = "SIGNAL_ACCOUNT"
+```
+
+## Smoke Test
+
+```bash
+loong signal-send --target "+15551234567" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| direct message send | `signal-send` | Usage: loong signal-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| linked-device listener | `signal-serve` | signal serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `signal.enabled`<br/>`signal.accounts.<account>.enabled` | none | none |
+| service url | `signal.service_url`<br/>`signal.accounts.<account>.service_url` | `signal.service_url_env`<br/>`signal.accounts.<account>.service_url_env` | `SIGNAL_SERVICE_URL` |
+| account identifier | `signal.account`<br/>`signal.accounts.<account>.account` | `signal.account_env`<br/>`signal.accounts.<account>.account_env` | `SIGNAL_ACCOUNT` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- The default local `signal-cli` bridge URL is private-host traffic, so controlled local bridges usually need `[outbound_http] allow_private_hosts = true`.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

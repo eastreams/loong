@@ -1,6 +1,6 @@
 # External Authoring Quickstart
 
-Use this guide when you want the shortest practical summary of what LoongClaw
+Use this guide when you want the shortest practical summary of what Loong
 expects external authors to build.
 
 ## Read This First
@@ -11,7 +11,7 @@ expects external authors to build.
 
 ## Public Stance
 
-LoongClaw's public SDK is contract-first and artifact-first.
+Loong's public SDK is contract-first and artifact-first.
 
 Do not assume the stable public surface is:
 

@@ -5,6 +5,7 @@
 /*.md @loongclaw-ai/doc-ops
 /**/*.md @loongclaw-ai/doc-ops
 /docs/** @loongclaw-ai/doc-ops
+/site/** @loongclaw-ai/doc-ops
 /.github/ISSUE_TEMPLATE/** @loongclaw-ai/doc-ops
 /.github/PULL_REQUEST_TEMPLATE.md @loongclaw-ai/doc-ops
 /docs/product-specs/** @loongclaw-ai/doc-ops @loongclaw-ai/ux
@@ -29,8 +30,6 @@
 /scripts/test_*.sh @loongclaw-ai/harness
 /skills/update-harness.skill @loongclaw-ai/harness
 /docs/design-docs/harness-engineering.md @loongclaw-ai/doc-ops @loongclaw-ai/harness
-/docs/plans/*audit* @loongclaw-ai/doc-ops @loongclaw-ai/harness @loongclaw-ai/sec-ops
-/docs/plans/*harness* @loongclaw-ai/doc-ops @loongclaw-ai/harness
 
 # Efficiency engineering: memory, budget, and benchmark surfaces
 /.github/workflows/perf-benchmark.yml @loongclaw-ai/harness @loongclaw-ai/efficiency-engineering
@@ -51,10 +50,6 @@
 /scripts/lint_programmatic_pressure_baseline.sh @loongclaw-ai/efficiency-engineering
 /scripts/update_programmatic_pressure_schema_baseline.sh @loongclaw-ai/efficiency-engineering
 /docs/product-specs/memory-profiles.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/efficiency-engineering
-/docs/product-specs/runtime-self-continuity.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/efficiency-engineering
-/docs/plans/*benchmark* @loongclaw-ai/doc-ops @loongclaw-ai/efficiency-engineering
-/docs/plans/*compaction* @loongclaw-ai/doc-ops @loongclaw-ai/efficiency-engineering
-/docs/plans/*memory* @loongclaw-ai/doc-ops @loongclaw-ai/efficiency-engineering
 
 # Release management: release pipeline, artifacts, and install surfaces
 /.github/workflows/enforce-main-to-release.yml @loongclaw-ai/harness @loongclaw-ai/release-managers
@@ -70,8 +65,6 @@
 /scripts/test_release_workflow_hardening.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
 /docs/releases/** @loongclaw-ai/doc-ops @loongclaw-ai/release-managers
 /docs/product-specs/installation.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/release-managers
-/docs/plans/*release* @loongclaw-ai/doc-ops @loongclaw-ai/release-managers
-/docs/plans/*install* @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/release-managers
 
 # Security operations: policy, credentials, and security scans
 /.github/workflows/codeql.yml @loongclaw-ai/harness @loongclaw-ai/sec-ops
@@ -88,7 +81,6 @@
 /examples/policy/** @loongclaw-ai/sec-ops
 /examples/spec/plugin-wasm-security-scan.json @loongclaw-ai/sec-ops
 /docs/SECURITY.md @loongclaw-ai/doc-ops @loongclaw-ai/sec-ops
-/docs/plans/*security* @loongclaw-ai/doc-ops @loongclaw-ai/sec-ops
 
 # UI and UX: presentation, first-run, and user-facing product surfaces
 /assets/** @loongclaw-ai/ui
@@ -105,10 +97,3 @@
 /crates/daemon/src/source_presentation.rs @loongclaw-ai/ux
 /crates/daemon/tests/integration/doctor_feishu.rs @loongclaw-ai/ux
 /crates/daemon/tests/integration/onboard_cli.rs @loongclaw-ai/ux
-/docs/product-specs/web-ui.md @loongclaw-ai/doc-ops @loongclaw-ai/ui @loongclaw-ai/ux
-/docs/plans/*doctor* @loongclaw-ai/doc-ops @loongclaw-ai/ux
-/docs/plans/*first-run* @loongclaw-ai/doc-ops @loongclaw-ai/ux
-/docs/plans/*onboard* @loongclaw-ai/doc-ops @loongclaw-ai/ux
-/docs/plans/*personality* @loongclaw-ai/doc-ops @loongclaw-ai/ux
-/docs/plans/*browser-companion* @loongclaw-ai/doc-ops @loongclaw-ai/ui @loongclaw-ai/ux
-/docs/plans/*browser-preview* @loongclaw-ai/doc-ops @loongclaw-ai/ui @loongclaw-ai/ux

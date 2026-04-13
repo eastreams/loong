@@ -2,13 +2,13 @@
 
 ## User Story
 
-As a LoongClaw operator, I want native prompt and personality presets so that I
-can start with a consistent LoongClaw identity without manually writing a full
+As a Loong operator, I want native prompt and personality presets so that I
+can start with a consistent Loong identity without manually writing a full
 system prompt.
 
 ## Acceptance Criteria
 
-- [ ] LoongClaw has a native base prompt owned by the product rather than only a
+- [ ] Loong has a native base prompt owned by the product rather than only a
       free-form prompt string.
 - [ ] Onboarding offers seven default personalities:
       `classicist`, `pragmatist`, `idealist`, `romanticist`, `hermit`,
@@ -25,7 +25,7 @@ system prompt.
       security requirements.
 - [ ] Runtime identity overlays are resolved separately from the native base
       prompt so workspace `IDENTITY.md` context can take precedence over legacy
-      imported identity without replacing LoongClaw's product-owned baseline.
+      imported identity without replacing Loong's product-owned baseline.
 - [ ] Non-interactive onboarding supports personality selection with a stable
       CLI flag.
 - [ ] Advanced users can still provide a full inline system prompt override.

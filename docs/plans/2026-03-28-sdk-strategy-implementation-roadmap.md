@@ -10,7 +10,7 @@ program.
 
 ## Strategic Frame
 
-Implementation should follow LoongClaw's current direction:
+Implementation should follow Loong's current direction:
 
 - `product mode` stays the operator-facing capability vocabulary
 - autonomy-policy becomes the internal runtime control kernel

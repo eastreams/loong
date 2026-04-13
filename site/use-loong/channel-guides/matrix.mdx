@@ -1,0 +1,78 @@
+---
+title: Matrix
+description: Configure the Matrix channel surface in Loong.
+---
+
+# Matrix
+
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `matrix` |
+| Config key | `matrix` |
+| Implementation status | `runtime_backed` |
+| Transport | `matrix_client_server_sync` |
+| Aliases | none |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[matrix]
+enabled = true
+base_url = "https://matrix.example.org"
+user_id = "@loongbot:example.org"
+access_token_env = "MATRIX_ACCESS_TOKEN"
+allowed_room_ids = ["!ops:example.org"]
+```
+
+## Smoke Test
+
+```bash
+loong matrix-send --target "!ops:example.org" --text "hello from loong"
+loong matrix-serve --once
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| direct send | `matrix-send` | Usage: loong matrix-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| sync reply loop | `matrix-serve` | Usage: loong matrix-serve [OPTIONS] |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `matrix.enabled`<br/>`matrix.accounts.<account>.enabled` | none | none |
+| access token | `matrix.access_token`<br/>`matrix.accounts.<account>.access_token` | `matrix.access_token_env`<br/>`matrix.accounts.<account>.access_token_env` | `MATRIX_ACCESS_TOKEN` |
+| homeserver base url | `matrix.base_url`<br/>`matrix.accounts.<account>.base_url` | none | none |
+
+## Required Fields For Serve
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `matrix.enabled`<br/>`matrix.accounts.<account>.enabled` | none | none |
+| access token | `matrix.access_token`<br/>`matrix.accounts.<account>.access_token` | `matrix.access_token_env`<br/>`matrix.accounts.<account>.access_token_env` | `MATRIX_ACCESS_TOKEN` |
+| homeserver base url | `matrix.base_url`<br/>`matrix.accounts.<account>.base_url` | none | none |
+| allowed room ids | `matrix.allowed_room_ids`<br/>`matrix.accounts.<account>.allowed_room_ids` | none | none |
+| user id when ignore_self_messages is enabled | `matrix.user_id`<br/>`matrix.accounts.<account>.user_id` | none | none |
+
+## Gateway And Ownership
+
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+
+## Operator Notes
+
+- Point `base_url` at the homeserver, not a Matrix web client URL.
+- Set `user_id` when self-message filtering matters for the room topology.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) when this surface needs longer-lived runtime ownership.

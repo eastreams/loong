@@ -10,3 +10,4 @@
 .claude
 __pycache__/
 *.pyc
+.omx/

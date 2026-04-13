@@ -1,105 +1,53 @@
 # Design Documents Index
 
-Catalog of design documents and architectural decisions.
+This directory is the repository-native map for Loong's public architecture
+references.
 
-## Active Design Documents
+The Mintlify site under `site/` is the public builder-facing reading path. This
+index exists for contributors and source readers who need the repository
+markdown behind that shorter public architecture summary.
+## Read This Index When
 
-| Document | Scope | Status |
-|----------|-------|--------|
-| [Core Beliefs](core-beliefs.md) | Engineering principles and taste enforcement | Living |
-| [Capability Promotion Contract](capability-promotion-contract.md) | Governed codification path from runtime evidence to durable capability assets | Active |
-| [Local Product Control Plane](local-product-control-plane.md) | Localhost-only platform layer above the runtime and below future HTTP/Web UI surfaces | Active |
-| [Discovery-First Tool Runtime Contract](discovery-first-tool-runtime-contract.md) | Provider-core tools, leases, parser rewrites, and follow-up turn contract | Active |
-| [External Authoring Contract](external-authoring-contract.md) | Public contract for capability packages and reusable capability assets | Active |
-| [Governance Simplification Classification](governance-simplification-classification.md) | Classifies governance surfaces as structural, transitional, cleanup-safe, or replacement-first | Active |
-| [Internal Integration SDK Contract](internal-integration-sdk-contract.md) | Maintainer-facing descriptor, registry, and projection contract for repository-owned surfaces | Active |
-| [Layered Kernel Design](layered-kernel-design.md) | L0-L9 kernel layer specification and boundary rules | Living |
-| [Plugin Package Manifest Contract](plugin-package-manifest-contract.md) | Manifest-first plugin metadata, setup surface, and slot ownership contract | Active |
-| [Plugin SDK And Ecosystem Strategy](plugin-sdk-and-ecosystem-strategy.md) | Native SDK layering, marketplace boundaries, migration lanes, and ecosystem maturity model | Active |
-| [OpenClaw Plugin Compatibility Contract](openclaw-plugin-compatibility-contract.md) | Foreign dialect normalization, compatibility-mode gating, and polyglot plugin strategy | Active |
-| [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
-| [Reference Runtime Comparison](reference-runtime-comparison.md) | Productization gap analysis and convergence order for tasks, skills, and memory | Active |
-| [SDK Stability Policy](sdk-stability-policy.md) | Stability boundaries across product vocabulary, public contracts, internal seams, and promotion artifacts | Active |
-| [SDK Strategy](sdk-strategy.md) | Product-governed capability authoring, acquisition, and promotion strategy | Active |
-| [SDK Validator Contract](sdk-validator-contract.md) | Public validation semantics for capability artifacts, package contracts, and promotion inputs | Active |
-| [ACP/ACPX Pre-Embed](acp-acpx-preembed.md) | Advanced cryptographic primitives | Active |
-| [Harness Engineering](harness-engineering.md) | Environment design for agent-driven development | Active |
+- you need the repository-native architecture references rather than the shorter
+  Mintlify summary
+- you are changing runtime boundaries, layering, or engineering rules
+- you want the source documents that back the public builder contract
 
-## Key Patterns
+## Route By Audience
 
-| Pattern | Description | Where Enforced |
-|---------|-------------|----------------|
-| Core/Extension split | Every execution plane has a core adapter and optional extensions | `kernel/src/tool.rs`, `runtime.rs`, `memory.rs`, `connector.rs` |
-| Capability-gated access | Every resource access requires an explicit capability token | `kernel/src/policy.rs` |
-| Rule of Two | Tool calls require both LLM intent and deterministic policy approval | `kernel/src/policy.rs` |
-| Registry pattern | Adapters registered by name into `BTreeMap<String, Arc<dyn Trait>>` | All execution planes |
-| Generation-based revocation | `AtomicU64` threshold invalidates all tokens with generation <= N | `kernel/src/kernel.rs` |
-| Policy extension chain | Chain-of-responsibility: multiple extensions evaluated in order, any can deny | `kernel/src/policy_ext.rs` |
+| If you are trying to... | Start here | Why |
+| --- | --- | --- |
+| read the public builder-facing overview first | [`../../site/build-on-loong/overview.mdx`](../../site/build-on-loong/overview.mdx) | `site/` is the public builder hub |
+| edit repository-native architecture references | this index | this directory is the source-facing architecture map |
+| understand the overall repository docs layering | [`../README.md`](../README.md) | it explains how repo-native docs differ from Mintlify pages |
 
-## Tracked Deviations
+## What Stays Here
 
-None currently.
+This directory keeps the architecture references that remain part of the OSS
+surface. Deeper implementation packages, comparative studies, and internal-only
+design backlog artifacts are intentionally out of the public docs flow.
 
-## Decision Log
+## Source Design Map
 
-All decisions from the research repository. Status reflects implementation reality, not aspiration.
+| Document | Read it when... |
+| --- | --- |
+| [Core Beliefs](core-beliefs.md) | you need the engineering principles that should survive refactors |
+| [Layered Kernel Design](layered-kernel-design.md) | you need the crate and layer boundary model before changing runtime shape |
+| [Harness Engineering](harness-engineering.md) | you are working on the agent-driven development environment itself |
 
-### Cross-Domain
+## Boundary Rules
 
-| ID | Decision | Implementation Status |
-|----|----------|---------------------|
-| D-001 | Zircon-style capability model (handle + rights, membrane revocation) | Partial — tokens enforced, membrane not checked (TD-003) |
-| D-002 | Hybrid agent lifecycle (Actix states + Erlang/OTP supervision) | Stub — lifecycle struct exists, no supervision |
-| D-015 | OAuth 2.1 external + capability internal auth | Research — not wired |
+- keep this index focused on architecture references that remain part of the
+  OSS source surface
+- do not turn `design-docs/` back into a catch-all archive for backlog design
+  bundles, internal comparisons, or implementation packages
+- put new reader-facing explainers in `site/` when they are really public docs
+  pages rather than source references
 
-### Runtime Core (Domain 01)
-
-| ID | Decision | Implementation Status |
-|----|----------|---------------------|
-| D-003 | Append-only event log as single source of truth | Partial — audit events exist, JSONL/fanout retention exists, no tamper-evident verification or query baseline yet |
-| D-004 | Materialized views from event log | Not started |
-| D-005 | Control/data plane separation | Partial — planes exist, not fully separated |
-| D-006 | Consensus-agnostic event log trait | Not started — no trait defined |
-| D-007 | Structured events using tracing crate | Not started |
-| D-008 | Work-stealing scheduler with fuel budgets | Not started |
-
-### Academic & Practice (Domains 09-10)
-
-| ID | Decision | Implementation Status |
-|----|----------|---------------------|
-| D-009 | Single-threaded Tokio-based async agent loop | Implemented |
-| D-010 | Kernel minimality principle | Implemented — core beliefs #10 |
-
-### Protocols (Domain 04)
-
-| ID | Decision | Implementation Status |
-|----|----------|---------------------|
-| D-011 | Multi-protocol pluggable transports | Partial — protocol crate exists |
-| D-012 | JSON-RPC external, binary internal | Partial — JSON-line transport implemented |
-| D-013 | Three-tier capability negotiation | Research |
-| D-014 | Algebraic protocol versioning | Research |
-
-### Memory (Domain 05)
-
-| ID | Decision | Implementation Status |
-|----|----------|---------------------|
-| D-016 | MemoryStore trait (4 typed async methods) | Not started — using string dispatch (TD-008) |
-| D-017 | MemoryScope enum (Task, Session, Agent, Global) | Partial — scoped memory vocabulary now exists in the app runtime as `Session`, `User`, `Agent`, and `Workspace`, and canonical recall now persists those scopes, but the original task/global vocabulary was not adopted |
-| D-018 | SQLite + FTS5 default backend (WAL, feature-gated sqlite-vec) | Partial — SQLite canonical store, WAL, operator-facing canonical FTS recall, and staged retrieval orchestration ship on `dev`, but sqlite-vec and richer ranking are not started |
-| D-019 | Mandatory provenance fields (10 fields: UUID, trust_tier, hash, agent, TTL...) | Partial — canonical records and operator-facing recall now surface scope/kind/metadata/timestamp provenance, but UUID/trust tier/hash/TTL are not yet enforced |
-| D-020 | Configurable trust scoring (Tier 0-3) | Not started |
-| D-021 | Blake3 content hashing (feature-gated `pure` mode) | Not started |
-| D-022 | Capability-scoped deletion (tombstone audit trail) | Not started |
-
-### WASM Plugins (Domain 08)
-
-| ID | Decision | Implementation Status |
-|----|----------|---------------------|
-| D-023 | WebAssembly Component Model for all plugins | Research (v0.2) |
-| D-024 | Wasmtime as runtime engine | Partial — wasmtime integrated with core-module host ABI v0 request/output/logging lane |
-| D-025 | Per-invocation plugin isolation | Research |
-| D-026 | OCI artifact distribution | Research |
-| D-027 | WIT plugin contracts | Research |
-| D-028 | WASI 0.3 async target | Research |
-| D-029 | Epoch interruption for production, fuel metering for testing | Partial — runtime timeout lane uses epoch interruption; broader policy rollout remains |
-| D-030 | Zero-capability-default WASI injection | Research |
+## Suggested Reading Order
+1. Start with [Core Beliefs](core-beliefs.md) if you need the repository's
+   architectural taste and invariants.
+2. Continue to [Layered Kernel Design](layered-kernel-design.md) if the change
+   touches boundaries, ownership, or layering.
+3. Read [Harness Engineering](harness-engineering.md) only when the work is
+   really about the development environment or agent workflow itself.

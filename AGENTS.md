@@ -1,11 +1,14 @@
-# LoongClaw Agent Guide
+# Loong Agent Guide
 
 This document is intentionally mirrored in `CLAUDE.md` and `AGENTS.md`.
 
-This file is the **map** — keep it short (~100 lines). Deeper context lives in `docs/`.
+This file is the **map** — keep it short (~100 lines). Deeper repo-native
+context lives in `docs/`, while the public reader-facing docs surface lives in
+`site/`.
 
 ## 1. Start Here
 
+- [Repository Docs Map](docs/README.md) — audience routing for `site/` vs `docs/`
 - [Core Beliefs](docs/design-docs/core-beliefs.md) — kernel and engineering principles
 - [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) — layered model and boundary rules
 - [Roadmap](docs/ROADMAP.md) — stage-based milestones and acceptance criteria
@@ -77,6 +80,7 @@ underlying `cargo` and `scripts/*` verification commands directly.
 | Need | Go to |
 |------|-------|
 | Architecture overview & crate DAG | `ARCHITECTURE.md` |
+| Repository docs layering | `docs/README.md` |
 | Core principles | `docs/design-docs/core-beliefs.md` |
 | Layered architecture | `docs/design-docs/layered-kernel-design.md` |
 | Design decisions, patterns & catalog | `docs/design-docs/index.md` |
@@ -84,9 +88,8 @@ underlying `cargo` and `scripts/*` verification commands directly.
 | Roadmap | `docs/ROADMAP.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
 | Security model & gaps | `docs/SECURITY.md` |
-| Quality scores & gaps | `docs/QUALITY_SCORE.md` |
 | Product sense & principles | `docs/PRODUCT_SENSE.md` |
-| Release process docs | `docs/releases/` |
+| Release process conventions | `docs/releases/README.md` |
 | Product requirements | `docs/product-specs/` |
-| References (specs, schemas, technical docs) | `docs/references/` |
+| Repository support references | `docs/references/README.md` |
 | Contributing recipes | `CONTRIBUTING.md` |

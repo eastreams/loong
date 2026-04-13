@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the public-facing authoring contract for LoongClaw
+This document defines the public-facing authoring contract for Loong
 capability artifacts.
 
 Its purpose is to let community authors build capability packages without
@@ -12,7 +12,7 @@ depending on internal crate layout.
 
 The public SDK should be contract-first, package-first, and artifact-first.
 
-LoongClaw should stabilize:
+Loong should stabilize:
 
 - package identity
 - package layout
