@@ -412,11 +412,11 @@ mod tests {
     #[cfg(feature = "tool-shell")]
     #[test]
     fn execute_bash_tool_with_config_emits_runtime_output_delta_and_single_metrics_event() {
-        let bash_available = probe_bash_candidate(Path::new("bash"));
-        if !bash_available {
+        let bash_runtime = detect_bash_runtime_policy();
+        let Some(bash_command) = bash_runtime.command else {
             eprintln!("skipping bash runtime event test because bash is unavailable");
             return;
-        }
+        };
 
         let root = tempfile::tempdir().expect("tempdir");
         let root_path = std::fs::canonicalize(root.path()).expect("canonicalize tempdir");
@@ -426,7 +426,7 @@ mod tests {
             ..ToolRuntimeConfig::default()
         };
         config.bash_exec.available = true;
-        config.bash_exec.command = Some(PathBuf::from("bash"));
+        config.bash_exec.command = Some(bash_command);
         config.bash_exec.governance.rules = compile_compatibility_rules(
             "test_allow",
             PrefixRuleDecision::Allow,
