@@ -2090,6 +2090,75 @@ fn resolve_provider_selection_allows_switching_step_plan_region_endpoint() {
 }
 
 #[test]
+fn resolve_provider_selection_prompts_for_custom_base_url_when_unresolved() {
+    let config = mvp::config::LoongConfig::default();
+    let options = interactive_onboard_options();
+    let provider_selection = crate::migration::ProviderSelectionPlan::default();
+    let context = onboard_test_context();
+    let mut ui = TestOnboardUi::with_inputs(["custom", "https://api.example.com/v1"]);
+
+    let selected = resolve_provider_selection(
+        &options,
+        &config,
+        &provider_selection,
+        GuidedPromptPath::NativePromptPack,
+        &mut ui,
+        &context,
+    )
+    .expect("custom provider selection should accept an explicit base URL");
+
+    assert_eq!(selected.kind, mvp::config::ProviderKind::Custom);
+    assert_eq!(selected.base_url, "https://api.example.com/v1");
+}
+
+#[test]
+fn resolve_provider_selection_preserves_existing_custom_base_url_by_default() {
+    let mut config = mvp::config::LoongConfig::default();
+    let options = interactive_onboard_options();
+    let provider_selection = crate::migration::ProviderSelectionPlan::default();
+    let context = onboard_test_context();
+    let mut ui = TestOnboardUi::with_inputs(["", ""]);
+
+    config.provider =
+        mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Custom);
+    config.provider.base_url = "https://api.example.com/v1".to_owned();
+
+    let selected = resolve_provider_selection(
+        &options,
+        &config,
+        &provider_selection,
+        GuidedPromptPath::NativePromptPack,
+        &mut ui,
+        &context,
+    )
+    .expect("custom provider selection should keep the existing base URL on default accept");
+
+    assert_eq!(selected.kind, mvp::config::ProviderKind::Custom);
+    assert_eq!(selected.base_url, "https://api.example.com/v1");
+}
+
+#[test]
+fn resolve_provider_selection_rejects_invalid_custom_base_url() {
+    let config = mvp::config::LoongConfig::default();
+    let options = interactive_onboard_options();
+    let provider_selection = crate::migration::ProviderSelectionPlan::default();
+    let context = onboard_test_context();
+    let mut ui = TestOnboardUi::with_inputs(["custom", "not-a-url"]);
+
+    let error = resolve_provider_selection(
+        &options,
+        &config,
+        &provider_selection,
+        GuidedPromptPath::NativePromptPack,
+        &mut ui,
+        &context,
+    )
+    .expect_err("custom provider selection should reject invalid base URLs");
+
+    assert!(error.contains("provider base URL is invalid"));
+}
+
+#[test]
 fn preinstalled_skills_screen_only_surfaces_the_onboarding_subset() {
     let lines = render_preinstalled_skills_selection_screen_lines_with_style(100, false);
     let joined = lines.join("\n");

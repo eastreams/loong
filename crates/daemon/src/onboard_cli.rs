@@ -1781,7 +1781,85 @@ fn resolve_provider_selection(
         provider_config.set_base_url(selected_base_url);
     }
 
+    prompt_provider_base_url_if_needed(options, kind, &mut provider_config, ui)?;
+
     Ok(provider_config)
+}
+
+fn prompt_provider_base_url_if_needed(
+    options: &OnboardCommandOptions,
+    kind: mvp::config::ProviderKind,
+    provider_config: &mut mvp::config::ProviderConfig,
+    ui: &mut impl OnboardUi,
+) -> CliResult<()> {
+    let requires_custom_base_url = kind.requires_custom_base_url();
+    if !requires_custom_base_url || options.non_interactive {
+        return Ok(());
+    }
+
+    let configured_base_url = provider_config.base_url.trim().to_owned();
+    let has_configured_base_url = !configured_base_url.is_empty();
+    let has_unresolved_custom_base_url = provider_config.has_unresolved_custom_base_url();
+    let prompt_lines = build_provider_base_url_prompt_lines(
+        kind,
+        configured_base_url.as_str(),
+        has_unresolved_custom_base_url,
+    );
+    print_lines(ui, prompt_lines)?;
+
+    let selected_base_url = if has_unresolved_custom_base_url || !has_configured_base_url {
+        ui.prompt_required("Provider base URL")?
+    } else {
+        ui.prompt_with_default("Provider base URL", configured_base_url.as_str())?
+    };
+    let validated_base_url = validate_onboard_provider_base_url(selected_base_url.as_str())?;
+    provider_config.set_base_url(validated_base_url);
+
+    Ok(())
+}
+
+fn build_provider_base_url_prompt_lines(
+    kind: mvp::config::ProviderKind,
+    configured_base_url: &str,
+    has_unresolved_custom_base_url: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let provider_label = provider_kind_display_name(kind);
+    let intro_line = format!("Set the {} API base URL:", provider_label);
+    lines.push(intro_line);
+
+    if let Some(configuration_hint) = kind.configuration_hint() {
+        lines.push(configuration_hint.to_owned());
+    }
+
+    if has_unresolved_custom_base_url {
+        let template_line = format!("Current template: {}", configured_base_url.trim());
+        lines.push(template_line);
+    }
+
+    lines
+}
+
+fn validate_onboard_provider_base_url(raw: &str) -> CliResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("provider base URL cannot be empty".to_owned());
+    }
+
+    let parsed_url = reqwest::Url::parse(trimmed)
+        .map_err(|error| format!("provider base URL is invalid: {error}"))?;
+    let scheme = parsed_url.scheme();
+    let valid_scheme = scheme == "http" || scheme == "https";
+    if !valid_scheme {
+        return Err("provider base URL must use http or https".to_owned());
+    }
+
+    let has_host = parsed_url.host_str().is_some();
+    if !has_host {
+        return Err("provider base URL must include a host".to_owned());
+    }
+
+    Ok(trimmed.to_owned())
 }
 
 pub fn resolve_provider_config_from_selector(
