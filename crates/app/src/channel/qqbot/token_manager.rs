@@ -25,7 +25,6 @@ pub(super) struct QqbotTokenManager {
     app_id: String,
     client_secret: String,
     current_token: Arc<RwLock<Option<QqbotAccessToken>>>,
-    expires_at: Option<Instant>,
     http_client: reqwest::Client,
     policy: ChannelOutboundHttpPolicy,
 }
@@ -41,7 +40,6 @@ impl QqbotTokenManager {
             app_id,
             client_secret,
             current_token: Arc::new(RwLock::new(None)),
-            expires_at: None,
             http_client,
             policy,
         }
