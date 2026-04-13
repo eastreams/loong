@@ -73,9 +73,9 @@ release review. It is not part of the primary public release trail.
 - Rule: each release must name at least one hotspot metric paid down or explicitly state why no paydown happened.
 
 ## Detail Links
-- [Architecture gate](../../../scripts/check_architecture_boundaries.sh)
-- [Release template](TEMPLATE.md)
-- [CI workflow](../../../.github/workflows/ci.yml)
+- [Architecture gate](../../scripts/check_architecture_boundaries.sh)
+- [Release template](support/TEMPLATE.md)
+- [CI workflow](../../.github/workflows/ci.yml)
 
 ## Do Not Use This File For
 
