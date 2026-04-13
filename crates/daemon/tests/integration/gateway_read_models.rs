@@ -41,6 +41,7 @@ fn legacy_channel_inventory_json(
         "catalog_only_channels": inventory.catalog_only_channels,
         "channel_catalog": inventory.channel_catalog,
         "channel_surfaces": inventory.channel_surfaces,
+        "channel_access_policies": inventory.channel_access_policies,
     })
 }
 

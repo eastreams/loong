@@ -31,6 +31,7 @@ pub struct GatewayChannelInventoryReadModel {
     pub catalog_only_channels: Vec<mvp::channel::ChannelCatalogEntry>,
     pub channel_catalog: Vec<mvp::channel::ChannelCatalogEntry>,
     pub channel_surfaces: Vec<GatewayChannelSurfaceReadModel>,
+    pub channel_access_policies: Vec<mvp::channel::ChannelConfiguredAccountAccessPolicy>,
 }
 
 pub type ChannelsCliJsonPayload = GatewayChannelInventoryReadModel;
@@ -268,6 +269,8 @@ pub struct GatewayOperatorChannelSurfaceReadModel {
     pub misconfigured_account_count: usize,
     pub ready_send_account_count: usize,
     pub ready_serve_account_count: usize,
+    pub conversation_gated_account_count: usize,
+    pub sender_gated_account_count: usize,
     pub default_configured_account_id: Option<String>,
     pub plugin_bridge_account_summary: Option<String>,
     pub service_enabled: bool,
@@ -335,6 +338,7 @@ pub fn build_channel_inventory_read_model(
         .cloned()
         .map(build_channel_surface_read_model)
         .collect();
+    let channel_access_policies = inventory.channel_access_policies.clone();
 
     GatewayChannelInventoryReadModel {
         config,
@@ -343,6 +347,7 @@ pub fn build_channel_inventory_read_model(
         catalog_only_channels,
         channel_catalog,
         channel_surfaces,
+        channel_access_policies,
     }
 }
 
@@ -800,6 +805,7 @@ fn build_operator_channels_summary_read_model(
     let enabled_service_channel_count = enabled_service_channel_ids.len();
     let surfaces = build_operator_channel_surface_read_models(
         &channel_inventory.channel_surfaces,
+        &channel_inventory.channel_access_policies,
         enabled_service_channel_ids,
     );
     let ready_service_channel_count = surfaces
@@ -822,13 +828,17 @@ fn build_operator_channels_summary_read_model(
 
 fn build_operator_channel_surface_read_models(
     channel_surfaces: &[GatewayChannelSurfaceReadModel],
+    channel_access_policies: &[mvp::channel::ChannelConfiguredAccountAccessPolicy],
     enabled_service_channel_ids: &[String],
 ) -> Vec<GatewayOperatorChannelSurfaceReadModel> {
     let mut surfaces = Vec::with_capacity(channel_surfaces.len());
 
     for channel_surface in channel_surfaces {
-        let surface =
-            build_operator_channel_surface_read_model(channel_surface, enabled_service_channel_ids);
+        let surface = build_operator_channel_surface_read_model(
+            channel_surface,
+            channel_access_policies,
+            enabled_service_channel_ids,
+        );
         surfaces.push(surface);
     }
 
@@ -837,6 +847,7 @@ fn build_operator_channel_surface_read_models(
 
 fn build_operator_channel_surface_read_model(
     channel_surface: &GatewayChannelSurfaceReadModel,
+    channel_access_policies: &[mvp::channel::ChannelConfiguredAccountAccessPolicy],
     enabled_service_channel_ids: &[String],
 ) -> GatewayOperatorChannelSurfaceReadModel {
     let surface = &channel_surface.surface;
@@ -868,6 +879,20 @@ fn build_operator_channel_surface_read_model(
             channel_account_operation_is_ready(account, mvp::channel::CHANNEL_OPERATION_SERVE_ID)
         })
         .count();
+    let conversation_gated_account_count = channel_access_policies
+        .iter()
+        .filter(|policy| policy.channel_id == surface.catalog.id)
+        .filter(|policy| {
+            policy.summary.conversation_mode != mvp::channel::ChannelAccessRestrictionMode::Open
+        })
+        .count();
+    let sender_gated_account_count = channel_access_policies
+        .iter()
+        .filter(|policy| policy.channel_id == surface.catalog.id)
+        .filter(|policy| {
+            policy.summary.sender_mode != mvp::channel::ChannelAccessRestrictionMode::Open
+        })
+        .count();
     let default_configured_account_id = surface.default_configured_account_id.clone();
     let plugin_bridge_account_summary = channel_surface.plugin_bridge_account_summary.clone();
     let service_enabled = enabled_service_channel_ids.contains(&channel_id);
@@ -882,6 +907,8 @@ fn build_operator_channel_surface_read_model(
         misconfigured_account_count,
         ready_send_account_count,
         ready_serve_account_count,
+        conversation_gated_account_count,
+        sender_gated_account_count,
         default_configured_account_id,
         plugin_bridge_account_summary,
         service_enabled,
@@ -1005,14 +1032,20 @@ mod tests {
         let inventory = mvp::channel::channel_inventory(&config);
         let surface = inventory
             .channel_surfaces
-            .into_iter()
+            .iter()
             .find(|surface| surface.catalog.id == "weixin")
             .expect("weixin surface");
-        let read_model = build_channel_surface_read_model(surface);
-        let operator_surface = build_operator_channel_surface_read_model(&read_model, &Vec::new());
+        let read_model = build_channel_surface_read_model(surface.clone());
+        let operator_surface = build_operator_channel_surface_read_model(
+            &read_model,
+            &inventory.channel_access_policies,
+            &Vec::new(),
+        );
 
         assert_eq!(operator_surface.channel_id, "weixin");
         assert_eq!(operator_surface.implementation_status, "plugin_backed");
+        assert_eq!(operator_surface.conversation_gated_account_count, 0);
+        assert_eq!(operator_surface.sender_gated_account_count, 0);
         assert_eq!(
             operator_surface.plugin_bridge_account_summary.as_deref(),
             Some(
@@ -1032,14 +1065,56 @@ mod tests {
         let inventory = mvp::channel::channel_inventory(&config);
         let surface = inventory
             .channel_surfaces
-            .into_iter()
+            .iter()
             .find(|surface| surface.catalog.id == "telegram")
             .expect("telegram surface");
-        let read_model = build_channel_surface_read_model(surface);
-        let operator_surface = build_operator_channel_surface_read_model(&read_model, &Vec::new());
+        let read_model = build_channel_surface_read_model(surface.clone());
+        let operator_surface = build_operator_channel_surface_read_model(
+            &read_model,
+            &inventory.channel_access_policies,
+            &Vec::new(),
+        );
 
         assert_eq!(operator_surface.channel_id, "telegram");
         assert_eq!(operator_surface.implementation_status, "runtime_backed");
+        assert_eq!(operator_surface.conversation_gated_account_count, 1);
+        assert_eq!(operator_surface.sender_gated_account_count, 0);
         assert_eq!(operator_surface.plugin_bridge_account_summary, None);
+    }
+
+    #[test]
+    fn channel_inventory_read_model_includes_structured_channel_access_policies() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.feishu.enabled = true;
+        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+            "cli_a1b2c3".to_owned(),
+        ));
+        config.feishu.app_secret =
+            Some(loongclaw_contracts::SecretRef::Inline("secret".to_owned()));
+        config.feishu.allowed_chat_ids = vec!["*".to_owned()];
+        config.feishu.allowed_sender_ids = vec!["ou_admin".to_owned()];
+
+        let inventory = mvp::channel::channel_inventory(&config);
+        let read_model = build_channel_inventory_read_model("/tmp/loongclaw.toml", &inventory);
+        let access_policy = read_model
+            .channel_access_policies
+            .iter()
+            .find(|policy| policy.channel_id == "feishu")
+            .expect("feishu access policy");
+
+        assert_eq!(access_policy.conversation_config_key, "allowed_chat_ids");
+        assert_eq!(access_policy.sender_config_key, "allowed_sender_ids");
+        assert_eq!(
+            access_policy.summary.conversation_mode,
+            mvp::channel::ChannelAccessRestrictionMode::WildcardAllowlist
+        );
+        assert_eq!(
+            access_policy.summary.allowed_conversations,
+            vec!["*".to_owned()]
+        );
+        assert_eq!(
+            access_policy.summary.allowed_senders,
+            vec!["ou_admin".to_owned()]
+        );
     }
 }

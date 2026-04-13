@@ -48,6 +48,10 @@ needs.
 
 ## Channel Surface Matrix
 
+`loong channels --json` exposes both the human-facing surface inventory and a
+structured `channel_access_policies` section for the shipped runtime-backed
+conversation/sender gating surfaces.
+
 | Surface | Status | Transport | Required config | Operator commands |
 | --- | --- | --- | --- | --- |
 | CLI | Shipped | local interactive runtime | none beyond base provider config | `loong ask`, `loong chat` |

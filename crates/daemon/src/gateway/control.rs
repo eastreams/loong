@@ -94,6 +94,7 @@ impl GatewayControlAppState {
             catalog_only_channels: vec![],
             channel_catalog: vec![],
             channel_surfaces: vec![],
+            channel_access_policies: vec![],
         };
         let runtime_snapshot = GatewayRuntimeSnapshotReadModel {
             config: String::new(),

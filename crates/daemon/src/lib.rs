@@ -87,6 +87,7 @@ pub use {base64, kernel, sha2};
 pub mod audit_cli;
 mod browser_companion_diagnostics;
 pub mod browser_preview;
+mod channel_access_policy_render;
 mod channel_bridge_render;
 #[cfg(test)]
 mod channel_send_cli_tests;
@@ -146,6 +147,9 @@ mod tool_calling_readiness;
 pub mod trajectory_cli;
 mod turn_cli;
 pub mod work_unit_cli;
+use channel_access_policy_render::{
+    channel_access_policy_by_account, render_channel_access_policy_line,
+};
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
     push_channel_surface_plugin_bridge_contract,
@@ -3992,6 +3996,7 @@ pub fn render_channel_surfaces_text(
 ) -> String {
     let mut lines = vec![format!("config={config_path}")];
     let mut catalog_only_surfaces = Vec::new();
+    let access_policy_by_account = channel_access_policy_by_account(inventory);
 
     for surface in &inventory.channel_surfaces {
         if surface.catalog.implementation_status
@@ -4017,6 +4022,12 @@ pub fn render_channel_surfaces_text(
                 snapshot.enabled,
                 api_base_url
             ));
+            if let Some(access_policy) = access_policy_by_account.get(&(
+                surface.catalog.id.to_owned(),
+                snapshot.configured_account_id.clone(),
+            )) {
+                lines.push(render_channel_access_policy_line(access_policy));
+            }
             for note in &snapshot.notes {
                 lines.push(format!("    note: {note}"));
             }

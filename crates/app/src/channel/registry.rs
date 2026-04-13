@@ -37,8 +37,9 @@ pub use self::tlon::TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
 pub use self::twitch::TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
 use super::{
     ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform,
-    access_policy::ChannelInboundAccessPolicy,
-    core::webhook_auth::build_webhook_auth_header_from_parts, runtime::state,
+    access_policy::{ChannelInboundAccessPolicy, ChannelInboundAccessPolicySummary},
+    core::webhook_auth::build_webhook_auth_header_from_parts,
+    runtime::state,
 };
 
 #[path = "registry_bridge.rs"]
@@ -187,6 +188,17 @@ pub struct ChannelInventory {
     pub catalog_only_channels: Vec<ChannelCatalogEntry>,
     pub channel_catalog: Vec<ChannelCatalogEntry>,
     pub channel_surfaces: Vec<ChannelSurface>,
+    pub channel_access_policies: Vec<ChannelConfiguredAccountAccessPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelConfiguredAccountAccessPolicy {
+    pub channel_id: &'static str,
+    pub configured_account_id: String,
+    pub conversation_config_key: &'static str,
+    pub sender_config_key: &'static str,
+    #[serde(flatten)]
+    pub summary: ChannelInboundAccessPolicySummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2507,11 +2519,13 @@ fn channel_inventory_with_now(
         channel_surface_plugin_bridge_discovery_by_id(config, &channel_catalog);
     let channel_surfaces =
         build_channel_surfaces(&channel_catalog, &channels, &plugin_bridge_discovery_by_id);
+    let channel_access_policies = build_channel_access_policies(config);
     ChannelInventory {
         channels,
         catalog_only_channels,
         channel_catalog,
         channel_surfaces,
+        channel_access_policies,
     }
 }
 
@@ -2529,6 +2543,124 @@ fn channel_status_snapshots_with_now(
         snapshots.extend(built_snapshots);
     }
     snapshots
+}
+
+fn build_channel_access_policies(
+    config: &LoongClawConfig,
+) -> Vec<ChannelConfiguredAccountAccessPolicy> {
+    let mut policies = Vec::new();
+    extend_telegram_channel_access_policies(&mut policies, config);
+    extend_feishu_channel_access_policies(&mut policies, config);
+    extend_matrix_channel_access_policies(&mut policies, config);
+    extend_wecom_channel_access_policies(&mut policies, config);
+    policies
+}
+
+fn extend_telegram_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.telegram.configured_account_ids() {
+        let resolved = config
+            .telegram
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_i64_lists(
+            resolved.allowed_chat_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+        );
+        let summary = access_policy.summary();
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "telegram",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_chat_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
+}
+
+fn extend_feishu_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.feishu.configured_account_ids() {
+        let resolved = config
+            .feishu
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            resolved.allowed_chat_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+            true,
+        );
+        let summary = access_policy.summary();
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "feishu",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_chat_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
+}
+
+fn extend_matrix_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.matrix.configured_account_ids() {
+        let resolved = config
+            .matrix
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            resolved.allowed_room_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+            false,
+        );
+        let summary = access_policy.summary();
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "matrix",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_room_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
+}
+
+fn extend_wecom_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.wecom.configured_account_ids() {
+        let resolved = config
+            .wecom
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            resolved.allowed_conversation_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+            false,
+        );
+        let summary = access_policy.summary();
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "wecom",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_conversation_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
 }
 
 fn validate_http_url(
@@ -8390,6 +8522,16 @@ mod tests {
             Some("default")
         );
         assert_eq!(discord.configured_accounts[0].id, "discord");
+        assert!(
+            inventory
+                .channel_access_policies
+                .iter()
+                .any(|policy| policy.channel_id == "telegram"
+                    && policy.configured_account_id == "default"
+                    && policy.conversation_config_key == "allowed_chat_ids"
+                    && policy.sender_config_key == "allowed_sender_ids"),
+            "channel inventory should expose structured access policy for telegram"
+        );
         let discord_encoded =
             serde_json::to_value(discord).expect("serialize discord channel surface");
         assert!(

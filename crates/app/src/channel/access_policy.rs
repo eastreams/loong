@@ -1,6 +1,24 @@
 use std::collections::BTreeSet;
 
+use serde::Serialize;
+
 const STRING_ACCESS_WILDCARD_SENTINEL: &str = "*";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelAccessRestrictionMode {
+    Open,
+    ExactAllowlist,
+    WildcardAllowlist,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelInboundAccessPolicySummary {
+    pub conversation_mode: ChannelAccessRestrictionMode,
+    pub sender_mode: ChannelAccessRestrictionMode,
+    pub allowed_conversations: Vec<String>,
+    pub allowed_senders: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChannelInboundAccessPolicy<T> {
@@ -116,6 +134,28 @@ impl ChannelInboundAccessPolicy<i64> {
         let allowed_senders = numeric_matcher(allowed_sender_ids);
         Self::new(allowed_conversations, allowed_senders)
     }
+
+    pub(crate) fn summary(&self) -> ChannelInboundAccessPolicySummary {
+        let allowed_conversations = self
+            .allowed_conversations
+            .values
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>();
+        let allowed_senders = self
+            .allowed_senders
+            .values
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>();
+
+        ChannelInboundAccessPolicySummary {
+            conversation_mode: numeric_matcher_mode(&self.allowed_conversations),
+            sender_mode: numeric_matcher_mode(&self.allowed_senders),
+            allowed_conversations,
+            allowed_senders,
+        }
+    }
 }
 
 impl ChannelInboundAccessPolicy<String> {
@@ -180,6 +220,18 @@ impl ChannelInboundAccessPolicy<String> {
         Some(values)
     }
 
+    pub(crate) fn summary(&self) -> ChannelInboundAccessPolicySummary {
+        let allowed_conversations = self.string_conversations().unwrap_or_default();
+        let allowed_senders = self.string_senders().unwrap_or_default();
+
+        ChannelInboundAccessPolicySummary {
+            conversation_mode: string_matcher_mode(&self.allowed_conversations),
+            sender_mode: string_matcher_mode(&self.allowed_senders),
+            allowed_conversations,
+            allowed_senders,
+        }
+    }
+
     fn allowed_conversations_allow_str(&self, conversation_id: &str) -> bool {
         if self.allowed_conversations.allows_all {
             return true;
@@ -208,6 +260,26 @@ fn normalize_optional_str(value: Option<&str>) -> Option<&str> {
         return None;
     }
     Some(trimmed_value)
+}
+
+fn numeric_matcher_mode<T>(matcher: &AccessMatcher<T>) -> ChannelAccessRestrictionMode
+where
+    T: Ord,
+{
+    if !matcher.is_configured() {
+        return ChannelAccessRestrictionMode::Open;
+    }
+    ChannelAccessRestrictionMode::ExactAllowlist
+}
+
+fn string_matcher_mode(matcher: &AccessMatcher<String>) -> ChannelAccessRestrictionMode {
+    if !matcher.is_configured() {
+        return ChannelAccessRestrictionMode::Open;
+    }
+    if matcher.allows_all {
+        return ChannelAccessRestrictionMode::WildcardAllowlist;
+    }
+    ChannelAccessRestrictionMode::ExactAllowlist
 }
 
 fn numeric_matcher(values: &[i64]) -> AccessMatcher<i64> {
@@ -243,7 +315,9 @@ fn string_matcher(values: &[String], allow_wildcards: bool) -> AccessMatcher<Str
 
 #[cfg(test)]
 mod tests {
-    use super::ChannelInboundAccessPolicy;
+    use super::{
+        ChannelAccessRestrictionMode, ChannelInboundAccessPolicy, ChannelInboundAccessPolicySummary,
+    };
 
     #[test]
     fn i64_policy_requires_conversation_allowlist_match() {
@@ -298,5 +372,39 @@ mod tests {
 
         assert!(policy.allows_optional_conversation_str(Some("oc_demo"), Some("ou_admin"),));
         assert!(!policy.allows_optional_conversation_str(None, Some("ou_admin")));
+    }
+
+    #[test]
+    fn numeric_policy_summary_reports_open_sender_mode_when_sender_allowlist_is_empty() {
+        let policy = ChannelInboundAccessPolicy::from_i64_lists(&[1001], &[]);
+
+        assert_eq!(
+            policy.summary(),
+            ChannelInboundAccessPolicySummary {
+                conversation_mode: ChannelAccessRestrictionMode::ExactAllowlist,
+                sender_mode: ChannelAccessRestrictionMode::Open,
+                allowed_conversations: vec!["1001".to_owned()],
+                allowed_senders: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn string_policy_summary_reports_wildcard_conversation_mode() {
+        let policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["*".to_owned()],
+            &["ou_admin".to_owned()],
+            true,
+        );
+
+        assert_eq!(
+            policy.summary(),
+            ChannelInboundAccessPolicySummary {
+                conversation_mode: ChannelAccessRestrictionMode::WildcardAllowlist,
+                sender_mode: ChannelAccessRestrictionMode::ExactAllowlist,
+                allowed_conversations: vec!["*".to_owned()],
+                allowed_senders: vec!["ou_admin".to_owned()],
+            }
+        );
     }
 }
