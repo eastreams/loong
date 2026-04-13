@@ -706,7 +706,7 @@ pub fn execute_tool_core_with_config(
     }
     let inner_tool_name = resolved_inner_tool_name_for_logs(canonical_name, &payload);
     let started_at = std::time::Instant::now();
-    let result = (|| {
+    let execute_request = || {
         ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
             requested_tool_name.as_str(),
             &payload,
@@ -726,7 +726,8 @@ pub fn execute_tool_core_with_config(
             "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
             _ => execute_discoverable_tool_core_with_config(request, config),
         }
-    })();
+    };
+    let result = execute_request();
     let duration_ms = started_at.elapsed().as_millis();
     match &result {
         Ok(outcome) => {
@@ -1710,14 +1711,41 @@ fn tool_function_name(tool: &Value) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, unique_temp_dir};
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome, unique_temp_dir};
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use std::ops::{Deref, DerefMut};
     use std::path::{Path, PathBuf};
     use std::sync::{MutexGuard, OnceLock};
 
-    fn test_tool_runtime_config(root: impl AsRef<Path>) -> runtime_config::ToolRuntimeConfig {
-        runtime_config::ToolRuntimeConfig {
+    struct ToolTestRuntimeConfig {
+        config: runtime_config::ToolRuntimeConfig,
+        _runtime_home: ScopedLoongClawHome,
+    }
+
+    impl Deref for ToolTestRuntimeConfig {
+        type Target = runtime_config::ToolRuntimeConfig;
+
+        fn deref(&self) -> &Self::Target {
+            &self.config
+        }
+    }
+
+    impl DerefMut for ToolTestRuntimeConfig {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.config
+        }
+    }
+
+    impl ToolTestRuntimeConfig {
+        fn into_inner(self) -> runtime_config::ToolRuntimeConfig {
+            self.config
+        }
+    }
+
+    fn test_tool_runtime_config(root: impl AsRef<Path>) -> ToolTestRuntimeConfig {
+        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-home");
+        let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
             file_root: Some(root.as_ref().to_path_buf()),
             messages_enabled: true,
@@ -1730,6 +1758,10 @@ mod tests {
                 auto_expose_installed: false,
             },
             ..Default::default()
+        };
+        ToolTestRuntimeConfig {
+            config,
+            _runtime_home: runtime_home,
         }
     }
 
@@ -1850,7 +1882,7 @@ mod tests {
         root: &Path,
         command: String,
     ) -> runtime_config::ToolRuntimeConfig {
-        let mut config = test_tool_runtime_config(root);
+        let mut config = test_tool_runtime_config(root).into_inner();
         config.browser_companion.enabled = true;
         config.browser_companion.ready = true;
         config.browser_companion.command = Some(command);
@@ -1976,7 +2008,7 @@ mod tests {
             "# Demo Skill\n\nUse this skill for explicit verification.\n",
         );
 
-        let config = test_tool_runtime_config(root.clone());
+        let config = test_tool_runtime_config(&root);
         execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "external_skills.install".to_owned(),
@@ -4533,6 +4565,35 @@ mod tests {
         for name in registry_names {
             assert!(feishu::is_known_feishu_tool_name(name));
         }
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
+    #[test]
+    fn tool_search_creates_tool_lease_secret_under_scoped_runtime_home() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-home-override");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        tool_lease_authority::clear_tool_lease_secret_cache_for_tests();
+
+        let config = test_tool_runtime_config(root);
+        let expected_home = config._runtime_home.path().to_path_buf();
+        let expected_secret = expected_home.join("tool-lease-secret.hex");
+        let payload = json!({
+            "query": "编辑文件",
+            "limit": 8
+        });
+        let request = ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload,
+        };
+        let outcome =
+            execute_tool_core_with_config(request, &config).expect("tool search should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert!(expected_secret.exists());
+
+        tool_lease_authority::clear_tool_lease_secret_cache_for_tests();
     }
 
     #[cfg(feature = "feishu-integration")]

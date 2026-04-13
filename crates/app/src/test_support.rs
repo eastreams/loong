@@ -1,5 +1,8 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
+#[cfg(test)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -27,17 +30,24 @@ fn subprocess_lock() -> &'static Mutex<()> {
 
 pub struct ScopedEnv {
     originals: Vec<(&'static str, Option<OsString>)>,
-    _guard: MutexGuard<'static, ()>,
+    guard: Option<MutexGuard<'static, ()>>,
 }
 
 impl ScopedEnv {
     pub fn new() -> Self {
-        let guard = env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let depth_before = scoped_env_depth();
+        let guard = if depth_before == 0 {
+            let guard = env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Some(guard)
+        } else {
+            None
+        };
+        set_scoped_env_depth(depth_before.saturating_add(1));
         Self {
             originals: Vec::new(),
-            _guard: guard,
+            guard,
         }
     }
 
@@ -70,6 +80,59 @@ impl Drop for ScopedEnv {
                 None => crate::process_env::remove_var(key),
             }
         }
+
+        let depth_before = scoped_env_depth();
+        let depth_after = depth_before.saturating_sub(1);
+        set_scoped_env_depth(depth_after);
+
+        if depth_after == 0 {
+            self.guard.take();
+        }
+    }
+}
+
+thread_local! {
+    static SCOPED_ENV_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+fn scoped_env_depth() -> usize {
+    SCOPED_ENV_DEPTH.with(|depth| depth.get())
+}
+
+fn set_scoped_env_depth(value: usize) {
+    SCOPED_ENV_DEPTH.with(|depth| {
+        depth.set(value);
+    });
+}
+
+#[cfg(test)]
+pub struct ScopedLoongClawHome {
+    env: ScopedEnv,
+    temp_home: tempfile::TempDir,
+}
+
+#[cfg(test)]
+impl ScopedLoongClawHome {
+    pub fn new(prefix: &str) -> Self {
+        let temp_home = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir()
+            .expect("create scoped loongclaw home");
+        let mut env = ScopedEnv::new();
+        env.set("LOONG_HOME", temp_home.path());
+        Self { env, temp_home }
+    }
+
+    pub fn path(&self) -> &Path {
+        self.temp_home.path()
+    }
+
+    pub fn join(&self, relative: impl AsRef<Path>) -> PathBuf {
+        self.path().join(relative)
+    }
+
+    pub fn env(&self) -> &ScopedEnv {
+        &self.env
     }
 }
 
@@ -369,6 +432,23 @@ mod tests {
             recovery.is_ok(),
             "ScopedEnv::new should recover from a poisoned env lock"
         );
+    }
+
+    #[test]
+    fn scoped_env_supports_nested_guards_on_one_thread() {
+        let mut outer = ScopedEnv::new();
+        outer.set("LOONG_HOME", "/tmp/outer");
+
+        let mut inner = ScopedEnv::new();
+        inner.set("LOONG_HOME", "/tmp/inner");
+
+        let inner_value = std::env::var_os("LOONG_HOME");
+        assert_eq!(inner_value, Some(std::ffi::OsString::from("/tmp/inner")));
+
+        drop(inner);
+
+        let outer_value = std::env::var_os("LOONG_HOME");
+        assert_eq!(outer_value, Some(std::ffi::OsString::from("/tmp/outer")));
     }
 
     #[test]

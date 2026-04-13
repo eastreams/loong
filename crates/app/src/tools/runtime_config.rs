@@ -1732,7 +1732,7 @@ pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
     #[cfg(feature = "feishu-integration")]
     use std::collections::BTreeMap;
 
@@ -3545,6 +3545,7 @@ Treat these as enforced limits for this child session."
     #[cfg(feature = "feishu-integration")]
     #[test]
     fn from_env_enables_feishu_runtime_when_credentials_exist() {
+        let _home = ScopedLoongClawHome::new("loongclaw-feishu-runtime-home");
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         clear_feishu_runtime_env(&mut env);

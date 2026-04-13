@@ -158,7 +158,7 @@ mod tests {
     use loongclaw_contracts::SecretRef;
 
     use super::*;
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
     use std::collections::BTreeSet;
 
     fn clear_config_test_secret_envs(env: &mut ScopedEnv) {
@@ -910,6 +910,7 @@ mod tests {
             Some(std::path::PathBuf::from(":memory:"))
         );
 
+        let _home = ScopedLoongClawHome::new("loongclaw-provider-profile-home");
         let profile_sqlite_default = ProviderConfig::default();
         let expected_default = default_loongclaw_home().join("provider-profile-state.sqlite3");
         assert_eq!(

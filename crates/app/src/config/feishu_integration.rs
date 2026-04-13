@@ -169,9 +169,11 @@ fn normalize_scope_alias(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedLoongClawHome;
 
     #[test]
     fn feishu_integration_defaults_use_dedicated_runtime_db() {
+        let _home = ScopedLoongClawHome::new("loongclaw-feishu-integration-home");
         let config = FeishuIntegrationConfig::default();
         assert_eq!(
             config.resolved_sqlite_path(),
