@@ -12,6 +12,7 @@ use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedQqbotChannelConfig,
 };
 use crate::context::DEFAULT_TOKEN_TTL_S;
+use tracing;
 
 use self::message_manager::QqbotMsgManager;
 use self::token_manager::QqbotTokenManager;
@@ -57,10 +58,10 @@ pub(super) async fn run_qqbot_channel(
     let _ = selected_by_default;
     let _ = default_account_source;
 
-    eprintln!(
-        "qqbot channel starting for account {} (config={})",
-        resolved.account.id,
-        resolved_path.display()
+    tracing::info!(
+        account_id = %resolved.account.id,
+        config_path = %resolved_path.display(),
+        "qqbot channel starting"
     );
 
     let app_id = resolved.app_id().ok_or("qqbot app_id missing")?;
@@ -98,7 +99,10 @@ pub(super) async fn run_qqbot_channel(
     tokio::select! {
         result = ws_manager.run_session() => result,
         _ = stop.wait() => {
-            eprintln!("qqbot channel shutting down for account {}", resolved.account.id);
+            tracing::info!(
+                account_id = %resolved.account.id,
+                "qqbot channel shutting down"
+            );
             Ok(())
         }
     }

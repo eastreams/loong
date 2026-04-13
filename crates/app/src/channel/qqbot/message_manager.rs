@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tracing;
 
 use crate::CliResult;
 use crate::KernelContext;
@@ -59,9 +60,9 @@ impl QqbotMsgManager {
     /// Enqueue a raw WebSocket payload. Drops if at capacity.
     pub(super) fn enqueue(&mut self, payload: Value) {
         if self.queue.len() >= MAX_QUEUE_CAPACITY {
-            eprintln!(
-                "warning: qqbot message queue full for account {}, dropping message",
-                self.account_id
+            tracing::warn!(
+                account_id = %self.account_id,
+                "qqbot message queue full, dropping message"
             );
             return;
         }
@@ -72,7 +73,11 @@ impl QqbotMsgManager {
     pub(super) async fn process_all(&mut self) {
         while let Some(payload) = self.queue.pop_front() {
             if let Err(e) = self.process_single(&payload).await {
-                eprintln!("warning: qqbot message processing failed: {e}");
+                tracing::warn!(
+                    account_id = %self.account_id,
+                    error = %e,
+                    "qqbot message processing failed"
+                );
             }
         }
     }
@@ -107,9 +112,9 @@ impl QqbotMsgManager {
             .await
             .is_err()
         {
-            eprintln!(
-                "warning: qqbot outbound channel closed for account {}",
-                self.account_id
+            tracing::warn!(
+                account_id = %self.account_id,
+                "qqbot outbound channel closed"
             );
         }
 
