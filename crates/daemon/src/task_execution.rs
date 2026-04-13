@@ -1,10 +1,13 @@
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use kernel::{
-    Capability, CapabilityToken, ConnectorCommand, ExecutionRoute, HarnessAdapter, HarnessError,
-    HarnessKind, HarnessOutcome, HarnessRequest, LoongKernel, PolicyEngine, StaticPolicyEngine,
-    TaskIntent, TaskState, TaskSupervisor,
+    AuditSink, Capability, CapabilityToken, ConnectorCommand, ExecutionRoute, HarnessAdapter,
+    HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, LoongClawKernel,
+    PolicyEngine, StaticPolicyEngine, SystemClock, TaskIntent, TaskState, TaskSupervisor,
+    VerticalPackManifest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -84,30 +87,30 @@ impl HarnessAdapter for EmbeddedAgentHarness {
         let payload = serde_json::from_value::<DaemonTurnTaskPayload>(request.payload)
             .map_err(|error| HarnessError::Execution(format!("invalid_turn_payload: {error}")))?;
         let message = payload.message.unwrap_or(request.objective);
-        let runtime = loong_app::agent_runtime::AgentRuntime::new();
-        let turn_result = runtime
-            .run_turn(
-                payload.config_path.as_deref(),
-                payload.session_hint.as_deref(),
-                &loong_app::agent_runtime::AgentTurnRequest {
-                    message,
-                    turn_mode: payload.turn_mode,
-                    channel_id: None,
-                    account_id: None,
-                    conversation_id: None,
-                    participant_id: None,
-                    thread_id: None,
-                    metadata: payload.metadata,
-                    acp: payload.acp,
-                    acp_event_stream: payload.acp_event_stream,
-                    acp_bootstrap_mcp_servers: payload.acp_bootstrap_mcp_servers,
-                    acp_cwd: payload.acp_cwd,
-                    live_surface_enabled: matches!(
-                        payload.turn_mode,
-                        loong_app::agent_runtime::AgentTurnMode::Interactive
-                    ),
-                },
-            )
+        let turn_request = loongclaw_app::agent_runtime::AgentTurnRequest {
+            message,
+            turn_mode: payload.turn_mode,
+            channel_id: None,
+            account_id: None,
+            conversation_id: None,
+            thread_id: None,
+            metadata: payload.metadata,
+            acp: payload.acp,
+            acp_event_stream: payload.acp_event_stream,
+            acp_bootstrap_mcp_servers: payload.acp_bootstrap_mcp_servers,
+            acp_cwd: payload.acp_cwd,
+            live_surface_enabled: matches!(
+                payload.turn_mode,
+                loongclaw_app::agent_runtime::AgentTurnMode::Interactive
+            ),
+        };
+        let turn_service = loongclaw_app::agent_runtime::load_turn_execution_service(
+            payload.config_path.as_deref(),
+        )
+        .map_err(HarnessError::Execution)?;
+        let turn_options = loongclaw_app::agent_runtime::TurnExecutionOptions::default();
+        let turn_result = turn_service
+            .execute(payload.session_hint.as_deref(), &turn_request, turn_options)
             .await
             .map_err(HarnessError::Execution)?;
 
@@ -125,10 +128,44 @@ impl HarnessAdapter for EmbeddedAgentHarness {
 /// This starts from the spec/kernel bootstrap defaults and then registers the
 /// embedded agent harness so daemon task intents can route back into the shared
 /// `AgentRuntime` pipeline without spawning an external process.
-fn build_daemon_runtime_kernel() -> LoongKernel<StaticPolicyEngine> {
-    let mut kernel = kernel_bootstrap::BootstrapBuilder::default().into_builder();
+fn build_daemon_runtime_kernel() -> LoongClawKernel<StaticPolicyEngine> {
+    let audit_sink = Arc::new(InMemoryAuditSink::default());
+    let audit_sink = audit_sink as Arc<dyn AuditSink>;
+    let clock = Arc::new(SystemClock) as Arc<dyn kernel::Clock>;
+    let mut kernel =
+        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit_sink);
+    let pack = daemon_runtime_pack_manifest();
+    let register_pack_result = kernel.register_pack(pack);
+    register_pack_result.expect("daemon runtime pack should register");
     kernel.register_harness_adapter(EmbeddedAgentHarness);
     kernel
+}
+
+fn daemon_runtime_pack_manifest() -> VerticalPackManifest {
+    let allowed_connectors = BTreeSet::new();
+    let granted_capabilities = BTreeSet::from([
+        Capability::InvokeTool,
+        Capability::MemoryRead,
+        Capability::MemoryWrite,
+    ]);
+    let metadata = BTreeMap::from([
+        ("owner".to_owned(), "daemon-runtime".to_owned()),
+        ("stage".to_owned(), "runtime".to_owned()),
+    ]);
+    let default_route = ExecutionRoute {
+        harness_kind: HarnessKind::EmbeddedPi,
+        adapter: Some("pi-local".to_owned()),
+    };
+
+    VerticalPackManifest {
+        pack_id: DEFAULT_PACK_ID.to_owned(),
+        domain: "engineering".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route,
+        allowed_connectors,
+        granted_capabilities,
+        metadata,
+    }
 }
 
 fn require_successful_daemon_task_execution(
@@ -189,7 +226,7 @@ pub async fn run_demo() -> CliResult<()> {
 pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
     let payload = crate::cli_json::parse_json_payload(payload_raw, "run-task payload")?;
 
-    let kernel = kernel_bootstrap::KernelBuilder::default().build();
+    let kernel = build_daemon_runtime_kernel();
     let token = kernel
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
         .map_err(|error| format!("token issue failed: {error}"))?;
@@ -232,19 +269,14 @@ pub(crate) async fn run_turn_cli(
     if message.trim().is_empty() {
         return Err("turn message must not be empty".to_owned());
     }
-    let (_resolved_path, config) = loong_app::config::load(config_path)?;
+    let turn_service = loongclaw_app::agent_runtime::load_turn_execution_service(config_path)?;
+    let config = turn_service.config();
     if !config.cli.enabled {
         return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
     }
 
-    let kernel = build_daemon_runtime_kernel();
-    let token = kernel
-        .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
-        .map_err(|error| format!("token issue failed: {error}"))?;
-    let payload = serde_json::to_value(DaemonTurnTaskPayload {
-        config_path: config_path.map(ToOwned::to_owned),
-        session_hint: session_hint.map(ToOwned::to_owned),
-        message: Some(message.to_owned()),
+    let turn_request = loongclaw_app::agent_runtime::AgentTurnRequest {
+        message: message.to_owned(),
         turn_mode: if acp {
             loong_app::agent_runtime::AgentTurnMode::Acp
         } else {
@@ -255,29 +287,12 @@ pub(crate) async fn run_turn_cli(
         acp_event_stream,
         acp_bootstrap_mcp_servers: acp_bootstrap_mcp_server.to_vec(),
         acp_cwd: acp_cwd.map(ToOwned::to_owned),
-    })
-    .map_err(|error| format!("serialize turn payload failed: {error}"))?;
-
-    let dispatch = execute_daemon_task_with_supervisor(
-        &kernel,
-        DEFAULT_PACK_ID,
-        &token,
-        TaskIntent {
-            task_id: "turn-run-01".to_owned(),
-            objective: message.to_owned(),
-            required_capabilities: BTreeSet::from([
-                Capability::InvokeTool,
-                Capability::MemoryRead,
-                Capability::MemoryWrite,
-            ]),
-            payload,
-        },
-    )
-    .await?;
-    let (_, outcome) = require_successful_daemon_task_execution(&dispatch)?;
-    let result =
-        serde_json::from_value::<loong_app::agent_runtime::AgentTurnResult>(outcome.output.clone())
-            .map_err(|error| format!("parse turn result failed: {error}"))?;
+        ..Default::default()
+    };
+    let turn_options = loongclaw_app::agent_runtime::TurnExecutionOptions::default();
+    let result = turn_service
+        .execute(session_hint, &turn_request, turn_options)
+        .await?;
     println!("{}", result.output_text);
     Ok(())
 }
@@ -396,27 +411,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daemon_runtime_kernel_overrides_pi_local_stub_harness() {
-        let mut env = crate::test_support::ScopedEnv::new();
-        let home = std::env::temp_dir().join(format!(
-            "loong-daemon-runtime-harness-home-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&home).expect("create isolated daemon home");
-        env.set("HOME", &home);
-        env.remove("LOONG_HOME");
-        env.remove("LOONG_CONFIG_PATH");
-        env.remove("LOONGCLAW_CONFIG_PATH");
-
+    async fn daemon_runtime_kernel_rejects_invalid_turn_payload_instead_of_using_stub_echo() {
         let kernel = build_daemon_runtime_kernel();
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
             .expect("issue token");
-        let payload = serde_json::to_value(DaemonTurnTaskPayload {
-            message: Some("hello".to_owned()),
-            ..DaemonTurnTaskPayload::default()
-        })
-        .expect("serialize turn payload");
+        let payload = json!({
+            "message": 42
+        });
 
         let execution = execute_daemon_task_with_supervisor(
             &kernel,
@@ -439,11 +441,11 @@ mod tests {
         let error = execution
             .error
             .as_deref()
-            .expect("missing config should fail through the real runtime harness");
+            .expect("invalid payload should fail through the real runtime harness");
 
         assert!(execution.outcome.is_none());
         assert!(
-            error.contains("failed to read config"),
+            error.contains("invalid_turn_payload"),
             "expected unified runtime harness failure, got: {error}"
         );
     }

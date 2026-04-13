@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(feature = "memory-sqlite")]
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
@@ -34,6 +35,7 @@ use crate::acp::{
     AcpConversationTurnEntryDecision, AcpConversationTurnExecutionOutcome,
     AcpConversationTurnOptions, AcpTurnEventSink, evaluate_acp_conversation_turn_entry_for_address,
     execute_acp_conversation_turn_for_address,
+    execute_acp_conversation_turn_for_address_with_manager,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -1464,8 +1466,34 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
+        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            acp_options,
+            binding,
+            ingress,
+            observer,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
         let runtime = Self::build_default_runtime_or_observe_failure(config, observer.as_ref())?;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
@@ -1475,7 +1503,7 @@ impl ConversationTurnCoordinator {
             binding,
             ingress,
             observer,
-            None,
+            acp_manager,
         )
         .await
     }
@@ -1513,17 +1541,43 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
+        self.handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            acp_options,
+            binding,
+            observer,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<ConversationTurnObserverHandle>,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
         let observer_ref = observer.as_ref();
         let production_binding = require_production_kernel_binding(binding, observer_ref)?;
 
-        self.handle_turn_with_address_and_acp_options_and_observer(
+        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
             error_mode,
             acp_options,
             production_binding,
+            None,
             observer,
+            acp_manager,
         )
         .await
     }
@@ -1878,7 +1932,38 @@ impl ConversationTurnCoordinator {
             binding,
             ingress,
             observer,
-            retry_progress,
+            None,
+        )
+        .await
+        .map(|outcome| outcome.reply)
+    }
+
+    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            binding,
+            ingress,
+            observer,
+            acp_manager,
         )
         .await
         .map(|outcome| outcome.reply)
@@ -1897,7 +1982,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
-        retry_progress: crate::provider::ProviderRetryProgressCallback,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<ConversationTurnOutcome> {
         let turn_result: CliResult<(ConversationTurnOutcome, bool)> = async {
             let session_id = address.session_id.as_str();
@@ -1966,7 +2051,7 @@ impl ConversationTurnCoordinator {
                 }
                 AcpConversationTurnEntryDecision::RouteViaAcp => {
                     let reply = self
-                        .handle_turn_via_acp(
+                        .handle_turn_via_acp_with_manager(
                             config,
                             address,
                             user_input,
@@ -1974,6 +2059,7 @@ impl ConversationTurnCoordinator {
                             runtime,
                             acp_options,
                             binding,
+                            acp_manager.clone(),
                         )
                         .await?;
                     return Ok((ConversationTurnOutcome { reply, usage: None }, true));
@@ -2069,18 +2155,11 @@ impl ConversationTurnCoordinator {
         .await;
 
         match turn_result {
-            Ok((reply, true)) => {
-                #[cfg(feature = "memory-sqlite")]
-                persist_task_progress_event_best_effort(
-                    config,
-                    address.session_id.as_str(),
-                    "turn_completed",
-                    completed_task_progress_record(config, address.session_id.as_str(), user_input),
-                );
+            Ok((outcome, true)) => {
                 observe_non_provider_turn_terminal_success_phases(observer.as_ref());
-                Ok(reply)
+                Ok(outcome)
             }
-            Ok((reply, false)) => Ok(reply),
+            Ok((outcome, false)) => Ok(outcome),
             Err(error) => {
                 let failed_event = ConversationTurnPhaseEvent::failed();
                 observe_turn_phase(observer.as_ref(), failed_event);
@@ -2443,10 +2522,47 @@ impl ConversationTurnCoordinator {
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
+        self.handle_turn_via_acp_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            binding,
+            None,
+        )
+        .await
+    }
+
+    async fn handle_turn_via_acp_with_manager<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
         let session_id = address.session_id.as_str();
-        let executed =
-            execute_acp_conversation_turn_for_address(config, address, user_input, acp_options)
-                .await?;
+        let executed = match acp_manager {
+            Some(manager) => {
+                execute_acp_conversation_turn_for_address_with_manager(
+                    config,
+                    address,
+                    user_input,
+                    acp_options,
+                    manager,
+                )
+                .await?
+            }
+            None => {
+                execute_acp_conversation_turn_for_address(config, address, user_input, acp_options)
+                    .await?
+            }
+        };
         let persistence_context = &executed.persistence_context;
 
         match executed.outcome {

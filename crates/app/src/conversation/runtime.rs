@@ -337,6 +337,31 @@ impl SessionContext {
     }
 }
 
+fn configured_root_session_workspace_root(config: &LoongClawConfig) -> Option<PathBuf> {
+    config
+        .tools
+        .configured_runtime_workspace_root()
+        .or_else(|| config.tools.configured_file_root())
+        .and_then(|workspace_root| {
+            let canonical_workspace_root = dunce::canonicalize(&workspace_root).ok()?;
+            canonical_workspace_root
+                .is_dir()
+                .then_some(canonical_workspace_root)
+        })
+}
+
+fn root_session_context_from_config(
+    config: &LoongClawConfig,
+    session_id: impl Into<String>,
+    tool_view: ToolView,
+) -> SessionContext {
+    let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
+    if let Some(workspace_root) = configured_root_session_workspace_root(config) {
+        session_context = session_context.with_workspace_root(workspace_root);
+    }
+    session_context
+}
+
 fn non_empty_runtime_narrowing_ref(
     runtime_narrowing: Option<&ToolRuntimeNarrowing>,
 ) -> Option<&ToolRuntimeNarrowing> {
@@ -761,7 +786,7 @@ fn build_session_context_from_snapshot(
         Some(parent_session_id) => {
             SessionContext::child(snapshot.session_id.clone(), parent_session_id, tool_view)
         }
-        None => SessionContext::root_with_tool_view(snapshot.session_id.clone(), tool_view),
+        None => root_session_context_from_config(config, snapshot.session_id.clone(), tool_view),
     };
     if let Some(profile) = snapshot.delegate_profile {
         session_context = session_context.with_profile(profile);
@@ -1506,13 +1531,9 @@ pub trait ConversationRuntime: Send + Sync {
             return Ok(session_context);
         }
 
-        let visible_external_skill_roots = model_visible_external_skill_roots_from_config(config);
-        let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
-        if !visible_external_skill_roots.is_empty() {
-            session_context =
-                session_context.with_visible_external_skill_roots(visible_external_skill_roots);
-        }
-        Ok(session_context)
+        Ok(root_session_context_from_config(
+            config, session_id, tool_view,
+        ))
     }
 
     fn tool_view(
@@ -1934,28 +1955,19 @@ where
                 );
             }
 
-            let visible_external_skill_roots =
-                model_visible_external_skill_roots_from_config(config);
-            let mut session_context =
-                SessionContext::root_with_tool_view(session_id, base_tool_view);
-            if !visible_external_skill_roots.is_empty() {
-                session_context =
-                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
-            }
-            Ok(session_context)
+            Ok(root_session_context_from_config(
+                config,
+                session_id,
+                base_tool_view,
+            ))
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
             let tool_view = self.tool_view(config, session_id, _binding)?;
-            let visible_external_skill_roots =
-                model_visible_external_skill_roots_from_config(config);
-            let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
-            if !visible_external_skill_roots.is_empty() {
-                session_context =
-                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
-            }
-            Ok(session_context)
+            Ok(root_session_context_from_config(
+                config, session_id, tool_view,
+            ))
         }
     }
 

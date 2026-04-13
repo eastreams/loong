@@ -1034,6 +1034,37 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
         provenance,
         provider_error_mode,
         observer_override,
+        None,
+    )
+    .await
+    .map(|outcome| outcome.reply)
+}
+
+pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_and_acp_manager(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    ingress: Option<&ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'_>,
+    provider_error_mode: ProviderErrorMode,
+    observer_override: Option<ConversationTurnObserverHandle>,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+) -> CliResult<String> {
+    run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+        runtime,
+        address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        metadata,
+        ingress,
+        provenance,
+        provider_error_mode,
+        observer_override,
+        acp_manager,
     )
     .await
     .map(|outcome| outcome.reply)
@@ -1050,6 +1081,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 ) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
     let acp_options = if runtime.explicit_acp_request {
@@ -1070,18 +1102,20 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     } else {
         None
     };
+    let binding = crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx);
     if let Some(ingress) = ingress {
         runtime
             .turn_coordinator
-            .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &turn_config,
                 address,
                 input,
                 provider_error_mode,
                 &acp_options,
-                runtime.conversation_binding(),
+                binding,
                 Some(ingress),
                 live_surface_observer,
+                acp_manager,
             )
             .await
             .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
@@ -1095,10 +1129,10 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 provider_error_mode,
                 &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
                 &acp_options,
-                runtime.conversation_binding(),
+                binding,
                 None,
                 live_surface_observer,
-                None,
+                acp_manager,
             )
             .await
     }

@@ -36,6 +36,46 @@ fn execute_tool_core_with_test_context(
 
 #[cfg(feature = "tool-file")]
 #[test]
+fn file_read_uses_runtime_workspace_root_from_runtime_config() {
+    let outer_root = std::env::temp_dir().join(format!(
+        "loongclaw-file-read-runtime-workspace-root-outer-{}",
+        std::process::id()
+    ));
+    let runtime_root = std::env::temp_dir().join(format!(
+        "loongclaw-file-read-runtime-workspace-root-runtime-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&outer_root).expect("create outer root");
+    std::fs::create_dir_all(&runtime_root).expect("create runtime root");
+    std::fs::write(outer_root.join("note.txt"), "outer").expect("write outer note");
+    std::fs::write(runtime_root.join("note.txt"), "runtime").expect("write runtime note");
+
+    let mut config = test_tool_runtime_config(outer_root.clone());
+    config.workspace_root = Some(runtime_root.clone());
+
+    let outcome = execute_tool_core_with_test_context(
+        ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "note.txt"
+            }),
+        },
+        &config,
+    )
+    .expect("runtime workspace root should be used for default resolution");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["content"], "runtime");
+    let expected_path =
+        dunce::canonicalize(runtime_root.join("note.txt")).expect("canonicalize runtime note");
+    assert_eq!(outcome.payload["path"], expected_path.display().to_string());
+
+    std::fs::remove_dir_all(&outer_root).ok();
+    std::fs::remove_dir_all(&runtime_root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
 fn file_read_uses_workspace_root_from_trusted_internal_payload() {
     let outer_root = std::env::temp_dir().join(format!(
         "loong-file-read-workspace-root-outer-{}",
