@@ -339,7 +339,7 @@ impl AgentRuntime {
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
             crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            true,
+            false,
         )?;
 
         self.run_turn_with_runtime(&runtime, request, event_sink)
@@ -368,7 +368,7 @@ impl AgentRuntime {
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
             crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            true,
+            false,
         )?;
 
         self.run_turn_with_runtime_and_observer_and_context_and_error_mode(
@@ -404,7 +404,7 @@ impl AgentRuntime {
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
             crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            true,
+            false,
         )?;
 
         self.run_turn_with_runtime_and_context_and_manager(
