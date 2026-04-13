@@ -879,10 +879,14 @@ pub fn execute_tool_core_with_config(
     let payload = request.payload;
     let workspace_root = trusted_workspace_root_from_payload(&payload)?;
     let runtime_narrowing = trusted_runtime_narrowing_from_payload(&payload)?;
-    let mut effective_config = match workspace_root {
-        Some(workspace_root) => config.with_file_root_override(workspace_root),
-        None => config.clone(),
-    };
+    let mut effective_config = config
+        .workspace_root
+        .clone()
+        .map(|workspace_root| config.with_file_root_override(workspace_root))
+        .unwrap_or_else(|| config.clone());
+    if let Some(workspace_root) = workspace_root {
+        effective_config = effective_config.with_file_root_override(workspace_root);
+    }
     if let Some(runtime_narrowing) = runtime_narrowing {
         effective_config = effective_config.narrowed(&runtime_narrowing);
     }

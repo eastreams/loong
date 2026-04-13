@@ -2397,15 +2397,15 @@ async fn turn_submit(
             acp_cwd: working_directory,
             live_surface_enabled: false,
         };
-        let execution_result = mvp::agent_runtime::AgentRuntime::new()
-            .run_turn_with_loaded_config_and_acp_manager(
-                resolved_path,
-                config,
-                Some(session_id.as_str()),
-                &turn_request,
-                Some(&event_forwarder),
-                acp_manager,
-            )
+        let turn_service =
+            crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
+                .with_acp_manager(acp_manager);
+        let turn_options = crate::mvp::agent_runtime::TurnExecutionOptions {
+            event_sink: Some(&event_forwarder),
+            ..Default::default()
+        };
+        let execution_result = turn_service
+            .execute(Some(session_id.as_str()), &turn_request, turn_options)
             .await;
 
         match execution_result {

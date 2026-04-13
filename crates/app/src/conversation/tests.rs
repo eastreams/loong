@@ -6429,6 +6429,64 @@ async fn handle_turn_with_runtime_streams_and_persists_acp_runtime_events_when_b
 }
 
 #[tokio::test]
+async fn handle_turn_with_runtime_automatic_acp_uses_injected_manager() {
+    let (backend_id, _backend_state) =
+        register_routed_acp_backend_with_events("injected-manager", false, Vec::new());
+    let runtime = FakeRuntime::new(Vec::new(), Ok("provider-should-not-run".to_owned()));
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    let memory_path = unique_acp_sqlite_path("injected-manager");
+    let provided_manager = Arc::new(crate::acp::AcpSessionManager::default());
+
+    config.acp.enabled = true;
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.dispatch.conversation_routing =
+        crate::config::AcpConversationRoutingMode::AgentPrefixedOnly;
+    config.memory.sqlite_path = memory_path;
+
+    let shared_manager =
+        crate::acp::shared_acp_session_manager(&config).expect("load shared ACP session manager");
+    let shared_snapshot_before = shared_manager
+        .observability_snapshot(&config)
+        .await
+        .expect("shared snapshot before turn");
+
+    assert_eq!(shared_snapshot_before.runtime_cache.active_sessions, 0);
+
+    let acp_options = AcpConversationTurnOptions::automatic();
+    let address = ConversationSessionAddress::from_session_id("agent:codex:acp-injected-manager");
+    let reply = coordinator
+        .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
+            &config,
+            &address,
+            "hello injected manager",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &acp_options,
+            ConversationRuntimeBinding::direct(),
+            None,
+            None,
+            Some(provided_manager.clone()),
+        )
+        .await
+        .expect("automatic ACP turn with injected manager should succeed");
+
+    assert_eq!(reply, "acp: hello injected manager");
+
+    let provided_snapshot = provided_manager
+        .observability_snapshot(&config)
+        .await
+        .expect("provided snapshot after turn");
+    let shared_snapshot_after = shared_manager
+        .observability_snapshot(&config)
+        .await
+        .expect("shared snapshot after turn");
+
+    assert_eq!(provided_snapshot.runtime_cache.active_sessions, 1);
+    assert_eq!(shared_snapshot_after.runtime_cache.active_sessions, 0);
+}
+
+#[tokio::test]
 async fn handle_turn_with_runtime_skips_compaction_when_disabled() {
     let runtime = FakeRuntime::new(
         vec![json!({"role": "system", "content": "sys"})],
@@ -20878,6 +20936,137 @@ async fn session_context_preserves_child_workspace_root_from_delegate_execution_
     assert!(
         system_content.contains("Child workspace identity"),
         "expected child workspace identity to be read from restored workspace root, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_root_session_prefers_runtime_workspace_root_over_file_root() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-root-runtime", "runtime-workspace-root")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let workspace_root = create_runtime_self_workspace(
+        "root-runtime-workspace-root",
+        "# Identity\n\n- Name: Root runtime workspace identity",
+    );
+    let fallback_root = crate::test_support::unique_temp_dir("root-runtime-fallback-file-root");
+    std::fs::create_dir_all(&fallback_root).expect("create fallback file root");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.file_root = Some(fallback_root.display().to_string());
+    config.tools.runtime_workspace_root = Some(workspace_root.display().to_string());
+
+    let runtime = DefaultConversationRuntime::default();
+    let session_context = runtime
+        .session_context(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load root session context");
+    let expected_workspace_root =
+        dunce::canonicalize(&workspace_root).unwrap_or_else(|_| workspace_root.clone());
+
+    assert_eq!(session_context.parent_session_id, None);
+    assert_eq!(
+        session_context.workspace_root.as_ref(),
+        Some(&expected_workspace_root),
+        "runtime workspace root should be preferred for root sessions"
+    );
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            "root-session",
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build root context from runtime workspace root");
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("Root runtime workspace identity"),
+        "expected root runtime workspace identity to be read from runtime workspace root, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn trait_default_root_session_falls_back_to_configured_file_root() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-root-runtime", "file-root-fallback")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let file_root = create_runtime_self_workspace(
+        "root-file-root-fallback",
+        "# Identity\n\n- Name: Root file root fallback identity",
+    );
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.file_root = Some(file_root.display().to_string());
+    config.tools.runtime_workspace_root = None;
+
+    let runtime = TraitDefaultToolViewRuntime;
+    let session_context = runtime
+        .session_context(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load trait-default root session context");
+    let expected_file_root = dunce::canonicalize(&file_root).unwrap_or_else(|_| file_root.clone());
+
+    assert_eq!(session_context.parent_session_id, None);
+    assert_eq!(
+        session_context.workspace_root.as_ref(),
+        Some(&expected_file_root),
+        "configured file root should backfill root session workspace scope"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn root_session_ignores_nonexistent_configured_file_root_for_workspace_scope() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-root-runtime", "nonexistent-file-root")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let missing_root = std::env::temp_dir().join(format!(
+        "loongclaw-missing-root-{}",
+        unique_acp_test_id("conversation-root-runtime", "missing-root-path")
+    ));
+    let _ = std::fs::remove_dir_all(&missing_root);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.file_root = Some(missing_root.display().to_string());
+    config.tools.runtime_workspace_root = None;
+
+    let runtime = TraitDefaultToolViewRuntime;
+    let session_context = runtime
+        .session_context(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load root session context with missing file root");
+
+    assert_eq!(session_context.parent_session_id, None);
+    assert_eq!(
+        session_context.workspace_root, None,
+        "nonexistent configured file root should not become trusted workspace scope"
     );
 }
 

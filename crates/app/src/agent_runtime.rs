@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, AcpTurnProvenance, JsonlAcpTurnEventSink};
 use crate::chat::{
     CliChatOptions, initialize_cli_turn_runtime, initialize_cli_turn_runtime_with_loaded_config,
+    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx,
 };
 use crate::config::load as load_config;
 use crate::conversation::{
@@ -98,6 +101,156 @@ pub struct AgentRuntimeEvent {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AgentRuntime;
+
+#[derive(Clone)]
+pub struct TurnExecutionService {
+    resolved_path: PathBuf,
+    config: crate::config::LoongClawConfig,
+    kernel_ctx: Option<crate::KernelContext>,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+}
+
+pub struct TurnExecutionOptions<'a> {
+    pub event_sink: Option<&'a dyn AcpTurnEventSink>,
+    pub observer: Option<crate::conversation::ConversationTurnObserverHandle>,
+    pub ingress: Option<&'a ConversationIngressContext>,
+    pub provenance: AcpTurnProvenance<'a>,
+    pub provider_error_mode: crate::conversation::ProviderErrorMode,
+}
+
+impl Default for TurnExecutionOptions<'_> {
+    fn default() -> Self {
+        Self {
+            event_sink: None,
+            observer: None,
+            ingress: None,
+            provenance: AcpTurnProvenance::default(),
+            provider_error_mode: crate::conversation::ProviderErrorMode::InlineMessage,
+        }
+    }
+}
+
+impl TurnExecutionService {
+    pub fn new(resolved_path: PathBuf, config: crate::config::LoongClawConfig) -> Self {
+        Self {
+            resolved_path,
+            config,
+            kernel_ctx: None,
+            acp_manager: None,
+        }
+    }
+
+    pub fn with_kernel_ctx(mut self, kernel_ctx: crate::KernelContext) -> Self {
+        self.kernel_ctx = Some(kernel_ctx);
+        self
+    }
+
+    pub fn with_acp_manager(mut self, acp_manager: Arc<crate::acp::AcpSessionManager>) -> Self {
+        self.acp_manager = Some(acp_manager);
+        self
+    }
+
+    pub fn config(&self) -> &crate::config::LoongClawConfig {
+        &self.config
+    }
+
+    pub fn execute<'a>(
+        &'a self,
+        session_hint: Option<&'a str>,
+        request: &'a AgentTurnRequest,
+        options: TurnExecutionOptions<'a>,
+    ) -> Pin<Box<dyn Future<Output = CliResult<AgentTurnResult>> + Send + 'a>> {
+        let runtime = AgentRuntime::new();
+        let resolved_path = self.resolved_path.clone();
+        let config = self.config.clone();
+        let kernel_ctx = self.kernel_ctx.clone();
+        let acp_manager = self.acp_manager.clone();
+        let event_sink = options.event_sink;
+        let observer = options.observer;
+        let ingress = options.ingress;
+        let provenance = options.provenance;
+        let provider_error_mode = options.provider_error_mode;
+
+        Box::pin(async move {
+            match (kernel_ctx, acp_manager) {
+                (Some(kernel_ctx), Some(acp_manager)) => {
+                    let options = cli_chat_options_for_turn_request(request);
+                    let cli_runtime =
+                        initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+                            resolved_path,
+                            config,
+                            session_hint,
+                            &options,
+                            kernel_ctx,
+                            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+                        )?;
+                    let execution_future = runtime.run_turn_with_runtime_and_context_and_manager(
+                        &cli_runtime,
+                        request,
+                        event_sink,
+                        observer,
+                        ingress,
+                        provenance,
+                        provider_error_mode,
+                        Some(acp_manager),
+                    );
+                    let execution_future = Box::pin(execution_future);
+
+                    execution_future.await
+                }
+                (Some(kernel_ctx), None) => {
+                    let execution_future = runtime
+                        .run_turn_with_loaded_config_and_kernel_ctx_and_observer_and_context_and_error_mode(
+                        resolved_path,
+                        config,
+                        session_hint,
+                        request,
+                        event_sink,
+                        observer,
+                        ingress,
+                        provenance,
+                        provider_error_mode,
+                        kernel_ctx,
+                    );
+                    let execution_future = Box::pin(execution_future);
+
+                    execution_future.await
+                }
+                (None, Some(acp_manager)) => {
+                    runtime
+                        .run_turn_with_loaded_config_and_acp_manager(
+                            resolved_path,
+                            config,
+                            session_hint,
+                            request,
+                            event_sink,
+                            acp_manager,
+                        )
+                        .await
+                }
+                (None, None) => {
+                    runtime
+                        .run_turn_with_loaded_config(
+                            resolved_path,
+                            config,
+                            session_hint,
+                            request,
+                            event_sink,
+                        )
+                        .await
+                }
+            }
+        })
+    }
+}
+
+pub fn load_turn_execution_service(config_path: Option<&str>) -> CliResult<TurnExecutionService> {
+    let loaded = crate::config::load(config_path)?;
+    let resolved_path = loaded.0;
+    let config = loaded.1;
+    let service = TurnExecutionService::new(resolved_path, config);
+    Ok(service)
+}
 
 impl AgentRuntime {
     pub const fn new() -> Self {
@@ -284,20 +437,20 @@ impl AgentRuntime {
         }
 
         let (effective_ingress, effective_provenance) = effective_turn_context(ingress, provenance);
-        let turn_outcome =
-            crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
-                runtime,
-                &turn_address,
-                message,
-                event_sink,
-                request.live_surface_enabled,
-                Some(&request.metadata),
-                effective_ingress,
-                effective_provenance,
-                provider_error_mode,
-                observer,
-            )
-            .await?;
+        let turn_outcome = crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+            runtime,
+            &turn_address,
+            message,
+            event_sink,
+            request.live_surface_enabled,
+            Some(&request.metadata),
+            effective_ingress,
+            effective_provenance,
+            provider_error_mode,
+            observer,
+            acp_manager,
+        )
+        .await?;
         let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
         let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
@@ -433,6 +586,46 @@ impl AgentRuntime {
             AcpTurnProvenance::default(),
             crate::conversation::ProviderErrorMode::InlineMessage,
             Some(acp_manager),
+        )
+        .await
+    }
+
+    pub(crate) async fn run_turn_with_loaded_config_and_kernel_ctx_and_observer_and_context_and_error_mode(
+        &self,
+        resolved_path: PathBuf,
+        config: crate::config::LoongClawConfig,
+        session_hint: Option<&str>,
+        request: &AgentTurnRequest,
+        event_sink: Option<&dyn AcpTurnEventSink>,
+        observer: Option<crate::conversation::ConversationTurnObserverHandle>,
+        ingress: Option<&ConversationIngressContext>,
+        provenance: AcpTurnProvenance<'_>,
+        provider_error_mode: crate::conversation::ProviderErrorMode,
+        kernel_ctx: crate::KernelContext,
+    ) -> CliResult<AgentTurnResult> {
+        if request.message.trim().is_empty() {
+            return Err("agent runtime message must not be empty".to_owned());
+        }
+
+        let options = cli_chat_options_for_turn_request(request);
+        let runtime = initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+            resolved_path,
+            config,
+            session_hint,
+            &options,
+            kernel_ctx,
+            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+        )?;
+
+        self.run_turn_with_runtime_and_context_and_manager(
+            &runtime,
+            request,
+            event_sink,
+            observer,
+            ingress,
+            provenance,
+            provider_error_mode,
+            None,
         )
         .await
     }

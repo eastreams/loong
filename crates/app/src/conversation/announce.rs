@@ -488,6 +488,7 @@ pub(crate) fn enqueue_delegate_result_announce_without_spawn_for_tests(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use serde_json::json;
     use tokio::time::{Duration, sleep};
@@ -509,9 +510,14 @@ mod tests {
 
     const DELEGATE_ANNOUNCE_EVENT_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 
-    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
-        let base =
-            std::env::temp_dir().join(format!("loong-announce-{test_name}-{}", std::process::id()));
+    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+        static NEXT_ISOLATED_MEMORY_ID: AtomicU64 = AtomicU64::new(1);
+
+        let isolated_id = NEXT_ISOLATED_MEMORY_ID.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "loongclaw-announce-{test_name}-{}-{isolated_id}",
+            std::process::id(),
+        ));
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
