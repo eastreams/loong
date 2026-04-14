@@ -57,6 +57,9 @@ turns for replay and final-result fetch.
 - [ ] The local product control plane exposes one stable default loopback
       address so browser shells and operator tooling do not need ad-hoc file
       reads just to discover the default gateway endpoint.
+- [ ] Shared local gateway clients bootstrap against the stable default
+      front door first and only fall back to persisted owner-state discovery
+      when the operator explicitly chose an override or ephemeral port.
 - [ ] Operator-facing status surfaces explain whether the active control-surface
       port came from the built-in default, config, env, or CLI override.
 - [ ] The control plane remains a thin product layer above the runtime and does

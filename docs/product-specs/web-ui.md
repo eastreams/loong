@@ -49,6 +49,10 @@ gateway endpoint as the normal bootstrap path and only fall back to persisted
 owner-state discovery when operators intentionally override the port with
 `--port`, `LOONGCLAW_GATEWAY_PORT`, or `--port 0`.
 
+The shared local gateway client should reflect the same rule: try the stable
+front door first, then use persisted owner-state discovery only for override
+and explicit ephemeral cases.
+
 The current daemon slice also includes a reusable localhost discovery/client
 contract that validates loopback binding, loads the local bearer token, and
 offers route-scoped helpers for the current gateway API. The Web UI dashboard

@@ -634,9 +634,10 @@ When `gateway run` is active, it also binds a loopback-only control endpoint on
 `port_source`, and `token_path` into `loongclaw gateway status --json`. Use `--port` or
 `LOONGCLAW_GATEWAY_PORT` when you need a different localhost port; use
 `--port 0` only when you explicitly want an OS-assigned ephemeral port for
-isolated test or lab runs. Local clients such as the future Web UI can
-discover the running owner through that persisted state without introducing a
-second service lifecycle.
+isolated test or lab runs. Local clients such as the future Web UI now try the
+stable `127.0.0.1:26306` front door first and only fall back to the persisted
+owner state when operators intentionally override that port, without
+introducing a second service lifecycle.
 
 The daemon now also carries a reusable localhost gateway client/discovery layer
 that centralizes loopback validation, bearer-token loading, and route helpers

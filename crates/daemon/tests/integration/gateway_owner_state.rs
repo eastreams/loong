@@ -273,6 +273,115 @@ async fn gateway_owner_state_uses_configured_gateway_port_when_no_override_is_pr
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::await_holding_lock)]
+async fn gateway_owner_state_uses_cli_gateway_port_override_when_present() {
+    let _lock = lock_daemon_test_environment();
+    let runtime_dir = unique_runtime_dir("cli-port");
+    let configured_port = unique_gateway_port();
+    let cli_port = unique_gateway_port();
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(move |_| {
+            let mut loaded = headless_loaded_config_fixture();
+            loaded.config.gateway.port = configured_port;
+            Ok(loaded)
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            Some(cli_port),
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let actual_port = running_status
+        .port
+        .expect("control surface port should be persisted");
+    let port_source = running_status
+        .port_source
+        .expect("port source should be persisted");
+
+    assert_eq!(actual_port, cli_port);
+    assert_eq!(port_source.as_str(), "cli");
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::await_holding_lock)]
+async fn gateway_owner_state_marks_explicit_ephemeral_cli_port_source() {
+    let _lock = lock_daemon_test_environment();
+    let runtime_dir = unique_runtime_dir("ephemeral-cli-port");
+    let configured_port = unique_gateway_port();
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(move |_| {
+            let mut loaded = headless_loaded_config_fixture();
+            loaded.config.gateway.port = configured_port;
+            Ok(loaded)
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            Some(0),
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let actual_port = running_status
+        .port
+        .expect("control surface port should be persisted");
+    let port_source = running_status
+        .port_source
+        .expect("port source should be persisted");
+
+    assert!(actual_port > 0);
+    assert_eq!(port_source.as_str(), "ephemeral_cli");
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_rejects_second_active_owner_slot() {
     let runtime_dir = unique_runtime_dir("exclusive-slot");
     let hooks = SupervisorRuntimeHooks {

@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use reqwest::blocking::Client as BlockingClient;
 use reqwest::{Client, Method, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -12,8 +13,17 @@ use crate::CliResult;
 
 use super::{
     read_models::GatewayOperatorSummaryReadModel,
-    state::{GatewayOwnerStatus, default_gateway_runtime_state_dir, load_gateway_owner_status},
+    state::{
+        GatewayOwnerStatus, default_gateway_runtime_state_dir, gateway_control_token_path,
+        load_gateway_owner_status,
+    },
 };
+
+const DEFAULT_GATEWAY_BOOTSTRAP_HOST: &str = "127.0.0.1";
+const DEFAULT_GATEWAY_BOOTSTRAP_CONNECT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(500);
+const DEFAULT_GATEWAY_BOOTSTRAP_REQUEST_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(2);
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct GatewayAcpSessionsRequest {
@@ -43,7 +53,8 @@ pub struct GatewayLocalDiscovery {
 impl GatewayLocalDiscovery {
     pub fn discover_default() -> CliResult<Self> {
         let runtime_dir = default_gateway_runtime_state_dir();
-        Self::discover(runtime_dir.as_path())
+        let bootstrap_address = default_gateway_bootstrap_socket_address();
+        discover_prefer_bootstrap(runtime_dir.as_path(), bootstrap_address)
     }
 
     pub fn discover(runtime_dir: &Path) -> CliResult<Self> {
@@ -88,6 +99,93 @@ impl GatewayLocalDiscovery {
     fn bearer_token(&self) -> &str {
         self.bearer_token.as_str()
     }
+}
+
+fn discover_prefer_bootstrap(
+    runtime_dir: &Path,
+    bootstrap_address: SocketAddr,
+) -> CliResult<GatewayLocalDiscovery> {
+    let bootstrap_result = discover_with_bootstrap(runtime_dir, bootstrap_address);
+    if let Ok(discovery) = bootstrap_result {
+        return Ok(discovery);
+    }
+
+    let owner_state_result = GatewayLocalDiscovery::discover(runtime_dir);
+    match owner_state_result {
+        Ok(discovery) => Ok(discovery),
+        Err(owner_state_error) => {
+            let bootstrap_error = bootstrap_result.expect_err("bootstrap result should be err");
+            let runtime_dir_text = runtime_dir.display().to_string();
+            let error = format!(
+                "gateway bootstrap discovery failed in {runtime_dir_text}: {bootstrap_error}; owner-state fallback failed: {owner_state_error}"
+            );
+            Err(error)
+        }
+    }
+}
+
+fn discover_with_bootstrap(
+    runtime_dir: &Path,
+    bootstrap_address: SocketAddr,
+) -> CliResult<GatewayLocalDiscovery> {
+    let token_path = gateway_control_token_path(runtime_dir);
+    let bearer_token = load_gateway_bearer_token(token_path.as_path())?;
+    let owner_status =
+        request_gateway_owner_status_from_bootstrap(bootstrap_address, bearer_token.as_str())?;
+    let socket_address = validate_gateway_local_owner_status(&owner_status)?;
+    let base_url = format!("http://{socket_address}");
+    let runtime_dir = runtime_dir.to_path_buf();
+
+    Ok(GatewayLocalDiscovery {
+        runtime_dir,
+        owner_status,
+        socket_address,
+        base_url,
+        bearer_token,
+    })
+}
+
+fn default_gateway_bootstrap_socket_address() -> SocketAddr {
+    let gateway_config = crate::mvp::config::GatewayConfig::default();
+    let bootstrap_port = gateway_config.port;
+    let bootstrap_host = DEFAULT_GATEWAY_BOOTSTRAP_HOST
+        .parse::<IpAddr>()
+        .expect("default gateway bootstrap host should stay valid");
+    SocketAddr::new(bootstrap_host, bootstrap_port)
+}
+
+fn request_gateway_owner_status_from_bootstrap(
+    socket_address: SocketAddr,
+    bearer_token: &str,
+) -> CliResult<GatewayOwnerStatus> {
+    let bootstrap_url = format!("http://{socket_address}/v1/status");
+    let http_client = BlockingClient::builder()
+        .connect_timeout(DEFAULT_GATEWAY_BOOTSTRAP_CONNECT_TIMEOUT)
+        .timeout(DEFAULT_GATEWAY_BOOTSTRAP_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|error| format!("build gateway bootstrap client failed: {error}"))?;
+    let response = http_client
+        .get(bootstrap_url.as_str())
+        .bearer_auth(bearer_token)
+        .send()
+        .map_err(|error| {
+            format!("gateway bootstrap request failed for {bootstrap_url}: {error}")
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let response_text = response
+            .text()
+            .unwrap_or_else(|_| "unable to read gateway bootstrap error body".to_owned());
+        let error = format!(
+            "gateway bootstrap request failed for {bootstrap_url} with status {status}: {}",
+            response_text.trim()
+        );
+        return Err(error);
+    }
+
+    response.json::<GatewayOwnerStatus>().map_err(|error| {
+        format!("decode gateway bootstrap response failed for {bootstrap_url}: {error}")
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -484,13 +582,20 @@ mod tests {
     use crate::gateway::state::GatewayPortSource;
     use std::{
         fs,
+        io::{Read, Write},
+        net::TcpListener,
         path::PathBuf,
+        thread,
         time::{SystemTime, UNIX_EPOCH},
     };
 
     use super::*;
 
     fn gateway_owner_status_fixture() -> GatewayOwnerStatus {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_millis() as u64;
         GatewayOwnerStatus {
             runtime_dir: "/tmp/loongclaw-gateway-runtime".to_owned(),
             phase: "running".to_owned(),
@@ -501,8 +606,8 @@ mod tests {
             version: "0.1.0".to_owned(),
             config_path: "/tmp/loongclaw.toml".to_owned(),
             attached_cli_session: None,
-            started_at_ms: 100,
-            last_heartbeat_at: 200,
+            started_at_ms: now_ms.saturating_sub(100),
+            last_heartbeat_at: now_ms,
             stopped_at_ms: None,
             shutdown_reason: None,
             last_error: None,
@@ -522,6 +627,62 @@ mod tests {
             .as_nanos();
         let temp_dir = std::env::temp_dir();
         temp_dir.join(format!("loongclaw-gateway-client-{label}-{suffix}"))
+    }
+
+    fn write_gateway_token_for_test(runtime_dir: &Path, token: &str) -> PathBuf {
+        let token_path = gateway_control_token_path(runtime_dir);
+        if let Some(parent) = token_path.parent() {
+            fs::create_dir_all(parent).expect("create gateway runtime dir");
+        }
+        fs::write(token_path.as_path(), token).expect("write gateway token");
+        token_path
+    }
+
+    fn spawn_gateway_status_server_once(
+        mut status: GatewayOwnerStatus,
+        expected_token: &str,
+    ) -> (SocketAddr, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind bootstrap server");
+        let socket_address = listener.local_addr().expect("bootstrap server addr");
+        if status.bind_address.is_none() {
+            status.bind_address = Some("127.0.0.1".to_owned());
+        }
+        if status.port.is_none() {
+            status.port = Some(socket_address.port());
+        }
+        let expected_header = format!("Authorization: Bearer {expected_token}");
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request_buffer = [0_u8; 8192];
+                let read = stream
+                    .read(&mut request_buffer)
+                    .expect("read bootstrap request");
+                let request_text = String::from_utf8_lossy(&request_buffer[..read]).into_owned();
+                let request_text_lower = request_text.to_ascii_lowercase();
+                let expected_header_lower = expected_header.to_ascii_lowercase();
+                assert!(
+                    request_text_lower.contains(expected_header_lower.as_str()),
+                    "expected bearer token in bootstrap request: {request_text}"
+                );
+                let body = serde_json::to_string(&status).expect("serialize gateway status");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write bootstrap response");
+            }
+        });
+        (socket_address, server)
+    }
+
+    fn unused_loopback_socket_address() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral probe");
+        let socket_address = listener.local_addr().expect("ephemeral probe addr");
+        drop(listener);
+        socket_address
     }
 
     #[test]
@@ -581,5 +742,49 @@ mod tests {
         assert!(error.contains("empty"), "unexpected error: {error}");
 
         fs::remove_file(token_path).ok();
+    }
+
+    #[test]
+    fn gateway_local_discovery_prefers_bootstrap_when_owner_status_is_missing() {
+        let runtime_dir = unique_temp_path("bootstrap-runtime");
+        fs::create_dir_all(runtime_dir.as_path()).expect("create runtime dir");
+        let token_path = write_gateway_token_for_test(runtime_dir.as_path(), "bootstrap-token");
+        let mut status = gateway_owner_status_fixture();
+        status.token_path = Some(token_path.display().to_string());
+        status.port = None;
+        let (socket_address, server) = spawn_gateway_status_server_once(status, "bootstrap-token");
+
+        let discovery =
+            discover_prefer_bootstrap(runtime_dir.as_path(), socket_address).expect("bootstrap");
+
+        assert_eq!(discovery.socket_address(), socket_address);
+        assert_eq!(discovery.owner_status().port, Some(socket_address.port()));
+
+        server.join().expect("bootstrap server join");
+        fs::remove_dir_all(runtime_dir).ok();
+    }
+
+    #[test]
+    fn gateway_local_discovery_falls_back_to_owner_status_when_bootstrap_is_unavailable() {
+        let runtime_dir = unique_temp_path("fallback-runtime");
+        fs::create_dir_all(runtime_dir.as_path()).expect("create runtime dir");
+        let token_path = write_gateway_token_for_test(runtime_dir.as_path(), "fallback-token");
+        let mut status = gateway_owner_status_fixture();
+        status.port = Some(7_777);
+        status.token_path = Some(token_path.display().to_string());
+        crate::gateway::state::write_gateway_owner_snapshot_for_test(
+            runtime_dir.as_path(),
+            &status,
+        )
+        .expect("write gateway owner snapshot");
+        let unused_bootstrap = unused_loopback_socket_address();
+
+        let discovery =
+            discover_prefer_bootstrap(runtime_dir.as_path(), unused_bootstrap).expect("fallback");
+
+        assert_eq!(discovery.socket_address().port(), 7_777);
+        assert_eq!(discovery.owner_status().port, Some(7_777));
+
+        fs::remove_dir_all(runtime_dir).ok();
     }
 }
