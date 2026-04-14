@@ -30,6 +30,8 @@ The current localhost control-plane slice now includes:
 
 - authenticated runtime snapshot and event feeds
 - session, approval, pairing, and ACP session observation routes
+- repository-backed session observation that surfaces workflow metadata for
+  visible sessions instead of only raw session fields
 - authenticated turn submission
 - SSE turn-event streaming for submitted turns
 - non-streaming final turn-result fetch for submitted turns

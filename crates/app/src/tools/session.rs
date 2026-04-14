@@ -141,24 +141,24 @@ struct SessionDelegateCancellationRecord {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SessionWorkflowRecord {
-    workflow_id: String,
-    task: Option<String>,
-    phase: Option<GovernedWorkflowPhase>,
-    operation_kind: Option<WorkflowOperationKind>,
-    operation_scope: Option<WorkflowOperationScope>,
-    task_session_id: Option<String>,
-    lineage_root_session_id: Option<String>,
-    lineage_depth: Option<usize>,
-    runtime_self_continuity: Option<SessionRuntimeSelfContinuityRecord>,
+pub(crate) struct SessionWorkflowRecord {
+    pub(crate) workflow_id: String,
+    pub(crate) task: Option<String>,
+    pub(crate) phase: Option<GovernedWorkflowPhase>,
+    pub(crate) operation_kind: Option<WorkflowOperationKind>,
+    pub(crate) operation_scope: Option<WorkflowOperationScope>,
+    pub(crate) task_session_id: Option<String>,
+    pub(crate) lineage_root_session_id: Option<String>,
+    pub(crate) lineage_depth: Option<usize>,
+    pub(crate) runtime_self_continuity: Option<SessionRuntimeSelfContinuityRecord>,
 }
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SessionRuntimeSelfContinuityRecord {
-    present: bool,
-    resolved_identity_present: bool,
-    session_profile_projection_present: bool,
+pub(crate) struct SessionRuntimeSelfContinuityRecord {
+    pub(crate) present: bool,
+    pub(crate) resolved_identity_present: bool,
+    pub(crate) session_profile_projection_present: bool,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1848,7 +1848,7 @@ fn load_delegate_lifecycle_events(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn load_session_workflow_record(
+pub(crate) fn load_session_workflow_record(
     repo: &SessionRepository,
     session: &SessionSummaryRecord,
     delegate_events: Option<&[SessionEventRecord]>,

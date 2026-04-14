@@ -651,6 +651,21 @@ fn control_plane_session_read_response_roundtrips_through_json() {
                 turn_count: 3,
                 last_turn_at: Some(20),
                 last_error: None,
+                workflow: ControlPlaneSessionWorkflow {
+                    workflow_id: "root-session".to_owned(),
+                    task: Some("research control plane parity".to_owned()),
+                    phase: Some("execute".to_owned()),
+                    operation_kind: Some("task".to_owned()),
+                    operation_scope: Some("task".to_owned()),
+                    task_session_id: Some("child-session".to_owned()),
+                    lineage_root_session_id: Some("root-session".to_owned()),
+                    lineage_depth: Some(1),
+                    runtime_self_continuity: Some(ControlPlaneSessionWorkflowContinuity {
+                        present: true,
+                        resolved_identity_present: true,
+                        session_profile_projection_present: false,
+                    }),
+                },
             },
             terminal_outcome: Some(ControlPlaneSessionTerminalOutcome {
                 session_id: "child-session".to_owned(),

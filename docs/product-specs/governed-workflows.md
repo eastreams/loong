@@ -39,6 +39,8 @@ The current runtime already ships important workflow substrate:
 - session inspection that already surfaces workflow metadata for delegate child
   sessions, including task text, lineage root, lineage depth, and
   runtime-self continuity summary
+- local control-plane session observation routes that can now surface the same
+  workflow metadata family for visible sessions
 - a task-shaped background-task CLI on top of the existing session runtime
 - explicit runtime-self continuity boundaries and query-aware memory retrieval
 - a localhost-only product control plane for session, approval, and turn

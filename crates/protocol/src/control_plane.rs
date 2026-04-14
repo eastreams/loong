@@ -383,6 +383,34 @@ impl ControlPlaneSessionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneSessionWorkflowContinuity {
+    pub present: bool,
+    pub resolved_identity_present: bool,
+    pub session_profile_projection_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneSessionWorkflow {
+    pub workflow_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage_root_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage_depth: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_self_continuity: Option<ControlPlaneSessionWorkflowContinuity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneSessionSummary {
     pub session_id: String,
     pub kind: ControlPlaneSessionKind,
@@ -400,6 +428,7 @@ pub struct ControlPlaneSessionSummary {
     pub last_turn_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    pub workflow: ControlPlaneSessionWorkflow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

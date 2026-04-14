@@ -32,10 +32,11 @@ pub use control_plane::{
     ControlPlaneRecentEventsResponse, ControlPlaneRole, ControlPlaneScope,
     ControlPlaneSessionEvent, ControlPlaneSessionKind, ControlPlaneSessionListResponse,
     ControlPlaneSessionObservation, ControlPlaneSessionReadResponse, ControlPlaneSessionState,
-    ControlPlaneSessionSummary, ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot,
-    ControlPlaneSnapshotResponse, ControlPlaneStateVersion, ControlPlaneTurnEventEnvelope,
-    ControlPlaneTurnResultResponse, ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest,
-    ControlPlaneTurnSubmitResponse, ControlPlaneTurnSummary,
+    ControlPlaneSessionSummary, ControlPlaneSessionTerminalOutcome, ControlPlaneSessionWorkflow,
+    ControlPlaneSessionWorkflowContinuity, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
+    ControlPlaneStateVersion, ControlPlaneTurnEventEnvelope, ControlPlaneTurnResultResponse,
+    ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest, ControlPlaneTurnSubmitResponse,
+    ControlPlaneTurnSummary,
 };
 
 fn default_frame_version() -> u32 {

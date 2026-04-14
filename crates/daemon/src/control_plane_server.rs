@@ -33,7 +33,8 @@ use loongclaw_protocol::{
     ControlPlaneRecentEventsResponse, ControlPlaneScope, ControlPlaneSessionEvent,
     ControlPlaneSessionKind, ControlPlaneSessionListResponse, ControlPlaneSessionObservation,
     ControlPlaneSessionReadResponse, ControlPlaneSessionState, ControlPlaneSessionSummary,
-    ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
+    ControlPlaneSessionTerminalOutcome, ControlPlaneSessionWorkflow,
+    ControlPlaneSessionWorkflowContinuity, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
     ControlPlaneStateVersion, ControlPlaneTurnEventEnvelope, ControlPlaneTurnResultResponse,
     ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest, ControlPlaneTurnSubmitResponse,
     ControlPlaneTurnSummary, ProtocolRouter,
@@ -470,21 +471,57 @@ fn map_session_state(state: mvp::session::repository::SessionState) -> ControlPl
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn map_session_workflow_continuity(
+    continuity: mvp::control_plane::ControlPlaneSessionWorkflowContinuityView,
+) -> ControlPlaneSessionWorkflowContinuity {
+    ControlPlaneSessionWorkflowContinuity {
+        present: continuity.present,
+        resolved_identity_present: continuity.resolved_identity_present,
+        session_profile_projection_present: continuity.session_profile_projection_present,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_workflow(
+    workflow: mvp::control_plane::ControlPlaneSessionWorkflowView,
+) -> ControlPlaneSessionWorkflow {
+    let runtime_self_continuity = workflow
+        .runtime_self_continuity
+        .map(map_session_workflow_continuity);
+
+    ControlPlaneSessionWorkflow {
+        workflow_id: workflow.workflow_id,
+        task: workflow.task,
+        phase: workflow.phase,
+        operation_kind: workflow.operation_kind,
+        operation_scope: workflow.operation_scope,
+        task_session_id: workflow.task_session_id,
+        lineage_root_session_id: workflow.lineage_root_session_id,
+        lineage_depth: workflow.lineage_depth,
+        runtime_self_continuity,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn map_session_summary(
-    summary: mvp::session::repository::SessionSummaryRecord,
+    summary: mvp::control_plane::ControlPlaneSessionSummaryView,
 ) -> ControlPlaneSessionSummary {
+    let session = summary.session;
+    let workflow = map_session_workflow(summary.workflow);
+
     ControlPlaneSessionSummary {
-        session_id: summary.session_id,
-        kind: map_session_kind(summary.kind),
-        parent_session_id: summary.parent_session_id,
-        label: summary.label,
-        state: map_session_state(summary.state),
-        created_at: summary.created_at,
-        updated_at: summary.updated_at,
-        archived_at: summary.archived_at,
-        turn_count: summary.turn_count,
-        last_turn_at: summary.last_turn_at,
-        last_error: summary.last_error,
+        session_id: session.session_id,
+        kind: map_session_kind(session.kind),
+        parent_session_id: session.parent_session_id,
+        label: session.label,
+        state: map_session_state(session.state),
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        archived_at: session.archived_at,
+        turn_count: session.turn_count,
+        last_turn_at: session.last_turn_at,
+        last_error: session.last_error,
+        workflow,
     }
 }
 
@@ -516,7 +553,7 @@ fn map_session_terminal_outcome(
 
 #[cfg(feature = "memory-sqlite")]
 fn map_session_observation(
-    observation: mvp::session::repository::SessionObservationRecord,
+    observation: mvp::control_plane::ControlPlaneSessionObservationView,
 ) -> ControlPlaneSessionObservation {
     ControlPlaneSessionObservation {
         session: map_session_summary(observation.session),
@@ -2954,7 +2991,20 @@ mod tests {
             event_kind: "delegate_started".to_owned(),
             actor_session_id: Some("root-session".to_owned()),
             payload_json: serde_json::json!({
-                "status": "started",
+                "task": "research control plane parity",
+                "label": "Child",
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 3,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 90,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
             }),
         })
         .expect("append child event");
@@ -4328,12 +4378,17 @@ mod tests {
                 .iter()
                 .any(|session| session.session_id == "root-session")
         );
-        assert!(
-            sessions
-                .sessions
-                .iter()
-                .any(|session| session.session_id == "child-session")
+        let child = sessions
+            .sessions
+            .iter()
+            .find(|session| session.session_id == "child-session")
+            .expect("child session");
+        assert_eq!(child.workflow.workflow_id, "root-session");
+        assert_eq!(
+            child.workflow.task.as_deref(),
+            Some("research control plane parity")
         );
+        assert_eq!(child.workflow.phase.as_deref(), Some("execute"));
         assert!(
             !sessions
                 .sessions
@@ -4372,6 +4427,18 @@ mod tests {
             serde_json::from_slice(&body).expect("session read json");
         assert_eq!(session.current_session_id, "root-session");
         assert_eq!(session.observation.session.session_id, "child-session");
+        assert_eq!(
+            session.observation.session.workflow.workflow_id,
+            "root-session"
+        );
+        assert_eq!(
+            session.observation.session.workflow.task.as_deref(),
+            Some("research control plane parity")
+        );
+        assert_eq!(
+            session.observation.session.workflow.phase.as_deref(),
+            Some("execute")
+        );
         assert_eq!(session.observation.recent_events.len(), 1);
         assert_eq!(
             session.observation.recent_events[0].event_kind,
