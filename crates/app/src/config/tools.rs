@@ -917,8 +917,8 @@ impl ToolConfig {
                 code: super::shared::ConfigValidationCode::NumericRange,
                 field_path: "tools.web_search.timeout_seconds".to_owned(),
                 inline_field_path: "tools.web_search.timeout_seconds".to_owned(),
-                example_env_name: "LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS".to_owned(),
-                suggested_env_name: Some("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS".to_owned()),
+                example_env_name: "LOONG_WEB_SEARCH_TIMEOUT_SECONDS".to_owned(),
+                suggested_env_name: Some("LOONG_WEB_SEARCH_TIMEOUT_SECONDS".to_owned()),
                 extra_message_variables: vars,
             })
         });
@@ -962,8 +962,8 @@ impl ToolConfig {
                 code: super::shared::ConfigValidationCode::UnknownSearchProvider,
                 field_path: "tools.web_search.default_provider".to_owned(),
                 inline_field_path: "tools.web_search.default_provider".to_owned(),
-                example_env_name: "LOONGCLAW_WEB_SEARCH_PROVIDER".to_owned(),
-                suggested_env_name: Some("LOONGCLAW_WEB_SEARCH_PROVIDER".to_owned()),
+                example_env_name: "LOONG_WEB_SEARCH_PROVIDER".to_owned(),
+                suggested_env_name: Some("LOONG_WEB_SEARCH_PROVIDER".to_owned()),
                 extra_message_variables,
             });
         }

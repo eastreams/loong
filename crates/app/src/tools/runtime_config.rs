@@ -939,8 +939,9 @@ impl ToolRuntimeConfig {
         });
         let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
-        let config_path = std::env::var("LOONGCLAW_CONFIG_PATH")
+        let config_path = std::env::var("LOONG_CONFIG_PATH")
             .ok()
+            .or_else(|| std::env::var("LOONGCLAW_CONFIG_PATH").ok())
             .map(PathBuf::from);
         let shell_allow: BTreeSet<String> = crate::config::DEFAULT_SHELL_ALLOW
             .iter()
@@ -993,7 +994,8 @@ impl ToolRuntimeConfig {
         let web_fetch_max_redirects = parse_env_usize("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS);
         let web_search_enabled = parse_env_bool("LOONGCLAW_WEB_SEARCH_ENABLED").unwrap_or(true);
-        let web_search_default_provider = parse_env_string("LOONGCLAW_WEB_SEARCH_PROVIDER")
+        let web_search_default_provider = parse_env_string("LOONG_WEB_SEARCH_PROVIDER")
+            .or_else(|| parse_env_string("LOONGCLAW_WEB_SEARCH_PROVIDER"))
             .as_deref()
             .and_then(crate::config::normalize_web_search_provider)
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)

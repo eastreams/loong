@@ -11,7 +11,8 @@ use super::context_engine::{
 
 pub const DEFAULT_CONTEXT_ENGINE_ID: &str = "default";
 pub const LEGACY_CONTEXT_ENGINE_ID: &str = "legacy";
-pub const CONTEXT_ENGINE_ENV: &str = "LOONGCLAW_CONTEXT_ENGINE";
+pub const CONTEXT_ENGINE_ENV: &str = "LOONG_CONTEXT_ENGINE";
+pub const LEGACY_CONTEXT_ENGINE_ENV: &str = "LOONGCLAW_CONTEXT_ENGINE";
 
 type ContextEngineFactory = Arc<dyn Fn() -> Box<dyn ConversationContextEngine> + Send + Sync>;
 
@@ -123,6 +124,7 @@ pub fn context_engine_id_from_env() -> Option<String> {
 
     std::env::var(CONTEXT_ENGINE_ENV)
         .ok()
+        .or_else(|| std::env::var(LEGACY_CONTEXT_ENGINE_ENV).ok())
         .map(|value| normalize_engine_id(value.as_str()))
         .filter(|value| !value.is_empty())
 }

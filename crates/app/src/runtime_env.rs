@@ -14,8 +14,15 @@ pub fn initialize_runtime_environment(
     resolved_config_path: Option<&Path>,
 ) {
     match resolved_config_path {
-        Some(path) => set_env_var("LOONGCLAW_CONFIG_PATH", path.display().to_string()),
-        None => remove_env_var("LOONGCLAW_CONFIG_PATH"),
+        Some(path) => {
+            let value = path.display().to_string();
+            set_env_var("LOONG_CONFIG_PATH", value.clone());
+            set_env_var("LOONGCLAW_CONFIG_PATH", value);
+        }
+        None => {
+            remove_env_var("LOONG_CONFIG_PATH");
+            remove_env_var("LOONGCLAW_CONFIG_PATH");
+        }
     }
 
     set_env_var(
