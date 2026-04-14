@@ -50,6 +50,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
         crate::migration::channels::collect_channel_next_actions(config, config_path);
     let unresolved_plugin_bridge_surfaces =
         collect_unresolved_plugin_bridge_surface_ids(config, &channel_actions);
+    let blocked_outbound_surfaces = collect_blocked_outbound_surface_ids(config);
     let browser_preview =
         crate::browser_preview::inspect_browser_preview_state_with_path_env(config, path_env);
     if config.cli.enabled {
@@ -86,6 +87,11 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
     if !unresolved_plugin_bridge_surfaces.is_empty() {
         let doctor_action =
             build_managed_bridge_doctor_action(config_path, &unresolved_plugin_bridge_surfaces);
+        actions.push(doctor_action);
+    }
+    if !blocked_outbound_surfaces.is_empty() {
+        let doctor_action =
+            build_outbound_channel_doctor_action(config_path, &blocked_outbound_surfaces);
         actions.push(doctor_action);
     }
     let channel_setup_actions = channel_actions
@@ -146,29 +152,9 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
 
 fn collect_unresolved_plugin_bridge_surface_ids(
     config: &mvp::config::LoongClawConfig,
-    channel_actions: &[crate::migration::channels::ChannelNextAction],
+    _channel_actions: &[crate::migration::channels::ChannelNextAction],
 ) -> Vec<&'static str> {
-    let has_catalog_only_channel_handoff = channel_actions_are_catalog_only(channel_actions);
-
-    if !has_catalog_only_channel_handoff {
-        return Vec::new();
-    }
-
     unresolved_plugin_bridge_surface_ids(config)
-}
-
-fn channel_actions_are_catalog_only(
-    channel_actions: &[crate::migration::channels::ChannelNextAction],
-) -> bool {
-    if channel_actions.len() != 1 {
-        return false;
-    }
-
-    let Some(action) = channel_actions.first() else {
-        return false;
-    };
-
-    action.id == crate::migration::channels::CHANNEL_CATALOG_ACTION_ID
 }
 
 fn unresolved_plugin_bridge_surface_ids(
@@ -189,6 +175,38 @@ fn unresolved_plugin_bridge_surface_ids(
         .filter(|surface| {
             let surface_name = plugin_bridge_surface_name(surface.catalog.id);
             unresolved_surface_names.contains(surface_name)
+        })
+        .map(|surface| surface.catalog.id)
+        .collect()
+}
+
+fn collect_blocked_outbound_surface_ids(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<&'static str> {
+    let inventory = mvp::channel::channel_inventory(config);
+
+    inventory
+        .channel_surfaces
+        .into_iter()
+        .filter(crate::migration::channels::surface_is_outbound_only)
+        .filter(|surface| {
+            surface
+                .configured_accounts
+                .iter()
+                .any(|snapshot| snapshot.enabled)
+        })
+        .filter(|surface| {
+            surface
+                .configured_accounts
+                .iter()
+                .filter(|snapshot| snapshot.enabled)
+                .any(|snapshot| {
+                    !snapshot
+                        .operation(mvp::channel::CHANNEL_OPERATION_SEND_ID)
+                        .is_some_and(|operation| {
+                            operation.health == mvp::channel::ChannelOperationHealth::Ready
+                        })
+                })
         })
         .map(|surface| surface.catalog.id)
         .collect()
@@ -232,6 +250,22 @@ fn build_managed_bridge_doctor_action(
     }
 }
 
+fn build_outbound_channel_doctor_action(
+    config_path: &str,
+    blocked_surface_ids: &[&'static str],
+) -> SetupNextAction {
+    let command = crate::cli_handoff::format_subcommand_with_config("doctor", config_path);
+    let label = outbound_channel_doctor_action_label(blocked_surface_ids);
+
+    SetupNextAction {
+        kind: SetupNextActionKind::Doctor,
+        channel_action_id: None,
+        browser_preview_phase: None,
+        label,
+        command,
+    }
+}
+
 fn managed_bridge_doctor_action_label(unresolved_surface_ids: &[&'static str]) -> String {
     if unresolved_surface_ids.len() == 1 {
         let surface_id = unresolved_surface_ids
@@ -249,6 +283,25 @@ fn managed_bridge_doctor_action_label(unresolved_surface_ids: &[&'static str]) -
     let label = format!("verify managed bridges: {rendered_surface_ids}");
 
     label
+}
+
+fn outbound_channel_doctor_action_label(blocked_surface_ids: &[&'static str]) -> String {
+    if blocked_surface_ids.len() == 1 {
+        let surface_id = blocked_surface_ids
+            .first()
+            .copied()
+            .unwrap_or("configured outbound channel");
+        let label = mvp::config::channel_descriptor(surface_id)
+            .map(|descriptor| descriptor.label)
+            .unwrap_or(surface_id);
+        return format!("verify {label} setup");
+    }
+
+    if blocked_surface_ids.is_empty() {
+        return "verify configured outbound channels".to_owned();
+    }
+
+    "verify configured outbound channels".to_owned()
 }
 
 pub(crate) fn is_managed_bridge_doctor_action(action: &SetupNextAction) -> bool {

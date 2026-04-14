@@ -584,6 +584,14 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("memory selected="));
     assert!(rendered.contains("acp enabled=true"));
     assert!(rendered.contains("acp mcp_servers=1"));
+    assert!(rendered.contains("runtime_backed_enabled=-"));
+    assert!(rendered.contains("plugin_backed_enabled=-"));
+    assert!(rendered.contains("outbound_only_enabled=-"));
+    assert!(
+        rendered.contains(
+            "surfaces=28 runtime_backed=5 config_backed=17 plugin_backed=3 catalog_only=3"
+        )
+    );
     assert!(rendered.contains("acp_mcp docs status=pending"));
     assert!(rendered.contains("tools visible_count="));
     assert!(rendered.contains(

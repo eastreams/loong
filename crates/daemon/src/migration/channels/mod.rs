@@ -10,6 +10,7 @@ use super::types::{
 
 mod feishu;
 mod matrix;
+mod outbound;
 mod plugin_bridge;
 mod telegram;
 mod wecom;
@@ -49,6 +50,7 @@ pub struct ChannelNextAction {
 }
 
 pub(crate) const CHANNEL_CATALOG_ACTION_ID: &str = "channel_catalog";
+pub(crate) const CONFIGURED_CHANNELS_ACTION_ID: &str = "configured_channels";
 const CHANNEL_CATALOG_ACTION_LABEL: &str = "channels";
 
 struct ChannelAdapter {
@@ -130,8 +132,10 @@ pub fn collect_channel_previews(
         .filter_map(|adapter| (adapter.collect_preview)(config, readiness, source))
         .collect::<Vec<_>>();
     let plugin_bridge_previews = plugin_bridge::collect_previews(config, source);
+    let outbound_previews = outbound::collect_previews(config, source);
 
     previews.extend(plugin_bridge_previews);
+    previews.extend(outbound_previews);
 
     previews
 }
@@ -156,7 +160,13 @@ pub fn enabled_channels_have_blockers(
         return true;
     }
 
-    plugin_bridge::enabled_channels_have_blockers(config)
+    let plugin_bridge_blockers = plugin_bridge::enabled_channels_have_blockers(config);
+
+    if plugin_bridge_blockers {
+        return true;
+    }
+
+    outbound::enabled_channels_have_blockers(config)
 }
 
 pub fn apply_detected_import_readiness(
@@ -245,8 +255,10 @@ pub fn collect_channel_preflight_checks(
         .flat_map(|adapter| (adapter.collect_preflight_checks)(config))
         .collect::<Vec<_>>();
     let plugin_bridge_checks = plugin_bridge::collect_preflight_checks(config);
+    let outbound_checks = outbound::collect_preflight_checks(config);
 
     checks.extend(plugin_bridge_checks);
+    checks.extend(outbound_checks);
 
     checks
 }
@@ -254,10 +266,17 @@ pub fn collect_channel_preflight_checks(
 pub fn collect_channel_doctor_checks(
     config: &mvp::config::LoongClawConfig,
 ) -> Vec<ChannelDoctorCheck> {
-    enabled_channel_adapters(config)
+    let mut checks = enabled_channel_adapters(config)
         .into_iter()
         .flat_map(|adapter| (adapter.collect_doctor_checks)(config))
-        .collect()
+        .collect::<Vec<_>>();
+    let plugin_bridge_checks = plugin_bridge::collect_doctor_checks(config);
+    let outbound_checks = outbound::collect_doctor_checks(config);
+
+    checks.extend(plugin_bridge_checks);
+    checks.extend(outbound_checks);
+
+    checks
 }
 
 pub fn apply_default_channel_env_bindings(
@@ -276,6 +295,12 @@ pub fn collect_channel_next_actions(
     let configured_actions = collect_configured_runtime_channel_next_actions(config, config_path);
     if !configured_actions.is_empty() {
         return configured_actions;
+    }
+
+    let inspection_actions =
+        collect_configured_non_runtime_channel_next_actions(config, config_path);
+    if !inspection_actions.is_empty() {
+        return inspection_actions;
     }
 
     vec![build_channel_catalog_next_action(config_path)]
@@ -321,12 +346,184 @@ fn collect_enabled_service_channel_ids(config: &mvp::config::LoongClawConfig) ->
     config.enabled_service_channel_ids().into_iter().collect()
 }
 
+fn collect_configured_non_runtime_channel_next_actions(
+    config: &mvp::config::LoongClawConfig,
+    config_path: &str,
+) -> Vec<ChannelNextAction> {
+    let enabled_channel_ids = config
+        .enabled_channel_ids()
+        .into_iter()
+        .filter(|channel_id| {
+            channel_id
+                != mvp::config::channel_descriptor("cli")
+                    .map(|descriptor| descriptor.id)
+                    .unwrap_or("cli")
+        })
+        .collect::<BTreeSet<_>>();
+    if enabled_channel_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let inventory = mvp::channel::channel_inventory(config);
+    let surfaces = inventory
+        .channel_surfaces
+        .into_iter()
+        .filter(|surface| enabled_channel_ids.contains(surface.catalog.id))
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                != mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .collect::<Vec<_>>();
+
+    if surfaces.is_empty() {
+        return Vec::new();
+    }
+
+    vec![build_configured_channel_inspection_action(
+        config_path,
+        &surfaces,
+    )]
+}
+
 fn build_channel_catalog_next_action(config_path: &str) -> ChannelNextAction {
     ChannelNextAction {
         id: CHANNEL_CATALOG_ACTION_ID,
         label: CHANNEL_CATALOG_ACTION_LABEL,
         command: crate::cli_handoff::format_subcommand_with_config("channels", config_path),
     }
+}
+
+fn build_configured_channel_inspection_action(
+    config_path: &str,
+    surfaces: &[mvp::channel::ChannelSurface],
+) -> ChannelNextAction {
+    let label = configured_channel_inspection_label(surfaces);
+
+    ChannelNextAction {
+        id: CONFIGURED_CHANNELS_ACTION_ID,
+        label: Box::leak(label.into_boxed_str()),
+        command: crate::cli_handoff::format_subcommand_with_config("channels", config_path),
+    }
+}
+
+fn configured_channel_inspection_label(surfaces: &[mvp::channel::ChannelSurface]) -> String {
+    let any_review = surfaces
+        .iter()
+        .any(configured_non_runtime_surface_needs_review);
+
+    if surfaces.len() == 1 {
+        let Some(surface) = surfaces.first() else {
+            return "inspect configured channels".to_owned();
+        };
+        let runtime_kind = surface_runtime_kind(surface);
+
+        if runtime_kind == Some(mvp::config::ChannelRuntimeKind::PluginBacked) {
+            return if any_review {
+                format!("review {} bridge", surface.catalog.label)
+            } else {
+                format!("inspect {} bridge", surface.catalog.label)
+            };
+        }
+
+        return if any_review {
+            format!("review {} setup", surface.catalog.label)
+        } else {
+            format!("inspect {}", surface.catalog.label)
+        };
+    }
+
+    let all_plugin_backed = surfaces.iter().all(surface_is_plugin_backed);
+    let all_outbound_only = surfaces.iter().all(surface_is_outbound_only);
+
+    if all_plugin_backed {
+        return if any_review {
+            "review configured bridges".to_owned()
+        } else {
+            "inspect configured bridges".to_owned()
+        };
+    }
+
+    if all_outbound_only {
+        return if any_review {
+            "review configured outbound channels".to_owned()
+        } else {
+            "inspect configured outbound channels".to_owned()
+        };
+    }
+
+    if any_review {
+        "review configured channels".to_owned()
+    } else {
+        "inspect configured channels".to_owned()
+    }
+}
+
+fn configured_non_runtime_surface_needs_review(surface: &mvp::channel::ChannelSurface) -> bool {
+    match surface_runtime_kind(surface) {
+        Some(mvp::config::ChannelRuntimeKind::PluginBacked) => {
+            configured_plugin_surface_needs_review(surface)
+        }
+        Some(mvp::config::ChannelRuntimeKind::OutboundOnly) => {
+            configured_outbound_surface_needs_review(surface)
+        }
+        _ => false,
+    }
+}
+
+fn configured_outbound_surface_needs_review(surface: &mvp::channel::ChannelSurface) -> bool {
+    let enabled_accounts = surface
+        .configured_accounts
+        .iter()
+        .filter(|snapshot| snapshot.enabled)
+        .collect::<Vec<_>>();
+    if enabled_accounts.is_empty() {
+        return true;
+    }
+
+    enabled_accounts.iter().any(|snapshot| {
+        !snapshot
+            .operation(mvp::channel::CHANNEL_OPERATION_SEND_ID)
+            .is_some_and(|operation| {
+                operation.health == mvp::channel::ChannelOperationHealth::Ready
+            })
+    })
+}
+
+fn configured_plugin_surface_needs_review(surface: &mvp::channel::ChannelSurface) -> bool {
+    let Some(discovery) = surface.plugin_bridge_discovery.as_ref() else {
+        return true;
+    };
+
+    let discovery_ready = discovery.status
+        == mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound
+        && discovery
+            .selection_status
+            .map(|status| status.selects_ready_plugin())
+            .unwrap_or(false)
+        && discovery.ambiguity_status.is_none();
+    if !discovery_ready {
+        return true;
+    }
+
+    let enabled_accounts = surface
+        .configured_accounts
+        .iter()
+        .filter(|snapshot| snapshot.enabled)
+        .collect::<Vec<_>>();
+    if enabled_accounts.is_empty() {
+        return true;
+    }
+
+    enabled_accounts.iter().any(|snapshot| {
+        snapshot.operations.iter().any(|operation| {
+            operation.health == mvp::channel::ChannelOperationHealth::Misconfigured
+                || (operation.health == mvp::channel::ChannelOperationHealth::Unsupported
+                    && !snapshot
+                        .notes
+                        .iter()
+                        .any(|note| note == "bridge_runtime_owner=external_plugin"))
+        })
+    })
 }
 
 fn enabled_channel_adapters(config: &mvp::config::LoongClawConfig) -> Vec<&'static ChannelAdapter> {
@@ -552,6 +749,8 @@ fn build_channel_preview(
     level: ImportSurfaceLevel,
     detail: String,
 ) -> ChannelPreview {
+    let detail = format!("{} · {}", channel_runtime_kind_label(id), detail);
+
     ChannelPreview {
         candidate: ChannelCandidate {
             id,
@@ -566,6 +765,43 @@ fn build_channel_preview(
             level,
             detail,
         },
+    }
+}
+
+pub(crate) fn channel_runtime_kind(
+    channel_id: &'static str,
+) -> Option<mvp::config::ChannelRuntimeKind> {
+    let descriptor = mvp::config::channel_descriptor(channel_id)?;
+
+    Some(descriptor.runtime_kind)
+}
+
+pub(crate) fn surface_runtime_kind(
+    surface: &mvp::channel::ChannelSurface,
+) -> Option<mvp::config::ChannelRuntimeKind> {
+    channel_runtime_kind(surface.catalog.id)
+}
+
+pub(crate) fn surface_is_plugin_backed(surface: &mvp::channel::ChannelSurface) -> bool {
+    let runtime_kind = surface_runtime_kind(surface);
+
+    runtime_kind == Some(mvp::config::ChannelRuntimeKind::PluginBacked)
+}
+
+pub(crate) fn surface_is_outbound_only(surface: &mvp::channel::ChannelSurface) -> bool {
+    let runtime_kind = surface_runtime_kind(surface);
+
+    runtime_kind == Some(mvp::config::ChannelRuntimeKind::OutboundOnly)
+}
+
+fn channel_runtime_kind_label(channel_id: &'static str) -> &'static str {
+    match channel_runtime_kind(channel_id) {
+        Some(mvp::config::ChannelRuntimeKind::RuntimeBacked) => "runtime-backed",
+        Some(mvp::config::ChannelRuntimeKind::PluginBacked) => "plugin-backed",
+        Some(mvp::config::ChannelRuntimeKind::OutboundOnly) => "outbound-only",
+        Some(mvp::config::ChannelRuntimeKind::CatalogOnly) => "catalog-only",
+        Some(mvp::config::ChannelRuntimeKind::Interactive) => "interactive",
+        None => "channel",
     }
 }
 

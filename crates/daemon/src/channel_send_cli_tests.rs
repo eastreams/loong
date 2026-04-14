@@ -45,6 +45,50 @@ async fn email_send_cli_requires_target() {
 }
 
 #[test]
+fn discord_send_cli_accepts_conversation_target_kind() {
+    let target_kind = parse_discord_send_target_kind("conversation")
+        .expect("discord-send should accept conversation targets");
+
+    assert_eq!(
+        default_discord_send_target_kind(),
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        target_kind,
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+}
+
+#[test]
+fn discord_send_cli_rejects_non_conversation_target_kind() {
+    let error =
+        parse_discord_send_target_kind("address").expect_err("address targets must be rejected");
+
+    assert_eq!(
+        error,
+        "discord --target-kind does not support `address`; use `conversation`"
+    );
+}
+
+#[tokio::test]
+async fn discord_send_cli_requires_target() {
+    let args = ChannelSendCliArgs {
+        config_path: None,
+        account: None,
+        target: None,
+        target_kind: mvp::channel::ChannelOutboundTargetKind::Conversation,
+        text: "hello",
+        as_card: false,
+    };
+
+    let error = run_discord_send_cli_impl(args)
+        .await
+        .expect_err("missing target should fail");
+
+    assert_eq!(error, "discord-send requires --target");
+}
+
+#[test]
 fn irc_send_cli_accepts_conversation_target_kind() {
     let target_kind = parse_irc_send_target_kind("conversation")
         .expect("irc-send should accept conversation targets");

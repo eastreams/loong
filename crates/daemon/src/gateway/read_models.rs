@@ -27,6 +27,7 @@ pub type ChannelsCliJsonSchema = GatewayChannelInventorySchema;
 pub struct GatewayChannelInventoryReadModel {
     pub config: String,
     pub schema: GatewayChannelInventorySchema,
+    pub summary: GatewayChannelInventorySummaryReadModel,
     pub channels: Vec<mvp::channel::ChannelStatusSnapshot>,
     pub catalog_only_channels: Vec<mvp::channel::ChannelCatalogEntry>,
     pub channel_catalog: Vec<mvp::channel::ChannelCatalogEntry>,
@@ -41,6 +42,15 @@ pub struct GatewayChannelSurfaceReadModel {
     pub surface: mvp::channel::ChannelSurface,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_bridge_account_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayChannelInventorySummaryReadModel {
+    pub total_surface_count: usize,
+    pub runtime_backed_surface_count: usize,
+    pub config_backed_surface_count: usize,
+    pub plugin_backed_surface_count: usize,
+    pub catalog_only_surface_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,7 +234,10 @@ pub struct GatewayRuntimeSnapshotSchema {
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayRuntimeSnapshotChannelsReadModel {
     pub enabled_channel_ids: Vec<String>,
+    pub enabled_runtime_backed_channel_ids: Vec<String>,
     pub enabled_service_channel_ids: Vec<String>,
+    pub enabled_plugin_backed_channel_ids: Vec<String>,
+    pub enabled_outbound_only_channel_ids: Vec<String>,
     pub inventory: GatewayChannelInventoryReadModel,
 }
 
@@ -282,6 +295,12 @@ pub struct GatewayOperatorChannelsSummaryReadModel {
     pub enabled_account_count: usize,
     pub misconfigured_account_count: usize,
     pub runtime_backed_channel_count: usize,
+    pub config_backed_channel_count: usize,
+    pub plugin_backed_channel_count: usize,
+    pub catalog_only_channel_count: usize,
+    pub enabled_runtime_backed_channel_count: usize,
+    pub enabled_plugin_backed_channel_count: usize,
+    pub enabled_outbound_only_channel_count: usize,
     pub enabled_service_channel_count: usize,
     pub ready_service_channel_count: usize,
     pub surfaces: Vec<GatewayOperatorChannelSurfaceReadModel>,
@@ -290,7 +309,10 @@ pub struct GatewayOperatorChannelsSummaryReadModel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub enabled_channel_ids: Vec<String>,
+    pub enabled_runtime_backed_channel_ids: Vec<String>,
     pub enabled_service_channel_ids: Vec<String>,
+    pub enabled_plugin_backed_channel_ids: Vec<String>,
+    pub enabled_outbound_only_channel_ids: Vec<String>,
     pub visible_tool_count: usize,
     pub capability_snapshot_sha256: String,
     pub active_provider_profile_id: Option<String>,
@@ -329,6 +351,7 @@ pub fn build_channel_inventory_read_model(
     let channels = inventory.channels.clone();
     let catalog_only_channels = inventory.catalog_only_channels.clone();
     let channel_catalog = inventory.channel_catalog.clone();
+    let summary = build_channel_inventory_summary_read_model(&inventory.channel_surfaces);
     let channel_surfaces = inventory
         .channel_surfaces
         .iter()
@@ -339,6 +362,7 @@ pub fn build_channel_inventory_read_model(
     GatewayChannelInventoryReadModel {
         config,
         schema,
+        summary,
         channels,
         catalog_only_channels,
         channel_catalog,
@@ -354,6 +378,48 @@ fn build_channel_surface_read_model(
     GatewayChannelSurfaceReadModel {
         surface,
         plugin_bridge_account_summary,
+    }
+}
+
+fn build_channel_inventory_summary_read_model(
+    channel_surfaces: &[mvp::channel::ChannelSurface],
+) -> GatewayChannelInventorySummaryReadModel {
+    let total_surface_count = channel_surfaces.len();
+    let runtime_backed_surface_count = channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed_surface_count = channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed_surface_count = channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only_surface_count = channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
+
+    GatewayChannelInventorySummaryReadModel {
+        total_surface_count,
+        runtime_backed_surface_count,
+        config_backed_surface_count,
+        plugin_backed_surface_count,
+        catalog_only_surface_count,
     }
 }
 
@@ -444,10 +510,16 @@ pub fn build_runtime_snapshot_read_model(
     let acp = crate::runtime_snapshot_acp_json(&snapshot.acp);
     let inventory = build_channel_inventory_read_model(config.as_str(), &snapshot.channels);
     let enabled_channel_ids = snapshot.enabled_channel_ids.clone();
+    let enabled_runtime_backed_channel_ids = snapshot.enabled_runtime_backed_channel_ids.clone();
     let enabled_service_channel_ids = snapshot.enabled_service_channel_ids.clone();
+    let enabled_plugin_backed_channel_ids = snapshot.enabled_plugin_backed_channel_ids.clone();
+    let enabled_outbound_only_channel_ids = snapshot.enabled_outbound_only_channel_ids.clone();
     let channels = GatewayRuntimeSnapshotChannelsReadModel {
         enabled_channel_ids,
+        enabled_runtime_backed_channel_ids,
         enabled_service_channel_ids,
+        enabled_plugin_backed_channel_ids,
+        enabled_outbound_only_channel_ids,
         inventory,
     };
     let tool_runtime = crate::runtime_snapshot_tool_runtime_json(&snapshot.tool_runtime);
@@ -796,7 +868,39 @@ fn build_operator_channels_summary_read_model(
                 == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
         })
         .count();
+    let config_backed_channel_count = channel_inventory
+        .channel_catalog
+        .iter()
+        .filter(|channel| {
+            channel.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed_channel_count = channel_inventory
+        .channel_catalog
+        .iter()
+        .filter(|channel| {
+            channel.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only_channel_count = channel_inventory
+        .channel_catalog
+        .iter()
+        .filter(|channel| {
+            channel.implementation_status == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
+    let enabled_runtime_backed_channel_ids =
+        &runtime_snapshot.channels.enabled_runtime_backed_channel_ids;
+    let enabled_plugin_backed_channel_ids =
+        &runtime_snapshot.channels.enabled_plugin_backed_channel_ids;
+    let enabled_outbound_only_channel_ids =
+        &runtime_snapshot.channels.enabled_outbound_only_channel_ids;
     let enabled_service_channel_ids = &runtime_snapshot.channels.enabled_service_channel_ids;
+    let enabled_runtime_backed_channel_count = enabled_runtime_backed_channel_ids.len();
+    let enabled_plugin_backed_channel_count = enabled_plugin_backed_channel_ids.len();
+    let enabled_outbound_only_channel_count = enabled_outbound_only_channel_ids.len();
     let enabled_service_channel_count = enabled_service_channel_ids.len();
     let surfaces = build_operator_channel_surface_read_models(
         &channel_inventory.channel_surfaces,
@@ -814,6 +918,12 @@ fn build_operator_channels_summary_read_model(
         enabled_account_count,
         misconfigured_account_count,
         runtime_backed_channel_count,
+        config_backed_channel_count,
+        plugin_backed_channel_count,
+        catalog_only_channel_count,
+        enabled_runtime_backed_channel_count,
+        enabled_plugin_backed_channel_count,
+        enabled_outbound_only_channel_count,
         enabled_service_channel_count,
         ready_service_channel_count,
         surfaces,
@@ -893,9 +1003,21 @@ fn build_operator_runtime_summary_read_model(
     runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
 ) -> GatewayOperatorRuntimeSummaryReadModel {
     let enabled_channel_ids = runtime_snapshot.channels.enabled_channel_ids.clone();
+    let enabled_runtime_backed_channel_ids = runtime_snapshot
+        .channels
+        .enabled_runtime_backed_channel_ids
+        .clone();
     let enabled_service_channel_ids = runtime_snapshot
         .channels
         .enabled_service_channel_ids
+        .clone();
+    let enabled_plugin_backed_channel_ids = runtime_snapshot
+        .channels
+        .enabled_plugin_backed_channel_ids
+        .clone();
+    let enabled_outbound_only_channel_ids = runtime_snapshot
+        .channels
+        .enabled_outbound_only_channel_ids
         .clone();
     let visible_tool_count = runtime_snapshot.tools.visible_tool_count;
     let capability_snapshot_sha256 = runtime_snapshot.tools.capability_snapshot_sha256.clone();
@@ -906,7 +1028,10 @@ fn build_operator_runtime_summary_read_model(
 
     GatewayOperatorRuntimeSummaryReadModel {
         enabled_channel_ids,
+        enabled_runtime_backed_channel_ids,
         enabled_service_channel_ids,
+        enabled_plugin_backed_channel_ids,
+        enabled_outbound_only_channel_ids,
         visible_tool_count,
         capability_snapshot_sha256,
         active_provider_profile_id,

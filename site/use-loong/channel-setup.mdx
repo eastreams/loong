@@ -1,12 +1,13 @@
 ---
 title: Channel Setup
-description: Practical setup guidance for shipped runtime-backed and outbound-only delivery surfaces.
+description: Practical setup guidance for runtime-backed, plugin-backed, and outbound-only delivery surfaces.
 ---
 
 # Channel Setup
 
 Loong keeps channel setup explicit so operators can tell what is actually
-shipped, what is outbound-only, and what still depends on future runtime work.
+shipped, what is bridge-owned, what is outbound-only, and what still depends on
+future runtime work.
 
 Use this page when you want the practical setup contract. If you want step-by-step
 smoke tests and worked examples instead, start with [Channel Guides](/use-loong/channel-guides/index) for the exact per-surface contract, then keep [Channel Recipes](/use-loong/channel-recipes) for representative rollout patterns.
@@ -22,6 +23,7 @@ headless supervision, or `--channel-account` selectors, continue to
 | --- | --- |
 | a local assistant only | `onboard`, `ask`, `chat`, and `doctor` |
 | inbound or reply-loop automation | one shipped runtime-backed service channel |
+| a real channel contract whose login/runtime stays in an external bridge | one plugin-backed bridge surface |
 | proactive delivery without a reply loop | one outbound-only surface |
 | the shared account and selector config shape first | [Configuration Patterns](/use-loong/configuration-patterns) |
 | multiple reply-loop surfaces on one host | [Gateway And Supervision](/use-loong/gateway-and-supervision) |
@@ -34,8 +36,8 @@ Before any channel is really ready:
 - the base CLI path should already work locally
 - provider credentials should already be healthy
 - channel-specific credentials should already resolve
-- the surface should be described truthfully as runtime-backed or outbound-only
-- setup should point to a concrete run command instead of a vague support claim
+- the surface should be described truthfully as runtime-backed, plugin-backed, or outbound-only
+- setup should point to a concrete operator path instead of a vague support claim
 
 ## Common Rollout Shapes
 
@@ -46,6 +48,7 @@ Before any channel is really ready:
 | one Matrix bot should own a room sync loop | configure `matrix` and run `loong matrix-serve` | the homeserver, room ids, and sync boundary stay explicit |
 | one WhatsApp business account should own a Cloud API reply loop | configure `whatsapp` and run `loong whatsapp-serve` | send and serve are both shipped on the verified webhook path |
 | one WeCom bot should own the official long connection | configure `wecom` and run `loong wecom-serve` | this matches the shipped AIBot contract |
+| one WeChat / QQ / OneBot bridge should stay external but visible | configure the plugin-backed channel block and run `loong doctor` plus `loong channels` | bridge-owned surfaces are real but should not pretend the gateway already owns the upstream login stack |
 | you need several accounts in one channel family | add `default_account` plus `accounts.<id>` before adding gateway selectors | stable account ids make later supervision and routing legible |
 | you only need governed direct sends | configure one outbound-only surface and use `loong <surface>-send` | this avoids pretending a reply loop already ships |
 
@@ -60,6 +63,23 @@ These are the shipped reply-loop surfaces today.
 | Matrix | homeserver base URL, access token, and trusted room ids | `loong matrix-serve` |
 | WhatsApp | Cloud API credentials plus verified webhook material | `loong whatsapp-serve` |
 | WeCom | bot id, secret, and trusted conversation ids | `loong wecom-serve` |
+
+## Plugin-Backed Bridge Surfaces
+
+These surfaces are shipped as real channel contracts, but the listener, login,
+and upstream session lifecycle stay in an external bridge or managed plugin.
+
+| Surface | What you configure first | Current operator path |
+| --- | --- | --- |
+| Weixin | `weixin.enabled`, `bridge_url`, `bridge_access_token`, `allowed_contact_ids` | `loong doctor`, `loong channels`, managed bridge discovery |
+| QQ Bot | `qqbot.enabled`, `app_id`, `client_secret`, `allowed_peer_ids` | `loong doctor`, `loong channels`, managed bridge discovery |
+| OneBot | `onebot.enabled`, `websocket_url`, `access_token`, `allowed_group_ids` | `loong doctor`, `loong channels`, managed bridge discovery |
+
+Operational rule:
+
+- these surfaces are actionable and operator-visible today
+- they do not join `gateway run` or `multi-channel-serve` because their runtime owner is still the external bridge
+- the important setup milestone is a passing contract + discovery result, not a native `*-serve` loop that does not exist yet
 
 ## Multi-Account Rule
 
@@ -125,6 +145,34 @@ WeCom is documented as the official AIBot long-connection lane:
 Loong should not describe a WeCom webhook callback mode as if it were the
 same shipped contract.
 
+### Weixin
+
+Weixin is a bridge-first surface:
+
+- configure `bridge_url` plus `bridge_access_token`
+- keep `allowed_contact_ids` explicit because the bridge contract should stay narrow
+- optional `managed_bridge_plugin_id` is the tie-breaker when several compatible managed bridges are installed
+- use `loong doctor` to verify the configured contract and the selected managed bridge
+- use `loong channels` or `loong channels --json` to inspect stable targets and discovery state
+
+### QQ Bot
+
+QQ Bot is the explicit Tencent gateway / bridge lane:
+
+- configure `app_id` plus `client_secret`
+- use `allowed_peer_ids` to keep the trusted conversation boundary explicit
+- add `managed_bridge_plugin_id` only when several compatible managed bridges exist and you need one exact selection
+- keep openids and account ids stable so direct, group, and guild routes do not drift between bridge implementations
+
+### OneBot
+
+OneBot is the protocol-level bridge lane:
+
+- configure `websocket_url` plus `access_token`
+- keep `allowed_group_ids` explicit so the bridge contract stays narrow
+- use it when the upstream bridge already speaks OneBot v11 and you want Loong to own the stable surface id and target contract
+- verify bridge discovery through `loong doctor` before you treat the surface as ready
+
 ## Outbound-Only Surfaces
 
 These surfaces ship direct-send behavior, config validation, and inventory
@@ -155,6 +203,7 @@ When you move beyond one local surface:
 
 - `gateway run`, `gateway status`, and `gateway stop` are the explicit owner contract
 - `multi-channel-serve` is the compatibility wrapper for the shipped runtime-backed subset
+- plugin-backed surfaces are inspected through `doctor` and `channels`, not supervised through the same reply-loop runtime contract
 - outbound-only surfaces should not be described as if they are supervised by the same reply-loop runtime contract
 - the detailed command model, selector syntax, and recovery loop live in
   [Gateway And Supervision](/use-loong/gateway-and-supervision)
@@ -163,12 +212,13 @@ When you move beyond one local surface:
 
 1. Get the local assistant path healthy first.
 2. Add one runtime-backed service channel if you need inbound or reply-loop behavior.
-3. Add outbound-only surfaces when you need governed direct sends.
-4. Reach for gateway and `multi-channel-serve` only after one channel already works cleanly.
+3. Add one plugin-backed bridge surface when the ecosystem is real but the runtime owner should stay external.
+4. Add outbound-only surfaces when you need governed direct sends.
+5. Reach for gateway and `multi-channel-serve` only after one runtime-backed channel already works cleanly.
 
 ## Deep References
 
-- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full actionable channel matrix.
 - Continue to [Channel Recipes](/use-loong/channel-recipes) for tutorial-style demos built on top of this setup contract.
 - Continue to [Channels](/use-loong/channels) for the conceptual public-surface model.
 - Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision)

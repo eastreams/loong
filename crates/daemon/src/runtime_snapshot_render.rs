@@ -135,17 +135,75 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
             .unwrap_or("-")
     ));
     crate::mcp_cli::append_mcp_runtime_snapshot_lines(&mut lines, &snapshot.acp.mcp);
+    let runtime_backed_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
     lines.push(format!(
-        "channels enabled={} service_enabled={} configured_accounts={} surfaces={}",
+        "channels enabled={} runtime_backed_enabled={} service_enabled={} plugin_backed_enabled={} outbound_only_enabled={} configured_accounts={} surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
         render_string_list(snapshot.enabled_channel_ids.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .enabled_runtime_backed_channel_ids
+                .iter()
+                .map(String::as_str)
+        ),
         render_string_list(
             snapshot
                 .enabled_service_channel_ids
                 .iter()
                 .map(String::as_str)
         ),
+        render_string_list(
+            snapshot
+                .enabled_plugin_backed_channel_ids
+                .iter()
+                .map(String::as_str)
+        ),
+        render_string_list(
+            snapshot
+                .enabled_outbound_only_channel_ids
+                .iter()
+                .map(String::as_str)
+        ),
         snapshot.channels.channels.len(),
-        snapshot.channels.channel_surfaces.len()
+        snapshot.channels.channel_surfaces.len(),
+        runtime_backed_surface_count,
+        config_backed_surface_count,
+        plugin_backed_surface_count,
+        catalog_only_surface_count
     ));
     for surface in &snapshot.channels.channel_surfaces {
         lines.push(format!(

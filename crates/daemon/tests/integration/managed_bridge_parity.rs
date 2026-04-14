@@ -45,7 +45,10 @@ fn runtime_snapshot_fixture(
         acp: serde_json::json!({}),
         channels: loongclaw_daemon::gateway::read_models::GatewayRuntimeSnapshotChannelsReadModel {
             enabled_channel_ids: vec!["weixin".to_owned()],
+            enabled_runtime_backed_channel_ids: Vec::new(),
             enabled_service_channel_ids: Vec::new(),
+            enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
+            enabled_outbound_only_channel_ids: Vec::new(),
             inventory: inventory.clone(),
         },
         tool_runtime: serde_json::json!({}),

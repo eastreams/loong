@@ -1,8 +1,8 @@
 # Channel Setup
 
 This file is the repository-native source contract for Loong's shipped
-channel surfaces, outbound-only delivery inventory, and current gateway owner
-model.
+channel surfaces, plugin-backed and outbound-only delivery inventory, and
+current gateway owner model.
 
 The public reader-facing docs path for this area lives under
 `site/use-loong/`, especially `configuration-patterns.mdx`,
@@ -23,11 +23,12 @@ source-level contract behind those pages.
 ## Read This File When
 
 - you need the exact shipped boundary between runtime-backed channels,
-  config-backed outbound surfaces, and catalog-only planned surfaces
+  plugin-backed bridge surfaces, config-backed outbound surfaces, and
+  catalog-only planned surfaces
 - you are reviewing required config, commands, or readiness rules for one
   shipped surface
-- you are checking whether a surface is part of gateway-owned supervision or
-  outbound-only delivery
+- you are checking whether a surface is part of gateway-owned supervision,
+  external bridge ownership, or outbound-only delivery
 - you need the repo-native source contract behind the public Mintlify guides
 
 ## User Story
@@ -41,15 +42,18 @@ needs.
 - [ ] Product docs clearly distinguish the shipped MVP surfaces: the base CLI
       assistant loop, the explicit `gateway run/status/stop` runtime-owner
       contract, runtime-backed Feishu / Lark, Telegram, Matrix, WhatsApp, and
-      WeCom service channels, plus config-backed outbound Discord, Slack,
-      LINE, DingTalk, Email, generic Webhook, Google Chat, Signal, Twitch,
-      Tlon, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC,
-      iMessage / BlueBubbles, and Nostr.
+      WeCom service channels, plugin-backed Weixin, QQ Bot, and OneBot bridge
+      surfaces, plus config-backed outbound Discord, Slack, LINE, DingTalk,
+      Email, generic Webhook, Google Chat, Signal, Twitch, Tlon, Microsoft
+      Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, iMessage /
+      BlueBubbles, and Nostr.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
-      config-backed outbound shipped surfaces, and catalog-only planned
-      surfaces such as Zalo, Zalo Personal, and WebChat.
+      plugin-backed bridge shipped surfaces, config-backed outbound shipped
+      surfaces, and catalog-only planned surfaces such as Zalo, Zalo Personal,
+      and WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles,
-      and the command used to run each shipped channel today.
+      and the command or operator entry surface used to run each shipped
+      channel today.
 - [ ] Product docs describe `gateway run/status/stop` as the current explicit
       gateway owner contract and `multi-channel-serve` as the attached
       compatibility wrapper for shipped runtime-backed surfaces rather than the
@@ -69,6 +73,8 @@ needs.
 
 - Shipping additional runtime-backed channels beyond CLI, Feishu / Lark,
   Telegram, Matrix, WhatsApp, and WeCom
+- Reclassifying plugin-backed Weixin, QQ Bot, or OneBot surfaces as if Loong
+  already owns their upstream runtime lifecycle natively
 - Promoting the remaining catalog-only planned surfaces such as Zalo,
   Zalo Personal, or WebChat to shipped support in this slice
 - Broad cross-channel inbox or routing UX
@@ -94,7 +100,10 @@ needs.
 | Matrix | Runtime-backed | Client-Server sync | `matrix.enabled`, `matrix.access_token`, `matrix.base_url`, `matrix.allowed_room_ids` | `loong matrix-send`, `loong matrix-serve` |
 | WhatsApp | Runtime-backed | WhatsApp Cloud API plus verified webhook | `whatsapp.enabled`, `whatsapp.access_token`, `whatsapp.phone_number_id`; serve mode also needs `verify_token` and `app_secret` | `loong whatsapp-send`, `loong whatsapp-serve` |
 | WeCom | Runtime-backed | official AIBot long connection | `wecom.enabled`, `wecom.bot_id`, `wecom.secret`, `wecom.allowed_conversation_ids` | `loong wecom-send`, `loong wecom-serve` |
-| Discord | Config-backed outbound | Discord HTTP API | `discord.enabled`, `discord.bot_token` | `loong discord-send` |
+| Weixin | Plugin-backed bridge | WeChat ClawBot / iLink bridge | `weixin.enabled`, `weixin.bridge_url`, `weixin.bridge_access_token`, `weixin.allowed_contact_ids`; optional `managed_bridge_plugin_id` pins one compatible managed bridge when discovery is ambiguous | `loong doctor`, `loong channels` |
+| QQ Bot | Plugin-backed bridge | official QQ Bot gateway or compatible bridge | `qqbot.enabled`, `qqbot.app_id`, `qqbot.client_secret`, `qqbot.allowed_peer_ids`; optional `managed_bridge_plugin_id` pins one compatible managed bridge when discovery is ambiguous | `loong doctor`, `loong channels` |
+| OneBot | Plugin-backed bridge | OneBot v11 bridge | `onebot.enabled`, `onebot.websocket_url`, `onebot.access_token`, `onebot.allowed_group_ids`; optional `managed_bridge_plugin_id` pins one compatible managed bridge when discovery is ambiguous | `loong doctor`, `loong channels` |
+| Discord | Config-backed outbound / outbound-only | Discord HTTP API | `discord.enabled`, `discord.bot_token`; optional `default_account`, `accounts.<id>`, `application_id`, `application_id_env`, and `allowed_guild_ids` keep multi-account routing and future-runtime governance explicit without claiming a shipped serve loop | `loong discord-send` |
 | Slack | Config-backed outbound | Slack Web API | `slack.enabled`, `slack.bot_token` | `loong slack-send` |
 | LINE | Config-backed outbound | LINE Messaging API | `line.enabled`, `line.channel_access_token` | `loong line-send` |
 | DingTalk | Config-backed outbound | DingTalk custom robot webhook | `dingtalk.enabled`, `dingtalk.webhook_url`; `secret` is optional when the webhook uses signed requests | `loong dingtalk-send` |
@@ -119,6 +128,9 @@ do not overclaim runtime support:
 
 - the channel catalog is the superset and can model planned surfaces before a
   runtime adapter exists
+- plugin-backed bridge surfaces are a shipped subset that own config
+  validation, stable target semantics, and managed bridge discovery while
+  leaving upstream login and listener ownership in the external bridge
 - config-backed outbound surfaces are a shipped subset that own credentials,
   status, and direct sends without pretending they also own a long-running
   serve runtime
@@ -145,6 +157,7 @@ send-only surface is already a shipped runtime surface.
 | --- | --- | --- |
 | base local assistant path | CLI | [Surface Setup Rules](#surface-setup-rules) |
 | runtime-backed service channels | Feishu / Lark, Telegram, Matrix, WhatsApp, WeCom | [Runtime-Backed Service Channels](#runtime-backed-service-channels) and [Gateway Ownership Direction](#gateway-ownership-direction) |
+| plugin-backed bridge surfaces | Weixin, QQ Bot, OneBot | [Plugin-Backed Bridge Surfaces](#plugin-backed-bridge-surfaces) |
 | config-backed outbound surfaces | Discord, Slack, LINE, DingTalk, Email, Webhook, Google Chat, Signal, Twitch, Tlon, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, iMessage / BlueBubbles, Nostr | [Config-Backed Outbound Surfaces](#config-backed-outbound-surfaces) |
 | catalog-only planned surfaces | Zalo, Zalo Personal, WebChat | [Expansion Model](#expansion-model) |
 
@@ -221,6 +234,65 @@ long-connection transport:
 Loong does not support a WeCom webhook callback mode on this surface. The
 runtime contract is explicitly the official AIBot websocket subscription flow.
 
+### Plugin-Backed Bridge Surfaces
+
+Weixin, QQ Bot, and OneBot are shipped as plugin-backed bridge surfaces:
+
+- they publish first-class channel ids, aliases, target semantics, config
+  validation, onboarding metadata, and managed bridge discovery through the
+  shared channel SDK
+- they intentionally do not join `multi-channel-serve` or `gateway run`
+  because the external bridge still owns the upstream runtime lifecycle
+- the current operator entry surfaces are `loong doctor` and `loong channels`,
+  not a native `*-serve` loop that does not exist yet
+- stable target templates and managed bridge discovery make these surfaces
+  actionable today without pretending Loong already owns native WeChat / QQ /
+  OneBot listeners
+
+#### Weixin
+
+Weixin is the ClawBot / iLink bridge lane:
+
+- configure `bridge_url` plus `bridge_access_token`
+- keep `allowed_contact_ids` explicit because the trust boundary should stay
+  narrow
+- use `managed_bridge_plugin_id` only when several compatible managed bridges
+  are installed and one exact selection should win
+
+Stable targets:
+
+- `weixin:<account>:contact:<id>`
+- `weixin:<account>:room:<id>`
+
+#### QQ Bot
+
+QQ Bot is the explicit Tencent gateway / bridge lane:
+
+- configure `app_id` plus `client_secret`
+- keep `allowed_peer_ids` explicit
+- preserve stable account ids so c2c, group, and guild route semantics do not
+  drift across bridge implementations
+
+Stable targets:
+
+- `qqbot:<account>:c2c:<openid>`
+- `qqbot:<account>:group:<openid>`
+- `qqbot:<account>:channel:<id>`
+
+#### OneBot
+
+OneBot is the protocol bridge lane:
+
+- configure `websocket_url` plus `access_token`
+- keep `allowed_group_ids` explicit
+- use it when the upstream bridge already speaks OneBot v11 and Loong should
+  own the stable surface id and target contract
+
+Stable targets:
+
+- `onebot:<account>:private:<user_id>`
+- `onebot:<account>:group:<group_id>`
+
 ### Config-Backed Outbound Surfaces
 
 Discord, Slack, LINE, DingTalk, Email, generic Webhook, Google Chat, Signal,
@@ -244,7 +316,8 @@ surfaces:
 #### Straightforward API Or Webhook Sends
 
 Discord, Slack, LINE, DingTalk, Google Chat, and Mattermost stay in the
-simplest config-backed outbound bucket for this spec slice:
+simplest config-backed outbound bucket for this spec slice. In operator and
+status UX this same bucket is also described as the outbound-only family:
 
 - the matrix above is the canonical source for required config keys and send
   commands
@@ -252,6 +325,16 @@ simplest config-backed outbound bucket for this spec slice:
   support richer bot or event contracts
 - they should not be described as shipped serve runtimes until Loong owns
   the corresponding inbound contract and gateway supervision model
+
+Discord keeps a slightly richer contract than the rest of this slice because
+its public config already carries the future-runtime governance fields
+`application_id`, `application_id_env`, and `allowed_guild_ids`:
+
+- these fields are preserved in config resolution, inspection, doctor, and
+  onboarding preflight
+- they support multi-account Discord setups without forcing operators to hide
+  future runtime intent in ad hoc metadata
+- they do **not** upgrade Discord into a shipped `discord-serve` runtime today
 
 #### Detailed Outbound Surface Notes
 
@@ -473,6 +556,8 @@ the attached compatibility wrapper rather than the long-term product noun:
 - those selectors should resolve against configured `accounts.<id>` entries;
   if named accounts do not exist yet, the operator should finish the normal
   per-channel setup first instead of inventing selector ids ad hoc
+- it never promotes plugin-backed bridge surfaces such as Weixin, QQ Bot, or
+  OneBot into runtime supervision until Loong owns those listeners natively
 - it never promotes config-backed outbound surfaces such as Signal, Email,
   generic Webhook, Microsoft Teams, DingTalk, Google Chat, Twitch, Tlon,
   Mattermost, Nextcloud Talk, Synology Chat, IRC, or iMessage / BlueBubbles

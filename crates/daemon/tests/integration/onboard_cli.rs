@@ -2487,14 +2487,16 @@ fn import_surfaces_include_ready_provider_and_channels() {
         surfaces
             .iter()
             .any(|surface| surface.name == "telegram channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready),
+                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.detail.contains("runtime-backed")),
         "telegram import surface should be ready: {surfaces:#?}"
     );
     assert!(
         surfaces
             .iter()
             .any(|surface| surface.name == "feishu channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready),
+                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.detail.contains("runtime-backed")),
         "feishu import surface should be ready: {surfaces:#?}"
     );
 }
@@ -2562,6 +2564,59 @@ fn channel_preflight_checks_report_enabled_channels() {
 }
 
 #[test]
+fn channel_preflight_checks_report_configured_outbound_channels() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "discord channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.detail.contains("direct send ready on 1 account(s)")
+        }),
+        "configured outbound channels should now participate in channel preflight checks: {checks:#?}"
+    );
+}
+
+#[test]
+fn channel_preflight_checks_summarize_outbound_multi_account_state_and_reserved_runtime_fields() {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "discord": {
+            "enabled": true,
+            "accounts": {
+                "ops": {
+                    "bot_token": "discord-ops-token",
+                    "application_id": "discord-application-id",
+                    "allowed_guild_ids": ["guild-a", "guild-b"]
+                },
+                "alerts": {}
+            }
+        }
+    }))
+    .expect("deserialize discord config");
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "discord channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.detail.contains("direct send ready on 1/2 account(s)")
+                && check.detail.contains("ops ready")
+                && check.detail.contains("alerts needs review")
+                && check.detail.contains("reserved future runtime fields")
+                && check.detail.contains("application_id")
+                && check.detail.contains("allowed_guild_ids:2")
+        }),
+        "configured outbound multi-account channels should surface per-account readiness and reserved future runtime fields in preflight detail: {checks:#?}"
+    );
+}
+
+#[test]
 fn import_surfaces_detect_ready_channels_from_environment_only() {
     let config = mvp::config::LoongClawConfig::default();
     let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces_with_channel_readiness(
@@ -2611,6 +2666,7 @@ fn import_surfaces_detect_configured_plugin_backed_channels_for_review_when_mana
         surfaces.iter().any(|surface| {
             surface.name == "weixin channel"
                 && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Review
+                && surface.detail.contains("plugin-backed")
                 && surface.detail.contains("external_skills.install_root")
         }),
         "import preview should surface managed bridge review guidance when a plugin-backed channel is configured but install_root is missing: {surfaces:#?}"
@@ -2653,6 +2709,7 @@ fn import_surfaces_detect_configured_plugin_backed_channels_as_ready_when_single
         surfaces.iter().any(|surface| {
             surface.name == "weixin channel"
                 && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.detail.contains("plugin-backed")
                 && surface.detail.contains("weixin-managed-bridge")
         }),
         "import preview should mark a configured plugin-backed channel as ready when exactly one compatible managed bridge is available: {surfaces:#?}"
@@ -2688,6 +2745,47 @@ fn import_surfaces_ignore_unconfigured_plugin_backed_channels_even_when_managed_
             .iter()
             .all(|surface| surface.name != "weixin channel"),
         "import preview should ignore plugin-backed channels that still match the default placeholder snapshot: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn import_surfaces_detect_configured_discord_channel_as_ready_when_send_contract_is_satisfied() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+
+    assert!(
+        surfaces.iter().any(|surface| {
+            surface.name == "discord channel"
+                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.detail.contains("outbound-only")
+                && surface.detail.contains("direct send ready on 1 account(s)")
+        }),
+        "import preview should surface configured outbound channels as ready when send readiness is satisfied: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn import_surfaces_detect_configured_discord_channel_for_review_when_send_contract_is_blocked() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token_env = None;
+    config.discord.bot_token = None;
+
+    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+
+    assert!(
+        surfaces.iter().any(|surface| {
+            surface.name == "discord channel"
+                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Review
+                && surface.detail.contains("outbound-only")
+                && surface.detail.contains("bot_token")
+        }),
+        "import preview should keep configured outbound channels visible for review when send readiness is blocked: {surfaces:#?}"
     );
 }
 
@@ -4457,7 +4555,7 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- channels: telegram")),
+            .any(|line| line.contains("- runtime-backed channels: telegram")),
         "current-setup shortcut should summarize enabled non-cli channels: {lines:#?}"
     );
     assert!(
@@ -4475,6 +4573,46 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
             .iter()
             .any(|line| line == "press Enter to use default 1, keep current setup"),
         "current-setup shortcut should make the fast-lane default explicit on the screen: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboard_current_setup_shortcut_screen_groups_enabled_channels_by_runtime_taxonomy() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.model = "gpt-4.1".to_owned();
+    config.telegram.enabled = true;
+    config.weixin.enabled = true;
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let lines =
+        loongclaw_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 120);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- runtime-backed channels: telegram"),
+        "current setup shortcut should render runtime-backed channels as a separate line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- plugin-backed channels: weixin"),
+        "current setup shortcut should render plugin-backed channels as a separate line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- outbound-only channels: discord"),
+        "current setup shortcut should render outbound-only channels as a separate line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line != "- channels: telegram, weixin, discord"),
+        "current setup shortcut should stop flattening enabled channels into one generic line once grouped lines are available: {lines:#?}"
     );
 }
 
@@ -4620,7 +4758,7 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- channels: telegram")),
+            .any(|line| line.contains("- runtime-backed channels: telegram")),
         "detected-setup shortcut should summarize enabled non-cli channels: {lines:#?}"
     );
     assert!(
@@ -6163,9 +6301,9 @@ fn onboarding_success_summary_adds_doctor_action_for_plugin_backed_channels_need
             .position(|action| action.kind == crate::onboard_cli::OnboardingActionKind::Doctor)
             < summary.next_actions.iter().position(|action| {
                 action.kind == crate::onboard_cli::OnboardingActionKind::Channel
-                    && action.label == "channels"
+                    && action.label == "review Weixin bridge"
             }),
-        "doctor should be promoted ahead of the generic channel catalog when a managed bridge still needs review: kinds={action_kinds:?} labels={action_labels:?}"
+        "doctor should be promoted ahead of the contextual bridge review handoff when a managed bridge still needs review: kinds={action_kinds:?} labels={action_labels:?}"
     );
 }
 
@@ -7984,7 +8122,17 @@ fn onboarding_success_summary_reports_existing_config_kept() {
             value: "not required".to_owned(),
         }),
         memory_path: None,
+        channel_surface_summary: loongclaw_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
+            total_surface_count: 28,
+            runtime_backed_surface_count: 5,
+            config_backed_surface_count: 17,
+            plugin_backed_surface_count: 3,
+            catalog_only_surface_count: 3,
+        },
         channels: vec!["cli".to_owned()],
+        runtime_backed_channels: Vec::new(),
+        plugin_backed_channels: Vec::new(),
+        outbound_only_channels: Vec::new(),
         suggested_channels: Vec::new(),
         domain_outcomes: Vec::new(),
         next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
@@ -8067,6 +8215,88 @@ fn onboarding_success_summary_reports_web_search_provider_and_credential() {
 }
 
 #[test]
+fn onboarding_success_summary_reports_channel_surface_distribution() {
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+        &path,
+        &mvp::config::LoongClawConfig::default(),
+        None,
+    );
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
+
+    assert_eq!(summary.channel_surface_summary.total_surface_count, 28);
+    assert_eq!(
+        summary.channel_surface_summary.runtime_backed_surface_count,
+        5
+    );
+    assert_eq!(
+        summary.channel_surface_summary.config_backed_surface_count,
+        17
+    );
+    assert_eq!(
+        summary.channel_surface_summary.plugin_backed_surface_count,
+        3
+    );
+    assert_eq!(
+        summary.channel_surface_summary.catalog_only_surface_count,
+        3
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line
+                == "- channel surfaces: 28 total (5 runtime-backed, 17 config-backed, 3 plugin-backed, 3 catalog-only)"
+        }),
+        "success summary should surface the public channel inventory distribution so operators can see the real maturity mix after onboarding: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_groups_enabled_channels_by_runtime_taxonomy() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.weixin.enabled = true;
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
+
+    assert_eq!(summary.runtime_backed_channels, vec!["telegram".to_owned()]);
+    assert_eq!(summary.plugin_backed_channels, vec!["weixin".to_owned()]);
+    assert_eq!(summary.outbound_only_channels, vec!["discord".to_owned()]);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- runtime-backed channels: telegram"),
+        "success summary should render enabled runtime-backed channels separately: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- plugin-backed channels: weixin"),
+        "success summary should render enabled plugin-backed channels separately: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "- outbound-only channels: discord"),
+        "success summary should render enabled outbound-only channels separately: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line != "- channels: telegram, weixin, discord"),
+        "success summary should avoid flattening enabled channels back into one generic line once grouped lines are available: {lines:#?}"
+    );
+}
+
+#[test]
 fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
     let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
         import_source: Some("suggested starting point".to_owned()),
@@ -8091,7 +8321,17 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
             value: "not required".to_owned(),
         }),
         memory_path: None,
+        channel_surface_summary: loongclaw_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
+            total_surface_count: 28,
+            runtime_backed_surface_count: 5,
+            config_backed_surface_count: 17,
+            plugin_backed_surface_count: 3,
+            catalog_only_surface_count: 3,
+        },
         channels: vec!["cli".to_owned()],
+        runtime_backed_channels: Vec::new(),
+        plugin_backed_channels: Vec::new(),
+        outbound_only_channels: Vec::new(),
         suggested_channels: Vec::new(),
         domain_outcomes: vec![
             loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
@@ -8162,7 +8402,17 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
             value: "not required".to_owned(),
         }),
         memory_path: None,
+        channel_surface_summary: loongclaw_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
+            total_surface_count: 28,
+            runtime_backed_surface_count: 5,
+            config_backed_surface_count: 17,
+            plugin_backed_surface_count: 3,
+            catalog_only_surface_count: 3,
+        },
         channels: vec!["cli".to_owned()],
+        runtime_backed_channels: Vec::new(),
+        plugin_backed_channels: Vec::new(),
+        outbound_only_channels: Vec::new(),
         suggested_channels: Vec::new(),
         domain_outcomes: vec![
             loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
@@ -8305,6 +8555,173 @@ fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_
 }
 
 #[test]
+fn onboarding_success_summary_uses_contextual_discord_handoff_when_cli_is_disabled() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(summary.next_actions[0].label, "inspect Discord");
+    assert_eq!(
+        summary.next_actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line == "- inspect Discord: loong channels --config '/tmp/loongclaw-config.toml'"
+        }),
+        "success summary should surface a contextual inspection handoff for configured outbound channels: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_contextual_discord_review_handoff_when_outbound_setup_is_blocked()
+ {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+    config.discord.enabled = true;
+    config.discord.bot_token = None;
+    config.discord.bot_token_env = None;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+    );
+    assert_eq!(summary.next_actions[0].label, "verify Discord setup");
+    assert_eq!(
+        summary.next_actions[0].command,
+        "loong doctor --config '/tmp/loongclaw-config.toml'"
+    );
+    assert_eq!(
+        summary.next_actions[1].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(summary.next_actions[1].label, "review Discord setup");
+    assert_eq!(
+        summary.next_actions[1].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("verify Discord setup")
+                && line.contains("loong doctor --config '/tmp/loongclaw-config.toml'")
+        }),
+        "success summary should steer blocked outbound-only setups into a doctor-first handoff: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_outbound_group_handoff_when_multiple_outbound_channels_are_enabled()
+ {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+    config.slack.enabled = true;
+    config.slack.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "xoxb-test-token".to_owned(),
+    ));
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(
+        summary.next_actions[0].label,
+        "inspect configured outbound channels"
+    );
+    assert_eq!(
+        summary.next_actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+    assert!(
+        summary.suggested_channels.is_empty(),
+        "once outbound channels are already configured, onboarding should stop suggesting unrelated runtime-backed channels: {summary:#?}"
+    );
+    assert!(
+        lines.join("\n").contains(
+            "- inspect configured outbound channels: loong channels --config\n  '/tmp/loongclaw-config.toml'"
+        ),
+        "success summary should prefer an outbound-group inspection handoff when several outbound-only surfaces are configured: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_outbound_review_handoff_when_multiple_outbound_channels_need_attention()
+ {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+    config.slack.enabled = true;
+    config.slack.bot_token = None;
+    config.slack.bot_token_env = None;
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+    );
+    assert_eq!(summary.next_actions[0].label, "verify Slack setup");
+    assert_eq!(
+        summary.next_actions[0].command,
+        "loong doctor --config '/tmp/loongclaw-config.toml'"
+    );
+    assert_eq!(
+        summary.next_actions[1].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(
+        summary.next_actions[1].label,
+        "review configured outbound channels"
+    );
+    assert_eq!(
+        summary.next_actions[1].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("verify Slack setup")
+                && line.contains("loong doctor --config '/tmp/loongclaw-config.toml'")
+        }),
+        "success summary should elevate blocked outbound-only groups into a doctor-first handoff that points at the exact blocked surface when one is known: {lines:#?}"
+    );
+}
+
+#[test]
 fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_when_cli_is_disabled()
 {
     let mut config = mvp::config::LoongClawConfig::default();
@@ -8341,9 +8758,9 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
     assert_eq!(
         summary.next_actions[1].kind,
         loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel,
-        "the generic channel catalog should remain available as a secondary fallback: {summary:#?}"
+        "a contextual bridge review handoff should remain available as a secondary fallback: {summary:#?}"
     );
-    assert_eq!(summary.next_actions[1].label, "channels");
+    assert_eq!(summary.next_actions[1].label, "review Weixin bridge");
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines
@@ -8358,6 +8775,65 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
                 .iter()
                 .any(|line| line.contains("/tmp/loongclaw-config.toml")),
         "success summary should render the managed bridge verification handoff as the primary action: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_contextual_bridge_handoff_when_ready_plugin_backed_channel_is_cli_only_path()
+ {
+    let install_root = unique_temp_path("managed-bridge-success-summary-ready-cli-disabled");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "cli": { "enabled": false },
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(summary.next_actions[0].label, "inspect Weixin bridge");
+    assert_eq!(
+        summary.next_actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+    assert!(
+        summary.next_actions.iter().all(
+            |action| action.kind != loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+        ),
+        "ready managed bridge setups should not force a doctor handoff: {summary:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line == "- inspect Weixin bridge: loong channels --config '/tmp/loongclaw-config.toml'"
+        }),
+        "success summary should render a contextual bridge inspection handoff when bridge setup is already ready: {lines:#?}"
     );
 }
 
@@ -8392,10 +8868,10 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
             && action.label == "verify weixin managed bridge"
     });
-    let catalog_position = summary
+    let bridge_review_position = summary
         .next_actions
         .iter()
-        .position(|action| action.label == "channels");
+        .position(|action| action.label == "review Weixin bridge");
 
     assert_eq!(
         ask_position,
@@ -8412,15 +8888,15 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
     );
     let doctor_position =
         doctor_position.expect("managed-bridge diagnostics should remain available");
-    let catalog_position =
-        catalog_position.expect("generic channel catalog handoff should remain available");
+    let bridge_review_position = bridge_review_position
+        .expect("contextual bridge inspection handoff should remain available");
     assert!(
         personalize_position < doctor_position,
         "working preferences should stay ahead of managed-bridge diagnostics in cli-enabled setups: {summary:#?}"
     );
     assert!(
-        doctor_position < catalog_position,
-        "managed-bridge diagnostics should still appear before the generic channel catalog: {summary:#?}"
+        doctor_position < bridge_review_position,
+        "managed-bridge diagnostics should still appear before the contextual bridge review handoff: {summary:#?}"
     );
     assert!(
         lines.iter().any(|line| {
