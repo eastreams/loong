@@ -149,12 +149,16 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
     let render_width = detect_cli_chat_render_width();
 
     #[cfg(feature = "memory-sqlite")]
+    let limit = runtime.config.memory.sliding_window;
+
+    #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_production_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics_with_limit(
             &runtime.config,
             &runtime.session_id,
-            runtime.conversation_binding(),
+            limit,
+            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
         )
         .await
     {
@@ -199,12 +203,16 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
     let render_width = detect_cli_chat_render_width();
 
     #[cfg(feature = "memory-sqlite")]
+    let limit = runtime.config.memory.sliding_window;
+
+    #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_production_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics_with_limit(
             &runtime.config,
             &runtime.session_id,
-            runtime.conversation_binding(),
+            limit,
+            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
         )
         .await
     {

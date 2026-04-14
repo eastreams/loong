@@ -1181,25 +1181,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn load_production_turn_checkpoint_diagnostics(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointDiagnostics> {
-        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let production_binding = prepared.1;
-        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            &runtime,
-            production_binding,
-        )
-        .await
-    }
-
     pub(crate) async fn load_turn_checkpoint_diagnostics_with_limit(
         &self,
         config: &LoongConfig,
@@ -1240,10 +1221,11 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub async fn probe_production_turn_checkpoint_tail_runtime_gate(
+    pub(crate) async fn probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
         &self,
         config: &LoongConfig,
         session_id: &str,
+        limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
         let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
@@ -1253,7 +1235,7 @@ impl ConversationTurnCoordinator {
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
             session_id,
-            config.memory.sliding_window,
+            limit,
             &runtime,
             production_binding,
         )
@@ -7289,10 +7271,12 @@ mod tests {
         config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
+        let limit = config.memory.sliding_window;
         let result = coordinator
-            .load_production_turn_checkpoint_diagnostics(
+            .load_production_turn_checkpoint_diagnostics_with_limit(
                 &config,
                 "maintenance-session",
+                limit,
                 ConversationRuntimeBinding::direct(),
             )
             .await;
@@ -7311,10 +7295,12 @@ mod tests {
         config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
+        let limit = config.memory.sliding_window;
         let result = coordinator
-            .probe_production_turn_checkpoint_tail_runtime_gate(
+            .probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
                 &config,
                 "maintenance-session",
+                limit,
                 ConversationRuntimeBinding::direct(),
             )
             .await;
