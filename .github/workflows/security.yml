@@ -72,7 +72,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
       - name: Install security tools
-        uses: taiki-e/install-action@0abfcd587b70a713fdaa7fb502c885e2112acb15
+        uses: taiki-e/install-action@85b24a67ef0c632dfefad70b9d5ce8fddb040754
         with:
           tool: cargo-audit,cargo-deny
 
