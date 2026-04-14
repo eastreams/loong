@@ -190,30 +190,38 @@ impl<'a> RuntimeTurnExecutionService<'a> {
                 let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
                 let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
-                return match execution {
-                    crate::acp::FinalizedAcpConversationTurn::Succeeded(success) => {
+                let governed_session_mode =
+                    ConversationRuntimeBinding::kernel(&runtime.kernel_ctx).session_mode();
+
+                return crate::acp::consume_finalized_acp_conversation_turn(
+                    execution,
+                    |success| async move {
+                        let result = success.result;
+                        let output_text = result.output_text;
+                        let state = Some(acp_session_state_label(result.state).to_owned());
+                        let stop_reason = result
+                            .stop_reason
+                            .map(acp_turn_stop_reason_label)
+                            .map(ToOwned::to_owned);
+                        let usage = result.usage;
+                        let event_count = success.runtime_events.len();
+
                         Ok(AgentTurnResult {
                             session_id: runtime.session_id.clone(),
-                            output_text: success.result.output_text,
+                            output_text,
                             turn_mode: request.turn_mode,
-                            governed_session_mode: ConversationRuntimeBinding::kernel(
-                                &runtime.kernel_ctx,
-                            )
-                            .session_mode(),
-                            state: Some(acp_session_state_label(success.result.state).to_owned()),
-                            stop_reason: success
-                                .result
-                                .stop_reason
-                                .map(acp_turn_stop_reason_label)
-                                .map(ToOwned::to_owned),
-                            usage: success.result.usage,
-                            event_count: success.runtime_events.len(),
+                            governed_session_mode,
+                            state,
+                            stop_reason,
+                            usage,
+                            event_count,
                             prompt_assembly,
                             prompt_cache,
                         })
-                    }
-                    crate::acp::FinalizedAcpConversationTurn::Failed(failure) => Err(failure.error),
-                };
+                    },
+                    |failure| async move { Err(failure.error) },
+                )
+                .await;
             }
 
             let (effective_ingress, effective_provenance) =
