@@ -395,7 +395,11 @@ async fn main() {
         Commands::Plugins { json, command } => {
             plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
         }
-        Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
+        Commands::Channels {
+            config,
+            resolve,
+            json,
+        } => run_channels_cli(config.as_deref(), resolve.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::RuntimeSnapshot {
             config,
