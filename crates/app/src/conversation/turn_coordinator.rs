@@ -35,7 +35,6 @@ use crate::acp::{
     AcpConversationTurnEntryDecision, AcpConversationTurnExecutionOutcome,
     AcpConversationTurnOptions, evaluate_acp_conversation_turn_entry_for_address,
     execute_acp_conversation_turn_for_address,
-    execute_acp_conversation_turn_for_address_with_manager,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -2181,22 +2180,14 @@ impl ConversationTurnCoordinator {
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
         let session_id = address.session_id.as_str();
-        let executed = match acp_manager {
-            Some(manager) => {
-                execute_acp_conversation_turn_for_address_with_manager(
-                    config,
-                    address,
-                    user_input,
-                    acp_options,
-                    manager,
-                )
-                .await?
-            }
-            None => {
-                execute_acp_conversation_turn_for_address(config, address, user_input, acp_options)
-                    .await?
-            }
-        };
+        let executed = execute_acp_conversation_turn_for_address(
+            config,
+            address,
+            user_input,
+            acp_options,
+            acp_manager,
+        )
+        .await?;
         let persistence_context = &executed.persistence_context;
 
         match executed.outcome {
