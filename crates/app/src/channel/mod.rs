@@ -1790,6 +1790,82 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn parse_known_channel_session_send_target_keeps_feishu_participant_and_thread_as_context() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "accounts": {
+                    "work": {
+                        "account_id": "lark_cli_a1b2c3",
+                        "app_id": "cli_app",
+                        "app_secret": "cli_secret",
+                        "allowed_chat_ids": ["oc_123"]
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let session_id =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_participant_id("ou_sender_1")
+                .with_thread_id("om_root_1")
+                .session_key();
+
+        let parsed = parse_known_channel_session_send_target(&config, session_id.as_str())
+            .expect("parse feishu session send target");
+
+        assert_eq!(
+            parsed,
+            KnownChannelSessionSendTarget::Feishu {
+                account_id: Some("lark_cli_a1b2c3".to_owned()),
+                conversation_id: "oc_123".to_owned(),
+                reply_message_id: None,
+            }
+        );
+    }
+
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn parse_known_channel_session_send_target_keeps_feishu_thread_as_context() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "accounts": {
+                    "work": {
+                        "account_id": "lark_cli_a1b2c3",
+                        "app_id": "cli_app",
+                        "app_secret": "cli_secret",
+                        "allowed_chat_ids": ["oc_123"]
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let session_id = ChannelSession::with_account_and_thread(
+            ChannelPlatform::Feishu,
+            "lark_cli_a1b2c3",
+            "oc_123",
+            "om_root_1",
+        )
+        .session_key();
+
+        let parsed = parse_known_channel_session_send_target(&config, session_id.as_str())
+            .expect("parse feishu session send target");
+
+        assert_eq!(
+            parsed,
+            KnownChannelSessionSendTarget::Feishu {
+                account_id: Some("lark_cli_a1b2c3".to_owned()),
+                conversation_id: "oc_123".to_owned(),
+                reply_message_id: None,
+            }
+        );
+    }
+
     #[cfg(feature = "channel-matrix")]
     #[test]
     fn matrix_security_validation_requires_room_allowlist_and_transport() {

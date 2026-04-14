@@ -2902,7 +2902,8 @@ pub(crate) async fn send_text_to_known_session(
                     resolved.allowed_sender_ids.as_slice(),
                     true,
                 );
-                let target_allowed = access_policy.allows_str(conversation_id.as_str(), None);
+                let target_allowed =
+                    access_policy.allows_conversation_str(conversation_id.as_str());
                 if !target_allowed {
                     return Err(format!(
                         "sessions_send_target_not_allowed: feishu target `{conversation_id}` is not present in feishu.allowed_chat_ids"

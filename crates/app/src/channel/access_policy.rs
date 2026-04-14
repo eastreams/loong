@@ -179,6 +179,14 @@ impl ChannelInboundAccessPolicy<String> {
             && self.allowed_senders_allow_str(sender_id)
     }
 
+    pub(crate) fn allows_conversation_str(&self, conversation_id: &str) -> bool {
+        let conversation_id = conversation_id.trim();
+        if conversation_id.is_empty() {
+            return false;
+        }
+        self.allowed_conversations_allow_str(conversation_id)
+    }
+
     pub(crate) fn allows_optional_conversation_str(
         &self,
         conversation_id: Option<&str>,
@@ -406,5 +414,18 @@ mod tests {
                 allowed_senders: vec!["ou_admin".to_owned()],
             }
         );
+    }
+
+    #[test]
+    fn string_policy_can_validate_conversation_without_sender_context() {
+        let policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["oc_demo".to_owned()],
+            &["ou_admin".to_owned()],
+            true,
+        );
+
+        assert!(policy.allows_conversation_str("oc_demo"));
+        assert!(!policy.allows_conversation_str("oc_other"));
+        assert!(!policy.allows_conversation_str(" "));
     }
 }

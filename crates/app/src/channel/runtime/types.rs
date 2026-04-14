@@ -216,14 +216,7 @@ fn parse_feishu_session_send_target(
         return Err(format!("sessions_send_channel_unsupported: `{session_id}`"));
     };
 
-    let reply_message_id = match scoped_path {
-        [_conversation_id] => None,
-        [_conversation_id, trailing] if looks_like_feishu_message_id(trailing.as_str()) => {
-            Some(trailing.clone())
-        }
-        [_conversation_id, _participant_id] => None,
-        _ => scoped_path.last().cloned(),
-    };
+    let reply_message_id = parse_feishu_session_reply_message_id(scoped_path);
 
     Ok(KnownChannelSessionSendTarget::Feishu {
         account_id,
@@ -382,6 +375,25 @@ fn split_known_channel_account_and_scope<'a>(
     }
 
     (configured_account_id.or(runtime_account_id), scoped_path)
+}
+
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+fn parse_feishu_session_reply_message_id(scope: &[String]) -> Option<String> {
+    if scope.len() <= 3 {
+        return None;
+    }
+
+    let reply_message_id = scope.last()?;
+    if !looks_like_feishu_message_id(reply_message_id.as_str()) {
+        return None;
+    }
+
+    Some(reply_message_id.clone())
 }
 
 #[cfg(any(
