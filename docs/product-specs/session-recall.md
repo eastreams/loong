@@ -2,13 +2,13 @@
 
 ## User Story
 
-As a LoongClaw operator, I want the assistant to search canonical session
+As a Loong operator, I want the assistant to search canonical session
 history directly so that follow-up work can recall prior turns and session
 events without forcing me to manually inspect transcripts.
 
 ## Acceptance Criteria
 
-- [x] LoongClaw exposes `session_search` as a runtime-visible session tool when
+- [x] Loong exposes `session_search` as a runtime-visible session tool when
       session tools are enabled.
 - [x] `session_search` searches only the visible session scope for the current
       session according to the existing session visibility policy.
@@ -21,7 +21,7 @@ events without forcing me to manually inspect transcripts.
 - [x] `session_search` returns ranked structured hits with enough metadata to
       identify the matched session, source kind, and snippet.
 - [x] `session_search` requires `MemoryRead` rather than filesystem access
-      because it searches LoongClaw-owned canonical session history.
+      because it searches Loong-owned canonical session history.
 - [x] Product docs and tool-surface descriptions use the canonical tool name
       `session_search`.
 

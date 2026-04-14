@@ -2,7 +2,7 @@
 
 ## User Story
 
-As a first-time LoongClaw user, I want a guided setup flow so that I can reach a
+As a first-time Loong user, I want a guided setup flow so that I can reach a
 working assistant without editing raw config or guessing which command comes
 next.
 

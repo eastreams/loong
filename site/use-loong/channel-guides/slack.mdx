@@ -1,0 +1,57 @@
+---
+title: Slack
+description: Configure the Slack channel surface in Loong.
+---
+
+# Slack
+
+This is a shipped config-backed outbound surface. Slack serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `slack` |
+| Config key | `slack` |
+| Implementation status | `config_backed` |
+| Transport | `slack_web_api` |
+| Aliases | `slack-bot` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[slack]
+enabled = true
+bot_token_env = "SLACK_BOT_TOKEN"
+```
+
+## Smoke Test
+
+```bash
+loong slack-send --target "C0123456789" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| direct send | `slack-send` | Usage: loong slack-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| events reply loop | `slack-serve` | slack serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `slack.enabled`<br/>`slack.accounts.<account>.enabled` | none | none |
+| bot token | `slack.bot_token`<br/>`slack.accounts.<account>.bot_token` | `slack.bot_token_env`<br/>`slack.accounts.<account>.bot_token_env` | `SLACK_BOT_TOKEN` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

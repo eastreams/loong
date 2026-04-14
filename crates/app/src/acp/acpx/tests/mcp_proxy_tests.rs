@@ -311,8 +311,10 @@ fn probe_mcp_proxy_support_kills_timed_out_runtime() {
 
     let pid_text = std::fs::read_to_string(&pid_path).expect("read timed out probe pid");
     let pid = pid_text.trim().to_owned();
+    let stable_unix_path = "/bin:/usr/bin";
     let status = std::process::Command::new("kill")
         .args(["-0", pid.as_str()])
+        .env("PATH", stable_unix_path)
         .stderr(std::process::Stdio::null())
         .status()
         .expect("check fake node liveness");

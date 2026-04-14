@@ -1,0 +1,62 @@
+---
+title: Together
+description: Configure the Together provider profile in Loong.
+---
+
+# Together
+
+Use this when your team already runs on Together and you want that vendor family to stay explicit in Loong config instead of disappearing behind a generic compatibility route.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `together` |
+| Provider group | Direct Hosted Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | TOGETHER_API_KEY |
+| Aliases | `together_compatible`, `together_ai`, `together-ai` |
+| Default base URL | `https://api.together.xyz` |
+| Request endpoint | `https://api.together.xyz/v1/chat/completions` |
+| Models endpoint | `https://api.together.xyz/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "together"
+
+[providers.together]
+kind = "together"
+api_key = { env = "TOGETHER_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `TOGETHER_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://api.together.xyz/v1/chat/completions` |
+| Primary model-catalog route | `https://api.together.xyz/v1/models` |
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

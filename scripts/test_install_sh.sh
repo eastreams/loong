@@ -148,7 +148,7 @@ make_latest_release_stub_bin() {
 set -euo pipefail
 
 url="${@: -1}"
-if [[ "$url" == "https://api.github.com/repos/loongclaw-ai/loongclaw/releases/latest" ]]; then
+if [[ "$url" == "https://api.github.com/repos/eastreams/loong/releases/latest" ]]; then
   exit 22
 fi
 
@@ -303,7 +303,7 @@ run_linux_x86_64_prefers_gnu_when_glibc_is_supported_test() {
   (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -325,7 +325,7 @@ run_termux_arm64_installs_android_release_test() {
     PATH="$fixture/fake-bin:$PATH" \
       TERMUX_VERSION="0.119.0" \
       PREFIX="/data/data/com.termux/files/usr" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -370,7 +370,7 @@ run_linux_guest_with_termux_env_prefers_linux_release_test() {
     PATH="$fixture/fake-bin:$PATH" \
       TERMUX_VERSION="0.119.0" \
       PREFIX="/data/data/com.termux/files/usr" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -390,7 +390,7 @@ run_termux_x86_64_rejects_android_release_test() {
     PATH="$fixture/fake-bin:$PATH" \
       TERMUX_VERSION="0.119.0" \
       PREFIX="/data/data/com.termux/files/usr" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$fixture/install" >"$output_file" 2>&1
   ); then
     echo "expected install.sh to reject unsupported Android x86_64 hosts" >&2
@@ -413,7 +413,7 @@ run_linux_x86_64_falls_back_to_musl_when_glibc_is_too_old_test() {
   (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -434,7 +434,7 @@ run_linux_x86_64_falls_back_to_musl_when_glibc_detection_fails_test() {
   (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -454,8 +454,8 @@ run_linux_x86_64_explicit_musl_override_test() {
   (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
-      LOONGCLAW_INSTALL_TARGET_LIBC="musl" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_TARGET_LIBC="musl" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -474,7 +474,7 @@ run_linux_x86_64_explicit_gnu_override_rejects_old_glibc_test() {
   if (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --target-libc gnu --prefix "$fixture/install" >"$output_file" 2>&1
   ); then
     echo "expected install.sh to reject a GNU override on an unsupported glibc host" >&2
@@ -554,7 +554,7 @@ run_linux_x86_64_prefers_gnu_when_sort_version_is_unavailable_test() {
   (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -574,7 +574,7 @@ run_linux_x86_64_explicit_gnu_override_rejects_musl_ldd_output_test() {
   if (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --target-libc gnu --prefix "$fixture/install" >"$output_file" 2>&1
   ); then
     echo "expected install.sh to reject a GNU override when only musl ldd output is available" >&2
@@ -596,7 +596,7 @@ run_linux_arm64_auto_rejects_old_glibc_without_musl_artifact_test() {
   if (
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$fixture/install" >"$output_file" 2>&1
   ); then
     echo "expected install.sh to reject GNU-only arm64 installs on an unsupported glibc host" >&2
@@ -621,7 +621,7 @@ run_release_override_install_and_onboard_test() {
     cd "$REPO_ROOT"
     PATH="$fixture/fake-bin:$PATH" \
       ONBOARD_MARKER="$marker" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       BRAVE_API_KEY="" \
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
@@ -806,7 +806,7 @@ run_release_override_install_and_onboard_detects_duckduckgo_default_test() {
       LANG="C.UTF-8" \
       TZ="UTC" \
       ONBOARD_MARKER="$marker" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       BRAVE_API_KEY="" \
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
@@ -838,7 +838,7 @@ run_release_override_install_and_onboard_prefers_tavily_for_domestic_hosts_test(
       LANG="zh_CN.UTF-8" \
       TZ="Asia/Shanghai" \
       ONBOARD_MARKER="$marker" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       BRAVE_API_KEY="" \
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
@@ -870,7 +870,7 @@ run_release_override_install_and_onboard_prefers_unique_ready_credential_test() 
       LANG="C.UTF-8" \
       TZ="UTC" \
       ONBOARD_MARKER="$marker" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       BRAVE_API_KEY="" \
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="perplexity-test-token" \
@@ -902,7 +902,7 @@ run_release_override_install_and_onboard_prefers_unique_ready_firecrawl_credenti
       LANG="C.UTF-8" \
       TZ="UTC" \
       ONBOARD_MARKER="$marker" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       BRAVE_API_KEY="" \
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
@@ -934,7 +934,7 @@ run_release_override_install_and_onboard_preserves_signal_source_when_firecrawl_
       LANG="C.UTF-8" \
       TZ="UTC" \
       ONBOARD_MARKER="$marker" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       BRAVE_API_KEY="" \
       TAVILY_API_KEY="" \
       PERPLEXITY_API_KEY="" \
@@ -966,7 +966,7 @@ run_release_override_install_and_onboard_preserves_signal_source_when_multiple_c
       LANG="zh_CN.UTF-8" \
       TZ="Asia/Shanghai" \
       ONBOARD_MARKER="$marker" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       BRAVE_API_KEY="" \
       TAVILY_API_KEY="tavily-test-token" \
       PERPLEXITY_API_KEY="perplexity-test-token" \
@@ -995,7 +995,7 @@ run_checksum_mismatch_fails_test() {
 
   if (
     cd "$REPO_ROOT"
-    LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+    LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version "$tag" --prefix "$install_dir" >"$output_file" 2>&1
   ); then
     echo "expected install.sh to fail on checksum mismatch" >&2
@@ -1023,10 +1023,10 @@ run_missing_release_guidance_test() {
     exit 1
   fi
 
-  assert_contains "$output_file" "no GitHub release is published for loongclaw-ai/loongclaw yet"
+  assert_contains "$output_file" "no GitHub release is published for eastreams/loong yet"
   assert_contains "$output_file" "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
   assert_contains "$output_file" 'source "$HOME/.cargo/env"'
-  assert_contains "$output_file" "git clone https://github.com/loongclaw-ai/loongclaw.git"
+  assert_contains "$output_file" "git clone https://github.com/eastreams/loong.git"
   assert_contains "$output_file" "bash scripts/install.sh --source --onboard"
 }
 
@@ -1046,7 +1046,7 @@ run_standalone_linux_arm64_install_rejects_missing_glibc_test() {
   if (
     cd "$fixture"
     PATH="$fixture/fake-bin:$PATH" \
-      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$standalone_script" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   ); then
     echo "expected standalone install.sh to reject GNU-only arm64 installs without detectable glibc" >&2

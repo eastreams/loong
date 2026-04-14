@@ -1,7 +1,7 @@
 # Internal Integration Quickstart
 
 Use this guide when you are adding or evolving a repository-owned surface in
-LoongClaw.
+Loong.
 
 ## Start Here
 
@@ -14,7 +14,7 @@ Read:
 
 | Family | Primary code seam | Primary contract doc |
 |--------|-------------------|----------------------|
-| Channels | `crates/app/src/channel/sdk.rs`, `crates/app/src/channel/registry.rs` | [Channel Registry Integration Contract](../design-docs/channel-registry-integration-contract.md) |
+| Channels | `crates/app/src/channel/sdk.rs`, `crates/app/src/channel/registry.rs` | [Internal Integration SDK Contract](../design-docs/internal-integration-sdk-contract.md) |
 | Tools | `crates/app/src/tools/catalog.rs`, `crates/app/src/tools/mod.rs` | [SDK Strategy](../design-docs/sdk-strategy.md) |
 | Providers | `crates/app/src/config/provider.rs`, `crates/app/src/provider/contracts.rs`, `crates/app/src/provider/mod.rs` | [Provider SDK Convergence Plan](../plans/2026-03-29-provider-sdk-convergence-implementation-plan.md) |
 | Memory systems | `crates/app/src/memory/system_registry.rs` | [Internal Integration SDK Contract](../design-docs/internal-integration-sdk-contract.md) |

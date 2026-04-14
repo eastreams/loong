@@ -1,0 +1,67 @@
+---
+title: Tlon
+description: Configure the Tlon channel surface in Loong.
+---
+
+# Tlon
+
+This is a shipped config-backed outbound surface. Tlon inbound serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `tlon` |
+| Config key | `tlon` |
+| Implementation status | `config_backed` |
+| Transport | `tlon_urbit_ship_api` |
+| Aliases | `urbit` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[tlon]
+enabled = true
+ship = "~zod"
+url = "https://ship.example.com"
+ship_env = "TLON_SHIP"
+url_env = "TLON_URL"
+code_env = "TLON_CODE"
+```
+
+## Smoke Test
+
+```bash
+loong tlon-send --target "~nec" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| ship message send | `tlon-send` | Usage: loong tlon-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| ship event service | `tlon-serve` | tlon inbound serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `tlon.enabled`<br/>`tlon.accounts.<account>.enabled` | none | none |
+| ship | `tlon.ship`<br/>`tlon.accounts.<account>.ship` | `tlon.ship_env`<br/>`tlon.accounts.<account>.ship_env` | `TLON_SHIP` |
+| ship url | `tlon.url`<br/>`tlon.accounts.<account>.url` | `tlon.url_env`<br/>`tlon.accounts.<account>.url_env` | `TLON_URL` |
+| login code | `tlon.code`<br/>`tlon.accounts.<account>.code` | `tlon.code_env`<br/>`tlon.accounts.<account>.code_env` | `TLON_CODE` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- Tlon is the shipped Urbit outbound lane. Inbound serve support remains catalog-only for now.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

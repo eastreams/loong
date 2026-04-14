@@ -1,0 +1,68 @@
+---
+title: Security And Reliability
+description: Public invariants and disclosure references.
+---
+
+# Security And Reliability
+
+Loong treats safety, governance, and reliability as public contract material, not as hidden implementation detail.
+
+## Reliability At A Glance
+
+- CI-parity build checks are expected to stay green at every commit.
+- Architecture boundaries are treated as machine-checkable guardrails, not only taste.
+- Kernel authorization and audit behavior should fail closed instead of silently degrading.
+- Shipped assistant and channel flows should surface persistence and provider failures rather than hiding them.
+
+## Reliability Covers
+
+- build invariants that should stay green at every commit
+- runtime and architecture guardrails
+- kernel and channel safety expectations that are part of the public operating contract
+- the machine-checkable architecture and verification commands contributors are expected to use
+
+## Security At A Glance
+
+- High-risk capability use should pass through capability, policy, and audit gates.
+- Operator-facing security posture should be inspectable through `loong doctor security`.
+- Outbound web and channel HTTP behavior should keep SSRF-style trust boundaries explicit.
+- Execution surfaces should expose a shared security-tier vocabulary instead of inventing one policy story per lane.
+
+## Security Covers
+
+- disclosure expectations
+- runtime safety boundaries
+- public-facing hardening notes that matter for contributors and evaluators
+- current operator-facing audit and security-posture surfaces
+
+## Typical Public Questions This Page Should Answer
+
+| If you want to understand... | Public answer |
+| --- | --- |
+| what is non-negotiable before a commit lands | fmt, clippy, workspace tests, and all-feature tests are expected to stay green |
+| whether the runtime is meant to fail open or fail closed | capability and audit boundaries are modeled to fail closed |
+| how operators inspect local security posture | `loong doctor security` is the public entrypoint |
+| how vulnerabilities should be reported | use the private disclosure path in the repository security policy |
+| whether extensions and outbound execution are governed | yes, they are intentionally framed through explicit policy and execution-tier boundaries |
+
+## Typical Commands
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+cargo test --workspace --all-features
+loong doctor security
+```
+
+## Use These References When
+
+- you want to understand what the project treats as non-negotiable
+- you are evaluating whether a change weakens an existing public contract
+- you need to distinguish stable expectations from internal planning notes
+
+## Repository Source Material
+
+- [Reliability](https://github.com/eastreams/loong/blob/dev/docs/RELIABILITY.md)
+- [Security](https://github.com/eastreams/loong/blob/dev/docs/SECURITY.md)
+- [Security Policy](https://github.com/eastreams/loong/blob/dev/SECURITY.md)

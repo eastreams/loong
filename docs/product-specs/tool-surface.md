@@ -2,7 +2,7 @@
 
 ## User Story
 
-As a LoongClaw user, I want the assistant to advertise only the tools that are
+As a Loong user, I want the assistant to advertise only the tools that are
 actually available in my current runtime, so that the product feels truthful
 and I do not get routed into disabled or still-planned capabilities.
 

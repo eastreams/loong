@@ -1,0 +1,177 @@
+---
+title: Channel Setup
+description: Practical setup guidance for shipped runtime-backed and outbound-only delivery surfaces.
+---
+
+# Channel Setup
+
+Loong keeps channel setup explicit so operators can tell what is actually
+shipped, what is outbound-only, and what still depends on future runtime work.
+
+Use this page when you want the practical setup contract. If you want step-by-step
+smoke tests and worked examples instead, start with [Channel Guides](/use-loong/channel-guides/index) for the exact per-surface contract, then keep [Channel Recipes](/use-loong/channel-recipes) for representative rollout patterns.
+If you want the shared public config shape before the per-surface setup rules,
+start with [Configuration Patterns](/use-loong/configuration-patterns).
+If you specifically need the longer-lived owner model, foreground versus
+headless supervision, or `--channel-account` selectors, continue to
+[Gateway And Supervision](/use-loong/gateway-and-supervision).
+
+## Start With The Right Question
+
+| If you need... | Start with... |
+| --- | --- |
+| a local assistant only | `onboard`, `ask`, `chat`, and `doctor` |
+| inbound or reply-loop automation | one shipped runtime-backed service channel |
+| proactive delivery without a reply loop | one outbound-only surface |
+| the shared account and selector config shape first | [Configuration Patterns](/use-loong/configuration-patterns) |
+| multiple reply-loop surfaces on one host | [Gateway And Supervision](/use-loong/gateway-and-supervision) |
+| the full source-level field contract behind this page | the repository-native [Channel Setup](https://github.com/eastreams/loong/blob/dev/docs/product-specs/channel-setup.md) spec |
+
+## Readiness Rules
+
+Before any channel is really ready:
+
+- the base CLI path should already work locally
+- provider credentials should already be healthy
+- channel-specific credentials should already resolve
+- the surface should be described truthfully as runtime-backed or outbound-only
+- setup should point to a concrete run command instead of a vague support claim
+
+## Common Rollout Shapes
+
+| Situation | Best first move | Why |
+| --- | --- | --- |
+| one Feishu or Lark app should own inbound automation | configure `feishu` and run `loong feishu-serve` | the Feishu family is the shipped runtime lane for both Feishu and Lark |
+| one Telegram bot should own a reply loop | configure `telegram` and run `loong telegram-serve` | this is the simplest runtime-backed bot lane |
+| one Matrix bot should own a room sync loop | configure `matrix` and run `loong matrix-serve` | the homeserver, room ids, and sync boundary stay explicit |
+| one WhatsApp business account should own a Cloud API reply loop | configure `whatsapp` and run `loong whatsapp-serve` | send and serve are both shipped on the verified webhook path |
+| one WeCom bot should own the official long connection | configure `wecom` and run `loong wecom-serve` | this matches the shipped AIBot contract |
+| you need several accounts in one channel family | add `default_account` plus `accounts.<id>` before adding gateway selectors | stable account ids make later supervision and routing legible |
+| you only need governed direct sends | configure one outbound-only surface and use `loong <surface>-send` | this avoids pretending a reply loop already ships |
+
+## Runtime-Backed Service Channels
+
+These are the shipped reply-loop surfaces today.
+
+| Surface | What you configure first | Run loop |
+| --- | --- | --- |
+| Feishu / Lark | app credentials, trusted chats, and the selected inbound transport | `loong feishu-serve` |
+| Telegram | bot token and trusted chat ids | `loong telegram-serve` |
+| Matrix | homeserver base URL, access token, and trusted room ids | `loong matrix-serve` |
+| WhatsApp | Cloud API credentials plus verified webhook material | `loong whatsapp-serve` |
+| WeCom | bot id, secret, and trusted conversation ids | `loong wecom-serve` |
+
+## Multi-Account Rule
+
+- use `default_account` when one account should be the normal default lane
+- use `accounts.<id>` when one config should hold prod, backup, or environment-specific credentials
+- keep shared defaults at the top level and override only account-specific secrets or allowlists
+- `feishu` is the canonical config block for the Feishu family, while `lark` remains an accepted operator-facing alias in selectors and references
+- gateway selectors should target those configured `accounts.<id>` values rather
+  than ad-hoc names invented at command time
+
+### Feishu / Lark
+
+Feishu supports two inbound transport shapes:
+
+- webhook mode
+- websocket mode
+
+Publicly that means:
+
+- both modes need the base app credentials and trusted-chat boundary
+- webhook mode also needs the webhook verification material
+- websocket mode should not be documented as if webhook-only secrets are mandatory
+- `feishu-send` and `feishu-serve` are both first-class shipped commands
+
+### Telegram
+
+Telegram remains the simplest shipped bot lane:
+
+- enable the channel
+- provide one bot token
+- allowlist trusted chat ids
+- use `telegram-serve` for reply-loop automation
+- use `telegram-send` for direct proactive sends
+
+### Matrix
+
+Matrix is a sync-loop surface:
+
+- configure the homeserver URL and access token
+- allowlist trusted room ids
+- use `matrix-send` for direct room delivery
+- use `matrix-serve` for the reply loop
+
+### WhatsApp
+
+WhatsApp is a Cloud API plus verified webhook runtime surface:
+
+- configure `access_token` and `phone_number_id` for direct sends
+- configure `verify_token` and `app_secret` for the webhook-backed serve path
+- use `whatsapp-send` for proactive sends
+- use `whatsapp-serve` for the reply loop
+- keep `webhook_bind` and `webhook_path` explicit so the callback owner is legible
+
+### WeCom
+
+WeCom is documented as the official AIBot long-connection lane:
+
+- configure `bot_id` and `secret`
+- allowlist trusted conversation ids
+- use `wecom-serve` for the long-lived reply loop
+- use `wecom-send` for proactive sends
+
+Loong should not describe a WeCom webhook callback mode as if it were the
+same shipped contract.
+
+## Outbound-Only Surfaces
+
+These surfaces ship direct-send behavior, config validation, and inventory
+metadata without claiming a full reply-loop runtime.
+
+| Surface family | Current examples | Primary command shape |
+| --- | --- | --- |
+| chat and workplace platforms | Discord, Slack, LINE, DingTalk, Microsoft Teams, Mattermost, Google Chat | `loong <surface>-send` |
+| messaging and communication bridges | Signal, IRC, iMessage / BlueBubbles, Nostr | `loong <surface>-send` |
+| generic or self-hosted delivery | Webhook, Email, Nextcloud Talk, Synology Chat, Tlon | `loong <surface>-send` |
+| community-facing outbound integrations | Twitch and similar outbound-only integrations | `loong <surface>-send` |
+
+## Outbound HTTP Trust Rules
+
+For HTTP-backed outbound delivery:
+
+- URLs should use `http` or `https`
+- credentials should not be embedded in the URL itself
+- private or special-use hosts are blocked by default
+- redirects are not followed automatically
+
+If an operator intentionally targets a private bridge or self-hosted endpoint,
+the runtime can widen that boundary explicitly instead of silently assuming it.
+
+## Gateway And Multi-Channel Ownership
+
+When you move beyond one local surface:
+
+- `gateway run`, `gateway status`, and `gateway stop` are the explicit owner contract
+- `multi-channel-serve` is the compatibility wrapper for the shipped runtime-backed subset
+- outbound-only surfaces should not be described as if they are supervised by the same reply-loop runtime contract
+- the detailed command model, selector syntax, and recovery loop live in
+  [Gateway And Supervision](/use-loong/gateway-and-supervision)
+
+## Recommended Progression
+
+1. Get the local assistant path healthy first.
+2. Add one runtime-backed service channel if you need inbound or reply-loop behavior.
+3. Add outbound-only surfaces when you need governed direct sends.
+4. Reach for gateway and `multi-channel-serve` only after one channel already works cleanly.
+
+## Deep References
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channel Recipes](/use-loong/channel-recipes) for tutorial-style demos built on top of this setup contract.
+- Continue to [Channels](/use-loong/channels) for the conceptual public-surface model.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision)
+  for the current runtime owner contract and multi-channel selection rules.
+- Continue to [Use Loong](/use-loong/overview) for the broader operator-facing runtime contract.
+- The repository still keeps the full field-level source spec in [Channel Setup](https://github.com/eastreams/loong/blob/dev/docs/product-specs/channel-setup.md).

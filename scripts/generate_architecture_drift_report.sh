@@ -6,7 +6,7 @@ cd "$REPO_ROOT"
 . "$REPO_ROOT/scripts/architecture_budget_lib.sh"
 
 REPORT_MONTH="${LOONGCLAW_ARCH_REPORT_MONTH:-$(date +%Y-%m)}"
-OUTPUT_PATH="${1:-docs/releases/architecture-drift-${REPORT_MONTH}.md}"
+OUTPUT_PATH="${1:-docs/releases/support/architecture-drift-${REPORT_MONTH}.md}"
 EXPLICIT_BASELINE="${LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT:-}"
 EXPLICIT_BASELINE_DIR="${LOONGCLAW_ARCH_DRIFT_BASELINE_DIR:-}"
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -214,6 +214,25 @@ fi
 {
   echo "# Architecture Drift Report ${REPORT_MONTH}"
   echo
+  echo "This report is a repository maintenance artifact for architecture-governance and"
+  echo "release review. It is not part of the primary public release trail."
+  echo
+  echo "## Route By Audience"
+  echo
+  echo "| If you are trying to... | Start here |"
+  echo "| --- | --- |"
+  echo "| read public release history | the top-level \`../vX.Y.Z*.md\` and \`../*-announcement.md\` files |"
+  echo "| inspect architecture-maintenance and release-governance evidence | this report |"
+  echo "| understand the release-support file boundary | [\`README.md\`](README.md) |"
+  echo
+  echo "## Read This File When"
+  echo
+  echo "- you are reviewing release-support architecture evidence for \`${REPORT_MONTH}\`"
+  echo "- you need the generated hotspot and boundary-check snapshot behind release"
+  echo "  governance"
+  echo "- you are validating whether release-support automation still matches the"
+  echo "  repository's current architecture boundaries"
+  echo
   echo "## Summary"
   echo "- Generated at: ${GENERATED_AT}"
   echo "- Report month: \`${REPORT_MONTH}\`"
@@ -267,13 +286,21 @@ fi
   echo
   echo "## Refactor Budget Policy"
   echo "- Monthly drift report command: \`scripts/generate_architecture_drift_report.sh\`"
-  echo "- Release checklist budget field lives in \`docs/releases/TEMPLATE.md\`."
+  echo "- Release checklist budget field lives in \`docs/releases/support/TEMPLATE.md\`."
   echo "- Rule: each release must name at least one hotspot metric paid down or explicitly state why no paydown happened."
   echo
   echo "## Detail Links"
-  echo "- [Architecture gate](../../scripts/check_architecture_boundaries.sh)"
+  echo "- [Architecture gate](../../../scripts/check_architecture_boundaries.sh)"
   echo "- [Release template](TEMPLATE.md)"
-  echo "- [CI workflow](../../.github/workflows/ci.yml)"
+  echo "- [CI workflow](../../../.github/workflows/ci.yml)"
+  echo
+  echo "## Do Not Use This File For"
+  echo
+  echo "- public release-history reading that should start from \`vX.Y.Z*.md\`,"
+  echo "  \`*-announcement.md\`, \`CHANGELOG.md\`, or GitHub Releases"
+  echo "- temporary maintainer scratch notes or architecture experiments that should"
+  echo "  live outside the tracked release-doc path"
+  echo "- backlog planning packages that do not belong in the OSS repository"
   echo
   while IFS='|' read -r key _classes _file lines _max_lines _line_headroom functions _max_functions _fn_headroom _peak_usage _pressure _prev_lines _line_growth _growth_status _prev_functions; do
     echo "<!-- arch-hotspot key=${key} lines=${lines} functions=${functions} -->"

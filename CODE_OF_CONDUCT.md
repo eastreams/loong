@@ -2,7 +2,7 @@
 
 ## Our Commitment
 
-We are committed to making participation in LoongClaw a harassment-free experience for everyone.
+We are committed to making participation in Loong a harassment-free experience for everyone.
 
 ## Expected Behavior
 
@@ -28,7 +28,7 @@ Report incidents to maintainers privately via repository security advisories or 
 
 ## Scope
 
-This code applies in all LoongClaw community spaces, including issues, pull requests, and project discussions.
+This code applies in all Loong community spaces, including issues, pull requests, and project discussions.
 
 ## Attribution
 

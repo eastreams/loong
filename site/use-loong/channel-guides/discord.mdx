@@ -1,0 +1,57 @@
+---
+title: Discord
+description: Configure the Discord channel surface in Loong.
+---
+
+# Discord
+
+This is a shipped config-backed outbound surface. Discord serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `discord` |
+| Config key | `discord` |
+| Implementation status | `config_backed` |
+| Transport | `discord_http_api` |
+| Aliases | `discord-bot` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[discord]
+enabled = true
+bot_token_env = "DISCORD_BOT_TOKEN"
+```
+
+## Smoke Test
+
+```bash
+loong discord-send --target "123456789012345678" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| direct send | `discord-send` | Usage: loong discord-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| gateway reply loop | `discord-serve` | discord serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `discord.enabled`<br/>`discord.accounts.<account>.enabled` | none | none |
+| bot token | `discord.bot_token`<br/>`discord.accounts.<account>.bot_token` | `discord.bot_token_env`<br/>`discord.accounts.<account>.bot_token_env` | `DISCORD_BOT_TOKEN` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

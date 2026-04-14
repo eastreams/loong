@@ -1,0 +1,72 @@
+---
+title: Telegram
+description: Configure the Telegram channel surface in Loong.
+---
+
+# Telegram
+
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `telegram` |
+| Config key | `telegram` |
+| Implementation status | `runtime_backed` |
+| Transport | `telegram_bot_api_polling` |
+| Aliases | none |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[telegram]
+enabled = true
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+allowed_chat_ids = [123456789]
+```
+
+## Smoke Test
+
+```bash
+loong telegram-send --target "123456789" --text "hello from loong"
+loong telegram-serve
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| direct send | `telegram-send` | Usage: loong telegram-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| reply loop | `telegram-serve` | Usage: loong telegram-serve [OPTIONS] |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `telegram.enabled`<br/>`telegram.accounts.<account>.enabled` | none | none |
+| bot token | `telegram.bot_token`<br/>`telegram.accounts.<account>.bot_token` | `telegram.bot_token_env`<br/>`telegram.accounts.<account>.bot_token_env` | `TELEGRAM_BOT_TOKEN` |
+
+## Required Fields For Serve
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `telegram.enabled`<br/>`telegram.accounts.<account>.enabled` | none | none |
+| bot token | `telegram.bot_token`<br/>`telegram.accounts.<account>.bot_token` | `telegram.bot_token_env`<br/>`telegram.accounts.<account>.bot_token_env` | `TELEGRAM_BOT_TOKEN` |
+| allowed chat ids | `telegram.allowed_chat_ids`<br/>`telegram.accounts.<account>.allowed_chat_ids` | none | none |
+
+## Gateway And Ownership
+
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+
+## Operator Notes
+
+- Telegram remains the smallest runtime-backed reply-loop path. Keep `allowed_chat_ids` tight and explicit.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) when this surface needs longer-lived runtime ownership.

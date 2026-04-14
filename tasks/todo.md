@@ -10,12 +10,12 @@ change against the repo's existing shell and release gates.
 
 - [x] Inspect current installer, release helper, and release workflow behavior.
 - [x] Confirm the Debian 12 failure mode and current public release contract.
-- [x] Align the spec location and format with existing `docs/plans` documents.
-- [x] Write `docs/plans/2026-03-20-linux-musl-release-contract-design.md`.
+- [x] Align the spec location and format with the repository's internal plan-doc convention.
+- [x] Write the Linux musl release contract design doc and archive it in the internal knowledge base.
 - [x] Perform a local review pass for contract gaps and scope drift.
 - [x] Commit the approved design and ask for user review.
 - [x] Post a concise implementation update to GitHub issue `#310`.
-- [x] Write `docs/plans/2026-03-20-linux-musl-release-contract-implementation-plan.md`.
+- [x] Write the Linux musl release contract implementation plan and archive it in the internal knowledge base.
 - [x] Add failing helper and installer coverage for libc-aware Linux behavior.
 - [x] Implement shared release-helper metadata, installer selection, and release
       workflow updates for Linux `x86_64` GNU plus musl artifacts.
@@ -40,13 +40,13 @@ change against the repo's existing shell and release gates.
 - 2026-03-20: Confirmed the release workflow already enforces a Linux ARM64
   glibc floor through `scripts/check_glibc_floor.sh`, which can be extended for
   explicit GNU floor metadata instead of inventing a second mechanism.
-- 2026-03-20: Wrote the design doc in `docs/plans` and tightened the contract
+- 2026-03-20: Wrote the design doc and tightened the contract
   around explicit GNU override behavior, glibc detection order, and shared
   helper ownership.
 - 2026-03-20: Posted the agreed rollout direction to GitHub issue `#310` with a
   concise summary of the Debian 12 repro, dual-artifact contract, installer
   fallback rule, and first-pass `x86_64` scope.
-- 2026-03-20: Wrote the implementation plan in `docs/plans` and executed it
+- 2026-03-20: Wrote the implementation plan and executed it
   helper-first: add failing tests, implement shared libc metadata, then wire the
   installer selection logic and release workflow.
 - 2026-03-20: Added release-helper coverage for Linux musl archive/checksum

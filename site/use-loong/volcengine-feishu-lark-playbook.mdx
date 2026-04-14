@@ -1,0 +1,191 @@
+---
+title: Volcengine Plus Feishu Or Lark
+description: End-to-end rollout from Ark-family hosted provider to a shipped Feishu or Lark runtime.
+---
+
+# Volcengine Plus Feishu Or Lark
+
+Use this playbook when one Ark-family hosted provider should own the runtime
+and the next real surface should be a Feishu or Lark room.
+
+This page keeps the rollout honest:
+
+- Volcengine stays the hosted provider lane
+- Feishu / Lark stays the shipped runtime-backed service channel
+- `gateway run` only comes after the basic `feishu-serve` loop is healthy
+
+## When This Is The Right Playbook
+
+- the base CLI path already works or is close to working
+- the team already operates in Feishu or Lark
+- you want a shipped inbound runtime, not just outbound notifications
+- you want Volcengine to stay explicit instead of hiding it behind a proxy story
+
+## Use A Different Playbook If
+
+| If you actually need... | Go here instead |
+| --- | --- |
+| WeCom as the primary enterprise lane | [WeCom Rollout](/use-loong/wecom-rollout-playbook) |
+| BytePlus Coding plus a lightweight bot surface | [BytePlus Coding Plus Telegram](/use-loong/byteplus-coding-telegram-playbook) |
+| one host supervising several already-healthy runtime-backed channels | [Gateway Rollout](/use-loong/gateway-rollout-playbook) |
+
+## Step 1: Bring Up The Hosted Provider
+
+```toml
+active_provider = "volcengine"
+
+[providers.volcengine]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+```
+
+Health loop:
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Confirm that the active provider is healthy."
+```
+
+Do not add Feishu or Lark first if the base provider path is still unstable.
+
+## Step 2: Choose The Inbound Transport
+
+Pick the transport on purpose:
+
+| Mode | Use it when | What changes |
+| --- | --- | --- |
+| `websocket` | the runtime should hold the inbound connection itself | fewer moving parts; no webhook verification material |
+| `webhook` | you explicitly want the platform to call a local bind and path you own | requires webhook verification material and a local listener |
+
+For most first rollouts, `websocket` is the cleaner first lane.
+
+## Step 3: Single-Account Feishu Or Lark Runtime
+
+Websocket example:
+
+```toml
+[feishu]
+enabled = true
+domain = "lark"
+mode = "websocket"
+receive_id_type = "chat_id"
+app_id = { env = "LARK_APP_ID" }
+app_secret = { env = "LARK_APP_SECRET" }
+allowed_chat_ids = ["oc_ops_room"]
+```
+
+Webhook example:
+
+```toml
+[feishu]
+enabled = true
+domain = "lark"
+mode = "webhook"
+receive_id_type = "chat_id"
+webhook_bind = "127.0.0.1:8080"
+webhook_path = "/feishu/events"
+app_id = { env = "LARK_APP_ID" }
+app_secret = { env = "LARK_APP_SECRET" }
+verification_token = { env = "LARK_VERIFICATION_TOKEN" }
+encrypt_key = { env = "LARK_ENCRYPT_KEY" }
+allowed_chat_ids = ["oc_ops_room"]
+```
+
+Operational notes:
+
+- `domain = "lark"` selects the Lark lane, while `domain = "feishu"` keeps the
+  Feishu lane
+- webhook mode requires `verification_token` and `encrypt_key`
+- websocket mode should not be documented as if webhook-only secrets were
+  mandatory
+- `allowed_chat_ids` remains the trust boundary in both modes
+
+## Step 4: Smoke-Test Before Any Gateway Ownership
+
+```bash
+loong doctor
+loong feishu-send --receive-id "ou_example_user" --text "hello from loong"
+loong feishu-serve
+```
+
+Only move forward if:
+
+- `doctor` says the provider and channel prerequisites are healthy
+- `feishu-send` works with the current account
+- `feishu-serve` can stay up cleanly and reply on the expected room boundary
+
+## Step 5: Add Named Accounts Before Selectors
+
+Do not jump to `--channel-account lark=work` while the config is still
+single-account. Selectors should target configured `accounts.<id>` entries.
+
+Multi-account example:
+
+```toml
+[feishu]
+enabled = true
+mode = "websocket"
+default_account = "work"
+receive_id_type = "chat_id"
+
+[feishu.accounts.work]
+domain = "lark"
+app_id = { env = "LARK_WORK_APP_ID" }
+app_secret = { env = "LARK_WORK_APP_SECRET" }
+allowed_chat_ids = ["oc_ops_room"]
+
+[feishu.accounts.backup]
+domain = "feishu"
+app_id = { env = "FEISHU_BACKUP_APP_ID" }
+app_secret = { env = "FEISHU_BACKUP_APP_SECRET" }
+allowed_chat_ids = ["oc_backup_room"]
+```
+
+Now the selector story is explicit:
+
+```bash
+loong gateway run --channel-account lark=work
+loong gateway status --json
+```
+
+## Step 6: Choose Foreground Or Persisted Ownership
+
+Foreground single-surface loop:
+
+```bash
+loong feishu-serve
+```
+
+Persisted owner contract:
+
+```bash
+loong gateway run --channel-account lark=work
+loong gateway status --json
+loong gateway stop
+```
+
+Use `feishu-serve` first during initial rollout. Use `gateway run` only after
+the service loop already behaves correctly.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| `list-models` fails before the channel even matters | fix the Volcengine provider lane first; do not debug the channel before the hosted path is healthy |
+| websocket setup still asks for webhook-only material | the config shape is wrong; websocket mode should not depend on `verification_token` or `encrypt_key` |
+| `gateway run --channel-account lark=work` fails on a single-account config | add `default_account` and `accounts.work` first, or run `gateway run` without a selector |
+| sends work but the runtime replies in the wrong room | review `allowed_chat_ids` and `receive_id_type` before changing gateway ownership |
+| you are not sure whether the runtime is actually owned | run `loong gateway status --json` from another process |
+
+## Continue Reading
+
+- Continue to [Common Setups](/use-loong/common-setups) for other end-to-end
+  rollout shapes.
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the
+  full shipped channel matrix.
+- Continue to [Channel Recipes](/use-loong/channel-recipes) for the
+  tutorial-style channel recipe set.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision)
+  for the owner contract and selector rules without the playbook framing.

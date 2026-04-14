@@ -13,12 +13,54 @@ on:
       - main
       - release
       - 'release/**'
+  merge_group:
+    types:
+      - checks_requested
   schedule:
     - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  advisory-checks:
+  changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run_advisory_checks: ${{ steps.classify.outputs.run_advisory_checks }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Classify security-sensitive changes
+        id: classify
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/workflow_change_router.mjs`;
+            const moduleUrl = `file://${modulePath}`;
+            const routerModule = await import(moduleUrl);
+            const runtime = { core, github, context };
+            const changedFileContext = await routerModule.collectChangedFileContext(runtime, {
+              workflowLabel: "Security",
+              forceRunEvents: ["schedule", "workflow_dispatch", "merge_group"],
+            });
+            const routeOutputs = routerModule.classifySecurityJobSet(changedFileContext);
+            const touchedPathSummary = routerModule.describeTouchedPaths(routeOutputs);
+            core.info(`Security changed paths: ${touchedPathSummary || "<full-validation>"}`);
+            routerModule.writeRouteOutputs(core, routeOutputs);
+
+  advisory-checks:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_advisory_checks == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -26,8 +68,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
 
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
       - name: Install security tools
-        uses: taiki-e/install-action@94cb46f8d6e437890146ffbd78a778b78e623fb2
+        uses: taiki-e/install-action@0abfcd587b70a713fdaa7fb502c885e2112acb15
         with:
           tool: cargo-audit,cargo-deny
 
@@ -35,4 +80,4 @@ jobs:
         run: cargo audit
 
       - name: Cargo deny
-        run: cargo deny check advisories bans sources
+        run: cargo deny check advisories bans licenses sources

@@ -10,6 +10,10 @@ on:
         description: "Tag to release (required for manual runs, for example v0.1.0 or v0.1.0-alpha.1)"
         required: true
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   BIN_NAME: loong
   LEGACY_BIN_NAME: loongclaw
@@ -54,6 +58,21 @@ jobs:
 
       - name: Test (all features)
         run: cargo test --workspace --all-features --locked
+
+      - name: Bootstrap local release artifacts
+        run: scripts/bootstrap_release_local_artifacts.sh
+
+      - name: Strict docs governance
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+          grep -F "## [${RELEASE_TAG#v}]" CHANGELOG.md > /dev/null
+          release_doc="docs/releases/${RELEASE_TAG}.md"
+          test -f "$release_doc"
+          grep -Fx "# Release ${RELEASE_TAG}" "$release_doc"
 
       - name: Docs build
         run: cargo doc --workspace --no-deps
@@ -225,7 +244,7 @@ jobs:
           ./scripts/check_glibc_floor.sh "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "$max_glibc"
 
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -280,7 +299,7 @@ jobs:
           fi
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           generate_release_notes: true

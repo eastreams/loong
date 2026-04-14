@@ -1,0 +1,62 @@
+---
+title: Vercel AI Gateway
+description: Configure the Vercel AI Gateway provider profile in Loong.
+---
+
+# Vercel AI Gateway
+
+Use this when Vercel AI Gateway sits in front of the actual model vendors and you want that ownership boundary documented directly in the provider profile.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `vercel_ai_gateway` |
+| Provider group | Gateway And Compatibility Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | AI_GATEWAY_API_KEY, VERCEL_API_KEY |
+| Aliases | `vercel-ai-gateway`, `vercel_ai`, `vercel-ai`, `vercel` |
+| Default base URL | `https://ai-gateway.vercel.sh/v1` |
+| Request endpoint | `https://ai-gateway.vercel.sh/v1/chat/completions` |
+| Models endpoint | `https://ai-gateway.vercel.sh/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "vercel_ai_gateway"
+
+[providers.vercel_ai_gateway]
+kind = "vercel_ai_gateway"
+api_key = { env = "AI_GATEWAY_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | yes |
+| Default API key env | `AI_GATEWAY_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://ai-gateway.vercel.sh/v1/chat/completions` |
+| Primary model-catalog route | `https://ai-gateway.vercel.sh/v1/models` |
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.
