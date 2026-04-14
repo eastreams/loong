@@ -8,8 +8,8 @@ This document describes the complete configuration schema for LoongClaw. Configu
 
 The default configuration file is located at:
 
-- **Linux/macOS**: `~/.loongclaw/config.toml`
-- **Windows**: `%USERPROFILE%\.loongclaw\config.toml`
+- **Linux/macOS**: `~/.loong/config.toml`
+- **Windows**: `%USERPROFILE%\.loong\config.toml`
 
 You can specify a custom path with the `--config` flag:
 
@@ -222,6 +222,7 @@ Notes:
 
 - `tools` includes strict numeric/domain diagnostics for browser/web/web_search/delegate child runtime limits.
 - `shell_default_mode` is documented with supported operational values (`"deny"`, `"allow"`).
+- `file_root` defaults to the current working directory on purpose. loong home (`~/.loong`) stores config and local runtime state, while workspace guidance and file operations still follow the current directory unless you set `tools.file_root` explicitly.
 
 ### tools.approval
 
@@ -350,7 +351,7 @@ Configuration for conversation memory and history management.
 | `system` | string | `"builtin"` | `"builtin"` | Memory system implementation |
 | `fail_open` | boolean | `true` | `true`, `false` | Allow fallback on memory errors |
 | `ingest_mode` | string | `"sync_minimal"` | `"sync_minimal"`, `"async_background"` | Message ingestion mode |
-| `sqlite_path` | string | `~/.loongclaw/memory.sqlite3` | Path | SQLite database location |
+| `sqlite_path` | string | `~/.loong/memory.sqlite3` | Path | SQLite database location |
 | `sliding_window` | integer | `12` | `1` - `128` | Turns to retain in window |
 | `summary_max_chars` | integer | `1200` | `256`+ (effective floor) | Summary character budget |
 | `profile_note` | string? | `null` | Text | Optional profile description |
@@ -372,7 +373,7 @@ Note: `memory.summary_max_chars` values below `256` are accepted but normalized 
 profile = "window_plus_summary"
 sliding_window = 24
 summary_max_chars = 2000
-sqlite_path = "~/.loongclaw/memory.sqlite3"
+sqlite_path = "~/.loong/memory.sqlite3"
 ```
 
 ---
@@ -612,7 +613,7 @@ Configuration for audit logging.
 | Field | Type | Default | Valid Values | Description |
 |-------|------|---------|--------------|-------------|
 | `mode` | string | `"fanout"` | `"in_memory"`, `"jsonl"`, `"fanout"` | Audit mode |
-| `path` | string | `~/.loongclaw/audit/events.jsonl` | Path | Log file path |
+| `path` | string | `~/.loong/audit/events.jsonl` | Path | Log file path |
 | `retain_in_memory` | boolean | `true` | `true`, `false` | Keep events in memory |
 
 ### Audit Modes
@@ -628,7 +629,7 @@ Configuration for audit logging.
 ```toml
 [audit]
 mode = "jsonl"
-path = "~/.loongclaw/audit/events.jsonl"
+path = "~/.loong/audit/events.jsonl"
 ```
 
 ---
@@ -785,7 +786,7 @@ Configuration for Feishu OAuth integration.
 
 | Field | Type | Default | Valid Range | Description |
 |-------|------|---------|-------------|-------------|
-| `sqlite_path` | string | `~/.loongclaw/feishu.sqlite3` | Path | SQLite database path |
+| `sqlite_path` | string | `~/.loong/feishu.sqlite3` | Path | SQLite database path |
 | `oauth_state_ttl_s` | integer | `600` | `60` - `86400` | OAuth state TTL |
 | `request_timeout_s` | integer | `20` | `3` - `120` | Request timeout |
 | `retry_max_attempts` | integer | `4` | `1` - `8` | Max retry attempts |
