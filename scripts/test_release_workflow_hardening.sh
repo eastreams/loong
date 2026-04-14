@@ -46,10 +46,19 @@ assert_android_release_target_parity() {
   assert_not_contains ".github/workflows/release.yml" "target: x86_64-linux-android"
 }
 
+assert_release_docs_gates() {
+  assert_contains ".github/workflows/release.yml" "scripts/bootstrap_release_local_artifacts.sh"
+  assert_contains ".github/workflows/release.yml" "LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh"
+  assert_contains ".github/workflows/release.yml" 'release_doc="docs/releases/${RELEASE_TAG}.md"'
+  assert_contains ".github/workflows/release.yml" 'grep -Fx "# Release ${RELEASE_TAG}" "$release_doc"'
+  assert_contains ".github/workflows/release.yml" 'grep -F "## [${RELEASE_TAG#v}]" CHANGELOG.md > /dev/null'
+}
+
 cd "$REPO_ROOT"
 
 assert_android_ndk_sha256_hardening ".github/workflows/ci.yml"
 assert_android_ndk_sha256_hardening ".github/workflows/release.yml"
 assert_android_release_target_parity
+assert_release_docs_gates
 
 echo "release workflow hardening checks passed"
