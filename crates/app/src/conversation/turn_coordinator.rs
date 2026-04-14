@@ -8244,6 +8244,69 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
+    async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confirmation() {
+        let coordinator = ConversationTurnCoordinator::new();
+        let runtime = ApprovalControlRuntime::default();
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-control-run-once-success");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        seed_pending_approval_request(&repo, "root-session", "apr-delegate-yes", "delegate", "app");
+
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("root-session");
+        let reply = coordinator
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "yes",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                None,
+            )
+            .await
+            .expect("approval control turn should succeed");
+
+        assert_eq!(reply, "approval handled");
+
+        let approval_request = repo
+            .load_approval_request("apr-delegate-yes")
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(approval_request.status, ApprovalRequestStatus::Approved);
+        assert_eq!(
+            approval_request.decision,
+            Some(ApprovalDecision::ApproveOnce)
+        );
+        assert_eq!(
+            approval_request.resolved_by_session_id.as_deref(),
+            Some("root-session")
+        );
+        assert!(
+            approval_request.last_error.is_none(),
+            "request={approval_request:?}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
     async fn approval_request_resolve_persists_session_mode_on_success() {
         let runtime = ApprovalControlRuntime::default();
         let mut config = LoongConfig::default();

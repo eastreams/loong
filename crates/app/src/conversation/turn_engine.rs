@@ -1325,6 +1325,17 @@ fn tool_is_session_consent_exempt(tool_name: &str) -> bool {
     )
 }
 
+fn tool_intent_skips_provider_exposed_gate(
+    intent: &ToolIntent,
+    descriptor: &crate::tools::ToolDescriptor,
+) -> bool {
+    if descriptor.name == "tool.invoke" {
+        return true;
+    }
+
+    intent.source == "approval_control" && tool_is_session_consent_exempt(descriptor.name)
+}
+
 fn tool_is_auto_eligible(
     descriptor: &crate::tools::ToolDescriptor,
     governance: crate::tools::ToolGovernanceProfile,
@@ -3670,8 +3681,10 @@ impl TurnEngine {
                 // For all other provider-sourced intents, verify they are provider-exposed
                 // (this gate catches non-bridge paths where a discoverable tool name
                 // arrives without being rewritten to tool.invoke).
-                if descriptor.name == "tool.invoke" {
+                if tool_intent_skips_provider_exposed_gate(intent, descriptor) {
                     // Lease validation happens in resolve_tool_invoke_request during execution.
+                    // Internal approval-control turns also bypass provider exposure checks for
+                    // the approval tools they synthesize.
                 } else if !crate::tools::is_provider_exposed_tool_name(&intent.tool_name) {
                     let reason = format!("tool_not_provider_exposed: {}", intent.tool_name);
                     return Err(TurnFailure::policy_denied(
@@ -4029,6 +4042,38 @@ mod tests {
             failure.reason
         );
         assert!(failure.supports_discovery_recovery);
+    }
+
+    #[test]
+    fn validate_turn_in_context_allows_internal_approval_control_resolve_tool() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "approval_request_resolve".to_owned(),
+                args_json: json!({
+                    "approval_request_id": "apr-allow-1",
+                    "decision": "approve_once"
+                }),
+                source: "approval_control".to_owned(),
+                session_id: "session-approval-control".to_owned(),
+                turn_id: "turn-approval-control".to_owned(),
+                tool_call_id: "call-approval-control".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+        let tool_view = crate::tools::ToolView::from_tool_names([
+            "approval_request_resolve",
+            "approval_request_status",
+            "approval_requests_list",
+        ]);
+        let session_context =
+            SessionContext::root_with_tool_view("session-approval-control", tool_view);
+
+        let validation = TurnEngine::new(4)
+            .validate_turn_in_context(&turn, &session_context)
+            .expect("approval-control resolve should stay executable");
+
+        assert_eq!(validation, TurnValidation::ToolExecutionRequired);
     }
 
     #[test]
