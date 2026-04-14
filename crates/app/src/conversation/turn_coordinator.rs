@@ -1146,28 +1146,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn handle_turn_with_ingress(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_session_and_acp_options_and_ingress(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-            ingress,
-        )
-        .await
-    }
-
     pub(crate) async fn repair_turn_checkpoint_tail(
         &self,
         config: &LoongConfig,
@@ -1201,25 +1179,6 @@ impl ConversationTurnCoordinator {
             session_id,
             &runtime,
             production_binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn load_turn_checkpoint_diagnostics(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointDiagnostics> {
-        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
-        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            &runtime,
-            effective_binding,
         )
         .await
     }
@@ -1283,25 +1242,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            &runtime,
-            effective_binding,
-        )
-        .await
-    }
-
     pub async fn probe_production_turn_checkpoint_tail_runtime_gate(
         &self,
         config: &LoongConfig,
@@ -1316,47 +1256,6 @@ impl ConversationTurnCoordinator {
             config,
             session_id,
             config.memory.sliding_window,
-            &runtime,
-            production_binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_limit(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            limit,
-            &runtime,
-            effective_binding,
-        )
-        .await
-    }
-
-    pub async fn probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let production_binding = prepared.1;
-
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            limit,
             &runtime,
             production_binding,
         )
