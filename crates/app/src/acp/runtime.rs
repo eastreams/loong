@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use serde_json::Value;
@@ -123,6 +124,29 @@ pub(crate) struct FinalizedAcpConversationTurnFailure {
     pub persistence_context: PersistedAcpRuntimeEventContext,
     pub error: String,
     pub runtime_events: Vec<Value>,
+}
+
+pub(crate) async fn consume_finalized_acp_conversation_turn<
+    T,
+    SuccessFuture,
+    FailureFuture,
+    OnSuccess,
+    OnFailure,
+>(
+    finalized: FinalizedAcpConversationTurn,
+    on_success: OnSuccess,
+    on_failure: OnFailure,
+) -> CliResult<T>
+where
+    SuccessFuture: Future<Output = CliResult<T>>,
+    FailureFuture: Future<Output = CliResult<T>>,
+    OnSuccess: FnOnce(FinalizedAcpConversationTurnSuccess) -> SuccessFuture,
+    OnFailure: FnOnce(FinalizedAcpConversationTurnFailure) -> FailureFuture,
+{
+    match finalized {
+        FinalizedAcpConversationTurn::Succeeded(success) => on_success(success).await,
+        FinalizedAcpConversationTurn::Failed(failure) => on_failure(failure).await,
+    }
 }
 
 static ACP_SESSION_MANAGER_REGISTRY: OnceLock<RwLock<BTreeMap<String, Arc<AcpSessionManager>>>> =

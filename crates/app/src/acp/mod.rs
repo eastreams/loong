@@ -50,7 +50,9 @@ pub use runtime::{
     resolve_acp_backend_selection, shared_acp_session_manager,
     should_route_conversation_turn_via_acp, should_route_conversation_turn_via_acp_for_address,
 };
-pub(crate) use runtime::{FinalizedAcpConversationTurn, execute_acp_conversation_turn_for_address};
+pub(crate) use runtime::{
+    consume_finalized_acp_conversation_turn, execute_acp_conversation_turn_for_address,
+};
 #[cfg(feature = "memory-sqlite")]
 pub use store::AcpSqliteSessionStore;
 pub use store::{AcpSessionStore, InMemoryAcpSessionStore};

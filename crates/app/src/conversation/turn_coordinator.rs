@@ -32,8 +32,9 @@ use crate::CliResult;
 #[cfg(test)]
 use crate::KernelContext;
 use crate::acp::{
-    AcpConversationTurnEntryDecision, AcpConversationTurnOptions, FinalizedAcpConversationTurn,
-    evaluate_acp_conversation_turn_entry_for_address, execute_acp_conversation_turn_for_address,
+    AcpConversationTurnEntryDecision, AcpConversationTurnOptions,
+    consume_finalized_acp_conversation_turn, evaluate_acp_conversation_turn_entry_for_address,
+    execute_acp_conversation_turn_for_address,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -2170,9 +2171,11 @@ impl ConversationTurnCoordinator {
         )
         .await?;
 
-        match executed {
-            FinalizedAcpConversationTurn::Succeeded(success) => {
+        consume_finalized_acp_conversation_turn(
+            executed,
+            |success| async move {
                 let reply = success.result.output_text.clone();
+
                 persist_reply_turns_raw_with_mode(
                     runtime,
                     session_id,
@@ -2182,37 +2185,51 @@ impl ConversationTurnCoordinator {
                     binding,
                 )
                 .await?;
+
                 if config.acp.emit_runtime_events {
+                    let runtime_events = &success.runtime_events;
+                    let persistence_context = &success.persistence_context;
+                    let result = &success.result;
+
                     let _ = persist_acp_runtime_events(
                         runtime,
                         session_id,
-                        &success.persistence_context,
-                        &success.runtime_events,
-                        Some(&success.result),
+                        persistence_context,
+                        runtime_events,
+                        Some(result),
                         None,
                         binding,
                     )
                     .await;
                 }
+
                 Ok(reply)
-            }
-            FinalizedAcpConversationTurn::Failed(failure) => {
+            },
+            |failure| async move {
+                let error = failure.error;
+
                 if config.acp.emit_runtime_events {
+                    let error_text = error.as_str();
+                    let runtime_events = &failure.runtime_events;
+                    let persistence_context = &failure.persistence_context;
+
                     let _ = persist_acp_runtime_events(
                         runtime,
                         session_id,
-                        &failure.persistence_context,
-                        &failure.runtime_events,
+                        persistence_context,
+                        runtime_events,
                         None,
-                        Some(failure.error.as_str()),
+                        Some(error_text),
                         binding,
                     )
                     .await;
                 }
+
                 match error_mode {
-                    ProviderErrorMode::Propagate => Err(failure.error),
+                    ProviderErrorMode::Propagate => Err(error),
                     ProviderErrorMode::InlineMessage => {
-                        let synthetic = format_provider_error_reply(&failure.error);
+                        let synthetic = format_provider_error_reply(&error);
+
                         persist_reply_turns_raw_with_mode(
                             runtime,
                             session_id,
@@ -2222,11 +2239,13 @@ impl ConversationTurnCoordinator {
                             binding,
                         )
                         .await?;
+
                         Ok(synthetic)
                     }
                 }
-            }
-        }
+            },
+        )
+        .await
     }
 }
 
