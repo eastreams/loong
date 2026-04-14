@@ -449,6 +449,7 @@ mod tests {
         Json, Router,
         body::to_bytes,
         extract::{Request, State},
+        response::IntoResponse,
         routing::post,
     };
     use futures_util::{SinkExt, StreamExt};
@@ -522,11 +523,12 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
-    async fn record_request(State(state): State<MockServerState>, request: Request) {
+    async fn record_request(State(state): State<MockServerState>, request: Request) -> String {
         let (parts, body) = request.into_parts();
         let body = to_bytes(body, usize::MAX)
             .await
             .expect("read mock request body");
+        let body_text = String::from_utf8(body.to_vec()).expect("mock request body utf8");
         state.requests.lock().await.push(MockRequest {
             path: parts.uri.path().to_owned(),
             authorization: parts
@@ -534,8 +536,59 @@ mod tests {
                 .get(axum::http::header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok())
                 .map(ToOwned::to_owned),
-            body: String::from_utf8(body.to_vec()).expect("mock request body utf8"),
+            body: body_text.clone(),
         });
+        body_text
+    }
+
+    fn mock_provider_stream_enabled(body: &str) -> bool {
+        serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|payload| payload.get("stream").and_then(Value::as_bool))
+            .unwrap_or(false)
+    }
+
+    fn mock_provider_stream_response_body(response_text: &str) -> String {
+        format!(
+            "data: {}\n\n\
+data: {}\n\n\
+data: [DONE]\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "content": response_text
+                    }
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            }),
+        )
+    }
+
+    fn mock_provider_success_response(
+        request_body: &str,
+        response_text: &str,
+    ) -> axum::response::Response {
+        if mock_provider_stream_enabled(request_body) {
+            return (
+                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                mock_provider_stream_response_body(response_text),
+            )
+                .into_response();
+        }
+
+        Json(json!({
+            "choices": [{
+                "message": {
+                    "content": response_text
+                }
+            }]
+        }))
+        .into_response()
     }
 
     async fn wait_for_request_count(
@@ -563,14 +616,11 @@ mod tests {
                 move |request| {
                     let state = state.clone();
                     async move {
-                        record_request(State(state), request).await;
-                        Json(json!({
-                            "choices": [{
-                                "message": {
-                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
-                                }
-                            }]
-                        }))
+                        let request_body = record_request(State(state), request).await;
+                        mock_provider_success_response(
+                            request_body.as_str(),
+                            MOCK_PROVIDER_MARKDOWN_REPLY,
+                        )
                     }
                 }
             }),
@@ -1123,6 +1173,9 @@ mod tests {
         let provider_requests = provider_requests.lock().await.clone();
         assert_eq!(provider_requests.len(), 1);
         assert_eq!(provider_requests[0].path, "/v1/chat/completions");
+        let provider_body =
+            serde_json::from_str::<Value>(&provider_requests[0].body).expect("provider body json");
+        assert_eq!(provider_body["stream"], json!(true));
         assert!(
             provider_requests[0].body.contains("hello over websocket"),
             "provider request should include the websocket inbound message"

@@ -279,31 +279,32 @@ impl AgentRuntime {
         }
 
         let (effective_ingress, effective_provenance) = effective_turn_context(ingress, provenance);
-        let output_text = crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode(
-            runtime,
-            &turn_address,
-            message,
-            event_sink,
-            request.live_surface_enabled,
-            Some(&request.metadata),
-            effective_ingress,
-            effective_provenance,
-            provider_error_mode,
-            observer,
-        )
-        .await?;
+        let turn_outcome =
+            crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+                runtime,
+                &turn_address,
+                message,
+                event_sink,
+                request.live_surface_enabled,
+                Some(&request.metadata),
+                effective_ingress,
+                effective_provenance,
+                provider_error_mode,
+                observer,
+            )
+            .await?;
         let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
         let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
         Ok(AgentTurnResult {
             session_id: runtime.session_id.clone(),
-            output_text,
+            output_text: turn_outcome.reply,
             turn_mode: request.turn_mode,
             governed_session_mode: ConversationRuntimeBinding::kernel(&runtime.kernel_ctx)
                 .session_mode(),
             state: None,
             stop_reason: None,
-            usage: None,
+            usage: turn_outcome.usage,
             event_count: 0,
             prompt_assembly,
             prompt_cache,
@@ -339,11 +340,48 @@ impl AgentRuntime {
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
             crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            true,
+            false,
         )?;
 
         self.run_turn_with_runtime(&runtime, request, event_sink)
             .await
+    }
+
+    pub async fn run_turn_with_loaded_config_and_observer_and_error_mode(
+        &self,
+        resolved_path: PathBuf,
+        config: crate::config::LoongClawConfig,
+        session_hint: Option<&str>,
+        request: &AgentTurnRequest,
+        event_sink: Option<&dyn AcpTurnEventSink>,
+        observer: Option<crate::conversation::ConversationTurnObserverHandle>,
+        provider_error_mode: crate::conversation::ProviderErrorMode,
+    ) -> CliResult<AgentTurnResult> {
+        if request.message.trim().is_empty() {
+            return Err("agent runtime message must not be empty".to_owned());
+        }
+
+        let options = cli_chat_options_for_turn_request(request);
+        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+            resolved_path,
+            config,
+            session_hint,
+            &options,
+            kernel_scope_for_turn_mode(request.turn_mode),
+            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            false,
+        )?;
+
+        self.run_turn_with_runtime_and_observer_and_context_and_error_mode(
+            &runtime,
+            request,
+            event_sink,
+            observer,
+            None,
+            AcpTurnProvenance::default(),
+            provider_error_mode,
+        )
+        .await
     }
 
     pub async fn run_turn_with_loaded_config_and_acp_manager(
@@ -367,7 +405,7 @@ impl AgentRuntime {
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
             crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            true,
+            false,
         )?;
 
         self.run_turn_with_runtime_and_context_and_manager(

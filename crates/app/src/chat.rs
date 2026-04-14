@@ -1525,7 +1525,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
 ) -> CliResult<String> {
-    run_cli_turn_with_address_and_ingress(
+    run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
         runtime,
         address,
         input,
@@ -1538,9 +1538,10 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
         observer_override,
     )
     .await
+    .map(|outcome| outcome.reply)
 }
 
-pub(crate) async fn run_cli_turn_with_address_and_ingress(
+pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
     runtime: &CliTurnRuntime,
     address: &ConversationSessionAddress,
     input: &str,
@@ -1551,7 +1552,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress(
     provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
-) -> CliResult<String> {
+) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
     let acp_options = if runtime.explicit_acp_request {
         AcpConversationTurnOptions::explicit()
@@ -1585,16 +1586,19 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress(
                 live_surface_observer,
             )
             .await
+            .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
     } else {
         runtime
             .turn_coordinator
-            .handle_production_turn_with_address_and_acp_options_and_observer(
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
                 &turn_config,
                 address,
                 input,
                 provider_error_mode,
+                &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
                 &acp_options,
                 crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                None,
                 live_surface_observer,
             )
             .await

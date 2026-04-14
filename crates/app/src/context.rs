@@ -135,7 +135,10 @@ fn bootstrap_kernel_context_with_audit_sink(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config = crate::memory::runtime_config::get_memory_runtime_config().clone();
+        let mem_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
+                &config.memory,
+            );
         kernel
             .register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(mem_config));
         kernel
@@ -233,9 +236,11 @@ mod tests {
 
     #[test]
     fn bootstrap_kernel_context_with_config_grants_network_egress() {
-        let context =
-            bootstrap_kernel_context_with_config("test-agent", 60, &LoongClawConfig::default())
-                .expect("bootstrap with default config should succeed");
+        let mut config = LoongClawConfig::default();
+        config.audit.mode = AuditMode::InMemory;
+
+        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+            .expect("bootstrap with default config should succeed");
 
         let allowed_capabilities = &context.token.allowed_capabilities;
 

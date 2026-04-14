@@ -187,6 +187,22 @@ fn build_openai_compatible_request_body(
     body.insert("model".to_owned(), json!(model));
     body.insert("messages".to_owned(), Value::Array(messages.to_vec()));
     body.insert("stream".to_owned(), Value::Bool(streaming));
+    if let Some(first_stop) = config.provider.stop.first() {
+        let stop = if config.provider.stop.len() == 1 {
+            Value::String(first_stop.clone())
+        } else {
+            Value::Array(
+                config
+                    .provider
+                    .stop
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            )
+        };
+        body.insert("stop".to_owned(), stop);
+    }
     apply_common_payload_fields(&mut body, config, payload_mode, capability);
 
     Value::Object(body)

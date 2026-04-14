@@ -36,6 +36,11 @@ pub fn extract_provider_turn_with_scope_and_messages(
     if let Some(message) = openai_message(body) {
         let mut assistant_text = message_content(message).unwrap_or_default();
         let mut raw_meta = message.clone();
+        if let Some(usage) = body.get("usage")
+            && let Some(raw_meta_object) = raw_meta.as_object_mut()
+        {
+            raw_meta_object.insert("usage".to_owned(), usage.clone());
+        }
         let mut tool_intents =
             extract_openai_tool_intents(message, session_id, turn_id, &bridge_context);
 

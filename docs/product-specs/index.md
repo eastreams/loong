@@ -38,14 +38,14 @@ source contract.
 | Area | Source specs | Read them when... |
 | --- | --- | --- |
 | first-run and local success path | [Installation](installation.md), [Onboarding](onboarding.md), [One-Shot Ask](one-shot-ask.md), [Doctor](doctor.md), [Shell Completion](shell-completion.md) | you are editing the base setup and recovery contract |
-| shipped runtime surfaces and operator controls | [Browser Automation](browser-automation.md), [Channel Setup](channel-setup.md), [Tool Surface](tool-surface.md) | you are editing surface-specific setup, controls, or field-level behavior |
+| shipped runtime surfaces and operator controls | [Browser Automation](browser-automation.md), [Channel Setup](channel-setup.md), [Tool Surface](tool-surface.md), [Configuration Schema](config-schema.md) | you are editing surface-specific setup, controls, or field-level behavior |
 | runtime behavior and continuity | [Prompt And Personality](prompt-and-personality.md), [Memory Profiles](memory-profiles.md) | you are editing day-to-day operator behavior, tone, or continuity rules |
 
 ## Public Contract Notes
 
 - `Installation`, `Onboarding`, `One-Shot Ask`, `Doctor`, `Browser Automation`,
-  `Tool Surface`, and `Channel Setup` define the shipped first-run and support
-  journey for the current MVP.
+  `Tool Surface`, `Channel Setup`, and `Configuration Schema` define the shipped
+  first-run and support journey for the current MVP.
 - `Prompt And Personality`, `Memory Profiles`, and `Shell Completion` remain
   public because they affect the current operator-facing setup and runtime
   experience directly.

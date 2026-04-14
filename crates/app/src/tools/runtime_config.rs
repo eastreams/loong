@@ -1732,7 +1732,7 @@ pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
     #[cfg(feature = "feishu-integration")]
     use std::collections::BTreeMap;
 
@@ -1965,9 +1965,7 @@ mod tests {
 
     #[test]
     fn tool_runtime_config_uses_loongclaw_home_rules_dir_when_unset() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", home.path());
+        let home = ScopedLoongClawHome::new("loongclaw-runtime-config-home");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
             &LoongClawConfig::default(),
@@ -1976,7 +1974,7 @@ mod tests {
 
         assert_eq!(
             runtime.bash_exec.governance.rules_dir,
-            crate::config::default_loongclaw_home().join("rules")
+            home.path().join("rules")
         );
     }
 
@@ -2002,11 +2000,8 @@ mod tests {
 
     #[test]
     fn bash_governance_runtime_treats_missing_rules_dir_as_empty_rule_set() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", tempdir.path());
-        env.remove("LOONG_HOME");
-        let config_path = tempdir.path().join("loongclaw.toml");
+        let home = ScopedLoongClawHome::new("loongclaw-runtime-governance-home");
+        let config_path = home.path().join("loongclaw.toml");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
             &LoongClawConfig::default(),
@@ -2019,14 +2014,12 @@ mod tests {
 
     #[test]
     fn bash_governance_runtime_preserves_rule_load_error_for_broken_rule_file() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", tempdir.path());
-        let rules_dir = crate::config::default_loongclaw_home().join("rules");
+        let home = ScopedLoongClawHome::new("loongclaw-runtime-governance-broken-home");
+        let rules_dir = home.path().join("rules");
         std::fs::create_dir_all(&rules_dir).expect("create rules dir");
         std::fs::write(rules_dir.join("broken.rules"), "not valid starlark")
             .expect("write broken rule file");
-        let config_path = tempdir.path().join("loongclaw.toml");
+        let config_path = home.path().join("loongclaw.toml");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
             &LoongClawConfig::default(),
@@ -2309,31 +2302,29 @@ mod tests {
     #[test]
     fn memory_sqlite_path_from_env_falls_back_to_loongclaw_home() {
         let mut env = ScopedEnv::new();
-        let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-home");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONG_HOME", &runtime_home);
+        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-memory-home");
 
         let runtime = ToolRuntimeConfig::from_env();
 
         assert_eq!(
             runtime.memory_sqlite_path,
-            Some(runtime_home.join("memory.sqlite3"))
+            Some(runtime_home.path().join("memory.sqlite3"))
         );
     }
 
     #[test]
     fn empty_legacy_memory_sqlite_path_falls_back_to_loongclaw_home() {
         let mut env = ScopedEnv::new();
-        let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-empty-sqlite-path");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONG_HOME", &runtime_home);
+        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-empty-sqlite-home");
         env.set("LOONGCLAW_SQLITE_PATH", "");
 
         let runtime = ToolRuntimeConfig::from_env();
 
         assert_eq!(
             runtime.memory_sqlite_path,
-            Some(runtime_home.join("memory.sqlite3"))
+            Some(runtime_home.path().join("memory.sqlite3"))
         );
     }
 
@@ -3548,6 +3539,7 @@ Treat these as enforced limits for this child session."
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         clear_feishu_runtime_env(&mut env);
+        let _home = ScopedLoongClawHome::new("loongclaw-feishu-runtime-home");
         env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
         env.set("FEISHU_APP_SECRET", "env-secret");
 

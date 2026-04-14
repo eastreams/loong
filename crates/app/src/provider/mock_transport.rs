@@ -103,7 +103,9 @@ impl ProviderTransport for MockTransport {
             Ok(MockStreamResponse::Events(events)) => Ok(TransportStream::Events {
                 events: Box::pin(stream::iter(events)),
             }),
-            Ok(MockStreamResponse::Response(response)) => Ok(TransportStream::Response(response)),
+            Ok(MockStreamResponse::Response(response)) => {
+                Ok(TransportStream::Response(Box::new(response)))
+            }
             Err(error) => Err(error),
         }
     }
