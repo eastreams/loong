@@ -475,6 +475,44 @@ pub struct ControlPlaneSessionReadResponse {
     pub observation: ControlPlaneSessionObservation,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneTaskSummary {
+    pub task_id: String,
+    pub session_id: String,
+    pub scope_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub session_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    pub workflow: ControlPlaneSessionWorkflow,
+    pub approval_request_count: usize,
+    pub approval_attention_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_tool_ids: Vec<String>,
+    pub effective_runtime_narrowing: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneTaskListResponse {
+    pub current_session_id: String,
+    pub matched_count: usize,
+    pub returned_count: usize,
+    pub tasks: Vec<ControlPlaneTaskSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneTaskReadResponse {
+    pub current_session_id: String,
+    pub task: ControlPlaneTaskSummary,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlPlaneApprovalRequestStatus {

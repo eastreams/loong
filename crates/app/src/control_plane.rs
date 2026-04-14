@@ -16,6 +16,8 @@ use crate::acp::{
 #[cfg(feature = "memory-sqlite")]
 use crate::config::LoongClawConfig;
 #[cfg(feature = "memory-sqlite")]
+use crate::config::ToolConfig;
+#[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -28,7 +30,9 @@ use crate::session::repository::{
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::tools::session::{
-    SessionRuntimeSelfContinuityRecord, SessionWorkflowRecord, load_session_workflow_record,
+    SessionRuntimeSelfContinuityRecord, SessionWorkflowRecord,
+    build_session_tool_policy_status_payload, load_session_workflow_record,
+    session_delegate_lifecycle_at,
 };
 
 const DEFAULT_RECENT_EVENT_LIMIT: usize = 256;
@@ -1528,6 +1532,34 @@ pub struct ControlPlaneSessionObservationView {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq)]
+pub struct ControlPlaneTaskSummaryView {
+    pub task_id: String,
+    pub session_id: String,
+    pub scope_session_id: String,
+    pub label: Option<String>,
+    pub session_state: String,
+    pub delegate_phase: Option<String>,
+    pub delegate_mode: Option<String>,
+    pub timeout_seconds: Option<u64>,
+    pub workflow: ControlPlaneSessionWorkflowView,
+    pub approval_request_count: usize,
+    pub approval_attention_count: usize,
+    pub effective_tool_ids: Vec<String>,
+    pub effective_runtime_narrowing: Value,
+    pub last_error: Option<String>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlPlaneTaskListView {
+    pub current_session_id: String,
+    pub matched_count: usize,
+    pub returned_count: usize,
+    pub tasks: Vec<ControlPlaneTaskSummaryView>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ControlPlaneApprovalListView {
     pub current_session_id: String,
     pub matched_count: usize,
@@ -1556,14 +1588,20 @@ pub struct ControlPlaneAcpSessionReadView {
 #[derive(Debug, Clone)]
 pub struct ControlPlaneRepositoryView {
     memory_config: MemoryRuntimeConfig,
+    tool_config: ToolConfig,
     current_session_id: String,
 }
 
 #[cfg(feature = "memory-sqlite")]
 impl ControlPlaneRepositoryView {
-    pub fn new(memory_config: MemoryRuntimeConfig, current_session_id: impl Into<String>) -> Self {
+    pub fn new(
+        memory_config: MemoryRuntimeConfig,
+        tool_config: ToolConfig,
+        current_session_id: impl Into<String>,
+    ) -> Self {
         Self {
             memory_config,
+            tool_config,
             current_session_id: normalize_control_plane_session_id(&current_session_id.into()),
         }
     }
@@ -1610,6 +1648,39 @@ impl ControlPlaneRepositoryView {
         })
     }
 
+    pub fn list_background_tasks(
+        &self,
+        include_archived: bool,
+        limit: usize,
+    ) -> Result<ControlPlaneTaskListView, String> {
+        let repo = self.open_repo()?;
+        let mut visible_sessions = self.visible_sessions(&repo)?;
+        if !include_archived {
+            visible_sessions.retain(|session| session.archived_at.is_none());
+        }
+
+        let mut task_views = Vec::new();
+        for session in &visible_sessions {
+            let task_view = self.build_background_task_view(&repo, session)?;
+            let Some(task_view) = task_view else {
+                continue;
+            };
+            task_views.push(task_view);
+        }
+
+        let matched_count = task_views.len();
+        let bounded_limit = limit.clamp(1, CONTROL_PLANE_MAX_LIST_LIMIT);
+        task_views.truncate(bounded_limit);
+        let returned_count = task_views.len();
+
+        Ok(ControlPlaneTaskListView {
+            current_session_id: self.current_session_id.clone(),
+            matched_count,
+            returned_count,
+            tasks: task_views,
+        })
+    }
+
     pub fn read_session(
         &self,
         target_session_id: &str,
@@ -1630,6 +1701,26 @@ impl ControlPlaneRepositoryView {
             tail_page_limit.clamp(1, CONTROL_PLANE_MAX_TAIL_EVENT_LIMIT),
         )?;
         self.build_session_observation_view(&repo, observation)
+    }
+
+    pub fn read_background_task(
+        &self,
+        target_session_id: &str,
+    ) -> Result<Option<ControlPlaneTaskSummaryView>, String> {
+        let trimmed_session_id = target_session_id.trim();
+        if trimmed_session_id.is_empty() {
+            return Err("control_plane_session_id_missing".to_owned());
+        }
+
+        let repo = self.open_repo()?;
+        self.ensure_visible_session(&repo, trimmed_session_id)?;
+
+        let session = repo.load_session_summary_with_legacy_fallback(trimmed_session_id)?;
+        let Some(session) = session else {
+            return Ok(None);
+        };
+
+        self.build_background_task_view(&repo, &session)
     }
 
     pub fn ensure_visible_session_id(&self, target_session_id: &str) -> Result<(), String> {
@@ -1758,6 +1849,65 @@ impl ControlPlaneRepositoryView {
         Ok(Some(observation_view))
     }
 
+    fn build_background_task_view(
+        &self,
+        repo: &SessionRepository,
+        session: &SessionSummaryRecord,
+    ) -> Result<Option<ControlPlaneTaskSummaryView>, String> {
+        if session.kind != crate::session::repository::SessionKind::DelegateChild {
+            return Ok(None);
+        }
+
+        let delegate_events = repo.list_delegate_lifecycle_events(&session.session_id)?;
+        let current_timestamp = current_control_plane_unix_timestamp();
+        let delegate_lifecycle =
+            session_delegate_lifecycle_at(session, delegate_events.as_slice(), current_timestamp);
+        let Some(delegate_lifecycle) = delegate_lifecycle else {
+            return Ok(None);
+        };
+
+        let is_async_mode = delegate_lifecycle.mode == "async";
+        if !is_async_mode {
+            return Ok(None);
+        }
+
+        let workflow_record =
+            load_session_workflow_record(repo, session, Some(delegate_events.as_slice()))?;
+        let workflow = control_plane_session_workflow_view(workflow_record);
+        let tool_policy_payload =
+            build_session_tool_policy_status_payload(repo, &session.session_id, &self.tool_config)?;
+        let effective_tool_ids = control_plane_effective_tool_ids(&tool_policy_payload);
+        let effective_runtime_narrowing =
+            control_plane_effective_runtime_narrowing(&tool_policy_payload);
+        let approval_requests =
+            repo.list_approval_requests_for_session(&session.session_id, None)?;
+        let pending_approval_requests = repo.list_approval_requests_for_session(
+            &session.session_id,
+            Some(ApprovalRequestStatus::Pending),
+        )?;
+        let delegate_phase = delegate_lifecycle.phase.to_owned();
+        let delegate_mode = delegate_lifecycle.mode.to_owned();
+
+        let task_view = ControlPlaneTaskSummaryView {
+            task_id: session.session_id.clone(),
+            session_id: session.session_id.clone(),
+            scope_session_id: self.current_session_id.clone(),
+            label: session.label.clone(),
+            session_state: session.state.as_str().to_owned(),
+            delegate_phase: Some(delegate_phase),
+            delegate_mode: Some(delegate_mode),
+            timeout_seconds: delegate_lifecycle.timeout_seconds,
+            workflow,
+            approval_request_count: approval_requests.len(),
+            approval_attention_count: pending_approval_requests.len(),
+            effective_tool_ids,
+            effective_runtime_narrowing,
+            last_error: session.last_error.clone(),
+        };
+
+        Ok(Some(task_view))
+    }
+
     fn count_approvals(
         &self,
         repo: &SessionRepository,
@@ -1813,6 +1963,43 @@ fn control_plane_session_workflow_view(
         lineage_depth: workflow.lineage_depth,
         runtime_self_continuity,
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn current_control_plane_unix_timestamp() -> i64 {
+    let now = SystemTime::now();
+    let duration_since_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let seconds_since_epoch = duration_since_epoch.as_secs();
+    let bounded_seconds = seconds_since_epoch.min(i64::MAX as u64);
+    bounded_seconds as i64
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_effective_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
+    let tool_id_values = tool_policy_payload
+        .get("effective_tool_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut tool_ids = Vec::new();
+    for tool_id_value in tool_id_values {
+        let tool_id = tool_id_value.as_str();
+        let Some(tool_id) = tool_id else {
+            continue;
+        };
+        let owned_tool_id = tool_id.to_owned();
+        tool_ids.push(owned_tool_id);
+    }
+    tool_ids
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_effective_runtime_narrowing(tool_policy_payload: &Value) -> Value {
+    tool_policy_payload
+        .get("effective_runtime_narrowing")
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2822,6 +3009,12 @@ mod tests {
             }),
         })
         .expect("create visible approval request");
+        repo.upsert_session_tool_policy(crate::session::repository::NewSessionToolPolicyRecord {
+            session_id: "child-session".to_owned(),
+            requested_tool_ids: vec!["file.read".to_owned()],
+            runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        })
+        .expect("create visible tool policy");
 
         repo.create_session(NewSessionRecord {
             session_id: "hidden-root".to_owned(),
@@ -2848,7 +3041,7 @@ mod tests {
         })
         .expect("create hidden approval request");
 
-        ControlPlaneRepositoryView::new(config, "root-session")
+        ControlPlaneRepositoryView::new(config, ToolConfig::default(), "root-session")
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -3015,6 +3208,54 @@ mod tests {
             .read_session("hidden-root", 20, None, 50)
             .expect_err("hidden session should be rejected");
         assert!(error.contains("visibility_denied"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn repository_view_lists_visible_background_tasks_with_workflow_metadata() {
+        let view = seeded_repository_view("task-list");
+        let tasks = view
+            .list_background_tasks(false, 50)
+            .expect("background task list");
+
+        assert_eq!(tasks.current_session_id, "root-session");
+        assert_eq!(tasks.matched_count, 1);
+        assert_eq!(tasks.returned_count, 1);
+
+        let task = tasks.tasks.first().expect("first background task");
+        assert_eq!(task.task_id, "child-session");
+        assert_eq!(task.workflow.workflow_id, "root-session");
+        assert_eq!(
+            task.workflow.task.as_deref(),
+            Some("research control plane parity")
+        );
+        assert_eq!(task.workflow.phase.as_deref(), Some("execute"));
+        assert_eq!(task.delegate_mode.as_deref(), Some("async"));
+        assert_eq!(task.delegate_phase.as_deref(), Some("running"));
+        assert_eq!(task.approval_request_count, 1);
+        assert_eq!(task.approval_attention_count, 1);
+        assert_eq!(task.effective_tool_ids, vec!["file.read".to_owned()]);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn repository_view_reads_visible_background_task_detail() {
+        let view = seeded_repository_view("task-read");
+        let task = view
+            .read_background_task("child-session")
+            .expect("background task read")
+            .expect("background task detail");
+
+        assert_eq!(task.task_id, "child-session");
+        assert_eq!(task.workflow.workflow_id, "root-session");
+        assert_eq!(task.delegate_mode.as_deref(), Some("async"));
+        assert_eq!(task.session_state, "running");
+        assert_eq!(task.approval_request_count, 1);
+
+        let hidden_error = view
+            .read_background_task("hidden-root")
+            .expect_err("hidden session should be rejected");
+        assert!(hidden_error.contains("visibility_denied"));
     }
 
     #[cfg(feature = "memory-sqlite")]
