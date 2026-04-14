@@ -1188,27 +1188,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let production_binding = prepared.1;
-
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            limit,
-            &runtime,
-            production_binding,
-        )
-        .await
-    }
-
     async fn handle_turn_with_session_and_acp_options_and_ingress(
         &self,
         config: &LoongClawConfig,
@@ -7240,30 +7219,6 @@ mod tests {
         let limit = config.memory.sliding_window;
         let result = coordinator
             .load_production_turn_checkpoint_diagnostics_with_limit(
-                &config,
-                "maintenance-session",
-                limit,
-                ConversationRuntimeBinding::direct(),
-            )
-            .await;
-        let error = result.expect_err("direct production maintenance binding should fail");
-
-        assert_eq!(
-            error,
-            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
-        );
-    }
-
-    #[tokio::test]
-    async fn probe_production_turn_checkpoint_tail_runtime_gate_rejects_direct_binding_before_runtime_bootstrap()
-     {
-        let mut config = LoongConfig::default();
-        config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
-
-        let coordinator = ConversationTurnCoordinator::new();
-        let limit = config.memory.sliding_window;
-        let result = coordinator
-            .probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
                 &config,
                 "maintenance-session",
                 limit,
