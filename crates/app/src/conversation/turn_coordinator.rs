@@ -32,9 +32,8 @@ use crate::CliResult;
 #[cfg(test)]
 use crate::KernelContext;
 use crate::acp::{
-    AcpConversationTurnEntryDecision, AcpConversationTurnExecutionOutcome,
-    AcpConversationTurnOptions, evaluate_acp_conversation_turn_entry_for_address,
-    execute_acp_conversation_turn_for_address,
+    AcpConversationTurnEntryDecision, AcpConversationTurnOptions, FinalizedAcpConversationTurn,
+    evaluate_acp_conversation_turn_entry_for_address, execute_acp_conversation_turn_for_address,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -2188,10 +2187,10 @@ impl ConversationTurnCoordinator {
             acp_manager,
         )
         .await?;
-        let persistence_context = &executed.persistence_context;
+        let finalized = executed.into_finalized();
 
-        match executed.outcome {
-            AcpConversationTurnExecutionOutcome::Succeeded(success) => {
+        match finalized {
+            FinalizedAcpConversationTurn::Succeeded(success) => {
                 let reply = success.result.output_text.clone();
                 persist_reply_turns_raw_with_mode(
                     runtime,
@@ -2206,7 +2205,7 @@ impl ConversationTurnCoordinator {
                     let _ = persist_acp_runtime_events(
                         runtime,
                         session_id,
-                        persistence_context,
+                        &success.persistence_context,
                         &success.runtime_events,
                         Some(&success.result),
                         None,
@@ -2216,12 +2215,12 @@ impl ConversationTurnCoordinator {
                 }
                 Ok(reply)
             }
-            AcpConversationTurnExecutionOutcome::Failed(failure) => {
+            FinalizedAcpConversationTurn::Failed(failure) => {
                 if config.acp.emit_runtime_events {
                     let _ = persist_acp_runtime_events(
                         runtime,
                         session_id,
-                        persistence_context,
+                        &failure.persistence_context,
                         &failure.runtime_events,
                         None,
                         Some(failure.error.as_str()),
