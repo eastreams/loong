@@ -1,0 +1,67 @@
+---
+title: Volcengine Coding
+description: Configure the Volcengine Coding provider profile in Loong.
+---
+
+# Volcengine Coding
+
+Dedicated coding lanes that keep coding quota, pricing, or route ownership separate from the general assistant lane. This page covers the built-in `volcengine_coding` provider kind directly.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `volcengine_coding` |
+| Provider group | Coding-Specialized Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `volcengine` |
+| Auth scheme | `bearer` |
+| Credential envs | ARK_API_KEY |
+| Aliases | `volcengine_coding_compatible` |
+| Default base URL | `https://ark.cn-beijing.volces.com/api/coding/v3` |
+| Request endpoint | `https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions` |
+| Models endpoint | `https://ark.cn-beijing.volces.com/api/coding/v3/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "volcengine_coding"
+
+[providers.volcengine_coding]
+kind = "volcengine_coding"
+api_key = { env = "ARK_API_KEY" }
+model = "your-reviewed-coding-model"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `ARK_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions` |
+| Primary model-catalog route | `https://ark.cn-beijing.volces.com/api/coding/v3/models` |
+
+## Operator Notes
+
+- Loong's Volcengine OpenAI-compatible path uses `provider.api_key` / `ARK_API_KEY` and sends `Authorization: Bearer <ARK_API_KEY>`; AK/SK request signing is not used on this path.
+- Keep this lane separate from the general `volcengine` lane so coding pricing and route ownership do not drift into the normal hosted profile by accident.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

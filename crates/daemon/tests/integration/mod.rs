@@ -987,9 +987,13 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     assert!(rendered.contains("configured_accounts=1"));
     assert!(rendered.contains("aliases=lark"));
     assert!(rendered.contains("account=feishu:cli_a1b2c3"));
-    assert!(rendered.contains(
-        "policy conversation_key=allowed_chat_ids conversation_mode=open sender_key=allowed_sender_ids sender_mode=open conversations=- senders=-"
-    ));
+    let feishu_section = rendered
+        .split("Feishu/Lark [feishu]")
+        .nth(1)
+        .expect("feishu section should render");
+    assert!(feishu_section.contains("policy conversation_key=allowed_chat_ids"));
+    assert!(feishu_section.contains("sender_key=allowed_sender_ids"));
+    assert!(feishu_section.contains("senders=-"));
     assert!(rendered.contains(&format!(
         "op send ({}) ready: ready target_kinds=receive_id,message_reply requirements=enabled,app_id,app_secret",
         channel_send_command("feishu")

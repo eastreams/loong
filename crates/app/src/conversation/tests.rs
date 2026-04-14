@@ -141,6 +141,7 @@ struct FakeRuntime {
     built_tool_views: Mutex<Vec<crate::tools::ToolView>>,
     turn_requested_tool_views: Mutex<Vec<crate::tools::ToolView>>,
     build_context_calls: Mutex<Vec<(String, bool)>>,
+    build_context_error: Option<String>,
     turn_requested_provider_ids: Mutex<Vec<String>>,
     completion_requested_provider_ids: Mutex<Vec<String>>,
     completion_calls: Mutex<usize>,
@@ -1026,6 +1027,7 @@ impl FakeRuntime {
             built_tool_views: Mutex::new(Vec::new()),
             turn_requested_tool_views: Mutex::new(Vec::new()),
             build_context_calls: Mutex::new(Vec::new()),
+            build_context_error: None,
             turn_requested_provider_ids: Mutex::new(Vec::new()),
             completion_requested_provider_ids: Mutex::new(Vec::new()),
             completion_calls: Mutex::new(0),
@@ -1068,6 +1070,11 @@ impl FakeRuntime {
 
     fn with_compact_result(mut self, result: Result<(), String>) -> Self {
         self.compact_result = result;
+        self
+    }
+
+    fn with_build_context_error(mut self, error: &str) -> Self {
+        self.build_context_error = Some(error.to_owned());
         self
     }
 
@@ -1557,6 +1564,9 @@ impl ConversationRuntime for FakeRuntime {
             .lock()
             .expect("build context lock")
             .push((session_id.to_owned(), include_system_prompt));
+        if let Some(error) = self.build_context_error.as_ref() {
+            return Err(error.clone());
+        }
         let assembled = if include_system_prompt {
             self.assembled_context_with_system_prompt.clone()
         } else {
@@ -19903,6 +19913,107 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
     assert_eq!(
         runtime_probe.reason(),
         TurnCheckpointTailRepairReason::CheckpointPreparationFingerprintMismatch
+    );
+    assert_eq!(
+        runtime
+            .build_context_calls
+            .lock()
+            .expect("build context lock")
+            .as_slice(),
+        &[(session_id.to_owned(), true)]
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn load_turn_checkpoint_diagnostics_with_runtime_degrades_build_context_failure_to_runtime_probe()
+ {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id(
+            "conversation-turn-checkpoint",
+            "diagnostics-build-context-failure"
+        )
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 12;
+
+    let session_id = "session-turn-checkpoint-diagnostics-build-context-failure";
+    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+        .expect("persist user turn");
+    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+        .expect("persist assistant turn");
+    crate::memory::append_turn_direct(
+        session_id,
+        "assistant",
+        &json!({
+            "type": "conversation_event",
+            "event": "turn_checkpoint",
+            "payload": {
+                "schema_version": 1,
+                "stage": "post_persist",
+                "checkpoint": {
+                    "identity": test_turn_checkpoint_identity("hello", "assistant-reply"),
+                    "lane": {
+                        "lane": "fast",
+                        "result_kind": "final_text"
+                    },
+                    "finalization": {
+                        "persistence_mode": "success",
+                        "runs_after_turn": true,
+                        "attempts_context_compaction": true
+                    }
+                },
+                "finalization_progress": {
+                    "after_turn": "pending",
+                    "compaction": "pending"
+                },
+                "failure": null
+            }
+        })
+        .to_string(),
+        &mem_config,
+    )
+    .expect("persist runtime-eligible checkpoint");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "hello"}),
+            json!({"role": "assistant", "content": "assistant-reply"}),
+        ],
+        vec![],
+        vec![],
+    )
+    .with_build_context_error("synthetic build context failure");
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let diagnostics = coordinator
+        .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
+            &config,
+            session_id,
+            12,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("diagnostics should degrade instead of failing");
+
+    let runtime_probe = diagnostics
+        .runtime_probe()
+        .expect("runtime build failure should surface a runtime manual probe");
+    assert_eq!(runtime_probe.action().as_str(), "inspect_manually");
+    assert_eq!(runtime_probe.source().as_str(), "runtime");
+    assert_eq!(
+        runtime_probe.reason(),
+        TurnCheckpointTailRepairReason::CheckpointStateRequiresManualInspection
     );
     assert_eq!(
         runtime

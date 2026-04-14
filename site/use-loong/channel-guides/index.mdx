@@ -1,0 +1,65 @@
+---
+title: Channel Guides
+description: One setup page per shipped Loong channel surface.
+---
+
+# Channel Guides
+
+Loong currently ships 22 public channel surfaces: 5 runtime-backed surfaces and 17 config-backed outbound surfaces. This hub keeps the full matrix visible while the higher-level chooser pages stay compact.
+
+Use [Channels](/use-loong/channels) when you still need the conceptual model first. Use this hub when you already know the surface and want the exact config, command, and support boundary for that one channel. Keep [Channel Recipes](/use-loong/channel-recipes) for representative rollout patterns rather than the full channel inventory.
+
+## Quick Picks
+
+Use this short list when you want a practical starting point before scanning the full surface matrix below.
+
+| If you want... | Start here | Why |
+| --- | --- | --- |
+| a primary team-chat runtime | [Feishu/Lark](/use-loong/channel-guides/feishu) | webhook and websocket paths are both documented on the shipped runtime family |
+| the lightest reply-loop bot | [Telegram](/use-loong/channel-guides/telegram) | it remains the smallest runtime-backed setup path |
+| a Cloud API plus webhook runtime | [WhatsApp](/use-loong/channel-guides/whatsapp) | send and serve are both shipped on the same surface |
+| the official enterprise AIBot lane | [WeCom](/use-loong/channel-guides/wecom) | the public docs keep the long-connection contract explicit |
+| one-way governed delivery | [Webhook](/use-loong/channel-guides/webhook) or [Email](/use-loong/channel-guides/email) | outbound-only delivery stays visible without being marketed as a reply-loop runtime |
+
+## Runtime-Backed Surfaces
+
+These are the shipped send plus serve lanes.
+
+| Surface | Transport | Send | Serve |
+| --- | --- | --- | --- |
+| [Feishu/Lark](/use-loong/channel-guides/feishu) | feishu_openapi_webhook_or_websocket | `feishu-send` | `feishu-serve` |
+| [Telegram](/use-loong/channel-guides/telegram) | telegram_bot_api_polling | `telegram-send` | `telegram-serve` |
+| [Matrix](/use-loong/channel-guides/matrix) | matrix_client_server_sync | `matrix-send` | `matrix-serve` |
+| [WhatsApp](/use-loong/channel-guides/whatsapp) | whatsapp_cloud_api | `whatsapp-send` | `whatsapp-serve` |
+| [WeCom](/use-loong/channel-guides/wecom) | wecom_aibot_long_connection | `wecom-send` | `wecom-serve` |
+
+## Config-Backed Outbound Surfaces
+
+These surfaces ship direct sends today and keep serve in the catalog without overclaiming a reply-loop runtime.
+
+| Surface | Transport | Send | Serve status |
+| --- | --- | --- | --- |
+| [Discord](/use-loong/channel-guides/discord) | discord_http_api | `discord-send` | outbound-only |
+| [Slack](/use-loong/channel-guides/slack) | slack_web_api | `slack-send` | outbound-only |
+| [LINE](/use-loong/channel-guides/line) | line_messaging_api | `line-send` | outbound-only |
+| [DingTalk](/use-loong/channel-guides/dingtalk) | dingtalk_custom_robot_webhook | `dingtalk-send` | outbound-only |
+| [Email](/use-loong/channel-guides/email) | smtp_imap | `email-send` | outbound-only |
+| [Webhook](/use-loong/channel-guides/webhook) | generic_webhook | `webhook-send` | outbound-only |
+| [Google Chat](/use-loong/channel-guides/google-chat) | google_chat_incoming_webhook | `google-chat-send` | outbound-only |
+| [Signal](/use-loong/channel-guides/signal) | signal_cli_rest_api | `signal-send` | outbound-only |
+| [Twitch](/use-loong/channel-guides/twitch) | twitch_chat_api | `twitch-send` | outbound-only |
+| [Microsoft Teams](/use-loong/channel-guides/teams) | microsoft_teams_incoming_webhook | `teams-send` | outbound-only |
+| [Mattermost](/use-loong/channel-guides/mattermost) | mattermost_rest_api | `mattermost-send` | outbound-only |
+| [Nextcloud Talk](/use-loong/channel-guides/nextcloud-talk) | nextcloud_talk_bot_api | `nextcloud-talk-send` | outbound-only |
+| [Synology Chat](/use-loong/channel-guides/synology-chat) | synology_chat_outgoing_incoming_webhooks | `synology-chat-send` | outbound-only |
+| [IRC](/use-loong/channel-guides/irc) | irc_socket | `irc-send` | outbound-only |
+| [iMessage](/use-loong/channel-guides/imessage) | imessage_bridge_api | `imessage-send` | outbound-only |
+| [Nostr](/use-loong/channel-guides/nostr) | nostr_relays | `nostr-send` | outbound-only |
+| [Tlon](/use-loong/channel-guides/tlon) | tlon_urbit_ship_api | `tlon-send` | outbound-only |
+
+## Reading Rule
+
+- Start with [Channels](/use-loong/channels) when you still need to choose between runtime-backed and outbound-only delivery.
+- Use an individual guide page when the surface is already decided and you need the exact config and smoke-test path.
+- Keep [Channel Recipes](/use-loong/channel-recipes) for representative rollout paths instead of the full surface inventory.
+- Keep [Gateway And Supervision](/use-loong/gateway-and-supervision) open whenever the chosen surface is runtime-backed and needs long-lived ownership.

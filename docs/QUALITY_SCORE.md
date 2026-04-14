@@ -1,6 +1,6 @@
 # Quality Score
 
-Domain grades for LoongClaw. Updated periodically to track gaps, prioritize cleanup, and measure harness maturity.
+Domain grades for Loong. Updated periodically to track gaps, prioritize cleanup, and measure harness maturity.
 
 ## Domain Grades
 

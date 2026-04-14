@@ -39,7 +39,7 @@ run_accepts_supported_glibc_floor_test() {
   fixture="$(mktemp -d)"
   trap 'rm -rf "$fixture"' RETURN
   output_file="$fixture/check.out"
-  bin_path="$fixture/loongclaw"
+  bin_path="$fixture/loong"
   : >"$bin_path"
   make_readelf_stub_bin "$fixture" $'Version needs section \'.gnu.version_r\' contains 1 entry:\n  0x0010:   Name: GLIBC_2.17  Flags: none  Version: 4\n  0x0020:   Name: GLIBC_2.4  Flags: none  Version: 3'
 
@@ -54,7 +54,7 @@ run_rejects_newer_glibc_requirement_test() {
   fixture="$(mktemp -d)"
   trap 'rm -rf "$fixture"' RETURN
   output_file="$fixture/check.out"
-  bin_path="$fixture/loongclaw"
+  bin_path="$fixture/loong"
   : >"$bin_path"
   make_readelf_stub_bin "$fixture" $'Version needs section \'.gnu.version_r\' contains 1 entry:\n  0x0010:   Name: GLIBC_2.18  Flags: none  Version: 4'
 
@@ -73,7 +73,7 @@ run_rejects_missing_glibc_versions_test() {
   fixture="$(mktemp -d)"
   trap 'rm -rf "$fixture"' RETURN
   output_file="$fixture/check.out"
-  bin_path="$fixture/loongclaw"
+  bin_path="$fixture/loong"
   : >"$bin_path"
   make_readelf_stub_bin "$fixture" "no version references found"
 

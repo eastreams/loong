@@ -1,0 +1,68 @@
+---
+title: Doctor And Health
+description: Diagnose and repair a broken local setup.
+---
+
+# Doctor And Health
+
+Loong uses `doctor` as the main repair path when the base runtime is unhealthy.
+
+## Start Here
+
+| If you need to... | Start with |
+| --- | --- |
+| check the local runtime health quickly | `loong doctor` |
+| apply the safe repair path | `loong doctor --fix` |
+| feed health output into another tool or script | `loong doctor --json` |
+| inspect the security-oriented checks only | `loong doctor security` |
+
+## Core Commands
+
+```bash
+loong doctor
+loong doctor --fix
+loong doctor --json
+loong doctor security
+loong doctor security --json
+```
+
+## When To Escalate To Audit
+
+```bash
+loong audit recent --limit 20
+loong audit summary --limit 200 --json
+loong audit token-trail --token-id token-abc
+```
+
+Use the audit commands when:
+
+- the runtime looks unhealthy and you need recent operator-visible evidence
+- a repair action happened but you want to inspect what changed
+- policy or token flow needs a more explicit trail than `doctor` alone provides
+
+## What This Page Optimizes For
+
+- keep health issues legible for operators
+- prefer safe local repair actions
+- surface concrete next steps instead of vague status-only output
+- preserve audit visibility for policy and runtime debugging
+
+## When To Use It
+
+- after onboarding if credentials or config still feel incomplete
+- before enabling channels or gateway surfaces
+- when runtime behavior has drifted and you need a trustworthy repair path
+
+## Typical Order
+
+1. Run `loong doctor`.
+2. Run `loong doctor --fix` if the safe repair path is appropriate.
+3. Use audit commands when you need evidence or a deeper trail.
+4. Return to [First Run](/get-started/first-run) once the base path is healthy again.
+
+## What Comes Next
+
+- Return to [First Run](/get-started/first-run) if you still have not reached a first useful answer.
+- Continue to [Managed Skills](/use-loong/managed-skills) when the blocker is install policy, skill exposure, or browser preview enablement.
+- Continue to [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) when the blocker is a private host, domain allowlist, or browser runtime gate.
+- Move on to [Use Loong](/use-loong/overview) once the base local runtime is healthy.

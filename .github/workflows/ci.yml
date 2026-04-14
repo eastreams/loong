@@ -13,6 +13,9 @@ on:
       - main
       - release
       - 'release/**'
+  merge_group:
+    types:
+      - checks_requested
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -25,8 +28,40 @@ env:
   ANDROID_NDK_REVISION: "r27d"
   ANDROID_NDK_LINUX_SHA256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9"
   ANDROID_API_LEVEL: "24"
+  MINTLIFY_NODE_VERSION: "20.20.2"
+  MINTLIFY_VERSION: "4.2.464"
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run_rust_jobs: ${{ steps.classify.outputs.run_rust_jobs }}
+      run_docs_site: ${{ steps.classify.outputs.run_docs_site }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Classify changed files
+        id: classify
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/workflow_change_router.mjs`;
+            const moduleUrl = `file://${modulePath}`;
+            const routerModule = await import(moduleUrl);
+            const runtime = { core, github, context };
+            const changedFileContext = await routerModule.collectChangedFileContext(runtime, {
+              workflowLabel: "CI",
+              forceRunEvents: ["merge_group"],
+            });
+            const routeOutputs = routerModule.classifyCiJobSet(changedFileContext);
+            const touchedPathSummary = routerModule.describeTouchedPaths(routeOutputs);
+            core.info(`CI changed paths: ${touchedPathSummary || "<full-validation>"}`);
+            routerModule.writeRouteOutputs(core, routeOutputs);
+
   governance:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -63,12 +98,17 @@ jobs:
           bash -n scripts/test_release_artifact_lib.sh
           bash -n scripts/test_release_workflow_hardening.sh
           bash -n scripts/test_bootstrap_release_local_artifacts.sh
+          bash -n scripts/test_ci_workflow_change_routing.sh
           bash -n scripts/test_promotion_guard_workflows.sh
+          bash -n scripts/test_workflow_change_router.sh
           bash -n scripts/check-docs.sh
           bash -n scripts/check_dep_graph.sh
           bash -n scripts/stress_daemon_tests.sh
+          bash -n scripts/test_scan_workflow_hardening.sh
           bash -n scripts/test_sync_github_labels.sh
           bash -n scripts/test_stress_daemon_tests.sh
+          node --check scripts/workflow_change_router.mjs
+          node --check scripts/test_workflow_change_router.mjs
 
       - name: Governance regression tests
         run: |
@@ -82,12 +122,15 @@ jobs:
           bash scripts/test_release_artifact_lib.sh
           bash scripts/test_release_workflow_hardening.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
+          bash scripts/test_ci_workflow_change_routing.sh
           bash scripts/test_promotion_guard_workflows.sh
+          bash scripts/test_workflow_change_router.sh
+          bash scripts/test_scan_workflow_hardening.sh
           bash scripts/test_sync_github_labels.sh
           bash scripts/test_stress_daemon_tests.sh
 
       - name: Fresh architecture drift report
-        run: bash scripts/check_architecture_drift_freshness.sh docs/releases/architecture-drift-$(date -u +%Y-%m).md
+        run: bash scripts/check_architecture_drift_freshness.sh docs/releases/support/architecture-drift-$(date -u +%Y-%m).md
 
       - name: Bootstrap local release artifacts
         run: scripts/bootstrap_release_local_artifacts.sh
@@ -104,7 +147,52 @@ jobs:
       - name: Diff hygiene
         run: git diff --check
 
+  docs-site:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_docs_site == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: ${{ env.MINTLIFY_NODE_VERSION }}
+
+      - name: Mintlify broken links
+        run: npm exec --yes --package=mintlify@${{ env.MINTLIFY_VERSION }} -- mintlify broken-links
+
+      - name: Mintlify export
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/loongclaw-docs-export.zip
+          set +e
+          timeout 300s npm exec --yes --package=mintlify@${{ env.MINTLIFY_VERSION }} -- mintlify export --output /tmp/loongclaw-docs-export.zip
+          export_status=$?
+          set -e
+          if [ "$export_status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$export_status" -eq 124 ] && [ -f /tmp/loongclaw-docs-export.zip ]; then
+            echo "Mintlify export produced the artifact before timing out; treating CLI hang as non-fatal."
+            exit 0
+          fi
+          exit "$export_status"
+
+      - name: Assert export artifact exists
+        run: test -f /tmp/loongclaw-docs-export.zip
+
   rust-quality:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -128,6 +216,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   rust-test-default:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -150,6 +240,8 @@ jobs:
         run: cargo test --workspace --locked
 
   rust-check-browser-without-webfetch:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -171,6 +263,8 @@ jobs:
           channel-cli,channel-telegram,channel-feishu,channel-matrix,config-toml,memory-sqlite,feishu-integration,tool-shell,tool-file,tool-browser,provider-openai,provider-anthropic,provider-bedrock,provider-volcengine
 
   rust-test-all-features:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -193,6 +287,8 @@ jobs:
         run: cargo test --workspace --all-features --locked
 
   android-termux-build:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -243,6 +339,8 @@ jobs:
           cargo build --release --locked -p loongclaw --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target aarch64-linux-android
 
   docs-build:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -264,6 +362,7 @@ jobs:
     name: build
     if: ${{ always() }}
     needs:
+      - changes
       - governance
       - rust-quality
       - rust-test-default
@@ -271,12 +370,14 @@ jobs:
       - rust-test-all-features
       - android-termux-build
       - docs-build
+      - docs-site
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - name: Require successful upstream jobs
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           GOVERNANCE_RESULT: ${{ needs.governance.result }}
           RUST_QUALITY_RESULT: ${{ needs.rust-quality.result }}
           RUST_TEST_DEFAULT_RESULT: ${{ needs.rust-test-default.result }}
@@ -284,6 +385,7 @@ jobs:
           RUST_TEST_ALL_FEATURES_RESULT: ${{ needs.rust-test-all-features.result }}
           ANDROID_TERMUX_BUILD_RESULT: ${{ needs.android-termux-build.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
+          DOCS_SITE_RESULT: ${{ needs.docs-site.result }}
         run: |
           set -euo pipefail
 
@@ -296,10 +398,21 @@ jobs:
             fi
           }
 
+          check_optional_result() {
+            local name="$1"
+            local result="$2"
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "::error title=${name} result::Expected success or skipped, got ${result}"
+              exit 1
+            fi
+          }
+
+          check_result changes "$CHANGES_RESULT"
           check_result governance "$GOVERNANCE_RESULT"
-          check_result rust-quality "$RUST_QUALITY_RESULT"
-          check_result rust-test-default "$RUST_TEST_DEFAULT_RESULT"
-          check_result rust-check-browser-without-webfetch "$RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT"
-          check_result rust-test-all-features "$RUST_TEST_ALL_FEATURES_RESULT"
-          check_result android-termux-build "$ANDROID_TERMUX_BUILD_RESULT"
-          check_result docs-build "$DOCS_BUILD_RESULT"
+          check_optional_result rust-quality "$RUST_QUALITY_RESULT"
+          check_optional_result rust-test-default "$RUST_TEST_DEFAULT_RESULT"
+          check_optional_result rust-check-browser-without-webfetch "$RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT"
+          check_optional_result rust-test-all-features "$RUST_TEST_ALL_FEATURES_RESULT"
+          check_optional_result android-termux-build "$ANDROID_TERMUX_BUILD_RESULT"
+          check_optional_result docs-build "$DOCS_BUILD_RESULT"
+          check_optional_result docs-site "$DOCS_SITE_RESULT"

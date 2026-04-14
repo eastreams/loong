@@ -3,7 +3,7 @@
 ## Purpose
 
 This document defines the maintainer-facing SDK contract for repository-owned
-surfaces inside LoongClaw.
+surfaces inside Loong.
 
 It answers one question:
 

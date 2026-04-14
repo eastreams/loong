@@ -1594,7 +1594,7 @@ fn feishu_unsupported_message_type_is_ignored() {
 }
 
 fn encrypt_event_payload_for_test(plain_payload: &str, encrypt_key: &str) -> String {
-    use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+    use cbc::cipher::{BlockModeEncrypt, KeyIvInit};
 
     let key = Sha256::digest(encrypt_key.as_bytes());
     let iv = [7_u8; 16];
@@ -1606,7 +1606,7 @@ fn encrypt_event_payload_for_test(plain_payload: &str, encrypt_key: &str) -> Str
 
     let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &iv)
         .expect("create encryptor")
-        .encrypt_padded_mut::<Pkcs7>(&mut buffer, message_len)
+        .encrypt_padded::<Pkcs7>(&mut buffer, message_len)
         .expect("encrypt payload");
 
     let mut merged = iv.to_vec();

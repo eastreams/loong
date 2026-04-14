@@ -1,0 +1,61 @@
+---
+title: Microsoft Teams
+description: Configure the Microsoft Teams channel surface in Loong.
+---
+
+# Microsoft Teams
+
+This is a shipped config-backed outbound surface. Microsoft teams incoming webhook surface is outbound-only today
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `teams` |
+| Config key | `teams` |
+| Implementation status | `config_backed` |
+| Transport | `microsoft_teams_incoming_webhook` |
+| Aliases | `msteams`, `ms-teams` |
+| Default send target kind | `endpoint`, `conversation` |
+
+## Minimal Config
+
+```toml
+[teams]
+enabled = true
+webhook_url_env = "TEAMS_WEBHOOK_URL"
+```
+
+## Smoke Test
+
+```bash
+loong teams-send --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| incoming webhook send | `teams-send` | Usage: loong teams-send [OPTIONS] --text &lt;TEXT&gt; |
+| bot event service | `teams-serve` | microsoft teams incoming webhook surface is outbound-only today |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `teams.enabled`<br/>`teams.accounts.<account>.enabled` | none | none |
+| incoming webhook url | `teams.webhook_url`<br/>`teams.accounts.<account>.webhook_url` | `teams.webhook_url_env`<br/>`teams.accounts.<account>.webhook_url_env` | `TEAMS_WEBHOOK_URL` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- Microsoft Teams is the incoming webhook send surface today. Bot-runtime fields remain reserved for a planned serve path and should not be documented as shipped support.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

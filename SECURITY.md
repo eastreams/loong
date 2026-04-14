@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-LoongClaw is pre-1.0. Security fixes are applied on the default branch (`main`) and in the latest release line.
+Loong is pre-1.0. Security fixes are applied on the default branch (`main`) and in the latest release line.
 
 ## Reporting a Vulnerability
 
