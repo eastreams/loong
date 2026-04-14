@@ -113,8 +113,6 @@ pub(crate) enum FinalizedAcpConversationTurn {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FinalizedAcpConversationTurnSuccess {
-    pub prepared: PreparedAcpConversationTurn,
-    pub backend_selection: AcpBackendSelection,
     pub persistence_context: PersistedAcpRuntimeEventContext,
     pub result: AcpTurnResult,
     pub runtime_events: Vec<Value>,
@@ -122,8 +120,6 @@ pub(crate) struct FinalizedAcpConversationTurnSuccess {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FinalizedAcpConversationTurnFailure {
-    pub prepared: PreparedAcpConversationTurn,
-    pub backend_selection: AcpBackendSelection,
     pub persistence_context: PersistedAcpRuntimeEventContext,
     pub error: String,
     pub runtime_events: Vec<Value>,
@@ -488,8 +484,6 @@ async fn execute_prepared_acp_conversation_turn(
                 result.events.clone()
             };
             FinalizedAcpConversationTurn::Succeeded(FinalizedAcpConversationTurnSuccess {
-                prepared,
-                backend_selection,
                 persistence_context,
                 result,
                 runtime_events,
@@ -502,8 +496,6 @@ async fn execute_prepared_acp_conversation_turn(
                 .transpose()?
                 .unwrap_or_default();
             FinalizedAcpConversationTurn::Failed(FinalizedAcpConversationTurnFailure {
-                prepared,
-                backend_selection,
                 persistence_context,
                 error,
                 runtime_events,
