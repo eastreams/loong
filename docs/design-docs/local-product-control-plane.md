@@ -179,6 +179,17 @@ That means:
 - no silent widening into LAN or public exposure
 - no multi-user or hosted assumptions in the first contract
 
+The current gateway-owned local front door should therefore stay predictable:
+
+- default control-surface address: `127.0.0.1:26306`
+- config seam: `[gateway].port`
+- operator overrides: `loongclaw gateway run --port <PORT>` and
+  `LOONGCLAW_GATEWAY_PORT=<PORT>`
+- explicit ephemeral-only escape hatch for labs/tests: `--port 0`
+
+That keeps local product surfaces bootstrap-friendly without turning persisted
+owner-state files into the primary source of configuration truth.
+
 This keeps the platform layer aligned with LoongClaw's current trust model:
 private, operator-owned, and local-first.
 

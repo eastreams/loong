@@ -30,6 +30,9 @@ The current localhost control-plane slice now includes:
 - authenticated turn submission
 - SSE turn-event streaming for submitted turns
 - non-streaming final turn-result fetch for submitted turns
+- a stable loopback gateway front door at `127.0.0.1:26306` by default, with
+  explicit operator overrides through `--port`, `LOONGCLAW_GATEWAY_PORT`, and
+  the deliberate ephemeral escape hatch `--port 0`
 
 Turn execution still reuses the existing ACP conversation preparation path and
 the current session/runtime addressing model. The first turn-result cache stays
@@ -51,6 +54,9 @@ turns for replay and final-result fetch.
       plane operations instead of staying terminal-only behavior.
 - [ ] The first browser-facing surfaces remain localhost-only by default and do
       not imply that public exposure is supported or safe.
+- [ ] The local product control plane exposes one stable default loopback
+      address so browser shells and operator tooling do not need ad-hoc file
+      reads just to discover the default gateway endpoint.
 - [ ] The control plane remains a thin product layer above the runtime and does
       not become a second policy authority above the kernel.
 

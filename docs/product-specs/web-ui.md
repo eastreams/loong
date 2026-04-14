@@ -43,6 +43,12 @@ control surface for gateway owner status, channel inventory, runtime snapshot,
 operator summary, and cooperative stop. The Web UI should consume that control
 surface instead of inventing a second browser-only runtime contract.
 
+That control surface now has a stable loopback default at
+`127.0.0.1:26306`. Browser-facing local product flows should treat that stable
+gateway endpoint as the normal bootstrap path and only fall back to persisted
+owner-state discovery when operators intentionally override the port with
+`--port`, `LOONGCLAW_GATEWAY_PORT`, or `--port 0`.
+
 The current daemon slice also includes a reusable localhost discovery/client
 contract that validates loopback binding, loads the local bearer token, and
 offers route-scoped helpers for the current gateway API. The Web UI dashboard

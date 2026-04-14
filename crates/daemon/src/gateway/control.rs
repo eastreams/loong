@@ -1096,6 +1096,19 @@ mod tests {
     }
 
     #[test]
+    fn gateway_control_listener_port_uses_config_default_when_no_override_is_present() {
+        let mut env = ScopedEnv::new();
+        env.remove(GATEWAY_CONTROL_PORT_ENV);
+
+        let mut config = LoongClawConfig::default();
+        config.gateway.port = 26_346;
+
+        let resolved_port = resolve_gateway_control_listener_port(&config, None).expect("port");
+
+        assert_eq!(resolved_port, 26_346);
+    }
+
+    #[test]
     fn gateway_control_listener_port_prefers_explicit_override() {
         let mut env = ScopedEnv::new();
         env.set(GATEWAY_CONTROL_PORT_ENV, "26316");

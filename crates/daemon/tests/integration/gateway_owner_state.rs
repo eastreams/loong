@@ -57,6 +57,12 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
     runtime_dir
 }
 
+fn unique_gateway_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port probe");
+    let local_address = listener.local_addr().expect("read ephemeral port probe");
+    local_address.port()
+}
+
 fn headless_loaded_config_fixture() -> LoadedSupervisorConfig {
     let runtime_root = unique_runtime_dir("headless-config");
     let config_path = runtime_root.join("loongclaw.toml");
@@ -208,6 +214,56 @@ async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request
         stopped_status.shutdown_reason.as_deref(),
         Some("shutdown requested: gateway stop requested")
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::await_holding_lock)]
+async fn gateway_owner_state_uses_configured_gateway_port_when_no_override_is_present() {
+    let _lock = lock_daemon_test_environment();
+    let runtime_dir = unique_runtime_dir("config-port");
+    let configured_port = unique_gateway_port();
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(move |_| {
+            let mut loaded = headless_loaded_config_fixture();
+            loaded.config.gateway.port = configured_port;
+            Ok(loaded)
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let actual_port = running_status
+        .port
+        .expect("control surface port should be persisted");
+
+    assert_eq!(actual_port, configured_port);
+    assert_eq!(running_status.bind_address.as_deref(), Some("127.0.0.1"));
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
 }
 
 #[tokio::test(flavor = "current_thread")]

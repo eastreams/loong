@@ -476,6 +476,17 @@ default_provider = "duckduckgo"
 # or "${JINA_AUTH_TOKEN}"
 ```
 
+Gateway control-surface example:
+
+```toml
+[gateway]
+port = 26306
+```
+
+`loongclaw gateway run` uses `127.0.0.1:26306` by default. Override it with
+`--port`, `LOONGCLAW_GATEWAY_PORT`, or set `port = 0` only when you explicitly
+want an ephemeral localhost port for test or lab runs.
+
 Volcengine / ARK example:
 
 ```bash
