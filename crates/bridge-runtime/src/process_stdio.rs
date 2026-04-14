@@ -196,7 +196,11 @@ pub async fn run_process_stdio_json_line_exchange(
 
                 let remaining_capacity = MAX_STDERR_BYTES.saturating_sub(bytes.len());
                 let bytes_to_take = remaining_capacity.min(read);
-                bytes.extend_from_slice(&chunk[..bytes_to_take]);
+                let chunk_slice = chunk.get(..bytes_to_take);
+                let Some(chunk_slice) = chunk_slice else {
+                    break;
+                };
+                bytes.extend_from_slice(chunk_slice);
             }
         }
         bytes
@@ -329,17 +333,17 @@ fn resolved_process_stdio_program(provider: &kernel::ProviderConfig) -> Option<S
     }
 
     let entrypoint = non_empty_provider_metadata_value(provider, "entrypoint");
-    if let Some(entrypoint) = entrypoint {
-        if entrypoint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT {
-            return Some(entrypoint);
-        }
+    if let Some(entrypoint) = entrypoint
+        && entrypoint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT
+    {
+        return Some(entrypoint);
     }
 
     let entrypoint_hint = non_empty_provider_metadata_value(provider, "entrypoint_hint");
-    if let Some(entrypoint_hint) = entrypoint_hint {
-        if entrypoint_hint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT {
-            return Some(entrypoint_hint);
-        }
+    if let Some(entrypoint_hint) = entrypoint_hint
+        && entrypoint_hint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT
+    {
+        return Some(entrypoint_hint);
     }
 
     None
