@@ -2187,9 +2187,8 @@ impl ConversationTurnCoordinator {
             acp_manager,
         )
         .await?;
-        let finalized = executed.into_finalized();
 
-        match finalized {
+        match executed {
             FinalizedAcpConversationTurn::Succeeded(success) => {
                 let reply = success.result.output_text.clone();
                 persist_reply_turns_raw_with_mode(

@@ -187,11 +187,10 @@ impl<'a> RuntimeTurnExecutionService<'a> {
                     acp_manager,
                 )
                 .await?;
-                let finalized = execution.into_finalized();
                 let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
                 let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
-                return match finalized {
+                return match execution {
                     crate::acp::FinalizedAcpConversationTurn::Succeeded(success) => {
                         Ok(AgentTurnResult {
                             session_id: runtime.session_id.clone(),

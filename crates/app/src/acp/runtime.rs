@@ -106,35 +106,9 @@ impl AcpConversationTurnEntryDecision {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ExecutedAcpConversationTurn {
-    pub prepared: PreparedAcpConversationTurn,
-    pub backend_selection: AcpBackendSelection,
-    pub persistence_context: PersistedAcpRuntimeEventContext,
-    pub outcome: AcpConversationTurnExecutionOutcome,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FinalizedAcpConversationTurn {
     Succeeded(FinalizedAcpConversationTurnSuccess),
     Failed(FinalizedAcpConversationTurnFailure),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum AcpConversationTurnExecutionOutcome {
-    Succeeded(AcpConversationTurnSuccess),
-    Failed(AcpConversationTurnFailure),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct AcpConversationTurnSuccess {
-    pub result: AcpTurnResult,
-    pub runtime_events: Vec<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AcpConversationTurnFailure {
-    pub error: String,
-    pub runtime_events: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,35 +127,6 @@ pub(crate) struct FinalizedAcpConversationTurnFailure {
     pub persistence_context: PersistedAcpRuntimeEventContext,
     pub error: String,
     pub runtime_events: Vec<Value>,
-}
-
-impl ExecutedAcpConversationTurn {
-    pub(crate) fn into_finalized(self) -> FinalizedAcpConversationTurn {
-        let prepared = self.prepared;
-        let backend_selection = self.backend_selection;
-        let persistence_context = self.persistence_context;
-
-        match self.outcome {
-            AcpConversationTurnExecutionOutcome::Succeeded(success) => {
-                FinalizedAcpConversationTurn::Succeeded(FinalizedAcpConversationTurnSuccess {
-                    prepared,
-                    backend_selection,
-                    persistence_context,
-                    result: success.result,
-                    runtime_events: success.runtime_events,
-                })
-            }
-            AcpConversationTurnExecutionOutcome::Failed(failure) => {
-                FinalizedAcpConversationTurn::Failed(FinalizedAcpConversationTurnFailure {
-                    prepared,
-                    backend_selection,
-                    persistence_context,
-                    error: failure.error,
-                    runtime_events: failure.runtime_events,
-                })
-            }
-        }
-    }
 }
 
 static ACP_SESSION_MANAGER_REGISTRY: OnceLock<RwLock<BTreeMap<String, Arc<AcpSessionManager>>>> =
@@ -464,7 +409,7 @@ pub(crate) async fn execute_acp_conversation_turn_for_address(
     user_input: &str,
     options: &AcpConversationTurnOptions<'_>,
     manager: Option<Arc<AcpSessionManager>>,
-) -> CliResult<ExecutedAcpConversationTurn> {
+) -> CliResult<FinalizedAcpConversationTurn> {
     let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
     let effective_manager = resolve_acp_turn_execution_manager(config, manager)?;
 
@@ -476,7 +421,7 @@ async fn execute_prepared_acp_conversation_turn(
     prepared: PreparedAcpConversationTurn,
     options: &AcpConversationTurnOptions<'_>,
     manager: Arc<AcpSessionManager>,
-) -> CliResult<ExecutedAcpConversationTurn> {
+) -> CliResult<FinalizedAcpConversationTurn> {
     let backend_selection = resolve_acp_backend_selection(config);
     let persistence_event_sink = config
         .acp
@@ -525,7 +470,16 @@ async fn execute_prepared_acp_conversation_turn(
         }
     };
 
-    let outcome = match turn_result {
+    let persistence_context = PersistedAcpRuntimeEventContext {
+        backend_id: backend_selection.id.clone(),
+        agent_id: prepared.route.agent_id.clone(),
+        session_key: prepared.request.session_key.clone(),
+        conversation_id: Some(prepared.route.conversation_id.clone()),
+        binding: prepared.route.binding.clone(),
+        request_metadata: prepared.request.metadata.clone(),
+    };
+
+    let finalized = match turn_result {
         Ok(result) => {
             let runtime_events = if let Some(persistence_sink) = persistence_event_sink.as_ref() {
                 let streamed_events = persistence_sink.snapshot()?;
@@ -533,7 +487,10 @@ async fn execute_prepared_acp_conversation_turn(
             } else {
                 result.events.clone()
             };
-            AcpConversationTurnExecutionOutcome::Succeeded(AcpConversationTurnSuccess {
+            FinalizedAcpConversationTurn::Succeeded(FinalizedAcpConversationTurnSuccess {
+                prepared,
+                backend_selection,
+                persistence_context,
                 result,
                 runtime_events,
             })
@@ -544,28 +501,17 @@ async fn execute_prepared_acp_conversation_turn(
                 .map(BufferedAcpTurnEventSink::snapshot)
                 .transpose()?
                 .unwrap_or_default();
-            AcpConversationTurnExecutionOutcome::Failed(AcpConversationTurnFailure {
+            FinalizedAcpConversationTurn::Failed(FinalizedAcpConversationTurnFailure {
+                prepared,
+                backend_selection,
+                persistence_context,
                 error,
                 runtime_events,
             })
         }
     };
 
-    let persistence_context = PersistedAcpRuntimeEventContext {
-        backend_id: backend_selection.id.clone(),
-        agent_id: prepared.route.agent_id.clone(),
-        session_key: prepared.request.session_key.clone(),
-        conversation_id: Some(prepared.route.conversation_id.clone()),
-        binding: prepared.route.binding.clone(),
-        request_metadata: prepared.request.metadata.clone(),
-    };
-
-    Ok(ExecutedAcpConversationTurn {
-        prepared,
-        backend_selection,
-        persistence_context,
-        outcome,
-    })
+    Ok(finalized)
 }
 
 pub fn derive_automatic_acp_routing_origin_for_address(
