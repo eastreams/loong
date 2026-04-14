@@ -114,6 +114,12 @@ pub(crate) struct ExecutedAcpConversationTurn {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) enum FinalizedAcpConversationTurn {
+    Succeeded(FinalizedAcpConversationTurnSuccess),
+    Failed(FinalizedAcpConversationTurnFailure),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum AcpConversationTurnExecutionOutcome {
     Succeeded(AcpConversationTurnSuccess),
     Failed(AcpConversationTurnFailure),
@@ -129,6 +135,53 @@ pub(crate) struct AcpConversationTurnSuccess {
 pub(crate) struct AcpConversationTurnFailure {
     pub error: String,
     pub runtime_events: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FinalizedAcpConversationTurnSuccess {
+    pub prepared: PreparedAcpConversationTurn,
+    pub backend_selection: AcpBackendSelection,
+    pub persistence_context: PersistedAcpRuntimeEventContext,
+    pub result: AcpTurnResult,
+    pub runtime_events: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FinalizedAcpConversationTurnFailure {
+    pub prepared: PreparedAcpConversationTurn,
+    pub backend_selection: AcpBackendSelection,
+    pub persistence_context: PersistedAcpRuntimeEventContext,
+    pub error: String,
+    pub runtime_events: Vec<Value>,
+}
+
+impl ExecutedAcpConversationTurn {
+    pub(crate) fn into_finalized(self) -> FinalizedAcpConversationTurn {
+        let prepared = self.prepared;
+        let backend_selection = self.backend_selection;
+        let persistence_context = self.persistence_context;
+
+        match self.outcome {
+            AcpConversationTurnExecutionOutcome::Succeeded(success) => {
+                FinalizedAcpConversationTurn::Succeeded(FinalizedAcpConversationTurnSuccess {
+                    prepared,
+                    backend_selection,
+                    persistence_context,
+                    result: success.result,
+                    runtime_events: success.runtime_events,
+                })
+            }
+            AcpConversationTurnExecutionOutcome::Failed(failure) => {
+                FinalizedAcpConversationTurn::Failed(FinalizedAcpConversationTurnFailure {
+                    prepared,
+                    backend_selection,
+                    persistence_context,
+                    error: failure.error,
+                    runtime_events: failure.runtime_events,
+                })
+            }
+        }
+    }
 }
 
 static ACP_SESSION_MANAGER_REGISTRY: OnceLock<RwLock<BTreeMap<String, Arc<AcpSessionManager>>>> =
