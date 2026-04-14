@@ -41,6 +41,8 @@ The current runtime already ships important workflow substrate:
   runtime-self continuity summary
 - local control-plane session observation routes that can now surface the same
   workflow metadata family for visible sessions
+- local control-plane background-task observation routes that stay rooted in the
+  same child-session workflow truth
 - a task-shaped background-task CLI on top of the existing session runtime
 - explicit runtime-self continuity boundaries and query-aware memory retrieval
 - a localhost-only product control plane for session, approval, and turn

@@ -695,6 +695,47 @@ fn control_plane_session_read_response_roundtrips_through_json() {
 }
 
 #[test]
+fn control_plane_task_read_response_roundtrips_through_json() {
+    let response = ControlPlaneTaskReadResponse {
+        current_session_id: "root-session".to_owned(),
+        task: ControlPlaneTaskSummary {
+            task_id: "child-session".to_owned(),
+            session_id: "child-session".to_owned(),
+            scope_session_id: "root-session".to_owned(),
+            label: Some("Child".to_owned()),
+            session_state: "running".to_owned(),
+            delegate_phase: Some("running".to_owned()),
+            delegate_mode: Some("async".to_owned()),
+            timeout_seconds: Some(90),
+            workflow: ControlPlaneSessionWorkflow {
+                workflow_id: "root-session".to_owned(),
+                task: Some("research control plane parity".to_owned()),
+                phase: Some("execute".to_owned()),
+                operation_kind: Some("task".to_owned()),
+                operation_scope: Some("task".to_owned()),
+                task_session_id: Some("child-session".to_owned()),
+                lineage_root_session_id: Some("root-session".to_owned()),
+                lineage_depth: Some(1),
+                runtime_self_continuity: Some(ControlPlaneSessionWorkflowContinuity {
+                    present: true,
+                    resolved_identity_present: true,
+                    session_profile_projection_present: false,
+                }),
+            },
+            approval_request_count: 1,
+            approval_attention_count: 1,
+            effective_tool_ids: vec!["file.read".to_owned()],
+            effective_runtime_narrowing: serde_json::json!({}),
+            last_error: None,
+        },
+    };
+    let encoded = serde_json::to_string(&response).expect("task read response should serialize");
+    let decoded: ControlPlaneTaskReadResponse =
+        serde_json::from_str(&encoded).expect("task read response should deserialize");
+    assert_eq!(decoded, response);
+}
+
+#[test]
 fn control_plane_approval_list_response_roundtrips_through_json() {
     let response = ControlPlaneApprovalListResponse {
         current_session_id: "root-session".to_owned(),

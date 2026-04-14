@@ -108,14 +108,14 @@ struct DelegateExecutionContract {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SessionDelegateLifecycleRecord {
-    profile: Option<&'static str>,
-    mode: &'static str,
-    phase: &'static str,
-    queued_at: Option<i64>,
-    started_at: Option<i64>,
-    timeout_seconds: Option<u64>,
-    execution: Option<ConstrainedSubagentExecution>,
+pub(crate) struct SessionDelegateLifecycleRecord {
+    pub(crate) profile: Option<&'static str>,
+    pub(crate) mode: &'static str,
+    pub(crate) phase: &'static str,
+    pub(crate) queued_at: Option<i64>,
+    pub(crate) started_at: Option<i64>,
+    pub(crate) timeout_seconds: Option<u64>,
+    pub(crate) execution: Option<ConstrainedSubagentExecution>,
     staleness: Option<SessionDelegateStalenessRecord>,
     cancellation: Option<SessionDelegateCancellationRecord>,
 }
@@ -2756,7 +2756,7 @@ fn build_session_cancel_plan(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn session_delegate_lifecycle_at(
+pub(crate) fn session_delegate_lifecycle_at(
     session: &SessionSummaryRecord,
     recent_events: &[SessionEventRecord],
     now_ts: i64,
@@ -3152,7 +3152,7 @@ fn runtime_narrowing_json(runtime_narrowing: Option<ToolRuntimeNarrowing>) -> Va
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn build_session_tool_policy_status_payload(
+pub(crate) fn build_session_tool_policy_status_payload(
     repo: &SessionRepository,
     target_session_id: &str,
     tool_config: &ToolConfig,
