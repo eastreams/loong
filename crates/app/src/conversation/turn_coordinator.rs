@@ -1311,31 +1311,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-        observer: Option<ConversationTurnObserverHandle>,
-    ) -> CliResult<String> {
-        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
-            config,
-            address,
-            user_input,
-            error_mode,
-            acp_options,
-            binding,
-            ingress,
-            observer,
-            None,
-        )
-        .await
-    }
-
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
         &self,
         config: &LoongClawConfig,
@@ -1377,7 +1352,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
-        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
@@ -1386,6 +1361,7 @@ impl ConversationTurnCoordinator {
             binding,
             None,
             observer,
+            None,
         )
         .await
     }
@@ -1722,7 +1698,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
@@ -1735,37 +1711,6 @@ impl ConversationTurnCoordinator {
             None,
         )
         .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-        observer: Option<ConversationTurnObserverHandle>,
-        retry_progress: crate::provider::ProviderRetryProgressCallback,
-    ) -> CliResult<String> {
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
-            config,
-            address,
-            user_input,
-            error_mode,
-            runtime,
-            acp_options,
-            binding,
-            ingress,
-            observer,
-            None,
-        )
-        .await
-        .map(|outcome| outcome.reply)
     }
 
     pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager<
@@ -2300,7 +2245,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         let production_binding = require_production_kernel_binding(binding, observer.as_ref())?;
 
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
@@ -7068,8 +7013,7 @@ mod tests {
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id("observer-session");
-        let reply = ConversationTurnCoordinator::new()
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        let reply = ConversationTurnCoordinator::new().handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7131,8 +7075,7 @@ mod tests {
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id("observer-session");
-        let reply = ConversationTurnCoordinator::new()
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        let reply = ConversationTurnCoordinator::new().handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7198,8 +7141,7 @@ mod tests {
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
         let acp_options = AcpConversationTurnOptions::explicit();
         let address = ConversationSessionAddress::from_session_id("observer-session");
-        let reply = ConversationTurnCoordinator::new()
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        let reply = ConversationTurnCoordinator::new().handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7266,7 +7208,7 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("observer-session");
 
         let result = coordinator
-            .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7275,6 +7217,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
             )
             .await;
         let _error = result.expect_err("missing runtime bootstrap should fail");
@@ -8863,7 +8806,7 @@ mod tests {
                 .expect("kernel context");
 
         let reply = coordinator
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "esc",
@@ -8958,7 +8901,7 @@ mod tests {
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id("root-session");
         let result = coordinator
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "auto",
