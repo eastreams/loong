@@ -147,6 +147,30 @@ pub(crate) fn clear_context_engine_env_override() {
 }
 
 #[cfg(test)]
+struct ScopedContextEngineEnvOverride {
+    previous: Option<Option<String>>,
+}
+
+#[cfg(test)]
+impl ScopedContextEngineEnvOverride {
+    fn set(value: Option<&str>) -> Self {
+        let previous = env_override();
+        set_context_engine_env_override(value);
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScopedContextEngineEnvOverride {
+    fn drop(&mut self) {
+        let mut guard = context_engine_env_override()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = self.previous.clone();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use async_trait::async_trait;
     use serde_json::Value;
@@ -243,14 +267,35 @@ mod tests {
         let _env_lock = conversation_selector_env_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        set_context_engine_env_override(Some("registry-custom"));
+        let _scoped_env = ScopedContextEngineEnvOverride::set(Some("registry-custom"));
 
         let observed = std::thread::spawn(context_engine_id_from_env)
             .join()
             .expect("join thread");
 
-        clear_context_engine_env_override();
-
         assert_eq!(observed.as_deref(), Some("registry-custom"));
+    }
+
+    #[test]
+    fn scoped_context_engine_env_override_clears_on_panic() {
+        let _env_lock = conversation_selector_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let result = std::panic::catch_unwind(|| {
+            let _scoped_env = ScopedContextEngineEnvOverride::set(Some("registry-custom"));
+            assert_eq!(
+                context_engine_id_from_env().as_deref(),
+                Some("registry-custom")
+            );
+            panic!("boom");
+        });
+
+        assert!(result.is_err(), "panic path should be captured");
+        assert_eq!(
+            context_engine_id_from_env(),
+            None,
+            "panic cleanup should restore the previous override state"
+        );
     }
 }
