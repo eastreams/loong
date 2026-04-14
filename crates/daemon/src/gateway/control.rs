@@ -41,8 +41,8 @@ use super::read_models::{
     build_operator_summary_read_model, build_runtime_snapshot_read_model,
 };
 use super::state::{
-    GatewayControlSurfaceBinding, GatewayStopRequestOutcome, gateway_control_token_path,
-    load_gateway_owner_status, request_gateway_stop,
+    GatewayControlSurfaceBinding, GatewayPortSource, GatewayStopRequestOutcome,
+    gateway_control_token_path, load_gateway_owner_status, request_gateway_stop,
 };
 
 const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
@@ -52,6 +52,12 @@ const GATEWAY_ACP_SESSION_LIST_MAX_LIMIT: usize = 200;
 const GATEWAY_CONTROL_PORT_ENV: &str = "LOONGCLAW_GATEWAY_PORT";
 
 type GatewayControlJsonResponse = (StatusCode, Json<Value>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GatewayPortResolution {
+    port: u16,
+    source: GatewayPortSource,
+}
 
 #[derive(Debug, Default, Deserialize)]
 struct GatewayAcpSessionsQuery {
@@ -225,8 +231,9 @@ pub async fn start_gateway_control_surface(
 
     write_gateway_control_token_file(token_path.as_path(), bearer_token.as_str())?;
 
-    let listener_address =
-        resolve_gateway_control_listener_address(&loaded_config.config, port_override)?;
+    let port_resolution =
+        resolve_gateway_control_listener_port(&loaded_config.config, port_override)?;
+    let listener_address = gateway_control_listener_address_from_port_resolution(port_resolution);
     let listener_result = TcpListener::bind(listener_address).await;
     let listener = match listener_result {
         Ok(listener) => listener,
@@ -258,6 +265,7 @@ pub async fn start_gateway_control_surface(
     let binding = GatewayControlSurfaceBinding {
         bind_address,
         port,
+        port_source: port_resolution.source,
         token_path: token_path.clone(),
     };
 
@@ -790,29 +798,56 @@ fn default_gateway_control_listener_address(config: &LoongClawConfig) -> SocketA
     SocketAddrV4::new(bind_address, bind_port)
 }
 
-fn resolve_gateway_control_listener_address(
-    config: &LoongClawConfig,
-    port_override: Option<u16>,
-) -> CliResult<SocketAddrV4> {
+fn gateway_control_listener_address_from_port_resolution(
+    resolution: GatewayPortResolution,
+) -> SocketAddrV4 {
     let bind_address = Ipv4Addr::LOCALHOST;
-    let bind_port = resolve_gateway_control_listener_port(config, port_override)?;
-    let listener_address = SocketAddrV4::new(bind_address, bind_port);
-    Ok(listener_address)
+    let bind_port = resolution.port;
+    SocketAddrV4::new(bind_address, bind_port)
 }
 
 fn resolve_gateway_control_listener_port(
     config: &LoongClawConfig,
     port_override: Option<u16>,
-) -> CliResult<u16> {
-    let env_port = resolve_gateway_control_listener_port_from_env()?;
-    let resolved_port = port_override.or(env_port);
-    let Some(port_value) = resolved_port else {
-        let default_address = default_gateway_control_listener_address(config);
-        let default_port = default_address.port();
-        return Ok(default_port);
-    };
+) -> CliResult<GatewayPortResolution> {
+    if let Some(port_override) = port_override {
+        let source = if port_override == 0 {
+            GatewayPortSource::EphemeralCli
+        } else {
+            GatewayPortSource::Cli
+        };
+        let resolution = GatewayPortResolution {
+            port: port_override,
+            source,
+        };
+        return Ok(resolution);
+    }
 
-    Ok(port_value)
+    let env_port = resolve_gateway_control_listener_port_from_env()?;
+    if let Some(port) = env_port {
+        let resolution = GatewayPortResolution {
+            port,
+            source: GatewayPortSource::Env,
+        };
+        return Ok(resolution);
+    }
+
+    let configured_port = config.gateway.port;
+    if configured_port != 26_306 {
+        let resolution = GatewayPortResolution {
+            port: configured_port,
+            source: GatewayPortSource::Config,
+        };
+        return Ok(resolution);
+    }
+
+    let default_address = default_gateway_control_listener_address(config);
+    let default_port = default_address.port();
+    let resolution = GatewayPortResolution {
+        port: default_port,
+        source: GatewayPortSource::Default,
+    };
+    Ok(resolution)
 }
 
 fn resolve_gateway_control_listener_port_from_env() -> CliResult<Option<u16>> {
@@ -1063,9 +1098,10 @@ pub fn build_gateway_acp_test_router(
 #[cfg(test)]
 mod tests {
     use super::{
-        GATEWAY_CONTROL_PORT_ENV, resolve_gateway_control_listener_address,
+        GATEWAY_CONTROL_PORT_ENV, gateway_control_listener_address_from_port_resolution,
         resolve_gateway_control_listener_port,
     };
+    use crate::gateway::state::GatewayPortSource;
     use crate::mvp::config::LoongClawConfig;
     use crate::test_support::ScopedEnv;
 
@@ -1075,13 +1111,14 @@ mod tests {
         env.remove(GATEWAY_CONTROL_PORT_ENV);
 
         let config = LoongClawConfig::default();
-        let listener_address =
-            resolve_gateway_control_listener_address(&config, None).expect("address");
+        let resolution = resolve_gateway_control_listener_port(&config, None).expect("resolution");
+        let listener_address = gateway_control_listener_address_from_port_resolution(resolution);
         let actual_ip = *listener_address.ip();
         let actual_port = listener_address.port();
 
         assert_eq!(actual_ip, std::net::Ipv4Addr::LOCALHOST);
         assert_eq!(actual_port, 26_306);
+        assert_eq!(resolution.source, GatewayPortSource::Default);
     }
 
     #[test]
@@ -1090,9 +1127,11 @@ mod tests {
         env.set(GATEWAY_CONTROL_PORT_ENV, "26316");
 
         let config = LoongClawConfig::default();
-        let resolved_port = resolve_gateway_control_listener_port(&config, None).expect("port");
+        let resolution = resolve_gateway_control_listener_port(&config, None).expect("resolution");
+        let resolved_port = resolution.port;
 
         assert_eq!(resolved_port, 26_316);
+        assert_eq!(resolution.source, GatewayPortSource::Env);
     }
 
     #[test]
@@ -1103,9 +1142,11 @@ mod tests {
         let mut config = LoongClawConfig::default();
         config.gateway.port = 26_346;
 
-        let resolved_port = resolve_gateway_control_listener_port(&config, None).expect("port");
+        let resolution = resolve_gateway_control_listener_port(&config, None).expect("resolution");
+        let resolved_port = resolution.port;
 
         assert_eq!(resolved_port, 26_346);
+        assert_eq!(resolution.source, GatewayPortSource::Config);
     }
 
     #[test]
@@ -1114,10 +1155,12 @@ mod tests {
         env.set(GATEWAY_CONTROL_PORT_ENV, "26316");
 
         let config = LoongClawConfig::default();
-        let resolved_port =
-            resolve_gateway_control_listener_port(&config, Some(26_326)).expect("port");
+        let resolution =
+            resolve_gateway_control_listener_port(&config, Some(26_326)).expect("resolution");
+        let resolved_port = resolution.port;
 
         assert_eq!(resolved_port, 26_326);
+        assert_eq!(resolution.source, GatewayPortSource::Cli);
     }
 
     #[test]
@@ -1126,9 +1169,12 @@ mod tests {
         env.remove(GATEWAY_CONTROL_PORT_ENV);
 
         let config = LoongClawConfig::default();
-        let resolved_port = resolve_gateway_control_listener_port(&config, Some(0)).expect("port");
+        let resolution =
+            resolve_gateway_control_listener_port(&config, Some(0)).expect("resolution");
+        let resolved_port = resolution.port;
 
         assert_eq!(resolved_port, 0);
+        assert_eq!(resolution.source, GatewayPortSource::EphemeralCli);
     }
 
     #[test]

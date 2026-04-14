@@ -25,6 +25,7 @@ fn gateway_owner_status_fixture() -> loongclaw_daemon::gateway::state::GatewayOw
         running_surface_count: 0,
         bind_address: Some("127.0.0.1".to_owned()),
         port: Some(31337),
+        port_source: Some(loongclaw_daemon::gateway::state::GatewayPortSource::Default),
         token_path: Some("/tmp/loongclaw.token".to_owned()),
     }
 }

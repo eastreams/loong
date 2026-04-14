@@ -481,6 +481,7 @@ async fn decode_gateway_error_message(response: Response) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::gateway::state::GatewayPortSource;
     use std::{
         fs,
         path::PathBuf,
@@ -509,6 +510,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: Some("127.0.0.1".to_owned()),
             port: Some(7777),
+            port_source: Some(GatewayPortSource::Default),
             token_path: Some("/tmp/loongclaw-gateway-runtime/control-token".to_owned()),
         }
     }

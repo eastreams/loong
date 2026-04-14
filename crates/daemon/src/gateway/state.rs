@@ -60,6 +60,7 @@ pub struct GatewayOwnerStatus {
     pub running_surface_count: usize,
     pub bind_address: Option<String>,
     pub port: Option<u16>,
+    pub port_source: Option<GatewayPortSource>,
     pub token_path: Option<String>,
 }
 
@@ -67,7 +68,30 @@ pub struct GatewayOwnerStatus {
 pub struct GatewayControlSurfaceBinding {
     pub bind_address: String,
     pub port: u16,
+    pub port_source: GatewayPortSource,
     pub token_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayPortSource {
+    Default,
+    Config,
+    Env,
+    Cli,
+    EphemeralCli,
+}
+
+impl GatewayPortSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Config => "config",
+            Self::Env => "env",
+            Self::Cli => "cli",
+            Self::EphemeralCli => "ephemeral_cli",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +119,7 @@ struct PersistedGatewayOwnerState {
     running_surface_count: usize,
     bind_address: Option<String>,
     port: Option<u16>,
+    port_source: Option<GatewayPortSource>,
     token_path: Option<String>,
     owner_token: String,
 }
@@ -149,6 +174,7 @@ impl GatewayOwnerTracker {
             running_surface_count: 0,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
             owner_token: owner_token.clone(),
         };
@@ -240,6 +266,7 @@ impl GatewayOwnerTracker {
                 .map_err(|error| format!("gateway owner state lock poisoned: {error}"))?;
             state_guard.bind_address = Some(binding.bind_address.clone());
             state_guard.port = Some(binding.port);
+            state_guard.port_source = Some(binding.port_source);
             state_guard.token_path = Some(binding.token_path.display().to_string());
             state_guard.last_heartbeat_at = now_ms();
             state_guard.clone()
@@ -333,6 +360,7 @@ impl GatewayOwnerTracker {
             if !running {
                 state_guard.bind_address = None;
                 state_guard.port = None;
+                state_guard.port_source = None;
                 state_guard.token_path = None;
             }
             state_guard.clone()
@@ -448,6 +476,7 @@ pub(crate) fn write_gateway_owner_snapshot_for_test(
         running_surface_count: persisted_state.running_surface_count,
         bind_address: persisted_state.bind_address.clone(),
         port: persisted_state.port,
+        port_source: persisted_state.port_source,
         token_path: persisted_state.token_path.clone(),
         owner_token,
     };
@@ -498,6 +527,7 @@ fn build_gateway_owner_status(
         running_surface_count: persisted_state.running_surface_count,
         bind_address: persisted_state.bind_address.clone(),
         port: persisted_state.port,
+        port_source: persisted_state.port_source,
         token_path: persisted_state.token_path.clone(),
     }
 }
@@ -806,6 +836,7 @@ mod tests {
             running_surface_count: if running { 2 } else { 0 },
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         }
     }
@@ -887,6 +918,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
             owner_token: "stale-owner".to_owned(),
         };

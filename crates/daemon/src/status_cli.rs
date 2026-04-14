@@ -436,7 +436,7 @@ mod tests {
         GatewayOperatorChannelsSummaryReadModel, GatewayOperatorControlSurfaceReadModel,
         GatewayOperatorRuntimeSummaryReadModel,
     };
-    use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus};
+    use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus, GatewayPortSource};
 
     #[test]
     fn render_status_cli_text_surfaces_drill_down_recipes() {
@@ -460,6 +460,7 @@ mod tests {
                 running_surface_count: 1,
                 bind_address: Some("127.0.0.1".to_owned()),
                 port: Some(7777),
+                port_source: Some(GatewayPortSource::Default),
                 token_path: Some("/tmp/token".to_owned()),
             },
             control_surface: GatewayOperatorControlSurfaceReadModel {
@@ -559,6 +560,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         };
 
@@ -595,6 +597,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         };
 

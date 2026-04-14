@@ -368,6 +368,7 @@ async fn gateway_run_turn_persists_acp_session_metadata_into_configured_sqlite_s
         run_gateway_run_with_hooks_for_test(
             None,
             None,
+            None,
             Vec::new(),
             runtime_dir_for_run.as_path(),
             hooks,
@@ -439,6 +440,7 @@ async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
 
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),

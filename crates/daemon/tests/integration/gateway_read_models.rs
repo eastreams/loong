@@ -455,6 +455,7 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         running_surface_count: 0,
         bind_address: Some("127.0.0.1".to_owned()),
         port: Some(7777),
+        port_source: Some(gateway::state::GatewayPortSource::Default),
         token_path: Some("/tmp/loongclaw-gateway-runtime/control-token".to_owned()),
     };
 

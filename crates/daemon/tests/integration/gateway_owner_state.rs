@@ -175,6 +175,7 @@ async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request
         run_gateway_run_with_hooks_for_test(
             None,
             None,
+            None,
             Vec::new(),
             runtime_dir_for_run.as_path(),
             hooks,
@@ -242,6 +243,7 @@ async fn gateway_owner_state_uses_configured_gateway_port_when_no_override_is_pr
         run_gateway_run_with_hooks_for_test(
             None,
             None,
+            None,
             Vec::new(),
             runtime_dir_for_run.as_path(),
             hooks,
@@ -253,9 +255,13 @@ async fn gateway_owner_state_uses_configured_gateway_port_when_no_override_is_pr
     let actual_port = running_status
         .port
         .expect("control surface port should be persisted");
+    let port_source = running_status
+        .port_source
+        .expect("port source should be persisted");
 
     assert_eq!(actual_port, configured_port);
     assert_eq!(running_status.bind_address.as_deref(), Some("127.0.0.1"));
+    assert_eq!(port_source.as_str(), "config");
 
     request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
     let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
@@ -285,6 +291,7 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
         run_gateway_run_with_hooks_for_test(
             None,
             None,
+            None,
             Vec::new(),
             runtime_dir_for_run.as_path(),
             hooks,
@@ -310,6 +317,7 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
         observe_state: Arc::new(|_| Ok(())),
     };
     let second_result = run_gateway_run_with_hooks_for_test(
+        None,
         None,
         None,
         Vec::new(),
@@ -350,6 +358,7 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
         run_gateway_run_with_hooks_for_test(
             None,
             None,
+            None,
             Vec::new(),
             runtime_dir_for_run.as_path(),
             hooks,
@@ -378,6 +387,7 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
         observe_state: Arc::new(|_| Ok(())),
     };
     let second_result = run_gateway_run_with_hooks_for_test(
+        None,
         None,
         None,
         Vec::new(),
@@ -424,6 +434,7 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_multi_channel_serve_gateway_compat_with_hooks_for_test(
+            None,
             None,
             "cli-supervisor",
             Vec::new(),
@@ -478,6 +489,7 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -755,6 +767,7 @@ async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy()
         run_gateway_run_with_hooks_for_test(
             None,
             None,
+            None,
             Vec::new(),
             runtime_dir_for_run.as_path(),
             hooks,
@@ -821,6 +834,7 @@ async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stop
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -925,6 +939,7 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),

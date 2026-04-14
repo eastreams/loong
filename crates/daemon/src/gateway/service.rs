@@ -14,9 +14,9 @@ use crate::mvp::acp::AcpSessionManager;
 
 use super::control::start_gateway_control_surface;
 use super::state::{
-    GatewayOwnerMode, GatewayOwnerStatus, GatewayOwnerTracker, GatewayStopRequestOutcome,
-    default_gateway_runtime_state_dir, load_gateway_owner_status, request_gateway_stop,
-    wait_for_gateway_stop_request,
+    GatewayOwnerMode, GatewayOwnerStatus, GatewayOwnerTracker, GatewayPortSource,
+    GatewayStopRequestOutcome, default_gateway_runtime_state_dir, load_gateway_owner_status,
+    request_gateway_stop, wait_for_gateway_stop_request,
 };
 
 #[derive(Subcommand, Debug)]
@@ -197,6 +197,7 @@ async fn run_gateway_runtime_with_hooks_for_test(
 #[doc(hidden)]
 pub async fn run_gateway_run_with_hooks_for_test(
     config_path: Option<&str>,
+    port: Option<u16>,
     session: Option<&str>,
     channel_accounts: Vec<MultiChannelServeChannelAccount>,
     runtime_dir: &Path,
@@ -204,7 +205,7 @@ pub async fn run_gateway_run_with_hooks_for_test(
 ) -> CliResult<crate::supervisor::SupervisorState> {
     run_gateway_runtime_with_hooks_for_test(
         config_path,
-        None,
+        port,
         session,
         channel_accounts,
         runtime_dir,
@@ -217,6 +218,7 @@ pub async fn run_gateway_run_with_hooks_for_test(
 #[doc(hidden)]
 pub async fn run_multi_channel_serve_gateway_compat_with_hooks_for_test(
     config_path: Option<&str>,
+    port: Option<u16>,
     session: &str,
     channel_accounts: Vec<MultiChannelServeChannelAccount>,
     runtime_dir: &Path,
@@ -224,7 +226,7 @@ pub async fn run_multi_channel_serve_gateway_compat_with_hooks_for_test(
 ) -> CliResult<crate::supervisor::SupervisorState> {
     run_gateway_runtime_with_hooks_for_test(
         config_path,
-        None,
+        port,
         Some(session),
         channel_accounts,
         runtime_dir,
@@ -338,6 +340,7 @@ pub(crate) fn default_gateway_owner_status(runtime_dir: &Path) -> GatewayOwnerSt
         running_surface_count: 0,
         bind_address: None,
         port: None,
+        port_source: None,
         token_path: None,
     }
 }
@@ -382,10 +385,14 @@ fn render_gateway_status_text(status: &GatewayOwnerStatus) -> String {
         .port
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_owned());
+    let port_source = status
+        .port_source
+        .map(GatewayPortSource::as_str)
+        .unwrap_or("-");
     let token_path = status.token_path.as_deref().unwrap_or("-");
 
     format!(
-        "runtime_dir={}\nphase={} running={} stale={} pid={} mode={} config={} session={} version={}\nstarted_at_ms={} last_heartbeat_at_ms={} stopped_at_ms={}\nsurfaces configured={} running={}\nshutdown_reason={}\nlast_error={}\nbind_address={} port={} token_path={}",
+        "runtime_dir={}\nphase={} running={} stale={} pid={} mode={} config={} session={} version={}\nstarted_at_ms={} last_heartbeat_at_ms={} stopped_at_ms={}\nsurfaces configured={} running={}\nshutdown_reason={}\nlast_error={}\nbind_address={} port={} port_source={} token_path={}",
         status.runtime_dir,
         status.phase,
         status.running,
@@ -404,6 +411,7 @@ fn render_gateway_status_text(status: &GatewayOwnerStatus) -> String {
         last_error,
         bind_address,
         port,
+        port_source,
         token_path,
     )
 }
@@ -486,5 +494,36 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(runtime_dir.as_path());
+    }
+
+    #[test]
+    fn render_gateway_status_text_surfaces_port_source() {
+        let status = GatewayOwnerStatus {
+            runtime_dir: "/tmp/runtime".to_owned(),
+            phase: "running".to_owned(),
+            running: true,
+            stale: false,
+            pid: Some(42),
+            mode: GatewayOwnerMode::GatewayHeadless,
+            version: "0.0.0-test".to_owned(),
+            config_path: "/tmp/config.toml".to_owned(),
+            attached_cli_session: None,
+            started_at_ms: 1,
+            last_heartbeat_at: 2,
+            stopped_at_ms: None,
+            shutdown_reason: None,
+            last_error: None,
+            configured_surface_count: 0,
+            running_surface_count: 0,
+            bind_address: Some("127.0.0.1".to_owned()),
+            port: Some(26_306),
+            port_source: Some(GatewayPortSource::Default),
+            token_path: Some("/tmp/token".to_owned()),
+        };
+
+        let rendered = render_gateway_status_text(&status);
+
+        assert!(rendered.contains("port=26306"));
+        assert!(rendered.contains("port_source=default"));
     }
 }

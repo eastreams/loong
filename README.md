@@ -630,8 +630,8 @@ The current gateway slice now includes:
 concurrent CLI host attached to the same runtime owner.
 
 When `gateway run` is active, it also binds a loopback-only control endpoint on
-`127.0.0.1:26306` by default and writes the actual `bind_address`, `port`, and
-`token_path` into `loongclaw gateway status --json`. Use `--port` or
+`127.0.0.1:26306` by default and writes the actual `bind_address`, `port`,
+`port_source`, and `token_path` into `loongclaw gateway status --json`. Use `--port` or
 `LOONGCLAW_GATEWAY_PORT` when you need a different localhost port; use
 `--port 0` only when you explicitly want an OS-assigned ephemeral port for
 isolated test or lab runs. Local clients such as the future Web UI can
