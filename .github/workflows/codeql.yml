@@ -13,11 +13,49 @@ on:
       - main
       - release
       - 'release/**'
+  merge_group:
+    types:
+      - checks_requested
   schedule:
     - cron: "0 5 * * 1"
 
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run_analysis: ${{ steps.classify.outputs.run_analysis }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Classify CodeQL-relevant changes
+        id: classify
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/workflow_change_router.mjs`;
+            const moduleUrl = `file://${modulePath}`;
+            const routerModule = await import(moduleUrl);
+            const runtime = { core, github, context };
+            const changedFileContext = await routerModule.collectChangedFileContext(runtime, {
+              workflowLabel: "CodeQL",
+              forceRunEvents: ["schedule", "merge_group"],
+            });
+            const routeOutputs = routerModule.classifyCodeqlJobSet(changedFileContext);
+            const touchedPathSummary = routerModule.describeTouchedPaths(routeOutputs);
+            core.info(`CodeQL changed paths: ${touchedPathSummary || "<full-validation>"}`);
+            routerModule.writeRouteOutputs(core, routeOutputs);
+
   analyze:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_analysis == 'true' }}
     permissions:
       actions: read
       contents: read

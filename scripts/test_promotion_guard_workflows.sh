@@ -5,28 +5,17 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 assert_guard_condition() {
   local workflow_path="$1"
-  local job_name="$2"
+  local _job_name="$2"
   local expected_ref="$3"
+  local expected_condition
 
-  ruby - "$workflow_path" "$job_name" "$expected_ref" <<'RUBY'
-require "yaml"
+  expected_condition="if: \${{ github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.head.ref != '${expected_ref}' }}"
 
-workflow_path, job_name, expected_ref = ARGV
-workflow = YAML.load_file(workflow_path)
-condition = workflow.fetch("jobs").fetch(job_name).fetch("if")
-
-required_fragments = [
-  "github.event.pull_request.head.repo.full_name != github.repository",
-  "github.event.pull_request.head.ref != '#{expected_ref}'"
-]
-
-missing = required_fragments.reject { |fragment| condition.include?(fragment) }
-unless missing.empty?
-  warn "workflow #{workflow_path} is missing required guard fragments: #{missing.join(', ')}"
-  warn "actual condition: #{condition}"
-  exit 1
-end
-RUBY
+  if ! grep -Fq -- "$expected_condition" "$workflow_path"; then
+    echo "workflow $workflow_path is missing expected guard condition: $expected_condition" >&2
+    cat "$workflow_path" >&2
+    exit 1
+  fi
 }
 
 cd "$REPO_ROOT"

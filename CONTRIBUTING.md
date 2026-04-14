@@ -150,6 +150,11 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 
 - `CI`, `CodeQL`, and `Security` run for pull requests and pushes targeting `dev`, `main`,
   `release`, and `release/*`.
+- Those required workflows also trigger on `merge_group` so merge-queue validation can report the
+  same stable checks as ordinary pull requests.
+- Inside those workflows, expensive jobs may skip themselves when the changed paths are unrelated.
+  This keeps required checks reportable without relying on workflow-level path filters that can
+  leave required statuses pending.
 - `perf-lint` follows the same branch set but only when workflow, benchmark, daemon, spec, kernel,
   or app paths change.
 - The aggregate required check for promotion branches is `build`, emitted by

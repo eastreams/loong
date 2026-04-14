@@ -10,6 +10,10 @@ on:
         description: "Tag to release (required for manual runs, for example v0.1.0 or v0.1.0-alpha.1)"
         required: true
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   BIN_NAME: loong
   LEGACY_BIN_NAME: loongclaw
@@ -54,6 +58,21 @@ jobs:
 
       - name: Test (all features)
         run: cargo test --workspace --all-features --locked
+
+      - name: Bootstrap local release artifacts
+        run: scripts/bootstrap_release_local_artifacts.sh
+
+      - name: Strict docs governance
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+          grep -F "## [${RELEASE_TAG#v}]" CHANGELOG.md > /dev/null
+          release_doc="docs/releases/${RELEASE_TAG}.md"
+          test -f "$release_doc"
+          grep -Fx "# Release ${RELEASE_TAG}" "$release_doc"
 
       - name: Docs build
         run: cargo doc --workspace --no-deps
