@@ -5186,14 +5186,16 @@ async fn handle_turn_with_observer_routes_explicit_acp_turns_through_acp() {
         ..AcpConversationTurnOptions::default()
     };
     let reply = coordinator
-        .handle_turn_with_address_and_acp_options_and_observer(
+        .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
             &config,
             &address,
             "hello from channel",
             ProviderErrorMode::Propagate,
             &acp_options,
             ConversationRuntimeBinding::direct(),
+            None,
             Some(observer_handle),
+            None,
         )
         .await
         .expect("explicit ACP turn with observer should route through ACP");
@@ -5950,12 +5952,13 @@ async fn handle_turn_with_runtime_and_address_routes_structured_channel_scope_in
         .with_channel_scope("telegram", "100");
 
     let reply = coordinator
-        .handle_turn_with_runtime_and_address(
+        .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
             &address,
             "hello structured route",
             ProviderErrorMode::Propagate,
             &runtime,
+            &AcpConversationTurnOptions::automatic(),
             ConversationRuntimeBinding::direct(),
         )
         .await
@@ -6028,12 +6031,13 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
         .with_account_id("lark-prod");
 
     let allowed_reply = coordinator
-        .handle_turn_with_runtime_and_address(
+        .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
             &allowed,
             "hello allowed",
             ProviderErrorMode::Propagate,
             &runtime,
+            &AcpConversationTurnOptions::automatic(),
             ConversationRuntimeBinding::direct(),
         )
         .await
@@ -6041,12 +6045,13 @@ async fn handle_turn_with_runtime_and_address_enforces_account_and_thread_dispat
     assert_eq!(allowed_reply, "acp: hello allowed");
 
     let blocked_reply = coordinator
-        .handle_turn_with_runtime_and_address(
+        .handle_turn_with_runtime_and_address_and_acp_options(
             &config,
             &blocked,
             "hello blocked",
             ProviderErrorMode::Propagate,
             &runtime,
+            &AcpConversationTurnOptions::automatic(),
             ConversationRuntimeBinding::direct(),
         )
         .await
