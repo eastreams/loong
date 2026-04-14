@@ -1273,40 +1273,20 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
         let address = ConversationSessionAddress::from_session_id(session_id);
-        self.handle_turn_with_address_and_acp_options_and_ingress(
-            config,
-            &address,
-            user_input,
-            error_mode,
-            acp_options,
-            binding,
-            ingress,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
         let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
         let runtime = prepared.0;
         let effective_binding = prepared.1;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
-            address,
+            &address,
             user_input,
             error_mode,
             &runtime,
             acp_options,
             effective_binding,
             ingress,
+            None,
+            None,
         )
         .await
     }
@@ -1577,7 +1557,7 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
         let address = ConversationSessionAddress::from_session_id(session_id);
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             &address,
             user_input,
@@ -1586,6 +1566,8 @@ impl ConversationTurnCoordinator {
             acp_options,
             binding,
             ingress,
+            None,
+            None,
         )
         .await
     }
@@ -1602,32 +1584,6 @@ impl ConversationTurnCoordinator {
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            address,
-            user_input,
-            error_mode,
-            runtime,
-            acp_options,
-            binding,
-            None,
-        )
-        .await
-    }
-
-    async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
@@ -1636,7 +1592,7 @@ impl ConversationTurnCoordinator {
             runtime,
             acp_options,
             binding,
-            ingress,
+            None,
             None,
             None,
         )
