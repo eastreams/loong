@@ -93,6 +93,11 @@ async fn wait_for_delegate_announce_event(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn delegate_announce_test_lock() -> &'static tokio::sync::Mutex<()> {
+    super::announce::delegate_announce_test_lock_for_tests()
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn make_delegate_announce_test_config(db_path: &std::path::Path) -> LoongClawConfig {
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
@@ -20734,6 +20739,8 @@ async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher() {
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-tools-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-tools", "normal-lane")
@@ -20804,6 +20811,8 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
 #[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher() {
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-sessions-send-normal-home");
     let (base_url, request_rx, server) = spawn_telegram_send_server_once();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -20926,6 +20935,7 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate-approval", "normal-lane")
@@ -21042,6 +21052,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "normal-lane")
@@ -21198,6 +21209,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "kernel-lifecycle")
@@ -21324,6 +21336,7 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_spawn_fails() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "prepare-failure")
@@ -21404,6 +21417,7 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_completion() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "end-hook-failure")
@@ -24311,6 +24325,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_terminal_event_to_pare
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_after_queueing() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate-async", "spawn-failed")
@@ -25453,6 +25468,8 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher() {
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-wait-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-wait", "normal-lane")
@@ -25543,6 +25560,8 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
     let _env_lock = context_engine_env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-tools-safe-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-tools", "safe-lane")
@@ -25618,6 +25637,8 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
     let _env_lock = context_engine_env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-sessions-send-safe-home");
     let (base_url, request_rx, server) = spawn_telegram_send_server_once();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -25723,6 +25744,8 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
     let _env_lock = context_engine_env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-wait-safe-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-wait", "safe-lane")

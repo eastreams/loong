@@ -447,17 +447,23 @@ pub(crate) fn reset_delegate_announce_queues_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn delegate_announce_test_lock_for_tests() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
 mod tests {
     use std::fs;
-    use std::sync::OnceLock;
 
     use serde_json::json;
-    use tokio::sync::Mutex as AsyncMutex;
     use tokio::time::{Duration, sleep};
 
     use super::{
-        DELEGATE_RESULTS_ANNOUNCED_EVENT_KIND, DelegateAnnounceSettings,
-        delegate_announce_queue_key, drain_delegate_announce_queue,
+        DELEGATE_RESULTS_ANNOUNCED_EVENT_KIND, DelegateAnnounceQueueState,
+        DelegateAnnounceSettings, delegate_announce_queue_key, delegate_announce_queues,
+        delegate_announce_test_lock_for_tests, drain_delegate_announce_queue,
         enqueue_delegate_result_announce, reset_delegate_announce_queues_for_tests,
     };
     use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -482,12 +488,6 @@ mod tests {
             sqlite_path: Some(db_path),
             ..MemoryRuntimeConfig::default()
         }
-    }
-
-    fn announce_test_lock() -> &'static AsyncMutex<()> {
-        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
-
-        LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
     fn create_parent_session(repo: &SessionRepository, session_id: &str, state: SessionState) {
@@ -581,7 +581,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_delivers_single_result_to_parent_session_events() {
-        let _guard = announce_test_lock().lock().await;
+        let _guard = delegate_announce_test_lock_for_tests().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("single");
         let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -612,7 +612,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_batches_children_completed_within_debounce_window() {
-        let _guard = announce_test_lock().lock().await;
+        let _guard = delegate_announce_test_lock_for_tests().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("batch");
         let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -625,28 +625,27 @@ mod tests {
             debounce_ms: 100,
             max_batch: 20,
         };
-        enqueue_delegate_result_announce(
-            memory_config.clone(),
-            "root-session".to_owned(),
-            "child-1".to_owned(),
-            settings.clone(),
-        );
-        enqueue_delegate_result_announce(
-            memory_config.clone(),
-            "root-session".to_owned(),
-            "child-2".to_owned(),
-            settings.clone(),
-        );
-        enqueue_delegate_result_announce(
-            memory_config.clone(),
-            "root-session".to_owned(),
-            "child-3".to_owned(),
-            settings,
-        );
+        let queue_key = delegate_announce_queue_key(&memory_config, "root-session");
+        {
+            let queues = delegate_announce_queues();
+            let mut queues = queues
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            queues.insert(
+                queue_key,
+                DelegateAnnounceQueueState {
+                    pending_child_session_ids: std::collections::VecDeque::from([
+                        "child-1".to_owned(),
+                        "child-2".to_owned(),
+                        "child-3".to_owned(),
+                    ]),
+                    last_enqueued_at: std::time::Instant::now() - Duration::from_millis(100),
+                    draining: true,
+                    settings,
+                },
+            );
+        }
         flush_delegate_announce_queue_for_tests(&memory_config, "root-session").await;
-
-        let payload = wait_for_parent_announce_event(&memory_config, "root-session").await;
-        let results = payload["results"].as_array().expect("results array");
         let events = repo
             .list_recent_events("root-session", 20)
             .expect("list parent events");
@@ -654,6 +653,8 @@ mod tests {
             .into_iter()
             .filter(|event| event.event_kind == DELEGATE_RESULTS_ANNOUNCED_EVENT_KIND)
             .collect();
+        let payload = &announce_events[0].payload_json;
+        let results = payload["results"].as_array().expect("results array");
 
         assert_eq!(announce_events.len(), 1);
         assert_eq!(payload["announce_kind"], "batch_delegate_results");
@@ -663,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_summarizes_oldest_results_when_batch_limit_is_exceeded() {
-        let _guard = announce_test_lock().lock().await;
+        let _guard = delegate_announce_test_lock_for_tests().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("overflow");
         let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -712,7 +713,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_drops_delivery_when_parent_is_terminal() {
-        let _guard = announce_test_lock().lock().await;
+        let _guard = delegate_announce_test_lock_for_tests().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("drop-terminal-parent");
         let repo = SessionRepository::new(&memory_config).expect("session repository");

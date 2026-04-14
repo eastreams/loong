@@ -67,6 +67,9 @@ impl ScopedEnv {
         if self.originals.iter().any(|(saved, _)| *saved == key) {
             return;
         }
+        if default_loongclaw_home_env_override_key(key) {
+            crate::config::push_default_loongclaw_home_env_override_for_tests();
+        }
         self.originals.push((key, std::env::var_os(key)));
     }
 }
@@ -79,6 +82,9 @@ impl Drop for ScopedEnv {
                 Some(value) => crate::process_env::set_var(key, value),
                 None => crate::process_env::remove_var(key),
             }
+            if default_loongclaw_home_env_override_key(key) {
+                crate::config::pop_default_loongclaw_home_env_override_for_tests();
+            }
         }
 
         let depth_before = scoped_env_depth();
@@ -89,6 +95,13 @@ impl Drop for ScopedEnv {
             self.guard.take();
         }
     }
+}
+
+fn default_loongclaw_home_env_override_key(key: &str) -> bool {
+    matches!(
+        key,
+        "HOME" | "USERPROFILE" | "LOONG_HOME" | "LOONGCLAW_HOME"
+    )
 }
 
 thread_local! {
