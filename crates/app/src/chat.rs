@@ -264,7 +264,11 @@ pub(crate) struct CliTurnRuntime {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CliSessionRequirement {
+    /// Interactive entrypoints may fall back to the implicit default session
+    /// (and, with sqlite memory enabled, resolve the `latest` selector).
     AllowImplicitDefault,
+    /// Embedded or multiplexed hosts must provide a session id explicitly so
+    /// they never attach to the wrong transcript by accident.
     RequireExplicit,
 }
 
@@ -475,6 +479,12 @@ fn ensure_cli_channel_enabled_for_entrypoint(config_path: Option<&str>) -> CliRe
     reject_disabled_cli_channel(&config)
 }
 
+/// Assemble a CLI turn runtime starting from a config path on disk.
+///
+/// This is the highest-level bootstrap used by `chat`/`ask`: it loads the
+/// config, permits implicit default-session resolution, exports runtime
+/// environment variables, bootstraps a fresh kernel context, and delegates the
+/// final session/memory assembly to the lower-level helpers below.
 pub(crate) fn initialize_cli_turn_runtime(
     config_path: Option<&str>,
     session_hint: Option<&str>,
@@ -493,6 +503,17 @@ pub(crate) fn initialize_cli_turn_runtime(
     )
 }
 
+/// Assemble a CLI turn runtime when the caller already owns a resolved config.
+///
+/// Compared with `initialize_cli_turn_runtime`, this skips config loading but
+/// still normalizes the runtime workspace root, optionally exports runtime
+/// environment variables, bootstraps a fresh kernel context, and then delegates
+/// the final session/memory assembly to
+/// `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx`.
+///
+/// Use the `_and_kernel_ctx` variant when the caller must reuse an existing
+/// kernel authority—such as channel-triggered turns—rather than minting a new
+/// token for the same logical operation.
 pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     resolved_path: PathBuf,
     config: LoongClawConfig,
@@ -503,6 +524,9 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     initialize_runtime_environment: bool,
 ) -> CliResult<CliTurnRuntime> {
     let mut config = config;
+    // Interactive chat surfaces should anchor tool-relative filesystem access
+    // to the launch directory when possible, rather than forcing every turn to
+    // inherit the static configured file root.
     let runtime_workspace_root = std::env::current_dir()
         .ok()
         .unwrap_or_else(|| config.tools.resolved_file_root());
@@ -526,6 +550,14 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     )
 }
 
+/// Final assembly step for CLI/chat turn state once config and kernel authority
+/// are already available.
+///
+/// This helper resolves ACP defaults, prepares memory/sqlite state, derives the
+/// effective session id/address, and constructs the `CliTurnRuntime`. It
+/// deliberately does not mutate process environment variables or bootstrap a
+/// new kernel context; callers use it when those concerns were already handled
+/// by an outer runtime surface.
 pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     resolved_path: PathBuf,
     config: LoongClawConfig,

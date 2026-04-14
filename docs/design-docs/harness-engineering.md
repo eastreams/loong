@@ -117,12 +117,13 @@ Progressive disclosure hierarchy:
 |------|-------|---------|
 | Hot | `AGENTS.md` / `CLAUDE.md` | Auto-loaded every session |
 | Specialized | Design docs, domain indices | Loaded when working on that domain |
-| Cold | Roadmap, reliability, product specs, plans | Accessed on demand |
+| Cold | Roadmap, reliability, and knowledge-base specs/plans | Accessed on demand |
 
 ---
 
 ## References
 
+- [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md)
 - [OpenAI: Harness Engineering](https://openai.com/index/harness-engineering/) (February 2026)
 - [Martin Fowler: Harness Engineering](https://martinfowler.com/articles/exploring-gen-ai/harness-engineering.html)
 - [Layered Kernel Design](layered-kernel-design.md)
