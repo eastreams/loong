@@ -4,8 +4,11 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use console::{Key, Term};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::task::JoinHandle;
 
 use super::cli_input::ConcurrentCliInputReader;
 use super::*;
@@ -82,7 +85,7 @@ pub(super) fn run_concurrent_cli_host_surface(options: &ConcurrentCliHostOptions
 }
 
 struct ChatSessionSurface {
-    runtime: CliTurnRuntime,
+    runtime: Arc<CliTurnRuntime>,
     options: CliChatOptions,
     term: Term,
     state: Arc<Mutex<SurfaceState>>,
@@ -113,6 +116,7 @@ struct SurfaceState {
     live: LiveSurfaceModel,
     footer_notice: String,
     pending_turn: bool,
+    queued_turn: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -331,8 +335,74 @@ fn fallback_live_surface_snapshot() -> CliChatLiveSurfaceSnapshot {
     }
 }
 
+fn apply_staged_submission(state: &mut SurfaceState, text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    state.queued_turn = Some(trimmed.to_owned());
+    state.composer.clear();
+    state.composer_cursor = 0;
+    state.history_index = None;
+    state.focus = SurfaceFocus::Composer;
+    true
+}
+
+fn resolve_queued_submission_after_completion(state: &mut SurfaceState) -> Option<String> {
+    if matches!(state.overlay, Some(SurfaceOverlay::ApprovalPrompt { .. })) {
+        let queued_turn = state.queued_turn.take();
+        if let Some(queued_turn) = queued_turn {
+            state.composer = queued_turn;
+            state.composer_cursor = state.composer.chars().count();
+            state.focus = SurfaceFocus::Composer;
+        }
+        return None;
+    }
+
+    state.queued_turn.take()
+}
+
+fn composer_hint_text(state: &SurfaceState) -> &'static str {
+    if state.command_palette.is_some() {
+        return "╰─ command palette active · type filter · ↑↓ choose · Enter run · Esc close";
+    }
+    if state.pending_turn && state.queued_turn.is_some() && state.composer.is_empty() {
+        return "╰─ current turn running · queued next turn ready · Esc drop queue";
+    }
+    if state.pending_turn && state.queued_turn.is_some() {
+        return "╰─ current turn running · Enter replace queued turn · Esc clear draft";
+    }
+    if state.pending_turn {
+        return "╰─ current turn running · Enter queue next turn · Esc clear draft";
+    }
+    if state.composer.starts_with('/') {
+        return "╰─ slash mode · Enter send command · : open command palette";
+    }
+    if should_continue_multiline(&state.composer) {
+        return "╰─ multiline compose · trailing \\ inserts newline on Enter";
+    }
+
+    "╰─ Enter send · : command palette · /help for commands"
+}
+
+fn should_clear_queued_turn_on_escape(state: &SurfaceState) -> bool {
+    let has_no_overlay = state.overlay.is_none();
+    let has_no_palette = state.command_palette.is_none();
+    let has_empty_composer = state.composer.is_empty();
+    state.pending_turn
+        && state.queued_turn.is_some()
+        && has_no_overlay
+        && has_no_palette
+        && has_empty_composer
+}
+
 struct SurfaceGuard {
     term: Term,
+}
+
+enum InteractiveInputEvent {
+    Key(Key),
+    Error(String),
 }
 
 impl SurfaceGuard {
@@ -353,6 +423,34 @@ impl Drop for SurfaceGuard {
         let _ = self.term.write_str(ALT_SCREEN_EXIT);
         let _ = self.term.flush();
     }
+}
+
+fn spawn_surface_key_reader(term: Term) -> CliResult<UnboundedReceiver<InteractiveInputEvent>> {
+    let (sender, receiver) = unbounded_channel();
+    thread::Builder::new()
+        .name("loongclaw-chat-surface-key-reader".to_owned())
+        .spawn(move || {
+            loop {
+                let key_result = term.read_key();
+                let read_failed = key_result.is_err();
+                let event = match key_result {
+                    Ok(key) => InteractiveInputEvent::Key(key),
+                    Err(error) => {
+                        let message = format!("failed to read terminal key: {error}");
+                        InteractiveInputEvent::Error(message)
+                    }
+                };
+                let send_result = sender.send(event);
+                if send_result.is_err() {
+                    break;
+                }
+                if read_failed {
+                    break;
+                }
+            }
+        })
+        .map_err(|error| format!("failed to start terminal key reader: {error}"))?;
+    Ok(receiver)
 }
 
 impl ChatSessionSurface {
@@ -381,6 +479,7 @@ impl ChatSessionSurface {
                 "Esc clear · ↑↓ history/scroll · PgUp/PgDn transcript · Tab focus · : commands"
                     .to_owned(),
             pending_turn: false,
+            queued_turn: None,
         };
         let render_width = detect_cli_chat_render_width();
         state.transcript.push(SurfaceEntry {
@@ -390,7 +489,7 @@ impl ChatSessionSurface {
             ),
         });
         Ok(Self {
-            runtime,
+            runtime: Arc::new(runtime),
             options,
             term,
             state: Arc::new(Mutex::new(state)),
@@ -413,29 +512,50 @@ impl ChatSessionSurface {
     }
 
     async fn run_interactive_loop(&self) -> CliResult<()> {
+        let mut key_receiver = spawn_surface_key_reader(self.term.clone())?;
+        let mut pending_turn_task: Option<JoinHandle<CliResult<String>>> = None;
+
         loop {
-            let key = self
-                .term
-                .read_key()
-                .map_err(|error| format!("failed to read terminal key: {error}"))?;
-            let action = self.handle_key(key)?;
-            match action {
-                SurfaceLoopAction::Continue => {}
-                SurfaceLoopAction::Submit => {
-                    let composer = self.lock_state().composer.clone();
-                    let action = self.submit_text(composer.as_str()).await?;
-                    if matches!(action, SurfaceLoopAction::Exit) {
-                        break;
+            let has_pending_turn = pending_turn_task.is_some();
+            let next_turn_result = async {
+                match pending_turn_task.as_mut() {
+                    Some(task) => Some(task.await),
+                    None => None,
+                }
+            };
+            tokio::select! {
+                maybe_result = next_turn_result, if has_pending_turn => {
+                    let join_result = maybe_result
+                        .ok_or_else(|| "chat surface pending turn future disappeared".to_owned())?;
+                    pending_turn_task = None;
+                    let assistant_text = join_result
+                        .map_err(|error| format!("chat surface turn task failed: {error}"))??;
+                    let next_submission = self.complete_pending_turn(assistant_text)?;
+                    if let Some(next_submission) = next_submission {
+                        pending_turn_task = Some(self.spawn_pending_turn_task(next_submission));
                     }
                 }
-                SurfaceLoopAction::RunCommand(command) => {
-                    let action = self.submit_text(command.as_str()).await?;
-                    if matches!(action, SurfaceLoopAction::Exit) {
-                        break;
+                maybe_event = key_receiver.recv() => {
+                    let event =
+                        maybe_event.ok_or_else(|| "terminal key reader stopped unexpectedly".to_owned())?;
+                    match event {
+                        InteractiveInputEvent::Key(key) => {
+                            let action = self.handle_key(key)?;
+                            let should_exit = self
+                                .dispatch_surface_action(action, &mut pending_turn_task)
+                                .await?;
+                            if should_exit {
+                                break;
+                            }
+                        }
+                        InteractiveInputEvent::Error(error) => return Err(error),
                     }
                 }
-                SurfaceLoopAction::Exit => break,
             }
+        }
+
+        if let Some(task) = pending_turn_task {
+            let _ = task.await;
         }
         Ok(())
     }
@@ -468,6 +588,180 @@ impl ChatSessionSurface {
         Ok(())
     }
 
+    async fn dispatch_surface_action(
+        &self,
+        action: SurfaceLoopAction,
+        pending_turn_task: &mut Option<JoinHandle<CliResult<String>>>,
+    ) -> CliResult<bool> {
+        match action {
+            SurfaceLoopAction::Continue => Ok(false),
+            SurfaceLoopAction::Submit => {
+                let composer = self.lock_state().composer.clone();
+                self.handle_submission_request(composer.as_str(), pending_turn_task)
+                    .await
+            }
+            SurfaceLoopAction::RunCommand(command) => {
+                self.handle_submission_request(command.as_str(), pending_turn_task)
+                    .await
+            }
+            SurfaceLoopAction::Exit => Ok(true),
+        }
+    }
+
+    async fn handle_submission_request(
+        &self,
+        text: &str,
+        pending_turn_task: &mut Option<JoinHandle<CliResult<String>>>,
+    ) -> CliResult<bool> {
+        let submission = self.classify_submission(text).await?;
+        match submission {
+            SurfaceSubmit::Ignore => Ok(false),
+            SurfaceSubmit::Exit => Ok(true),
+            SurfaceSubmit::Stage(text) => {
+                self.stage_submission(text.as_str())?;
+                Ok(false)
+            }
+            SurfaceSubmit::Start(text) => {
+                let task = self.spawn_pending_turn_task(text);
+                *pending_turn_task = Some(task);
+                Ok(false)
+            }
+        }
+    }
+
+    async fn classify_submission(&self, text: &str) -> CliResult<SurfaceSubmit> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(SurfaceSubmit::Ignore);
+        }
+
+        if is_exit_command(&self.runtime.config, trimmed) {
+            return Ok(SurfaceSubmit::Exit);
+        }
+
+        if trimmed.starts_with('/') {
+            {
+                let mut state = self.lock_state();
+                state.composer.clear();
+                state.composer_cursor = 0;
+                state.history_index = None;
+                state.focus = SurfaceFocus::Composer;
+            }
+            self.handle_command(trimmed).await?;
+            self.render()?;
+            return Ok(SurfaceSubmit::Ignore);
+        }
+
+        let turn_in_flight = self.lock_state().pending_turn;
+        if turn_in_flight {
+            return Ok(SurfaceSubmit::Stage(trimmed.to_owned()));
+        }
+
+        self.begin_pending_turn(trimmed.to_owned())?;
+        Ok(SurfaceSubmit::Start(trimmed.to_owned()))
+    }
+
+    fn stage_submission(&self, text: &str) -> CliResult<()> {
+        let mut state = self.lock_state();
+        let staged = apply_staged_submission(&mut state, text);
+        if !staged {
+            return Ok(());
+        }
+        drop(state);
+        self.render()
+    }
+
+    fn begin_pending_turn(&self, text: String) -> CliResult<()> {
+        let mut state = self.lock_state();
+        state.transcript.push(SurfaceEntry {
+            lines: render_cli_chat_message_spec_with_width(
+                &TuiMessageSpec {
+                    role: "you".to_owned(),
+                    caption: Some("prompt".to_owned()),
+                    sections: vec![TuiSectionSpec::Narrative {
+                        title: None,
+                        lines: vec![text.clone()],
+                    }],
+                    footer_lines: vec!["Enter send · Esc clear · Tab sidebar".to_owned()],
+                },
+                self.content_width(),
+            ),
+        });
+        state.history.push(text);
+        state.composer.clear();
+        state.composer_cursor = 0;
+        state.history_index = None;
+        state.pending_turn = true;
+        state.scroll_offset = 0;
+        state.sticky_bottom = true;
+        state.selected_entry = Some(state.transcript.len().saturating_sub(1));
+        state.focus = SurfaceFocus::Transcript;
+        drop(state);
+        self.render()
+    }
+
+    fn spawn_pending_turn_task(&self, text: String) -> JoinHandle<CliResult<String>> {
+        let runtime = self.runtime.clone();
+        let observer = build_surface_live_observer(self.state.clone(), self.term.clone());
+        tokio::spawn(async move {
+            let assistant_text = crate::agent_runtime::AgentRuntime::new()
+                .run_turn_with_runtime_and_observer(
+                    &runtime,
+                    &crate::agent_runtime::AgentTurnRequest {
+                        message: text,
+                        turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+                        channel_id: runtime.session_address.channel_id.clone(),
+                        account_id: runtime.session_address.account_id.clone(),
+                        conversation_id: runtime.session_address.conversation_id.clone(),
+                        thread_id: runtime.session_address.thread_id.clone(),
+                        metadata: std::collections::BTreeMap::new(),
+                        acp: runtime.explicit_acp_request,
+                        acp_event_stream: false,
+                        acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
+                        acp_cwd: runtime
+                            .effective_working_directory
+                            .as_ref()
+                            .map(|path| path.display().to_string()),
+                        live_surface_enabled: true,
+                    },
+                    None,
+                    Some(observer),
+                )
+                .await?
+                .output_text;
+            Ok(assistant_text)
+        })
+    }
+
+    fn complete_pending_turn(&self, assistant_text: String) -> CliResult<Option<String>> {
+        let mut state = self.lock_state();
+        state.transcript.push(SurfaceEntry {
+            lines: render_cli_chat_assistant_lines_with_width(
+                &assistant_text,
+                self.content_width(),
+            ),
+        });
+        if let Some(screen) = build_cli_chat_approval_screen_spec(&assistant_text) {
+            state.overlay = Some(SurfaceOverlay::ApprovalPrompt { screen });
+        }
+        state.pending_turn = false;
+        state.live.last_assistant_preview = Some(assistant_text);
+        state.live.snapshot = None;
+        state.live.state = CliChatLiveSurfaceState::default();
+        state.selected_entry = Some(state.transcript.len().saturating_sub(1));
+        state.sticky_bottom = true;
+
+        let next_submission = resolve_queued_submission_after_completion(&mut state);
+
+        drop(state);
+        self.render()?;
+        if let Some(next_submission) = next_submission {
+            self.begin_pending_turn(next_submission.clone())?;
+            return Ok(Some(next_submission));
+        }
+        Ok(None)
+    }
+
     #[allow(clippy::wildcard_enum_match_arm)]
     fn handle_key(&self, key: Key) -> CliResult<SurfaceLoopAction> {
         match key {
@@ -494,6 +788,13 @@ impl ChatSessionSurface {
                     state.command_palette = None;
                     state.focus = SurfaceFocus::Composer;
                     state.composer.clear();
+                    drop(state);
+                    self.render()?;
+                    return Ok(SurfaceLoopAction::Continue);
+                }
+                if should_clear_queued_turn_on_escape(&state) {
+                    state.queued_turn = None;
+                    state.focus = SurfaceFocus::Composer;
                     drop(state);
                     self.render()?;
                     return Ok(SurfaceLoopAction::Continue);
@@ -1017,104 +1318,30 @@ impl ChatSessionSurface {
     }
 
     async fn submit_text(&self, text: &str) -> CliResult<SurfaceLoopAction> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Ok(SurfaceLoopAction::Continue);
-        }
-
-        if is_exit_command(&self.runtime.config, trimmed) {
-            return Ok(SurfaceLoopAction::Exit);
-        }
-
-        if trimmed.starts_with('/') {
-            {
-                let mut state = self.lock_state();
-                state.composer.clear();
-                state.composer_cursor = 0;
-                state.history_index = None;
-                state.focus = SurfaceFocus::Composer;
+        let submission = self.classify_submission(text).await?;
+        match submission {
+            SurfaceSubmit::Ignore => Ok(SurfaceLoopAction::Continue),
+            SurfaceSubmit::Stage(text) => {
+                self.stage_submission(text.as_str())?;
+                Ok(SurfaceLoopAction::Continue)
             }
-            self.handle_command(trimmed).await?;
-            self.render()?;
-            return Ok(SurfaceLoopAction::Continue);
-        }
-
-        {
-            let mut state = self.lock_state();
-            state.transcript.push(SurfaceEntry {
-                lines: render_cli_chat_message_spec_with_width(
-                    &TuiMessageSpec {
-                        role: "you".to_owned(),
-                        caption: Some("prompt".to_owned()),
-                        sections: vec![TuiSectionSpec::Narrative {
-                            title: None,
-                            lines: vec![trimmed.to_owned()],
-                        }],
-                        footer_lines: vec!["Enter send · Esc clear · Tab sidebar".to_owned()],
-                    },
-                    self.content_width(),
-                ),
-            });
-            state.history.push(trimmed.to_owned());
-            state.composer.clear();
-            state.composer_cursor = 0;
-            state.history_index = None;
-            state.pending_turn = true;
-            state.scroll_offset = 0;
-            state.sticky_bottom = true;
-            state.selected_entry = Some(state.transcript.len().saturating_sub(1));
-            state.focus = SurfaceFocus::Transcript;
-        }
-        self.render()?;
-
-        let observer = build_surface_live_observer(self.state.clone(), self.term.clone());
-        let assistant_text = crate::agent_runtime::AgentRuntime::new()
-            .run_turn_with_runtime_and_observer(
-                &self.runtime,
-                &crate::agent_runtime::AgentTurnRequest {
-                    message: trimmed.to_owned(),
-                    turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
-                    channel_id: self.runtime.session_address.channel_id.clone(),
-                    account_id: self.runtime.session_address.account_id.clone(),
-                    conversation_id: self.runtime.session_address.conversation_id.clone(),
-                    thread_id: self.runtime.session_address.thread_id.clone(),
-                    metadata: std::collections::BTreeMap::new(),
-                    acp: self.runtime.explicit_acp_request,
-                    acp_event_stream: false,
-                    acp_bootstrap_mcp_servers: self.runtime.effective_bootstrap_mcp_servers.clone(),
-                    acp_cwd: self
-                        .runtime
-                        .effective_working_directory
-                        .as_ref()
-                        .map(|path| path.display().to_string()),
-                    live_surface_enabled: true,
-                },
-                None,
-                Some(observer),
-            )
-            .await?
-            .output_text;
-
-        {
-            let mut state = self.lock_state();
-            state.transcript.push(SurfaceEntry {
-                lines: render_cli_chat_assistant_lines_with_width(
-                    &assistant_text,
-                    self.content_width(),
-                ),
-            });
-            if let Some(screen) = build_cli_chat_approval_screen_spec(&assistant_text) {
-                state.overlay = Some(SurfaceOverlay::ApprovalPrompt { screen });
+            SurfaceSubmit::Start(text) => {
+                let assistant_text = self
+                    .spawn_pending_turn_task(text)
+                    .await
+                    .map_err(|error| format!("chat surface turn task failed: {error}"))??;
+                let next_submission = self.complete_pending_turn(assistant_text)?;
+                if let Some(next_submission) = next_submission {
+                    let followup_text = self
+                        .spawn_pending_turn_task(next_submission)
+                        .await
+                        .map_err(|error| format!("chat surface turn task failed: {error}"))??;
+                    let _ = self.complete_pending_turn(followup_text)?;
+                }
+                Ok(SurfaceLoopAction::Continue)
             }
-            state.pending_turn = false;
-            state.live.last_assistant_preview = Some(assistant_text);
-            state.live.snapshot = None;
-            state.live.state = CliChatLiveSurfaceState::default();
-            state.selected_entry = Some(state.transcript.len().saturating_sub(1));
-            state.sticky_bottom = true;
+            SurfaceSubmit::Exit => Ok(SurfaceLoopAction::Exit),
         }
-        self.render()?;
-        Ok(SurfaceLoopAction::Continue)
     }
 
     async fn handle_command(&self, input: &str) -> CliResult<()> {
@@ -1690,15 +1917,7 @@ impl ChatSessionSurface {
         } else {
             "│".to_owned()
         };
-        let hint = if state.command_palette.is_some() {
-            "╰─ command palette active · type filter · ↑↓ choose · Enter run · Esc close"
-        } else if state.composer.starts_with('/') {
-            "╰─ slash mode · Enter send command · : open command palette"
-        } else if should_continue_multiline(&state.composer) {
-            "╰─ multiline compose · trailing \\ inserts newline on Enter"
-        } else {
-            "╰─ Enter send · : command palette · /help for commands"
-        };
+        let hint = composer_hint_text(state);
         vec![prompt_line, body_line, second_line, hint.to_owned()]
     }
 
@@ -1715,6 +1934,9 @@ impl ChatSessionSurface {
         );
         if state.pending_turn {
             status.push_str(" · turn running");
+        }
+        if state.queued_turn.is_some() {
+            status.push_str(" · queued=1");
         }
         clipped_display_line(&status, width)
     }
@@ -2010,6 +2232,13 @@ enum SurfaceLoopAction {
     Continue,
     Submit,
     RunCommand(String),
+    Exit,
+}
+
+enum SurfaceSubmit {
+    Ignore,
+    Stage(String),
+    Start(String),
     Exit,
 }
 
@@ -2779,10 +3008,186 @@ mod tests {
             live: LiveSurfaceModel::default(),
             footer_notice: String::new(),
             pending_turn: false,
+            queued_turn: None,
         };
         assert_eq!(current_overlay_label(&state), "none");
         state.overlay = Some(SurfaceOverlay::Timeline);
         assert_eq!(current_overlay_label(&state), "timeline");
+    }
+
+    #[test]
+    fn apply_staged_submission_replaces_existing_queue_and_clears_composer() {
+        let mut state = SurfaceState {
+            startup_summary: None,
+            session_title_override: None,
+            transcript: Vec::new(),
+            composer: "draft".to_owned(),
+            composer_cursor: 5,
+            history: Vec::new(),
+            history_index: Some(0),
+            scroll_offset: 0,
+            sticky_bottom: true,
+            selected_entry: None,
+            focus: SurfaceFocus::Transcript,
+            sidebar_visible: true,
+            sidebar_tab: SidebarTab::Session,
+            command_palette: None,
+            overlay: None,
+            live: LiveSurfaceModel::default(),
+            footer_notice: String::new(),
+            pending_turn: true,
+            queued_turn: Some("older".to_owned()),
+        };
+
+        let staged = apply_staged_submission(&mut state, " newer ");
+
+        assert!(staged);
+        assert_eq!(state.queued_turn.as_deref(), Some("newer"));
+        assert!(state.composer.is_empty());
+        assert_eq!(state.composer_cursor, 0);
+        assert_eq!(state.history_index, None);
+        assert_eq!(state.focus, SurfaceFocus::Composer);
+    }
+
+    #[test]
+    fn resolve_queued_submission_after_completion_keeps_queue_in_composer_for_approval_prompt() {
+        let mut state = SurfaceState {
+            startup_summary: None,
+            session_title_override: None,
+            transcript: Vec::new(),
+            composer: String::new(),
+            composer_cursor: 0,
+            history: Vec::new(),
+            history_index: None,
+            scroll_offset: 0,
+            sticky_bottom: true,
+            selected_entry: None,
+            focus: SurfaceFocus::Transcript,
+            sidebar_visible: true,
+            sidebar_tab: SidebarTab::Session,
+            command_palette: None,
+            overlay: Some(SurfaceOverlay::ApprovalPrompt {
+                screen: TuiScreenSpec {
+                    header_style: TuiHeaderStyle::Compact,
+                    subtitle: None,
+                    title: None,
+                    progress_line: None,
+                    intro_lines: Vec::new(),
+                    sections: Vec::new(),
+                    choices: Vec::new(),
+                    footer_lines: Vec::new(),
+                },
+            }),
+            live: LiveSurfaceModel::default(),
+            footer_notice: String::new(),
+            pending_turn: false,
+            queued_turn: Some("queued next".to_owned()),
+        };
+
+        let next_submission = resolve_queued_submission_after_completion(&mut state);
+
+        assert_eq!(next_submission, None);
+        assert_eq!(state.queued_turn, None);
+        assert_eq!(state.composer, "queued next");
+        assert_eq!(state.composer_cursor, "queued next".chars().count());
+        assert_eq!(state.focus, SurfaceFocus::Composer);
+    }
+
+    #[test]
+    fn resolve_queued_submission_after_completion_returns_next_turn_without_overlay() {
+        let mut state = SurfaceState {
+            startup_summary: None,
+            session_title_override: None,
+            transcript: Vec::new(),
+            composer: String::new(),
+            composer_cursor: 0,
+            history: Vec::new(),
+            history_index: None,
+            scroll_offset: 0,
+            sticky_bottom: true,
+            selected_entry: None,
+            focus: SurfaceFocus::Transcript,
+            sidebar_visible: true,
+            sidebar_tab: SidebarTab::Session,
+            command_palette: None,
+            overlay: None,
+            live: LiveSurfaceModel::default(),
+            footer_notice: String::new(),
+            pending_turn: false,
+            queued_turn: Some("queued next".to_owned()),
+        };
+
+        let next_submission = resolve_queued_submission_after_completion(&mut state);
+
+        assert_eq!(next_submission.as_deref(), Some("queued next"));
+        assert_eq!(state.queued_turn, None);
+        assert!(state.composer.is_empty());
+    }
+
+    #[test]
+    fn composer_hint_text_reports_running_queue_state() {
+        let state = SurfaceState {
+            startup_summary: None,
+            session_title_override: None,
+            transcript: Vec::new(),
+            composer: String::new(),
+            composer_cursor: 0,
+            history: Vec::new(),
+            history_index: None,
+            scroll_offset: 0,
+            sticky_bottom: true,
+            selected_entry: None,
+            focus: SurfaceFocus::Composer,
+            sidebar_visible: true,
+            sidebar_tab: SidebarTab::Session,
+            command_palette: None,
+            overlay: None,
+            live: LiveSurfaceModel::default(),
+            footer_notice: String::new(),
+            pending_turn: true,
+            queued_turn: Some("queued next".to_owned()),
+        };
+
+        let hint = composer_hint_text(&state);
+
+        assert_eq!(
+            hint,
+            "╰─ current turn running · queued next turn ready · Esc drop queue"
+        );
+    }
+
+    #[test]
+    fn should_clear_queued_turn_on_escape_only_when_turn_is_running_and_queue_is_visible() {
+        let mut state = SurfaceState {
+            startup_summary: None,
+            session_title_override: None,
+            transcript: Vec::new(),
+            composer: String::new(),
+            composer_cursor: 0,
+            history: Vec::new(),
+            history_index: None,
+            scroll_offset: 0,
+            sticky_bottom: true,
+            selected_entry: None,
+            focus: SurfaceFocus::Composer,
+            sidebar_visible: true,
+            sidebar_tab: SidebarTab::Session,
+            command_palette: None,
+            overlay: None,
+            live: LiveSurfaceModel::default(),
+            footer_notice: String::new(),
+            pending_turn: true,
+            queued_turn: Some("queued next".to_owned()),
+        };
+
+        assert!(should_clear_queued_turn_on_escape(&state));
+
+        state.composer = "draft".to_owned();
+        assert!(!should_clear_queued_turn_on_escape(&state));
+
+        state.composer.clear();
+        state.overlay = Some(SurfaceOverlay::Timeline);
+        assert!(!should_clear_queued_turn_on_escape(&state));
     }
 
     #[test]
