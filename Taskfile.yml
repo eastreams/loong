@@ -4,27 +4,27 @@ tasks:
   fmt:
     desc: Check formatting for all crates
     cmds:
-      - cargo fmt --all -- --check
+      - ./scripts/cargo-local-toolchain.sh fmt --all -- --check
 
   lint:
     desc: Run clippy across workspace targets
     cmds:
-      - cargo clippy --workspace --all-targets --all-features
+      - ./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features
 
   lint:strict:
     desc: Run clippy with warnings denied (migration gate)
     cmds:
-      - cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - ./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     desc: Run workspace unit and doc tests
     cmds:
-      - cargo test --workspace
+      - ./scripts/cargo-local-toolchain.sh test --workspace
 
   test:all-features:
     desc: Run tests with all features enabled
     cmds:
-      - cargo test --workspace --all-features
+      - ./scripts/cargo-local-toolchain.sh test --workspace --all-features
 
   test:daemon:stress:
     desc: Stress daemon test binary across thread modes to catch intermittent regressions
@@ -34,9 +34,9 @@ tasks:
   smoke:
     desc: Run representative spec-runner smoke scenarios
     cmds:
-      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/runtime-extension.json --print-audit
-      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/tool-search.json --print-audit
-      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/programmatic-tool-call.json --print-audit
+      - ./scripts/cargo-local-toolchain.sh run -p loongclaw --bin loong -- run-spec --spec examples/spec/runtime-extension.json --print-audit
+      - ./scripts/cargo-local-toolchain.sh run -p loongclaw --bin loong -- run-spec --spec examples/spec/tool-search.json --print-audit
+      - ./scripts/cargo-local-toolchain.sh run -p loongclaw --bin loong -- run-spec --spec examples/spec/programmatic-tool-call.json --print-audit
 
   benchmark:pressure:
     desc: Run programmatic pressure benchmark with gate enforcement
@@ -98,7 +98,7 @@ tasks:
       - sh: command -v cargo-deny
         msg: "cargo-deny not installed. Run: cargo install cargo-deny"
     cmds:
-      - cargo deny check advisories bans licenses sources
+      - ./scripts/cargo-deny-local.sh check advisories bans licenses sources
 
   verify:
     desc: Canonical local verification gate (strict superset of CI checks)

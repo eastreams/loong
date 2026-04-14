@@ -57,6 +57,13 @@ impl GatewayTurnResponse {
 
 type TurnJsonResponse = (StatusCode, Json<Value>);
 
+/// Execute one ACP-backed agent turn through the gateway HTTP surface.
+///
+/// This endpoint validates the structured session/channel address first, then
+/// reuses the gateway's shared ACP manager and loaded config snapshot to run a
+/// single `AgentRuntime` turn. It is intentionally narrower than the CLI chat
+/// path: the request is always executed as an ACP turn and never owns long-lived
+/// interactive surface state.
 pub(crate) async fn handle_turn(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,

@@ -392,6 +392,10 @@ async fn execute_create_command(
 fn build_tasks_create_runtime(
     config: &mvp::config::LoongClawConfig,
 ) -> CliResult<impl mvp::conversation::ConversationRuntime> {
+    // Background task creation prefers the detached sqlite-backed runtime when
+    // available so delegated child sessions can survive outside the foreground
+    // CLI process. Non-sqlite builds fall back to the default in-process
+    // conversation runtime.
     #[cfg(feature = "memory-sqlite")]
     {
         let runtime = DetachedTasksRuntime::from_config(config)?;
