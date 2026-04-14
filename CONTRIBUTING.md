@@ -88,10 +88,17 @@ Use Track A for:
 Required checks:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+./scripts/cargo-local-toolchain.sh fmt --all -- --check
+./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings
+./scripts/cargo-local-toolchain.sh test --workspace --all-features
 ```
+
+The helper script resolves the concrete `rustc` / `rustdoc` binaries from the
+active rustup toolchain before invoking Cargo. For `cargo test`, it also seeds
+an isolated writable `LOONG_HOME` under `target/test-loong-home` unless you set
+one explicitly. Use it when local rustup proxy shims would otherwise try to
+sync channels or install targets in the middle of verification, or when test
+defaults would otherwise write under your real home directory.
 
 Optional convenience wrapper:
 
@@ -103,10 +110,10 @@ If `task` or its transitive dependencies are unavailable locally, run at least
 CI parity plus architecture/dep-graph checks directly:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-cargo test --workspace --all-features
+./scripts/cargo-local-toolchain.sh fmt --all -- --check
+./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings
+./scripts/cargo-local-toolchain.sh test --workspace
+./scripts/cargo-local-toolchain.sh test --workspace --all-features
 scripts/check_architecture_boundaries.sh
 scripts/check_dep_graph.sh
 ```
@@ -252,16 +259,19 @@ for the shorter public contributor docs entrypoint.
 
 ```bash
 # All tests
-cargo test --workspace
+./scripts/cargo-local-toolchain.sh test --workspace
 
 # Just the mvp crate
-cargo test -p loongclaw-app
+./scripts/cargo-local-toolchain.sh test -p loongclaw-app
 
 # Just kernel tests
-cargo test -p loongclaw-kernel
+./scripts/cargo-local-toolchain.sh test -p loongclaw-kernel
 
 # With all features (CI gate)
-cargo test --workspace --all-features
+./scripts/cargo-local-toolchain.sh test --workspace --all-features
+
+# Cargo-deny with a repo-local writable advisory DB/cache
+./scripts/cargo-deny-local.sh check advisories bans licenses sources
 ```
 
 ### Recipe: Add a Provider
