@@ -1443,25 +1443,6 @@ impl ConversationTurnCoordinator {
         }
     }
 
-    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            runtime,
-            binding,
-        )
-        .await
-    }
-
     pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit<
         R: ConversationRuntime + ?Sized,
     >(
@@ -7317,7 +7298,6 @@ mod tests {
             "handle_turn_with_runtime",
             "handle_turn_with_runtime_and_ingress",
             "repair_turn_checkpoint_tail_with_runtime",
-            "probe_turn_checkpoint_tail_runtime_gate_with_runtime",
             "probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit",
             "handle_turn_with_runtime_and_acp_options",
             "handle_turn_with_runtime_and_acp_event_sink",
