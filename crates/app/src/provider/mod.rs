@@ -50,7 +50,7 @@ mod transport_profile_runtime;
 mod transport_trait;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
-pub(crate) use failover::parse_provider_failover_snapshot_payload;
+pub use failover::parse_provider_failover_snapshot_payload;
 pub use rate_limit::RateLimitObservation;
 pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;

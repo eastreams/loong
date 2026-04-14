@@ -756,20 +756,33 @@ where
                 }
                 accumulator.text.push_str(&text);
             }
-            Ok(StreamingEvent::ToolCallStart { index, name, id }) => {
+            Ok(StreamingEvent::ToolCallStart {
+                index,
+                name,
+                id,
+                initial_json,
+            }) => {
                 if let Some(ref callback) = on_token {
                     callback(StreamingCallbackData::ToolCallStart {
                         index,
                         name: name.clone(),
                         id: id.clone(),
                     });
+                    if let Some(initial_json) = initial_json.clone()
+                        && !initial_json.is_empty()
+                    {
+                        callback(StreamingCallbackData::ToolCallInput {
+                            index,
+                            partial_json: initial_json,
+                        });
+                    }
                 }
                 accumulator.tool_calls.insert(
                     index,
                     ToolCallInfo {
                         name,
                         id,
-                        input: String::new(),
+                        input: initial_json.unwrap_or_default(),
                     },
                 );
             }
@@ -909,7 +922,12 @@ fn parse_anthropic_streaming_event(data: Value) -> Option<StreamingEvent> {
                 .to_owned();
             let id = content_block.get("id").and_then(|v| v.as_str())?.to_owned();
             let index = data.get("index").and_then(|v| v.as_u64())? as usize;
-            return Some(StreamingEvent::ToolCallStart { index, name, id });
+            return Some(StreamingEvent::ToolCallStart {
+                index,
+                name,
+                id,
+                initial_json: None,
+            });
         }
     }
     if event_type == "content_block_delta" {
@@ -961,6 +979,39 @@ fn parse_openai_streaming_event(data: Value) -> Option<StreamingEvent> {
     {
         return Some(StreamingEvent::Done);
     }
+    let delta = choice.get("delta")?;
+    if let Some(tool_call) = delta
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .and_then(|tool_calls| tool_calls.first())
+    {
+        let index = tool_call.get("index").and_then(Value::as_u64)? as usize;
+        let function = tool_call.get("function");
+        let initial_json = function
+            .and_then(|function| function.get("arguments"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|value| !value.is_empty());
+        if let (Some(id), Some(name)) = (
+            tool_call.get("id").and_then(Value::as_str),
+            function
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str),
+        ) {
+            return Some(StreamingEvent::ToolCallStart {
+                index,
+                name: name.to_owned(),
+                id: id.to_owned(),
+                initial_json,
+            });
+        }
+        if let Some(partial_json) = initial_json {
+            return Some(StreamingEvent::ToolInputPartial {
+                index,
+                partial_json,
+            });
+        }
+    }
     let text = choice
         .get("delta")
         .and_then(|delta| delta.get("content"))
@@ -990,6 +1041,7 @@ pub(crate) enum StreamingEvent {
         index: usize,
         name: String,
         id: String,
+        initial_json: Option<String>,
     },
     ToolInputPartial {
         index: usize,
@@ -1519,6 +1571,90 @@ mod tests {
         let first = stream.next().await.expect("first streamed item");
         assert_eq!(first.expect("text event"), "streamed hello");
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_streaming_turn_request_reconstructs_openai_tool_calls() {
+        use crate::provider::mock_transport::MockTransport;
+
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Openai,
+            ..ProviderConfig::default()
+        };
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_stream_events([Ok(vec![
+            Ok(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": ""
+                            }
+                        }]
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "arguments": "{\"location\":\"NYC\"}"
+                            }
+                        }]
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "tool_calls"
+                }]
+            })),
+        ])]);
+        let runtime = StreamingModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let turn = execute_streaming_turn_request(
+            runtime,
+            |_| json!({}),
+            Some("session-123"),
+            Some("turn-123"),
+            &[],
+            None,
+            |_| false,
+        )
+        .await
+        .expect("openai streaming tool calls should be reconstructed");
+
+        assert!(turn.assistant_text.is_empty(), "turn={turn:?}");
+        assert_eq!(turn.tool_intents.len(), 1, "turn={turn:?}");
+        assert_eq!(turn.tool_intents[0].tool_name, "get_weather");
+        assert_eq!(turn.tool_intents[0].tool_call_id, "call_123");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"location":"NYC"}));
     }
 
     #[tokio::test(flavor = "current_thread")]

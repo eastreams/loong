@@ -172,7 +172,7 @@ pub(super) fn build_model_request_error_with_rate_limit(
     }
 }
 
-pub(crate) fn parse_provider_failover_snapshot_payload(error: &str) -> Option<Value> {
+pub fn parse_provider_failover_snapshot_payload(error: &str) -> Option<Value> {
     let (_prefix, payload_raw) = error.rsplit_once(PROVIDER_FAILOVER_MARKER)?;
     let payload: Value = serde_json::from_str(payload_raw).ok()?;
     validate_provider_failover_snapshot_payload(payload)

@@ -231,7 +231,7 @@ pub(crate) async fn handle_chat_completions(
         .map_or_else(
             |error| {
                 json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    gateway_runtime_error_status(error.as_str()),
                     json!({"error": {"message": error}}),
                 )
             },
@@ -619,6 +619,14 @@ fn build_sse_event(payload: Value) -> Event {
     Event::default().data(payload.to_string())
 }
 
+fn gateway_runtime_error_status(error: &str) -> StatusCode {
+    crate::mvp::provider::parse_provider_failover_snapshot_payload(error)
+        .and_then(|payload| payload.get("status_code").and_then(Value::as_u64))
+        .and_then(|status| u16::try_from(status).ok())
+        .and_then(|status| StatusCode::from_u16(status).ok())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 fn json_response(status: StatusCode, payload: Value) -> Response {
     (status, Json(payload)).into_response()
 }
@@ -854,15 +862,17 @@ mod tests {
                 .set_nonblocking(true)
                 .expect("set listener nonblocking");
             let deadline = Instant::now() + Duration::from_secs(5);
+            let mut idle_deadline = None;
             let mut requests = Vec::new();
-            while requests.is_empty() {
+            loop {
                 if Instant::now() >= deadline {
-                    panic!("timed out waiting for provider request");
+                    break;
                 }
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let request = read_openai_compat_provider_request(&mut stream, deadline);
                         requests.push(request);
+                        idle_deadline = Some(Instant::now() + Duration::from_secs(2));
                         let response = format!(
                             "{status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             body.len(),
@@ -873,10 +883,18 @@ mod tests {
                             .expect("write response");
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if let Some(idle_deadline) = idle_deadline
+                            && Instant::now() >= idle_deadline
+                        {
+                            break;
+                        }
                         std::thread::yield_now();
                     }
                     Err(error) => panic!("accept provider request: {error}"),
                 }
+            }
+            if requests.is_empty() {
+                panic!("timed out waiting for provider request");
             }
             requests
         });
@@ -1263,10 +1281,12 @@ mod tests {
             "HTTP/1.1 200 OK",
             r#"{"choices":[{"message":{"role":"assistant","content":"provider says hi"}}]}"#,
         );
-        let app = build_openai_compat_test_router_no_backend(
-            openai_compat_provider_config(base_url),
-            "tok".to_owned(),
-        );
+        let mut config = openai_compat_provider_config(base_url);
+        config.provider.retry_max_attempts = 1;
+        if let Some(profile) = config.providers.get_mut("openai-main") {
+            profile.provider.retry_max_attempts = 1;
+        }
+        let app = build_openai_compat_test_router_no_backend(config, "tok".to_owned());
         let body = serde_json::json!({
             "model": "gpt-5",
             "messages": [
@@ -1364,6 +1384,58 @@ mod tests {
                 "completion_tokens": 7,
                 "total_tokens": 18
             })
+        );
+    }
+
+    #[test]
+    fn gateway_openai_chat_completion_preserves_provider_rate_limit_status() {
+        run_openai_compat_test_on_large_stack("openai-compat-rate-limit-status", || async move {
+            gateway_openai_chat_completion_preserves_provider_rate_limit_status_impl().await;
+        });
+    }
+
+    async fn gateway_openai_chat_completion_preserves_provider_rate_limit_status_impl() {
+        let (base_url, _server) = spawn_openai_compat_provider_server(
+            "HTTP/1.1 429 Too Many Requests",
+            r#"{"error":{"message":"rate limit exceeded"}}"#,
+        );
+        let app = build_openai_compat_test_router_no_backend(
+            openai_compat_provider_config(base_url),
+            "tok".to_owned(),
+        );
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("authorization", "Bearer tok")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).expect("encode body")))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(
+            status,
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "payload={payload}"
+        );
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("rate limit"),
+            "payload={payload}"
         );
     }
 
