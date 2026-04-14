@@ -134,7 +134,7 @@ body:
         enabled = true
 
         Env overrides:
-        LOONG_CONTEXT_ENGINE=legacy
+        LOONGCLAW_CONTEXT_ENGINE=legacy
 
   - type: textarea
     id: logs
