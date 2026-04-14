@@ -892,6 +892,10 @@ fn build_task_detail(
         .get("timeout_seconds")
         .cloned()
         .unwrap_or(Value::Null);
+    let workflow = status_payload
+        .get("workflow")
+        .cloned()
+        .unwrap_or(Value::Null);
     let created_at = session.get("created_at").cloned().unwrap_or(Value::Null);
     let updated_at = session.get("updated_at").cloned().unwrap_or(Value::Null);
     let archived = session.get("archived").cloned().unwrap_or(Value::Null);
@@ -946,6 +950,7 @@ fn build_task_detail(
         "phase": phase,
         "mode": mode,
         "timeout_seconds": timeout_seconds,
+        "workflow": workflow,
         "created_at": created_at,
         "updated_at": updated_at,
         "archived": archived,
@@ -994,6 +999,7 @@ fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
         "session_state": Value::Null,
         "phase": Value::Null,
         "timeout_seconds": Value::Null,
+        "workflow": Value::Null,
         "last_error": Value::Null,
         "approval": {
             "matched_count": 0,
@@ -1393,6 +1399,11 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .get("phase")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let workflow_phase = task
+        .get("workflow")
+        .and_then(|value| value.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let label = task.get("label").and_then(Value::as_str).unwrap_or("-");
     let approval_attention = task
         .get("approval")
@@ -1401,7 +1412,7 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let line = format!(
-        "{task_id} state={state} phase={phase} label={label} approval_attention={approval_attention}"
+        "{task_id} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={label} approval_attention={approval_attention}"
     );
     Ok(line)
 }
@@ -1421,6 +1432,31 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .get("phase")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let workflow_id = task
+        .get("workflow")
+        .and_then(|value| value.get("workflow_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_phase = task
+        .get("workflow")
+        .and_then(|value| value.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_operation_kind = task
+        .get("workflow")
+        .and_then(|value| value.get("operation_kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_operation_scope = task
+        .get("workflow")
+        .and_then(|value| value.get("operation_scope"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_task_session_id = task
+        .get("workflow")
+        .and_then(|value| value.get("task_session_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
     let timeout_seconds = task
         .get("timeout_seconds")
         .and_then(Value::as_u64)
@@ -1464,6 +1500,17 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("scope_session_id: {scope_session_id}"));
     lines.push(format!("label: {label}"));
     lines.push(format!("state: {state}"));
+    lines.push(format!("workflow_id: {workflow_id}"));
+    lines.push(format!("workflow_phase: {workflow_phase}"));
+    lines.push(format!(
+        "workflow_operation_kind: {workflow_operation_kind}"
+    ));
+    lines.push(format!(
+        "workflow_operation_scope: {workflow_operation_scope}"
+    ));
+    lines.push(format!(
+        "workflow_task_session_id: {workflow_task_session_id}"
+    ));
     lines.push(format!("phase: {phase}"));
     lines.push(format!("timeout_seconds: {timeout_seconds}"));
     lines.push(format!("last_error: {last_error}"));

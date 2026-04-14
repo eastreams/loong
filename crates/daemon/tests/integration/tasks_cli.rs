@@ -507,6 +507,14 @@ async fn execute_tasks_command_list_returns_visible_background_tasks() {
     assert_eq!(execution.payload["returned_count"], 1);
     assert_eq!(execution.payload["tasks"][0]["task_id"], "delegate:task-1");
     assert_eq!(execution.payload["tasks"][0]["phase"], "queued");
+    assert_eq!(
+        execution.payload["tasks"][0]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(
+        execution.payload["tasks"][0]["workflow"]["phase"],
+        "execute"
+    );
 }
 
 #[tokio::test]
@@ -533,6 +541,15 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert_eq!(execution.payload["task"]["task_id"], "delegate:task-1");
     assert_eq!(execution.payload["task"]["approval"]["matched_count"], 1);
     assert_eq!(
+        execution.payload["task"]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(execution.payload["task"]["workflow"]["phase"], "execute");
+    assert_eq!(
+        execution.payload["task"]["workflow"]["operation_kind"],
+        "task"
+    );
+    assert_eq!(
         execution.payload["task"]["tool_policy"]["effective_tool_ids"][0],
         "file.read"
     );
@@ -542,6 +559,10 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert!(
         rendered.contains("approval_requests: 1"),
         "status render should surface approval count: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_phase: execute"),
+        "status render should surface workflow phase: {rendered}"
     );
     assert!(
         rendered.contains("effective_tool_ids: file.read"),
