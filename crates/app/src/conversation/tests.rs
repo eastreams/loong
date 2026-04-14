@@ -19753,11 +19753,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
+    let limit = config.memory.sliding_window;
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
             session_id,
+            limit,
             &runtime,
             ConversationRuntimeBinding::direct(),
         )
@@ -19855,11 +19857,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_when_repair_not_ne
         vec![],
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let limit = config.memory.sliding_window;
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
             session_id,
+            limit,
             &runtime,
             ConversationRuntimeBinding::direct(),
         )
@@ -19950,11 +19954,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_summary_manual
         vec![],
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let limit = config.memory.sliding_window;
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
             session_id,
+            limit,
             &runtime,
             ConversationRuntimeBinding::direct(),
         )
@@ -20047,11 +20053,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_runnable_repai
         vec![],
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let limit = config.memory.sliding_window;
 
     let probe = coordinator
-        .probe_turn_checkpoint_tail_runtime_gate_with_runtime(
+        .probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             &config,
             session_id,
+            limit,
             &runtime,
             ConversationRuntimeBinding::direct(),
         )
