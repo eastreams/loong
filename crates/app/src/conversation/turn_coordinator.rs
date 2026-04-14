@@ -1111,24 +1111,6 @@ impl ConversationTurnCoordinator {
         Ok(report)
     }
 
-    pub(crate) async fn repair_turn_checkpoint_tail(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
-        self.repair_turn_checkpoint_tail_with_runtime(
-            config,
-            session_id,
-            &runtime,
-            effective_binding,
-        )
-        .await
-    }
-
     pub async fn repair_production_turn_checkpoint_tail(
         &self,
         config: &LoongConfig,
@@ -7240,7 +7222,6 @@ mod tests {
             "compact_session_with_runtime",
             "handle_turn_with_ingress",
             "handle_turn_with_acp_options",
-            "repair_turn_checkpoint_tail",
             "probe_turn_checkpoint_tail_runtime_gate",
             "probe_turn_checkpoint_tail_runtime_gate_with_limit",
             "handle_turn_with_acp_event_sink",

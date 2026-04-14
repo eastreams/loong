@@ -2241,7 +2241,7 @@ impl ChatSessionSurface {
                                             let outcome = self
                                                 .runtime
                                                 .turn_coordinator
-                                                .repair_turn_checkpoint_tail(
+                                                .repair_production_turn_checkpoint_tail(
                                                     &self.runtime.config,
                                                     &self.runtime.session_id,
                                                     self.runtime.conversation_binding(),
@@ -2698,6 +2698,7 @@ impl ChatSessionSurface {
         self.render()?;
         Ok(SurfaceLoopAction::Continue)
     }
+
 
     fn submit_input_overlay(&self, kind: OverlayInputKind, value: String) -> CliResult<()> {
         let trimmed = value.trim();
