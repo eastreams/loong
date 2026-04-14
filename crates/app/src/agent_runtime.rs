@@ -177,18 +177,14 @@ impl<'a> RuntimeTurnExecutionService<'a> {
 
             if explicit_acp_request {
                 let turn_config = load_runtime_turn_config(runtime)?;
-                let effective_acp_manager = match acp_manager {
-                    Some(manager) => manager,
-                    None => crate::acp::shared_acp_session_manager(&turn_config)?,
-                };
                 let acp_options = acp_turn_options_from_runtime(runtime, event_sink, request)
                     .with_provenance(provenance);
-                let execution = crate::acp::execute_acp_conversation_turn_for_address_with_manager(
+                let execution = crate::acp::execute_acp_conversation_turn_for_address(
                     &turn_config,
                     &turn_address,
                     message,
                     &acp_options,
-                    effective_acp_manager,
+                    acp_manager,
                 )
                 .await?;
                 let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;

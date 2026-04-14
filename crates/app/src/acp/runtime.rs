@@ -395,26 +395,27 @@ pub fn evaluate_acp_conversation_turn_entry_for_address(
     }
 }
 
+fn resolve_acp_turn_execution_manager(
+    config: &LoongClawConfig,
+    manager: Option<Arc<AcpSessionManager>>,
+) -> CliResult<Arc<AcpSessionManager>> {
+    match manager {
+        Some(manager) => Ok(manager),
+        None => shared_acp_session_manager(config),
+    }
+}
+
 pub(crate) async fn execute_acp_conversation_turn_for_address(
     config: &LoongConfig,
     address: &ConversationSessionAddress,
     user_input: &str,
     options: &AcpConversationTurnOptions<'_>,
+    manager: Option<Arc<AcpSessionManager>>,
 ) -> CliResult<ExecutedAcpConversationTurn> {
     let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
-    let manager = shared_acp_session_manager(config)?;
-    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
-}
+    let effective_manager = resolve_acp_turn_execution_manager(config, manager)?;
 
-pub(crate) async fn execute_acp_conversation_turn_for_address_with_manager(
-    config: &LoongConfig,
-    address: &ConversationSessionAddress,
-    user_input: &str,
-    options: &AcpConversationTurnOptions<'_>,
-    manager: Arc<AcpSessionManager>,
-) -> CliResult<ExecutedAcpConversationTurn> {
-    let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
-    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
+    execute_prepared_acp_conversation_turn(config, prepared, options, effective_manager).await
 }
 
 async fn execute_prepared_acp_conversation_turn(
