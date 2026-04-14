@@ -5739,7 +5739,7 @@ fn ensure_required_scopes(
     }
 
     Err(format!(
-        "{tool_name} requires Feishu scopes [{}] for `{}`; rerun the OAuth flow with the required scopes",
+        "{tool_name} requires Feishu scopes [{}] for `{}`; update Feishu config if needed and rerun `loong feishu auth start --account <account>`",
         missing.join(", "),
         grant.principal.storage_key()
     ))
@@ -5759,7 +5759,7 @@ fn ensure_any_required_scope(
     }
 
     Err(format!(
-        "{tool_name} requires at least one Feishu scope [{}] for `{}`; rerun the OAuth flow with the required scopes",
+        "{tool_name} requires at least one Feishu scope [{}] for `{}`; update Feishu config if needed and rerun `loong feishu auth start --account <account>`",
         accepted.join(", "),
         grant.principal.storage_key()
     ))

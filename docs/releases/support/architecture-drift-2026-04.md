@@ -20,7 +20,7 @@ release review. It is not part of the primary public release trail.
   repository's current architecture boundaries
 
 ## Summary
-- Generated at: 2026-04-14T05:04:09Z
+- Generated at: 2026-04-14T05:28:14Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/support/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -42,7 +42,7 @@ release review. It is not part of the primary public release trail.
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6599 | 7300 | 701 | 95 | 160 | 65 | 90.4% | WATCH | 6936 | -4.9% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 2036 | 6400 | 4364 | 0 | 110 | 110 | 31.8% | HEALTHY | 1779 | 14.4% | BREACH | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 9970 | 11200 | 1230 | 61 | 120 | 59 | 89.0% | WATCH | 10831 | -7.9% | PASS | 98 |
-| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14267 | 15000 | 733 | 42 | 70 | 28 | 95.1% | TIGHT | 14472 | -1.4% | PASS | 54 |
+| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14271 | 15000 | 729 | 42 | 70 | 28 | 95.1% | TIGHT | 14472 | -1.4% | PASS | 54 |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5678 | 6500 | 822 | 174 | 210 | 36 | 87.4% | WATCH | 6324 | -10.2% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9202 | 9800 | 598 | 205 | 250 | 45 | 93.9% | WATCH | 9519 | -3.3% | PASS | 228 |
 
@@ -96,7 +96,7 @@ release review. It is not part of the primary public release trail.
 <!-- arch-hotspot key=chat_runtime lines=6599 functions=95 -->
 <!-- arch-hotspot key=channel_mod lines=2036 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=9970 functions=61 -->
-<!-- arch-hotspot key=tools_mod lines=14267 functions=42 -->
+<!-- arch-hotspot key=tools_mod lines=14271 functions=42 -->
 <!-- arch-hotspot key=daemon_lib lines=5678 functions=174 -->
 <!-- arch-hotspot key=onboard_cli lines=9202 functions=205 -->
 <!-- arch-boundary key=memory_literals status=PASS -->

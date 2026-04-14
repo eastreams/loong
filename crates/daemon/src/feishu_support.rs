@@ -12,6 +12,18 @@ use loongclaw_spec::CliResult;
 
 const FEISHU_GROUP_MESSAGE_READ_SCOPE: &str = "im:message.group_msg";
 const FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY: &str = "im:message.group_msg:readonly";
+const FEISHU_OFFLINE_ACCESS_SCOPE: &str = "offline_access";
+const FEISHU_DOC_READ_SCOPE: &str = "docx:document:readonly";
+const FEISHU_MESSAGE_READ_SCOPE: &str = "im:message:readonly";
+const FEISHU_MESSAGE_SEND_SCOPE: &str = "im:message:send";
+const FEISHU_MESSAGE_SEARCH_SCOPE: &str = "search:message";
+const FEISHU_CALENDAR_READ_SCOPE: &str = "calendar:calendar:readonly";
+const FEISHU_BITABLE_SCOPE: &str = "bitable:app";
+const FEISHU_BITABLE_TABLE_READ_SCOPE: &str = "base:table:read";
+const FEISHU_BITABLE_RECORD_CREATE_SCOPE: &str = "base:record:create";
+const FEISHU_BITABLE_RECORD_RETRIEVE_SCOPE: &str = "base:record:retrieve";
+const FEISHU_BITABLE_RECORD_WRITE_SCOPE: &str = "base:record:write";
+const FEISHU_DRIVE_READ_SCOPE: &str = "drive:drive:readonly";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FeishuAuthCapability {
@@ -28,6 +40,25 @@ impl FeishuAuthCapability {
             Self::DocWrite => "doc-write",
             Self::MessageWrite => "message-write",
             Self::All => "all",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum FeishuConfiguredCapability {
+    Docs,
+    Messages,
+    Calendar,
+    Bitable,
+}
+
+impl FeishuConfiguredCapability {
+    pub fn as_config_key(self) -> &'static str {
+        match self {
+            Self::Docs => "docs",
+            Self::Messages => "messages",
+            Self::Calendar => "calendar",
+            Self::Bitable => "bitable",
         }
     }
 }
@@ -70,8 +101,18 @@ impl FeishuDaemonContext {
         self.resolved.account.id.as_str()
     }
 
-    pub fn default_scopes(&self) -> Vec<String> {
-        self.config.feishu_integration.trimmed_default_scopes()
+    pub fn required_scopes(
+        &self,
+        override_scopes: &[String],
+        cli_capabilities: &[FeishuAuthCapability],
+        include_message_write: bool,
+    ) -> Vec<String> {
+        resolve_required_feishu_scopes(
+            &self.config.feishu_integration,
+            override_scopes,
+            cli_capabilities,
+            include_message_write,
+        )
     }
 }
 
@@ -167,6 +208,86 @@ pub fn resolve_scopes(
     scopes
 }
 
+pub fn configured_capabilities_from_config(
+    config: &mvp::config::FeishuIntegrationConfig,
+) -> Vec<FeishuConfiguredCapability> {
+    let caps = &config.capabilities;
+    let mut resolved = Vec::new();
+    if caps.docs {
+        resolved.push(FeishuConfiguredCapability::Docs);
+    }
+    if caps.messages {
+        resolved.push(FeishuConfiguredCapability::Messages);
+    }
+    if caps.calendar {
+        resolved.push(FeishuConfiguredCapability::Calendar);
+    }
+    if caps.bitable {
+        resolved.push(FeishuConfiguredCapability::Bitable);
+    }
+    resolved
+}
+
+pub fn scopes_for_configured_capabilities(
+    capabilities: &[FeishuConfiguredCapability],
+) -> Vec<String> {
+    let mut scopes = Vec::new();
+    if !capabilities.is_empty() {
+        push_scope_if_missing(&mut scopes, FEISHU_OFFLINE_ACCESS_SCOPE);
+    }
+    for capability in capabilities {
+        match capability {
+            FeishuConfiguredCapability::Docs => {
+                push_scope_if_missing(&mut scopes, FEISHU_DOC_READ_SCOPE);
+                for scope in mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES {
+                    push_scope_if_missing(&mut scopes, scope);
+                }
+            }
+            FeishuConfiguredCapability::Messages => {
+                push_scope_if_missing(&mut scopes, FEISHU_MESSAGE_READ_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_GROUP_MESSAGE_READ_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_MESSAGE_SEARCH_SCOPE);
+                for scope in mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES {
+                    push_scope_if_missing(&mut scopes, scope);
+                }
+                push_scope_if_missing(&mut scopes, FEISHU_MESSAGE_SEND_SCOPE);
+            }
+            FeishuConfiguredCapability::Calendar => {
+                push_scope_if_missing(&mut scopes, FEISHU_CALENDAR_READ_SCOPE);
+            }
+            FeishuConfiguredCapability::Bitable => {
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_TABLE_READ_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_RECORD_CREATE_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_RECORD_RETRIEVE_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_BITABLE_RECORD_WRITE_SCOPE);
+                push_scope_if_missing(&mut scopes, FEISHU_DRIVE_READ_SCOPE);
+            }
+        }
+    }
+    scopes
+}
+
+pub fn resolve_required_feishu_scopes(
+    config: &mvp::config::FeishuIntegrationConfig,
+    override_scopes: &[String],
+    cli_capabilities: &[FeishuAuthCapability],
+    include_message_write: bool,
+) -> Vec<String> {
+    let default_scopes = if config.has_explicit_capability_config() {
+        scopes_for_configured_capabilities(&configured_capabilities_from_config(config))
+    } else {
+        config.trimmed_default_scopes()
+    };
+
+    resolve_scopes(
+        &default_scopes,
+        override_scopes,
+        cli_capabilities,
+        include_message_write,
+    )
+}
+
 pub fn normalized_auth_start_capabilities(
     capabilities: &[FeishuAuthCapability],
     include_message_write: bool,
@@ -226,8 +347,8 @@ pub fn recommended_auth_start_command_for_grant(
 ) -> Option<String> {
     let status =
         mvp::channel::feishu::api::auth::summarize_grant_status(grant, now_s, required_scopes);
-    let doc_write_status = mvp::channel::feishu::api::summarize_doc_write_scope_status(grant);
-    let write_status = mvp::channel::feishu::api::summarize_message_write_scope_status(grant);
+    let doc_write_status = summarize_required_doc_write_scope_status(grant, required_scopes);
+    let write_status = summarize_required_message_write_scope_status(grant, required_scopes);
     let needs_auth_start = !status.has_grant
         || status.refresh_token_expired
         || !status.missing_scopes.is_empty()
@@ -252,8 +373,8 @@ pub fn build_grant_recommendations(
 ) -> FeishuGrantRecommendations {
     let status =
         mvp::channel::feishu::api::auth::summarize_grant_status(grant, now_s, required_scopes);
-    let doc_write_status = mvp::channel::feishu::api::summarize_doc_write_scope_status(grant);
-    let write_status = mvp::channel::feishu::api::summarize_message_write_scope_status(grant);
+    let doc_write_status = summarize_required_doc_write_scope_status(grant, required_scopes);
+    let write_status = summarize_required_message_write_scope_status(grant, required_scopes);
 
     FeishuGrantRecommendations {
         auth_start_command: recommended_auth_start_command_for_grant(
@@ -269,6 +390,69 @@ pub fn build_grant_recommendations(
         requested_open_id_missing: false,
         refresh_token_expired: status.refresh_token_expired,
     }
+}
+
+pub fn summarize_required_doc_write_scope_status(
+    grant: Option<&mvp::channel::feishu::api::FeishuGrant>,
+    required_scopes: &[String],
+) -> mvp::channel::feishu::api::FeishuGrantAnyScopeStatus {
+    summarize_required_any_scope_status(
+        grant,
+        required_scopes,
+        mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES,
+    )
+}
+
+pub fn summarize_required_message_write_scope_status(
+    grant: Option<&mvp::channel::feishu::api::FeishuGrant>,
+    required_scopes: &[String],
+) -> mvp::channel::feishu::api::FeishuGrantAnyScopeStatus {
+    summarize_required_any_scope_status(
+        grant,
+        required_scopes,
+        mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
+    )
+}
+
+fn summarize_required_any_scope_status(
+    grant: Option<&mvp::channel::feishu::api::FeishuGrant>,
+    required_scopes: &[String],
+    accepted: &[&str],
+) -> mvp::channel::feishu::api::FeishuGrantAnyScopeStatus {
+    if !required_scopes_request_any(required_scopes, accepted) {
+        return mvp::channel::feishu::api::FeishuGrantAnyScopeStatus {
+            ready: true,
+            accepted_scopes: Vec::new(),
+            matched_scopes: Vec::new(),
+        };
+    }
+
+    let accepted_scopes = accepted
+        .iter()
+        .copied()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let matched_scopes = grant
+        .map(|grant| {
+            accepted_scopes
+                .iter()
+                .filter(|scope| grant.scopes.contains(scope))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    mvp::channel::feishu::api::FeishuGrantAnyScopeStatus {
+        ready: !matched_scopes.is_empty(),
+        accepted_scopes,
+        matched_scopes,
+    }
+}
+
+fn required_scopes_request_any(required_scopes: &[String], accepted: &[&str]) -> bool {
+    accepted
+        .iter()
+        .any(|candidate| required_scopes.iter().any(|scope| scope == candidate))
 }
 
 pub fn build_account_recommendations(
@@ -601,6 +785,122 @@ mod tests {
     }
 
     #[test]
+    fn configured_capabilities_from_config_reflects_enabled_flags() {
+        let config = mvp::config::FeishuIntegrationConfig {
+            capabilities: mvp::config::FeishuCapabilityConfig {
+                docs: false,
+                messages: false,
+                calendar: false,
+                bitable: true,
+            },
+            ..mvp::config::FeishuIntegrationConfig::default()
+        };
+
+        let capabilities = configured_capabilities_from_config(&config);
+
+        assert_eq!(capabilities, vec![FeishuConfiguredCapability::Bitable]);
+    }
+
+    #[test]
+    fn scopes_for_configured_capabilities_include_offline_access_and_bitable_bundle() {
+        let scopes = scopes_for_configured_capabilities(&[
+            FeishuConfiguredCapability::Docs,
+            FeishuConfiguredCapability::Bitable,
+        ]);
+
+        assert!(
+            scopes
+                .iter()
+                .any(|scope| scope == FEISHU_OFFLINE_ACCESS_SCOPE)
+        );
+        assert!(scopes.iter().any(|scope| scope == FEISHU_DOC_READ_SCOPE));
+        assert!(scopes.iter().any(|scope| scope == FEISHU_BITABLE_SCOPE));
+        assert!(
+            scopes
+                .iter()
+                .any(|scope| scope == FEISHU_BITABLE_TABLE_READ_SCOPE)
+        );
+        assert!(
+            scopes
+                .iter()
+                .any(|scope| scope == FEISHU_BITABLE_RECORD_CREATE_SCOPE)
+        );
+        assert!(
+            scopes
+                .iter()
+                .any(|scope| scope == FEISHU_BITABLE_RECORD_RETRIEVE_SCOPE)
+        );
+        assert!(
+            scopes
+                .iter()
+                .any(|scope| scope == FEISHU_BITABLE_RECORD_WRITE_SCOPE)
+        );
+        assert!(scopes.iter().any(|scope| scope == FEISHU_DRIVE_READ_SCOPE));
+    }
+
+    #[test]
+    fn resolve_required_feishu_scopes_prefers_config_capabilities_over_legacy_default_scopes() {
+        let config = mvp::config::FeishuIntegrationConfig {
+            default_scopes: vec!["offline_access".to_owned()],
+            capabilities_explicitly_configured: true,
+            capabilities: mvp::config::FeishuCapabilityConfig {
+                docs: true,
+                messages: true,
+                calendar: true,
+                bitable: true,
+            },
+            ..mvp::config::FeishuIntegrationConfig::default()
+        };
+
+        let scopes = resolve_required_feishu_scopes(&config, &[], &[], false);
+
+        assert!(scopes.iter().any(|scope| scope == FEISHU_BITABLE_SCOPE));
+        assert!(scopes.iter().any(|scope| scope == FEISHU_DOC_READ_SCOPE));
+        assert!(
+            scopes
+                .iter()
+                .any(|scope| scope == FEISHU_MESSAGE_READ_SCOPE)
+        );
+    }
+
+    #[test]
+    fn resolve_required_feishu_scopes_uses_explicit_default_capability_block_instead_of_legacy_default_scopes()
+     {
+        let mut config = mvp::config::FeishuIntegrationConfig {
+            default_scopes: vec![
+                "offline_access".to_owned(),
+                "docx:document:readonly".to_owned(),
+                "bitable:app".to_owned(),
+            ],
+            ..mvp::config::FeishuIntegrationConfig::default()
+        };
+        config.capabilities_explicitly_configured = true;
+
+        let scopes = resolve_required_feishu_scopes(&config, &[], &[], false);
+
+        assert!(!scopes.iter().any(|scope| scope == FEISHU_BITABLE_SCOPE));
+        assert!(scopes.iter().any(|scope| scope == FEISHU_DOC_READ_SCOPE));
+    }
+
+    #[test]
+    fn resolve_required_feishu_scopes_falls_back_to_legacy_default_scopes_when_capability_block_is_absent()
+     {
+        let config = mvp::config::FeishuIntegrationConfig {
+            default_scopes: vec![
+                "offline_access".to_owned(),
+                "docx:document:readonly".to_owned(),
+                "bitable:app".to_owned(),
+            ],
+            capabilities_explicitly_configured: false,
+            ..mvp::config::FeishuIntegrationConfig::default()
+        };
+
+        let scopes = resolve_required_feishu_scopes(&config, &[], &[], false);
+
+        assert!(scopes.iter().any(|scope| scope == FEISHU_BITABLE_SCOPE));
+    }
+
+    #[test]
     fn resolve_scopes_can_expand_all_capability_bundle_over_custom_scopes() {
         let scopes = resolve_scopes(
             &[
@@ -652,7 +952,12 @@ mod tests {
         let now_s = unix_ts_now();
         let grant = sample_grant("feishu_main", "ou_123", now_s);
 
-        let recommendations = build_grant_recommendations("feishu_main", Some(&grant), now_s, &[]);
+        let recommendations = build_grant_recommendations(
+            "feishu_main",
+            Some(&grant),
+            now_s,
+            &["docx:document".to_owned(), "im:message".to_owned()],
+        );
 
         assert!(recommendations.missing_doc_write_scope);
         assert!(recommendations.missing_message_write_scope);
@@ -676,7 +981,12 @@ mod tests {
             "im:message",
         ]);
 
-        let recommendations = build_grant_recommendations("feishu_main", Some(&grant), now_s, &[]);
+        let recommendations = build_grant_recommendations(
+            "feishu_main",
+            Some(&grant),
+            now_s,
+            &["docx:document".to_owned(), "im:message".to_owned()],
+        );
 
         assert!(recommendations.missing_doc_write_scope);
         assert!(!recommendations.missing_message_write_scope);
@@ -698,7 +1008,12 @@ mod tests {
             "im:message:readonly",
         ]);
 
-        let recommendations = build_grant_recommendations("feishu_main", Some(&grant), now_s, &[]);
+        let recommendations = build_grant_recommendations(
+            "feishu_main",
+            Some(&grant),
+            now_s,
+            &["docx:document".to_owned(), "im:message".to_owned()],
+        );
 
         assert!(!recommendations.missing_doc_write_scope);
         assert!(recommendations.missing_message_write_scope);
@@ -706,6 +1021,45 @@ mod tests {
             recommendations.auth_start_command.as_deref(),
             Some("loong feishu auth start --account feishu_main --capability message-write")
         );
+    }
+
+    #[test]
+    fn build_grant_recommendations_ignores_write_gaps_when_not_required() {
+        let now_s = unix_ts_now();
+        let mut grant = sample_grant("feishu_main", "ou_123", now_s);
+        grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+            "offline_access",
+            "calendar:calendar:readonly",
+        ]);
+
+        let recommendations = build_grant_recommendations(
+            "feishu_main",
+            Some(&grant),
+            now_s,
+            &[
+                "offline_access".to_owned(),
+                "calendar:calendar:readonly".to_owned(),
+            ],
+        );
+
+        assert!(!recommendations.missing_doc_write_scope);
+        assert!(!recommendations.missing_message_write_scope);
+        assert_eq!(recommendations.auth_start_command, None);
+    }
+
+    #[test]
+    fn summarize_required_doc_write_scope_status_treats_disabled_scope_as_already_satisfied() {
+        let status = summarize_required_doc_write_scope_status(
+            None,
+            &[
+                "offline_access".to_owned(),
+                "calendar:calendar:readonly".to_owned(),
+            ],
+        );
+
+        assert!(status.ready);
+        assert!(status.accepted_scopes.is_empty());
+        assert!(status.matched_scopes.is_empty());
     }
 
     #[test]

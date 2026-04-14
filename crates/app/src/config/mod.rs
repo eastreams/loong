@@ -71,7 +71,7 @@ pub(crate) use channels::{
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
-pub use feishu_integration::FeishuIntegrationConfig;
+pub use feishu_integration::{FeishuCapabilityConfig, FeishuIntegrationConfig};
 pub(crate) use irc::{
     IRC_NICKNAME_ENV, IRC_SERVER_ENV, IrcServerEndpoint, IrcServerTransport,
     parse_irc_server_endpoint,
