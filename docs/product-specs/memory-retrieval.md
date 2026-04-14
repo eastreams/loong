@@ -9,20 +9,22 @@ channel.
 
 ## Acceptance Criteria
 
-- [ ] LoongClaw exposes retrieval that can reason over an explicit query rather
+- [x] LoongClaw exposes retrieval that can reason over an explicit query rather
       than only implicit summary hydration.
-- [ ] Retrieval can be scoped across the runtime's existing memory scope model
+- [x] Retrieval can be scoped across the runtime's existing memory scope model
       instead of being permanently fixed to session-local summary only.
-- [ ] Retrieved artifacts surface provenance that is meaningful to operators,
+- [x] Retrieved artifacts surface provenance that is meaningful to operators,
       including where the result came from and why it was injected.
-- [ ] Workspace-document retrieval honors explicit record-status metadata so
+- [x] Workspace-document retrieval honors explicit record-status metadata so
       inactive records are filtered before ranking or operator inspection.
-- [ ] The first slice includes a local text-search path before any
+- [x] The shipped surface includes a local text-search path before any
       embedding-dependent retrieval becomes required.
-- [ ] Retrieved memory remains advisory and does not override runtime self,
+- [x] Retrieved memory remains advisory and does not override runtime self,
       resolved runtime identity, or other continuity lanes.
-- [ ] Product docs clearly distinguish first-slice scoped retrieval from later
-      embedding-based or hybrid search enhancements.
+- [x] Product docs clearly distinguish the current scoped retrieval surface from
+      later embedding-based or hybrid search enhancements.
+- [ ] Derived-memory ranking should grow beyond the current metadata-backed FTS
+      baseline without weakening provenance or identity boundaries.
 
 ## Current Baseline
 
@@ -34,12 +36,18 @@ The current runtime already ships:
   `Derive`, `Retrieve`, `Rank`, `AfterTurn`, `Compact`
 - explicit retrieval-request modeling
 - runtime-self continuity boundaries
+- operator-facing `memory_search`
+- operator-facing `memory_get`
+- workspace durable-memory filtering that respects record status such as active
+  vs tombstoned material
 
-The built-in retrieval path is still intentionally narrow:
+The remaining gaps are not basic retrieval existence. The remaining gaps are:
 
-- no explicit query
-- session scope only
-- summary kind only
+- trust scoring and TTL or hash-backed durability hints
+- richer derived-memory ranking and synthesis
+- workflow-aware retrieval overlays that stay advisory
+- optional later embedding or hybrid search without changing the authority
+  model
 
 ## Out of Scope
 

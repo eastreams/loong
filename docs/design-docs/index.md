@@ -18,7 +18,7 @@ Catalog of design documents and architectural decisions.
 | [Plugin SDK And Ecosystem Strategy](plugin-sdk-and-ecosystem-strategy.md) | Native SDK layering, marketplace boundaries, migration lanes, and ecosystem maturity model | Active |
 | [OpenClaw Plugin Compatibility Contract](openclaw-plugin-compatibility-contract.md) | Foreign dialect normalization, compatibility-mode gating, and polyglot plugin strategy | Active |
 | [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
-| [Reference Runtime Comparison](reference-runtime-comparison.md) | Productization gap analysis and convergence order for tasks, skills, and memory | Active |
+| [Runtime Productization Direction](reference-runtime-comparison.md) | LoongClaw-centric direction for workflow, task, skills, and memory productization | Active |
 | [SDK Stability Policy](sdk-stability-policy.md) | Stability boundaries across product vocabulary, public contracts, internal seams, and promotion artifacts | Active |
 | [SDK Strategy](sdk-strategy.md) | Product-governed capability authoring, acquisition, and promotion strategy | Active |
 | [SDK Validator Contract](sdk-validator-contract.md) | Public validation semantics for capability artifacts, package contracts, and promotion inputs | Active |

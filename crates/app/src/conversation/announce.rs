@@ -744,6 +744,7 @@ mod tests {
 
     #[test]
     fn delegate_announce_queue_keeps_pending_batch_when_no_runtime_is_available() {
+        let _guard = announce_test_lock().blocking_lock();
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("no-runtime");
 

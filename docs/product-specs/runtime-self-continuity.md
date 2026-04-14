@@ -3,8 +3,8 @@
 ## User Story
 
 As a LoongClaw operator, I want runtime-self continuity to survive compaction,
-delegation, and future durable recall so that the agent stays coherent without
-mixing identity authority with transient task context.
+delegation, workflow handoff, and future durable recall so that the agent stays
+coherent without mixing identity authority with transient task context.
 
 ## Continuity Lanes
 
@@ -22,14 +22,15 @@ mixing identity authority with transient task context.
 
 - `Session Profile`
   Durable advisory context such as preferences, tuning, and imported
-  non-identity profile material. Future durable recall from `#421` and `#429`
-  may enrich this lane, but that enrichment remains advisory and cannot become a
-  second identity authority.
+  non-identity profile material. Future durable recall may enrich this lane,
+  but that enrichment remains advisory and cannot become a second identity
+  authority.
 
 - `Session-Local Recall`
-  Memory summaries, sliding-window turns, and delegate child task findings.
-  These artifacts preserve useful session context, but they stay local to the
-  session chain unless a separate durable-memory flow explicitly promotes them.
+  Memory summaries, sliding-window turns, delegate child task findings,
+  workflow-phase notes, and transient artifact references. These artifacts
+  preserve useful session context, but they stay local to the session chain
+  unless a separate durable-memory flow explicitly promotes them.
 
 ## Boundary Rules
 
@@ -37,10 +38,12 @@ mixing identity authority with transient task context.
   session-local recall only.
 - Delegate child sessions inherit continuity through one explicit runtime
   contract, even when the child has no extra tool narrowing.
+- Workflow or task metadata may enrich local context, but it must stay advisory
+  unless a separate durable-memory flow explicitly promotes it.
 - Durable recall augments advisory context; it does not replace runtime-self
   guidance or resolved runtime identity.
-- Advisory profile, summary, and durable-recall projection must demote
-  runtime-owned or identity-like headings instead of replaying them as
+- Advisory profile, summary, workflow-note, and durable-recall projection must
+  demote runtime-owned or identity-like headings instead of replaying them as
   authoritative-looking prompt sections.
 - When a safe workspace file root is configured and compaction is about to run,
   LoongClaw may export advisory durable recall into `memory/YYYY-MM-DD.md`
@@ -58,6 +61,7 @@ LoongClaw's public continuity direction is intentionally narrow:
 
 - keep runtime-self guidance and resolved runtime identity as the authority lane
 - keep session profile and future durable recall advisory
+- keep workflow and task continuity subordinate to the same authority split
 - add bounded durable context before broadening retrieval scope
 - add explicit query-aware retrieval before embedding-dependent search becomes
   required
@@ -68,11 +72,14 @@ In practical terms, that means:
   into a second identity layer
 - retrieval should start with local text-first recall and clear provenance
   rather than jumping directly to opaque vendor-managed search
-- future memory providers may enrich advisory context, but they must not become
-  prompt authority or override runtime-owned continuity lanes
+- future workflow journals or worktree-bound notes may enrich advisory context,
+  but they must not become prompt authority or override runtime-owned
+  continuity lanes
 
 Related public specs:
 
+- [Governed Workflows](governed-workflows.md) defines the operator-facing
+  workflow model that should sit above these continuity lanes
 - [Memory Profiles](memory-profiles.md) covers bounded profile projection and
   advisory durable context
 - [Memory Retrieval](memory-retrieval.md) covers explicit query-aware recall and
@@ -84,9 +91,9 @@ Related public specs:
   resolved runtime identity, or durable advisory profile context.
 - Session profile projection clearly states that durable recall is advisory and
   does not override resolved runtime identity.
-- Advisory profile, summary, and durable-recall projection demote runtime-owned
-  or identity-like headings rather than preserving them as raw prompt section
-  headings.
+- Advisory profile, summary, workflow-note, and durable-recall projection
+  demote runtime-owned or identity-like headings rather than preserving them as
+  raw prompt section headings.
 - Delegate child sessions always receive an explicit self-continuity contract.
 - Pre-compaction durable exports, when enabled by workspace configuration, stay
   advisory and do not become an identity override path.
@@ -94,5 +101,5 @@ Related public specs:
   stays advisory and does not become an identity override path.
 - Session-local derived overview artifacts stay advisory and are clearly
   distinguished from summary checkpoints and retrieved durable recall.
-- The relationship to `#421` and `#429` is explicit: retrieval may enrich
-  durable context, but it must not become an identity override path.
+- The relationship to retrieval remains explicit: retrieval may enrich durable
+  context, but it must not become an identity override path.

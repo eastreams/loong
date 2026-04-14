@@ -19,6 +19,7 @@ Product specs describe **what** the product does from the user's perspective, no
 - [Runtime Experiment](runtime-experiment.md)
 - [Runtime Capability](runtime-capability.md)
 - [Local Product Control Plane](local-product-control-plane.md)
+- [Governed Workflows](governed-workflows.md)
 - [Web UI](web-ui.md)
 - [Prompt And Personality](prompt-and-personality.md)
 - [Background Tasks](background-tasks.md)
@@ -36,7 +37,8 @@ Product specs describe **what** the product does from the user's perspective, no
 - `Runtime Experiment` defines the shipped local experiment-record surface layered on top of runtime snapshot and restore artifacts.
 - `Runtime Capability` defines the shipped local capability-candidate review surface layered on top of runtime experiment artifacts.
 - `Local Product Control Plane` defines the shared localhost-only product substrate that future HTTP and Web UI surfaces must consume instead of inventing a second runtime.
-- `Background Tasks`, `Skills Discovery`, and `Memory Retrieval` define the next operator-facing productization surfaces that should be built on top of already-shipped runtime substrate.
+- `Background Tasks` and `Governed Workflows` define the next operator-facing child-session workflow surfaces that should be built on top of already-shipped runtime substrate.
+- `Skills Discovery` and `Memory Retrieval` define the next operator-facing productization surfaces that should be built on top of already-shipped runtime substrate.
 - `Memory Profiles`, `Memory Retrieval`, and `Runtime-Self Continuity` together define the public continuity boundary: bounded advisory memory, explicit retrieval, and strict runtime-self identity separation.
 - `Personalization` defines the shipped optional operator-preference capture surface layered on top of the advisory session-profile lane.
 - `Browser Automation Companion` and `Web UI` remain expectation-setting specs for the next user-facing surfaces. They should not be documented as generally available before the implementation exists.

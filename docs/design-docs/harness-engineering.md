@@ -46,7 +46,7 @@ Current built-in core tool slice: `shell.exec`, `file.read`, `file.write`, `file
 |-------|--------|
 | Working context (system prompt + tool snapshot + sliding window) | Implemented |
 | Session state (SQLite turns table) | Implemented |
-| Long-term memory | Not implemented |
+| Long-term memory | Partial — canonical session recall plus `memory_search` / `memory_get` are shipped, but richer derived-memory ranking and workflow-aware continuity remain limited |
 
 ### Stage 4: Result Verification & Iteration
 
@@ -56,7 +56,7 @@ Current built-in core tool slice: `shell.exec`, `file.read`, `file.write`, `file
 
 ### Stage 5: Completion and Handoff
 
-Turn persistence to SQLite. Audit event recording. Structured progress artifacts are a gap.
+Turn persistence to SQLite. Audit event recording. Session workflow metadata and task-shaped background-task surfaces now exist, but a native workflow phase model and richer structured progress artifacts remain a gap.
 
 ---
 

@@ -459,11 +459,19 @@ Current first-slice mapping:
   its runtime gate is open
 - `trusted` - reserved for future explicit high-trust runtime lanes rather than assumed by default
 
-### D9: First-party workflow packs on hardened primitives
+### D9: Native workflow harness and first-party workflow packs on hardened primitives
 
-Once the runtime base is harder, LoongClaw should turn that into a small set of first-party
-workflow packs that prove the kernel's value in operator-facing tasks such as release/review work,
-issue triage, or channel support.
+Once the runtime base is harder, LoongClaw should first productize the current session, task,
+continuity, and control-plane substrate into a native workflow harness, then use that harness to
+ship a small set of first-party workflow packs for operator-facing tasks such as release/review
+work, issue triage, and channel support.
+
+The harness-first step should make these surfaces explicit without inventing a second scheduler:
+
+- workflow phase progression (`plan`, `spec`, `execute`, `verify`, `fix`)
+- task-shaped delegated work rooted in child-session truth
+- truthful workflow inspection over bound session, worktree, and artifact identity
+- advisory continuity that stays subordinate to runtime-self identity
 
 Trade-off: this is the right productization direction, but it should follow runtime hardening
 instead of preceding it.
@@ -474,7 +482,7 @@ instead of preceding it.
 2. Persistent audit sink and query baseline
 3. ACP control-plane hardening and recovery
 4. Shared execution security tiers across process/browser/WASM lanes
-5. First-party workflow packs on hardened runtime primitives
+5. Native workflow harness foundation and first-party workflow packs on hardened runtime primitives
 
 Execution package for this order:
 

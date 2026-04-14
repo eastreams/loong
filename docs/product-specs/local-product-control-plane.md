@@ -4,7 +4,8 @@
 
 As a LoongClaw operator, I want every local product surface to use one shared
 localhost-only control plane so that sessions, approvals, status, onboarding,
-and browser surfaces all behave like the same assistant runtime.
+and future workflow or browser surfaces all behave like the same assistant
+runtime.
 
 ## Product Scope
 
@@ -15,6 +16,8 @@ The local product control plane is the shared surface contract for:
 - turn submission and streaming
 - approval visibility and decisions
 - onboarding and doctor workflows
+- future workflow and background-task observation routes that must stay rooted
+  in the same session/runtime model
 
 It is a local product substrate.
 
@@ -37,6 +40,11 @@ runtime-local; it does not introduce a second durable session authority. The
 runtime-local turn registry only retains a bounded recent window of completed
 turns for replay and final-result fetch.
 
+Workflow and task productization remain split today: sessions and approvals
+already flow through the control plane, while the current `loong tasks` surface
+is still CLI-owned. The follow-on contract should close that gap without
+inventing a separate workflow-specific identity model.
+
 ## Acceptance Criteria
 
 - [ ] LoongClaw defines one localhost-only product control plane that future
@@ -47,8 +55,11 @@ turns for replay and final-result fetch.
       unrelated lifecycle rules.
 - [ ] Approval visibility and decisions stay consistent with the kernel-governed
       execution path rather than being reimplemented in a browser-only layer.
-- [ ] `status`, `onboard`, and `doctor` can be exposed as reusable local control
-      plane operations instead of staying terminal-only behavior.
+- [ ] `status`, `onboard`, `doctor`, and future workflow or task observation can
+      be exposed as reusable local control-plane operations instead of staying
+      surface-specific behavior.
+- [ ] Future workflow and task routes reuse the same session lineage and
+      runtime-self continuity model rather than inventing workflow-local truth.
 - [ ] The first browser-facing surfaces remain localhost-only by default and do
       not imply that public exposure is supported or safe.
 - [ ] The control plane remains a thin product layer above the runtime and does
