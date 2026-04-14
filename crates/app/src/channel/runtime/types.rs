@@ -409,8 +409,8 @@ fn resolve_feishu_known_session_target(
         scoped_path.last().cloned()
     } else if scoped_path.len() == 2 {
         let candidate_thread_id = scoped_path.get(1);
-        let candidate_thread_id = candidate_thread_id
-            .filter(|value| looks_like_feishu_message_id(value.as_str()));
+        let candidate_thread_id =
+            candidate_thread_id.filter(|value| looks_like_feishu_message_id(value.as_str()));
         candidate_thread_id.cloned()
     } else {
         None

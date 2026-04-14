@@ -1927,10 +1927,7 @@ mod tests {
 
         assert_eq!(resolved.channel_id, "feishu");
         assert_eq!(resolved.session_shape, "feishu_chat");
-        assert_eq!(
-            resolved.target_kind,
-            ChannelOutboundTargetKind::ReceiveId
-        );
+        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::ReceiveId);
         assert_eq!(resolved.target_id, "oc_123");
         assert_eq!(resolved.account_id.as_deref(), Some("feishu_cli_a1b2c3"));
         assert_eq!(resolved.conversation_id.as_deref(), Some("oc_123"));
@@ -1960,10 +1957,7 @@ mod tests {
 
         assert_eq!(resolved.channel_id, "feishu");
         assert_eq!(resolved.session_shape, "feishu_chat");
-        assert_eq!(
-            resolved.target_kind,
-            ChannelOutboundTargetKind::ReceiveId
-        );
+        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::ReceiveId);
         assert_eq!(resolved.target_id, "oc_123");
         assert_eq!(resolved.account_id.as_deref(), Some("feishu_cli_a1b2c3"));
         assert_eq!(resolved.conversation_id.as_deref(), Some("oc_123"));
