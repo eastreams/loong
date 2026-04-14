@@ -1035,19 +1035,6 @@ impl ConversationTurnCoordinator {
         Self
     }
 
-    pub(crate) async fn compact_session(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<ContextCompactionReport> {
-        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
-        self.compact_session_with_runtime(config, session_id, &runtime, effective_binding)
-            .await
-    }
-
     pub async fn compact_production_session(
         &self,
         config: &LoongConfig,
@@ -1122,27 +1109,6 @@ impl ConversationTurnCoordinator {
         };
 
         Ok(report)
-    }
-
-    pub(crate) async fn handle_turn(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_session_and_acp_options_and_ingress(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-            None,
-        )
-        .await
     }
 
     pub(crate) async fn repair_turn_checkpoint_tail(
@@ -7335,9 +7301,7 @@ mod tests {
     fn generic_direct_capable_coordinator_entrypoints_are_not_public_api() {
         let source = include_str!("turn_coordinator.rs");
         let function_names = [
-            "compact_session",
             "compact_session_with_runtime",
-            "handle_turn",
             "handle_turn_with_ingress",
             "handle_turn_with_acp_options",
             "repair_turn_checkpoint_tail",
