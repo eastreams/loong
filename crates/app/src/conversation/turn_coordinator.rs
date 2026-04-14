@@ -33,7 +33,7 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::acp::{
     AcpConversationTurnEntryDecision, AcpConversationTurnExecutionOutcome,
-    AcpConversationTurnOptions, AcpTurnEventSink, evaluate_acp_conversation_turn_entry_for_address,
+    AcpConversationTurnOptions, evaluate_acp_conversation_turn_entry_for_address,
     execute_acp_conversation_turn_for_address,
     execute_acp_conversation_turn_for_address_with_manager,
 };
@@ -1384,28 +1384,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn handle_turn_with_acp_event_sink(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_session_and_acp_options_and_ingress(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-            None,
-        )
-        .await
-    }
-
     async fn handle_turn_with_session_and_acp_options_and_ingress(
         &self,
         config: &LoongClawConfig,
@@ -1425,47 +1403,6 @@ impl ConversationTurnCoordinator {
             acp_options,
             binding,
             ingress,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_address(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_address_and_acp_options(
-            config,
-            address,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_address_and_acp_event_sink(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_address_and_acp_options(
-            config,
-            address,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
         )
         .await
     }
@@ -1866,57 +1803,6 @@ impl ConversationTurnCoordinator {
                     .to_owned(),
             )
         }
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_acp_options<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        self.handle_turn_with_runtime_and_session_and_acp_options_and_ingress(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            runtime,
-            acp_options,
-            binding,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_acp_event_sink<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_runtime_and_session_and_acp_options_and_ingress(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
-            None,
-        )
-        .await
     }
 
     async fn handle_turn_with_runtime_and_session_and_acp_options_and_ingress<
@@ -2595,32 +2481,6 @@ impl ConversationTurnCoordinator {
             production_binding,
             ingress,
             observer,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_event_sink<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            address,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
             None,
         )
         .await
