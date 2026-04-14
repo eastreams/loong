@@ -5,18 +5,19 @@ description: Shared public config shapes for providers, channels, account select
 
 # Configuration Patterns
 
-Use this page when you want the public config shape without reading the full
-source-level spec.
+Use this page when you want the shared public config shape before reading the
+full field-level reference.
 
 This page is intentionally about patterns, not every field. It should help you
 recognize how Loong's config is organized before you drop into provider
-guides, channel guides, rollout recipes, or the repository-native product
-specs.
+guides, channel guides, rollout recipes, or the deeper
+[Configuration Reference](/use-loong/configuration-reference) page.
 
 ## Start With The Right Question
 
 | If you need... | Start here |
 | --- | --- |
+| every field, default, or `validate-config` note | [Configuration Reference](/use-loong/configuration-reference) |
 | one provider profile that should own first value | [Single Provider Profile](#single-provider-profile) |
 | several explicit provider lanes in one file | [Multi-Profile Provider Config](#multi-profile-provider-config) |
 | one service-channel account that should own a reply loop | [Single-Account Channel Shape](#single-account-channel-shape) |
