@@ -6,7 +6,10 @@ use std::{
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, sleep};
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loongclaw_contracts::{
+    GovernedWorkflowPhase, ToolCoreOutcome, ToolCoreRequest, WorkflowOperationKind,
+    WorkflowOperationScope,
+};
 use serde_json::{Value, json};
 
 use super::payload::{
@@ -37,7 +40,7 @@ use crate::session::recovery::{
 #[cfg(feature = "memory-sqlite")]
 use crate::session::{
     DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED, DELEGATE_CANCEL_REQUESTED_EVENT_KIND,
-    DELEGATE_CANCELLED_EVENT_KIND, delegate_cancelled_error,
+    DELEGATE_CANCELLED_EVENT_KIND, delegate_cancelled_error, parse_delegate_cancelled_reason,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::tools::ToolView;
@@ -139,7 +142,12 @@ struct SessionDelegateCancellationRecord {
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SessionWorkflowRecord {
+    workflow_id: String,
     task: Option<String>,
+    phase: Option<GovernedWorkflowPhase>,
+    operation_kind: Option<WorkflowOperationKind>,
+    operation_scope: Option<WorkflowOperationScope>,
+    task_session_id: Option<String>,
     lineage_root_session_id: Option<String>,
     lineage_depth: Option<usize>,
     runtime_self_continuity: Option<SessionRuntimeSelfContinuityRecord>,
@@ -1860,19 +1868,39 @@ fn load_session_workflow_record(
         Some(events) => events,
         None => loaded_delegate_events.as_deref().unwrap_or(&[]),
     };
+    let workflow_id = session_workflow_id(session, lineage_root_session_id.as_deref());
     let task = delegate_events
         .iter()
         .rev()
         .find_map(session_workflow_task_from_event);
+    let phase = session_workflow_phase(session, delegate_events);
+    let operation_kind = session_workflow_operation_kind(session);
+    let operation_scope = session_workflow_operation_scope(session);
+    let task_session_id = session_workflow_task_session_id(session);
     let runtime_self_continuity =
         load_session_runtime_self_continuity_record(repo, session, delegate_events)?;
 
     Ok(SessionWorkflowRecord {
+        workflow_id,
         task,
+        phase,
+        operation_kind,
+        operation_scope,
+        task_session_id,
         lineage_root_session_id,
         lineage_depth,
         runtime_self_continuity,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_id(
+    session: &SessionSummaryRecord,
+    lineage_root_session_id: Option<&str>,
+) -> String {
+    let fallback_session_id = session.session_id.as_str();
+    let resolved_workflow_id = lineage_root_session_id.unwrap_or(fallback_session_id);
+    resolved_workflow_id.to_owned()
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1882,6 +1910,69 @@ fn session_workflow_task_from_event(event: &SessionEventRecord) -> Option<String
         .get("task")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_phase(
+    session: &SessionSummaryRecord,
+    delegate_events: &[SessionEventRecord],
+) -> Option<GovernedWorkflowPhase> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    let cancellation_reason = session
+        .last_error
+        .as_deref()
+        .and_then(parse_delegate_cancelled_reason);
+    let was_cancelled = cancellation_reason.is_some();
+    if was_cancelled {
+        return Some(GovernedWorkflowPhase::Cancelled);
+    }
+
+    let has_delegate_events = !delegate_events.is_empty();
+    if !has_delegate_events && session.parent_session_id.is_none() {
+        return None;
+    }
+
+    match session.state {
+        SessionState::Ready => Some(GovernedWorkflowPhase::Execute),
+        SessionState::Running => Some(GovernedWorkflowPhase::Execute),
+        SessionState::Completed => Some(GovernedWorkflowPhase::Complete),
+        SessionState::Failed => Some(GovernedWorkflowPhase::Failed),
+        SessionState::TimedOut => Some(GovernedWorkflowPhase::Failed),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_operation_kind(
+    session: &SessionSummaryRecord,
+) -> Option<WorkflowOperationKind> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    Some(WorkflowOperationKind::Task)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_operation_scope(
+    session: &SessionSummaryRecord,
+) -> Option<WorkflowOperationScope> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    Some(WorkflowOperationScope::Task)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_task_session_id(session: &SessionSummaryRecord) -> Option<String> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    Some(session.session_id.clone())
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -3704,7 +3795,12 @@ fn subagent_handle_coordination_actions(
 #[cfg(feature = "memory-sqlite")]
 fn session_workflow_json(workflow: SessionWorkflowRecord) -> Value {
     json!({
+        "workflow_id": workflow.workflow_id,
         "task": workflow.task,
+        "phase": workflow.phase,
+        "operation_kind": workflow.operation_kind,
+        "operation_scope": workflow.operation_scope,
+        "task_session_id": workflow.task_session_id,
         "lineage_root_session_id": workflow.lineage_root_session_id,
         "lineage_depth": workflow.lineage_depth,
         "runtime_self_continuity": workflow
@@ -4441,7 +4537,12 @@ mod tests {
             .iter()
             .find(|item| item["session_id"] == "child-session")
             .expect("child session");
+        assert_eq!(child["workflow"]["workflow_id"], "root-session");
         assert_eq!(child["workflow"]["task"], "research release readiness");
+        assert_eq!(child["workflow"]["phase"], "execute");
+        assert_eq!(child["workflow"]["operation_kind"], "task");
+        assert_eq!(child["workflow"]["operation_scope"], "task");
+        assert_eq!(child["workflow"]["task_session_id"], "child-session");
         assert_eq!(child["workflow"]["lineage_root_session_id"], "root-session");
         assert_eq!(child["workflow"]["lineage_depth"], 1);
         assert_eq!(child["subagent"]["session_id"], "child-session");
@@ -4654,7 +4755,15 @@ mod tests {
         )
         .expect("session_status outcome");
 
+        assert_eq!(outcome.payload["workflow"]["workflow_id"], "root-session");
         assert_eq!(outcome.payload["workflow"]["task"], "research continuity");
+        assert_eq!(outcome.payload["workflow"]["phase"], "execute");
+        assert_eq!(outcome.payload["workflow"]["operation_kind"], "task");
+        assert_eq!(outcome.payload["workflow"]["operation_scope"], "task");
+        assert_eq!(
+            outcome.payload["workflow"]["task_session_id"],
+            "child-session"
+        );
         assert_eq!(
             outcome.payload["workflow"]["lineage_root_session_id"],
             "root-session"
@@ -5869,6 +5978,7 @@ mod tests {
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["session"]["state"], "failed");
+        assert_eq!(outcome.payload["workflow"]["phase"], "cancelled");
         assert_eq!(outcome.payload["terminal_outcome_state"], "present");
         assert_eq!(outcome.payload["terminal_outcome"]["status"], "error");
         assert_eq!(
