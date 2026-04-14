@@ -1342,53 +1342,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn handle_turn_with_address_and_acp_options_and_observer(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        observer: Option<ConversationTurnObserverHandle>,
-    ) -> CliResult<String> {
-        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
-            config,
-            address,
-            user_input,
-            error_mode,
-            acp_options,
-            binding,
-            None,
-            observer,
-            None,
-        )
-        .await
-    }
-
-    pub async fn handle_production_turn_with_address_and_acp_options_and_observer(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        observer: Option<ConversationTurnObserverHandle>,
-    ) -> CliResult<String> {
-        self.handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
-            config,
-            address,
-            user_input,
-            error_mode,
-            acp_options,
-            binding,
-            observer,
-            None,
-        )
-        .await
-    }
-
     pub(crate) async fn handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
         &self,
         config: &LoongClawConfig,
@@ -1633,29 +1586,6 @@ impl ConversationTurnCoordinator {
             acp_options,
             binding,
             ingress,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_address<R: ConversationRuntime + ?Sized>(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            address,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
-            None,
         )
         .await
     }
@@ -7245,14 +7175,16 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("observer-session");
 
         let result = coordinator
-            .handle_turn_with_address_and_acp_options_and_observer(
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
                 ProviderErrorMode::Propagate,
                 &acp_options,
                 ConversationRuntimeBinding::direct(),
+                None,
                 Some(observer_handle),
+                None,
             )
             .await;
         let _error = result.expect_err("missing runtime bootstrap should fail");
@@ -7281,7 +7213,7 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("observer-session");
 
         let result = coordinator
-            .handle_production_turn_with_address_and_acp_options_and_observer(
+            .handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7289,6 +7221,7 @@ mod tests {
                 &acp_options,
                 ConversationRuntimeBinding::direct(),
                 Some(observer_handle),
+                None,
             )
             .await;
         let error = result.expect_err("direct production binding should fail");
