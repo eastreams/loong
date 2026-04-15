@@ -46,7 +46,9 @@ use super::state::{
     load_gateway_owner_status, request_gateway_stop,
 };
 
+#[cfg(unix)]
 const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
+#[cfg(unix)]
 const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 const GATEWAY_ACP_SESSION_LIST_DEFAULT_LIMIT: usize = 50;
 const GATEWAY_ACP_SESSION_LIST_MAX_LIMIT: usize = 200;
