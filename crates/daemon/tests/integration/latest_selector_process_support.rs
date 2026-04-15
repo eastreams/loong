@@ -88,6 +88,7 @@ impl LatestSelectorCliFixture {
         let mut config = mvp::config::LoongClawConfig::default();
         config.memory.sqlite_path = self.sqlite_path.display().to_string();
         config.memory.sliding_window = 8;
+        config.audit.mode = mvp::config::AuditMode::InMemory;
         config.tools.file_root = Some(self.root.display().to_string());
         configure(&mut config);
         let config_path_text = self.config_path.to_string_lossy();
@@ -169,7 +170,7 @@ impl LatestSelectorCliFixture {
     }
 
     pub(super) fn run_process(&self, args: &[&str], stdin_bytes: Option<&[u8]>) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_loongclaw"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_loong"));
         command
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)

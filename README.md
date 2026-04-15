@@ -81,7 +81,7 @@ Also, if you want the longer public rationale behind this positioning, read
 <a id="quick-start"></a>
 ## Quick Start
 
-> Loong uses `loong` as the primary command. `loongclaw` remains as a compatibility entrypoint.
+> Loong uses `loong` as the only supported command-line entrypoint.
 
 ### Script Install (Recommended)
 

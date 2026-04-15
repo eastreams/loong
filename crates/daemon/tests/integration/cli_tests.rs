@@ -48,7 +48,7 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
     );
     assert!(
         help.contains("loong doctor --config <path>")
-            || help.contains("loongclaw doctor --config <path>"),
+            || help.contains("loong doctor --config <path>"),
         "welcome help should mention doctor with an explicit config placeholder: {help}"
     );
     assert!(
@@ -59,7 +59,7 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
 
 #[test]
 fn setup_subcommand_is_removed() {
-    let error = try_parse_cli(["loongclaw", "setup"])
+    let error = try_parse_cli(["loong", "setup"])
         .expect_err("`setup` should no longer parse as a valid subcommand");
     assert!(
         error
@@ -101,7 +101,7 @@ fn migrate_cli_parses_discover_mode_with_defaults() {
 
 #[test]
 fn migrate_cli_requires_mode_flag() {
-    let error = try_parse_cli(["loongclaw", "migrate", "--input", "/tmp/legacy-root"])
+    let error = try_parse_cli(["loong", "migrate", "--input", "/tmp/legacy-root"])
         .expect_err("`migrate` without --mode should fail");
     let rendered = error.to_string();
 
@@ -445,7 +445,7 @@ fn benchmark_memory_context_cli_parses_custom_knobs() {
 
 #[test]
 fn benchmark_memory_context_cli_uses_stable_default_sample_sizes() {
-    let cli = try_parse_cli(["loongclaw", "benchmark-memory-context"])
+    let cli = try_parse_cli(["loong", "benchmark-memory-context"])
         .expect("benchmark-memory-context CLI should parse with defaults");
 
     match cli.command {
@@ -467,7 +467,7 @@ fn benchmark_memory_context_cli_uses_stable_default_sample_sizes() {
 
 #[test]
 fn memory_systems_cli_parses() {
-    let cli = try_parse_cli(["loongclaw", "list-memory-systems"])
+    let cli = try_parse_cli(["loong", "list-memory-systems"])
         .expect("`list-memory-systems` should parse");
 
     match cli.command {
@@ -2081,7 +2081,7 @@ fn imessage_send_cli_rejects_non_conversation_target_kind() {
 
 #[test]
 fn matrix_serve_cli_accepts_once_and_account_flags() {
-    let cli = try_parse_cli(["loongclaw", "matrix-serve", "--once", "--account", "ops"])
+    let cli = try_parse_cli(["loong", "matrix-serve", "--once", "--account", "ops"])
         .expect("matrix serve CLI should parse");
 
     match cli.command {
@@ -2095,7 +2095,7 @@ fn matrix_serve_cli_accepts_once_and_account_flags() {
 
 #[test]
 fn wecom_serve_cli_accepts_account_flag() {
-    let cli = try_parse_cli(["loongclaw", "wecom-serve", "--account", "ops"])
+    let cli = try_parse_cli(["loong", "wecom-serve", "--account", "ops"])
         .expect("wecom serve CLI should parse");
 
     match cli.command {
@@ -2193,8 +2193,8 @@ fn run_channel_serve_cli_forwards_optional_arguments_to_runner() {
 
 #[test]
 fn multi_channel_serve_cli_requires_explicit_cli_session() {
-    let error = try_parse_cli(["loongclaw", "multi-channel-serve"])
-        .expect_err("missing --session should fail");
+    let error =
+        try_parse_cli(["loong", "multi-channel-serve"]).expect_err("missing --session should fail");
     assert!(error.to_string().contains("--session <SESSION>"));
 }
 

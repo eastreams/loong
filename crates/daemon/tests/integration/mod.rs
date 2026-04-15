@@ -389,7 +389,7 @@ fn run_spec_cli_accepts_render_summary_flag() {
 
 #[test]
 fn ask_cli_requires_message_flag() {
-    let error = try_parse_cli(["loongclaw", "ask"]).expect_err("ask without --message should fail");
+    let error = try_parse_cli(["loong", "ask"]).expect_err("ask without --message should fail");
     let rendered = error.to_string();
 
     assert!(
@@ -455,7 +455,7 @@ fn audit_cli_recent_parses_global_flags_after_subcommand() {
 
 #[test]
 fn audit_cli_summary_parses_limit_without_json() {
-    let cli = try_parse_cli(["loongclaw", "audit", "summary", "--limit", "10"])
+    let cli = try_parse_cli(["loong", "audit", "summary", "--limit", "10"])
         .expect("audit summary CLI should parse");
 
     match cli.command {
@@ -622,7 +622,7 @@ fn audit_cli_summary_parses_kind_filter_in_canonical_form() {
 
 #[test]
 fn audit_cli_summary_parses_group_by_alias() {
-    let cli = try_parse_cli(["loongclaw", "audit", "summary", "--group-by", "token-id"])
+    let cli = try_parse_cli(["loong", "audit", "summary", "--group-by", "token-id"])
         .expect("audit summary CLI should parse group-by alias");
 
     match cli.command {
@@ -688,7 +688,7 @@ fn audit_cli_discovery_parses_trust_filters_and_aliases() {
 
 #[test]
 fn audit_cli_discovery_parses_group_by_alias() {
-    let cli = try_parse_cli(["loongclaw", "audit", "discovery", "--group-by", "agent-id"])
+    let cli = try_parse_cli(["loong", "audit", "discovery", "--group-by", "agent-id"])
         .expect("audit discovery CLI should parse group-by alias");
 
     match cli.command {

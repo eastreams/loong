@@ -15,6 +15,7 @@ use super::state::ChannelOperationRuntimeTracker;
 use crate::CliResult;
 
 #[derive(Debug, Clone, Copy)]
+/// Identifies the per-account singleton runtime slot for a `serve` operation.
 pub(in crate::channel) struct ChannelServeRuntimeSpec<'a> {
     pub(in crate::channel) platform: ChannelPlatform,
     pub(in crate::channel) operation_id: &'static str,
@@ -104,6 +105,11 @@ pub(in crate::channel) fn ensure_channel_operation_runtime_slot_available_in_dir
     ))
 }
 
+/// Guard a channel serve loop with runtime-tracker lifecycle management.
+///
+/// The helper prunes stale runtime state, rejects duplicate active serve loops
+/// for the same platform/operation/account triple, starts a tracker before
+/// invoking `run`, and always attempts shutdown bookkeeping afterward.
 pub(in crate::channel) async fn with_channel_serve_runtime<T, F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     run: F,
@@ -130,6 +136,8 @@ where
     merge_runtime_result(result, shutdown_result)
 }
 
+/// Variant of `with_channel_serve_runtime` that forwards a cooperative stop
+/// handle into the serve loop.
 pub(in crate::channel) async fn with_channel_serve_runtime_with_stop<F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     stop: ChannelServeStopHandle,

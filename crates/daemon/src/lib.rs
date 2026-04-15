@@ -212,7 +212,6 @@ pub mod test_support;
 
 pub const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
 pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
-pub const LEGACY_CLI_COMMAND_NAME: &str = mvp::config::LEGACY_CLI_COMMAND_NAME;
 
 pub fn active_cli_command_name() -> &'static str {
     mvp::config::active_cli_command_name()

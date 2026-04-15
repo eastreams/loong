@@ -82,7 +82,7 @@ daemon     operator CLI and service assembly over the lower layers
 | `app` | Product/runtime layer. Owns providers, channels, tools, memory backends, chat/conversation/session logic, config loading, runtime environment helpers, and presentation-facing surfaces. Houses the feature-flagged product modules. |
 | `spec` | Deterministic execution rail. Owns runner specs, bootstrap builders, programmatic tool/spec execution, and test-facing runtime scaffolding that should stay out of daemon business logic. |
 | `bench` | Performance and pressure rail. Owns benchmark suites and gate enforcement on top of the spec/kernel surfaces instead of folding that logic into the normal runtime path. |
-| `daemon` | Operator assembly layer. `loong` is the primary command, while `loongclaw` remains a compatibility entrypoint. Wires lower-layer crates into CLI and service entrypoints such as `onboard`, `ask`, `chat`, `doctor`, `gateway`, `tasks`, `skills`, plugin flows, migration flows, and benchmarks. |
+| `daemon` | Operator assembly layer. `loong` is the supported command-line entrypoint. Wires lower-layer crates into CLI and service entrypoints such as `onboard`, `ask`, `chat`, `doctor`, `gateway`, `tasks`, `skills`, plugin flows, migration flows, and benchmarks. |
 
 ## Layered Execution Model
 
@@ -178,6 +178,7 @@ the documented contract deliberately.
 |-------|----------|
 | Repository docs layering | [Repository Docs Map](docs/README.md) |
 | Full layer specification (L0-L9) | [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) |
+| Runtime/bootstrap surface map | [Runtime Entrypoint and Bootstrap Map](docs/design-docs/runtime-entrypoint-map.md) |
 | Harness engineering & backpressure | [Harness Engineering](docs/design-docs/harness-engineering.md) |
 | Design decisions, patterns & catalog | [Design Docs Index](docs/design-docs/index.md) |
 | Security model & gaps | [Security](docs/SECURITY.md) |

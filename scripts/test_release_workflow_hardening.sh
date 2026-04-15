@@ -46,6 +46,42 @@ assert_android_release_target_parity() {
   assert_not_contains ".github/workflows/release.yml" "target: x86_64-linux-android"
 }
 
+assert_daemon_bin_targets() {
+  local bin_targets
+
+  bin_targets="$(
+    awk '
+      /^\[\[bin\]\]$/ { in_bin=1; next }
+      /^\[/ && $0 != "[[bin]]" { in_bin=0 }
+      in_bin && $1 == "name" {
+        value = $3
+        gsub(/"/, "", value)
+        print value
+      }
+    ' crates/daemon/Cargo.toml
+  )"
+
+  if [[ "$bin_targets" != "loong" ]]; then
+    echo "expected daemon bin targets to be only 'loong' but got: ${bin_targets}" >&2
+    exit 1
+  fi
+}
+
+assert_single_cli_bin_surface() {
+  assert_daemon_bin_targets
+
+  assert_not_contains ".github/workflows/ci.yml" "LEGACY_BIN_NAME"
+  assert_not_contains ".github/workflows/ci.yml" '--bin "${LEGACY_BIN_NAME}"'
+
+  assert_not_contains ".github/workflows/release.yml" "LEGACY_BIN_NAME"
+  assert_not_contains ".github/workflows/release.yml" '${env:LEGACY_BIN_NAME}'
+  assert_not_contains ".github/workflows/release.yml" '--bin "${LEGACY_BIN_NAME}"'
+  assert_not_contains ".github/workflows/release.yml" '--bin ${{ env.LEGACY_BIN_NAME }}'
+
+  assert_not_contains "scripts/install.ps1" 'LegacyBinName'
+  assert_not_contains "scripts/install.ps1" 'Installed compatible loong'
+}
+
 assert_release_docs_gates() {
   assert_contains ".github/workflows/release.yml" "scripts/bootstrap_release_local_artifacts.sh"
   assert_contains ".github/workflows/release.yml" "LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh"
@@ -59,6 +95,7 @@ cd "$REPO_ROOT"
 assert_android_ndk_sha256_hardening ".github/workflows/ci.yml"
 assert_android_ndk_sha256_hardening ".github/workflows/release.yml"
 assert_android_release_target_parity
+assert_single_cli_bin_surface
 assert_release_docs_gates
 
 echo "release workflow hardening checks passed"

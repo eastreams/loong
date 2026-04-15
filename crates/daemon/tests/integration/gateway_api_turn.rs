@@ -172,6 +172,7 @@ fn gateway_turn_loaded_config_fixture(
     let mut config = LoongClawConfig::default();
     let sqlite_path_text = sqlite_path.display().to_string();
     config.memory.sqlite_path = sqlite_path_text;
+    config.audit.mode = loongclaw_app::config::AuditMode::InMemory;
     config.acp = AcpConfig {
         enabled: true,
         backend: Some(backend_id.to_owned()),

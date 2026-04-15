@@ -1609,6 +1609,9 @@ impl ConversationTurnCoordinator {
         config: &LoongClawConfig,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> CliResult<DefaultConversationRuntime<Box<dyn ConversationContextEngine>>> {
+        // Keep runtime-construction failures visible to the turn observer so
+        // operator surfaces receive the same failed phase signal as execution
+        // errors later in the turn pipeline.
         let runtime_result = DefaultConversationRuntime::from_config_or_env(config);
         let runtime = match runtime_result {
             Ok(runtime) => runtime,
@@ -4678,6 +4681,10 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     timeout_seconds: u64,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    // This resumes execution after the child session row/workspace have already
+    // been created. The remaining job is to run the child turn with the shared
+    // runtime/binding, enforce timeout + unwind containment, and then finalize
+    // the persisted delegate session/announcement state from the outcome.
     let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
     let start = Instant::now();
     let child_coordinator = ConversationTurnCoordinator::new();

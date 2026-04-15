@@ -208,6 +208,12 @@ struct ControlPlaneTurnStreamState {
     last_seq: u64,
 }
 
+/// Shared dependencies for ad-hoc turn execution launched from the control
+/// plane HTTP surface.
+///
+/// This is intentionally narrower than the full control-plane router state: it
+/// keeps just enough config, ACP ownership, and per-turn event registry state
+/// to materialize `AgentRuntime` turns on demand.
 struct ControlPlaneTurnRuntime {
     resolved_path: std::path::PathBuf,
     config: mvp::config::LoongClawConfig,
@@ -926,6 +932,8 @@ fn control_plane_subscribe_stream(
 }
 
 impl ControlPlaneTurnRuntime {
+    /// Build a control-plane turn runtime from a config snapshot and the shared
+    /// ACP manager that should back all HTTP-triggered turns for that process.
     fn new(
         resolved_path: std::path::PathBuf,
         config: mvp::config::LoongClawConfig,
@@ -934,6 +942,8 @@ impl ControlPlaneTurnRuntime {
         Ok(Self::with_manager(resolved_path, config, acp_manager))
     }
 
+    /// Test/advanced constructor that reuses an already prepared ACP manager
+    /// while still allocating a fresh turn registry for this runtime shell.
     fn with_manager(
         resolved_path: std::path::PathBuf,
         config: mvp::config::LoongClawConfig,
@@ -2188,6 +2198,13 @@ async fn turn_submit(
                 }
             }
             Err(error) => {
+                tracing::warn!(
+                    target: "loongclaw.control-plane",
+                    turn_id = %spawned_turn_id,
+                    session_id = %session_id,
+                    error = %crate::observability::summarize_error(error.as_str()),
+                    "control-plane turn execution failed"
+                );
                 let completion = turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
                 if let Ok(record) = completion {
                     let payload = map_turn_event_payload(&record);
@@ -2417,6 +2434,9 @@ pub async fn run_control_plane_serve_cli(
     bind_override: Option<&str>,
     port: u16,
 ) -> CliResult<()> {
+    // The control plane can boot in a config-less/read-only shape, but
+    // turn execution and repository-backed views only come online when a
+    // concrete config is available to seed runtime state.
     if current_session_id.is_some() && config_path.is_none() {
         return Err("control-plane-serve --session requires --config".to_owned());
     }
@@ -2434,6 +2454,9 @@ pub async fn run_control_plane_serve_cli(
     )?;
     let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
     manager.set_runtime_ready(true);
+    // Turn execution is only enabled when the control plane was launched with a
+    // concrete config; config-less mode still exposes read-only/control state
+    // routes but cannot synthesize governed chat turns.
     let turn_runtime = match loaded_config.as_ref() {
         Some((resolved_path, config)) => Some(Arc::new(ControlPlaneTurnRuntime::new(
             resolved_path.clone(),
@@ -2730,6 +2753,7 @@ mod tests {
         let mut config = mvp::config::LoongClawConfig::default();
         config.acp.enabled = true;
         config.acp.backend = Some(backend_id.to_owned());
+        config.audit.mode = mvp::config::AuditMode::InMemory;
         config
     }
 
@@ -4775,7 +4799,12 @@ mod tests {
         }
 
         let final_result = final_result.expect("turn should reach a terminal state");
-        assert_eq!(final_result.turn.status, ControlPlaneTurnStatus::Completed);
+        assert_eq!(
+            final_result.turn.status,
+            ControlPlaneTurnStatus::Completed,
+            "turn result error: {:?}",
+            final_result.error
+        );
         assert_eq!(final_result.output_text.as_deref(), Some("streamed: hello"));
         assert_eq!(final_result.stop_reason.as_deref(), Some("completed"));
         assert_eq!(
@@ -4981,7 +5010,9 @@ mod tests {
         let expected_output = format!("streamed: {input}");
         assert_eq!(
             final_result.output_text.as_deref(),
-            Some(expected_output.as_str())
+            Some(expected_output.as_str()),
+            "turn result error: {:?}",
+            final_result.error
         );
     }
 

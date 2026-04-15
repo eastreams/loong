@@ -66,16 +66,6 @@ mod tests {
     }
 
     #[test]
-    fn completions_zsh_can_target_legacy_binary_name() {
-        let out = String::from_utf8(
-            render_completions_for_command(Shell::Zsh, crate::LEGACY_CLI_COMMAND_NAME)
-                .expect("generate zsh completions"),
-        )
-        .unwrap();
-        assert!(out.contains("#compdef loongclaw"));
-    }
-
-    #[test]
     fn completions_fish_non_empty() {
         let mut buf = Vec::new();
         generate_completions(Shell::Fish, &mut buf).expect("generate fish completions");

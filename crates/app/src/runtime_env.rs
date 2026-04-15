@@ -2,6 +2,13 @@ use std::path::Path;
 
 use crate::config::LoongClawConfig;
 
+/// Mirror config-backed runtime knobs into process environment and singleton
+/// runtime caches.
+///
+/// Use this before spawning child processes or surfaces that still consume
+/// `LOONGCLAW_*` environment variables. This helper intentionally does not
+/// bootstrap a kernel token, choose a chat session, or validate durable chat
+/// state; higher-level entrypoints compose those steps separately.
 pub fn initialize_runtime_environment(
     config: &LoongClawConfig,
     resolved_config_path: Option<&Path>,

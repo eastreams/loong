@@ -81,7 +81,7 @@
 <a id="quick-start"></a>
 ## 快速开始
 
-> Loong 当前主命令是 `loong`，`loongclaw` 仍保留为兼容入口。
+> Loong 当前只支持 `loong` 这个命令行入口。
 
 ### 脚本安装（推荐）
 

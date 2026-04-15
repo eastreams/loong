@@ -3091,6 +3091,14 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
+/// Bridge an inbound channel message into the shared chat/provider turn
+/// runtime.
+///
+/// Unlike the CLI entrypoints, channel surfaces already own the surrounding
+/// kernel authority for the serve loop. This helper therefore reloads
+/// provider-facing config, derives channel-specific ACP hints, reuses the
+/// supplied `kernel_ctx`, and assembles a one-shot chat runtime around the
+/// channel session address before handing execution to `AgentRuntime`.
 pub(crate) async fn process_inbound_with_provider(
     config: &LoongClawConfig,
     resolved_path: Option<&std::path::Path>,
@@ -3233,6 +3241,11 @@ pub(crate) async fn process_inbound_with_provider(
     result
 }
 
+/// Reload only the provider runtime portion of channel config for a new turn.
+///
+/// This intentionally does not re-resolve channel serve account selection or
+/// mutate the long-lived channel loop state; it only refreshes the provider
+/// data that turn execution depends on.
 pub(super) fn reload_channel_turn_config(
     config: &LoongClawConfig,
     resolved_path: Option<&std::path::Path>,

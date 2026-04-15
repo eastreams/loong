@@ -7068,17 +7068,17 @@ mod tests {
         );
 
         assert_eq!(weixin.onboarding.strategy.as_str(), "plugin_bridge");
-        assert_eq!(weixin.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(weixin.onboarding.status_command, "loong doctor");
         assert_eq!(weixin.onboarding.repair_command, None);
         assert!(weixin.onboarding.setup_hint.contains("ClawBot"));
 
         assert_eq!(qqbot.onboarding.strategy.as_str(), "plugin_bridge");
-        assert_eq!(qqbot.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(qqbot.onboarding.status_command, "loong doctor");
         assert_eq!(qqbot.onboarding.repair_command, None);
         assert!(qqbot.onboarding.setup_hint.contains("QQ Bot"));
 
         assert_eq!(onebot.onboarding.strategy.as_str(), "plugin_bridge");
-        assert_eq!(onebot.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(onebot.onboarding.status_command, "loong doctor");
         assert_eq!(onebot.onboarding.repair_command, None);
         assert!(onebot.onboarding.setup_hint.contains("OneBot"));
     }
