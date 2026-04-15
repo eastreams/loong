@@ -8,6 +8,9 @@ description = "Internal support crate for Loong: specification execution surface
 repository.workspace = true
 homepage.workspace = true
 
+[lib]
+name = "loongclaw_spec"
+
 [features]
 test-hooks = []
 test-support = ["test-hooks"]

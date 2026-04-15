@@ -20,10 +20,8 @@ static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn assert_compact_loongclaw_header(lines: &[String], context: &str) {
     assert!(
-        lines
-            .first()
-            .is_some_and(|line| line.starts_with("LOONGCLAW")),
-        "{context} should start with the compact LOONGCLAW header: {lines:#?}"
+        lines.first().is_some_and(|line| line.starts_with("LOONG")),
+        "{context} should start with the compact LOONG header: {lines:#?}"
     );
     assert!(
         lines
@@ -2046,15 +2044,15 @@ async fn interactive_onboard_only_shows_large_logo_on_the_initial_screen() {
             .filter(|line| line.contains("██╗      ██████╗"))
             .count(),
         1,
-        "interactive onboarding should show the large LOONGCLAW banner only once, on the initial risk screen: {transcript:#?}"
+        "interactive onboarding should show the large Loong banner only once, on the initial risk screen: {transcript:#?}"
     );
     assert!(
         transcript
             .iter()
-            .filter(|line| line.contains("LOONGCLAW"))
+            .filter(|line| line.contains("LOONG  v"))
             .count()
             >= 3,
-        "follow-up screens should keep using the compact LOONGCLAW header instead of dropping branding entirely: {transcript:#?}"
+        "follow-up screens should keep using the compact LOONG header instead of dropping branding entirely: {transcript:#?}"
     );
     assert!(
         transcript.iter().any(|line| line == "choose personality"),
@@ -5390,7 +5388,7 @@ fn onboard_starting_point_selection_screen_wraps_header_title_and_subtitle_on_na
         lines.iter().all(|line| line.len() <= 22),
         "starting-point screen should keep brand subtitle and title within narrow widths: {lines:#?}"
     );
-    assert_eq!(lines[0], "LOONGCLAW");
+    assert_eq!(lines[0], "LOONG");
     assert!(
         lines.iter().any(|line| line == "choose detected"),
         "narrow starting-point screen should wrap the long title instead of leaving it on one overflowing line: {lines:#?}"
@@ -5489,7 +5487,7 @@ fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_wi
         "model screen should keep compact header and progress copy within narrow terminal widths: {lines:#?}"
     );
     assert_eq!(
-        lines[0], "LOONGCLAW",
+        lines[0], "LOONG",
         "narrow model screen should split the compact header instead of forcing brand and version onto one line: {lines:#?}"
     );
     assert!(

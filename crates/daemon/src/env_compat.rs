@@ -13,7 +13,10 @@ fn non_empty_env_var(name: &str) -> Option<std::ffi::OsString> {
 /// Copies deprecated `LOONGCLAW_*` env vars into their `LOONG_*` replacements
 /// and emits a deprecation warning. No-op when the new name is already set.
 pub fn make_env_compatible() {
-    const MIGRATIONS: &[(&str, &str)] = &[("LOONG_HOME", "LOONGCLAW_HOME")];
+    const MIGRATIONS: &[(&str, &str)] = &[
+        ("LOONG_HOME", "LOONGCLAW_HOME"),
+        ("LOONG_CONFIG_PATH", "LOONGCLAW_CONFIG_PATH"),
+    ];
 
     for &(new_name, old_name) in MIGRATIONS {
         let old_value = non_empty_env_var(old_name);
@@ -44,6 +47,10 @@ mod tests {
 
     fn loong_home() -> Option<std::path::PathBuf> {
         std::env::var_os("LOONG_HOME").map(std::path::PathBuf::from)
+    }
+
+    fn loong_config_path() -> Option<std::path::PathBuf> {
+        std::env::var_os("LOONG_CONFIG_PATH").map(std::path::PathBuf::from)
     }
 
     #[test]
@@ -115,5 +122,30 @@ mod tests {
         make_env_compatible();
 
         assert!(loong_home().is_none());
+    }
+
+    #[test]
+    fn migrates_legacy_config_path_when_new_path_is_unset() {
+        let mut env = ScopedEnv::new();
+        let value = std::env::temp_dir().join("loong-compat-config-old-only");
+        env.set("LOONGCLAW_CONFIG_PATH", &value);
+        env.remove("LOONG_CONFIG_PATH");
+
+        make_env_compatible();
+
+        assert_eq!(loong_config_path(), Some(value));
+    }
+
+    #[test]
+    fn does_not_overwrite_new_config_path_when_both_are_set() {
+        let mut env = ScopedEnv::new();
+        let new_value = std::env::temp_dir().join("loong-compat-config-new");
+        let old_value = std::env::temp_dir().join("loong-compat-config-old");
+        env.set("LOONG_CONFIG_PATH", &new_value);
+        env.set("LOONGCLAW_CONFIG_PATH", &old_value);
+
+        make_env_compatible();
+
+        assert_eq!(loong_config_path(), Some(new_value));
     }
 }

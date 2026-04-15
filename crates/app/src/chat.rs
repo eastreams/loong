@@ -4491,9 +4491,7 @@ mod tests {
         );
 
         assert!(
-            lines
-                .first()
-                .is_some_and(|line| line.starts_with("LOONGCLAW")),
+            lines.first().is_some_and(|line| line.starts_with("LOONG")),
             "chat startup should now use the shared compact brand header: {lines:#?}"
         );
         assert!(
@@ -4649,9 +4647,7 @@ mod tests {
         let lines = render_cli_chat_missing_config_lines_with_width(command, 80);
 
         assert!(
-            lines
-                .first()
-                .is_some_and(|line| line.starts_with("LOONGCLAW")),
+            lines.first().is_some_and(|line| line.starts_with("LOONG")),
             "missing-config setup prompt should keep the shared compact header: {lines:#?}"
         );
         assert!(

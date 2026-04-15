@@ -8,6 +8,9 @@ description = "Internal support crate for Loong: benchmark harness and gates"
 repository.workspace = true
 homepage.workspace = true
 
+[lib]
+name = "loongclaw_bench"
+
 [features]
 test-support = []
 

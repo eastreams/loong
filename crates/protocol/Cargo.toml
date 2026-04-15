@@ -8,6 +8,9 @@ description = "Internal support crate for Loong: protocol and transport types"
 repository.workspace = true
 homepage.workspace = true
 
+[lib]
+name = "loongclaw_protocol"
+
 [features]
 test-support = []
 

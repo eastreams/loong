@@ -220,7 +220,7 @@ pub fn active_cli_command_name() -> &'static str {
 
 fn render_welcome_long_about(command_name: &str) -> String {
     format!(
-        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONG_CONFIG_PATH first."
     )
 }
 
@@ -365,7 +365,7 @@ impl std::str::FromStr for MultiChannelServeChannelAccount {
 #[derive(Parser, Debug)]
 #[command(
     name = CLI_COMMAND_NAME,
-    about = "LoongClaw low-level runtime daemon",
+    about = "Loong low-level runtime daemon",
     version
 )]
 pub struct Cli {
@@ -383,7 +383,7 @@ pub enum InitSpecPreset {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
-        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONG_CONFIG_PATH first."
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
@@ -1591,7 +1591,8 @@ mod multi_channel_serve_tests {
 }
 
 fn resolved_default_entry_config_path() -> PathBuf {
-    std::env::var_os("LOONGCLAW_CONFIG_PATH")
+    std::env::var_os("LOONG_CONFIG_PATH")
+        .or_else(|| std::env::var_os("LOONGCLAW_CONFIG_PATH"))
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(mvp::config::default_config_path)
@@ -1615,12 +1616,46 @@ fn default_onboard_command() -> Commands {
     }
 }
 
+fn default_import_preview_command() -> Commands {
+    Commands::Import {
+        output: None,
+        force: false,
+        preview: true,
+        apply: false,
+        json: false,
+        from: None,
+        source_path: None,
+        provider: None,
+        include: Vec::new(),
+        exclude: Vec::new(),
+    }
+}
+
+fn detected_legacy_home_for_default_entry() -> Option<PathBuf> {
+    if std::env::var_os("LOONG_HOME")
+        .as_deref()
+        .is_some_and(|value| !value.is_empty())
+    {
+        return None;
+    }
+
+    let user_home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)?;
+
+    mvp::config::detect_legacy_home(user_home.as_path())
+}
+
 pub fn resolve_default_entry_command() -> Commands {
     if resolved_default_entry_config_path().is_file() {
-        Commands::Welcome
-    } else {
-        default_onboard_command()
+        return Commands::Welcome;
     }
+
+    if detected_legacy_home_for_default_entry().is_some() {
+        return default_import_preview_command();
+    }
+
+    default_onboard_command()
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {
@@ -1633,7 +1668,7 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
         Ok(config_path)
     } else {
         Err(format!(
-            "Config file not found at {}. Run `{} onboard` to set up LoongClaw.",
+            "Config file not found at {}. Run `{} onboard` to set up Loong.",
             config_path.display(),
             active_cli_command_name(),
         ))
@@ -1656,7 +1691,7 @@ fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongClawConf
     let quick_commands = quick_command_lines.join("\n");
 
     format!(
-        "LoongClaw is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n{}",
+        "Loong is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n{}",
         env!("CARGO_PKG_VERSION"),
         config_path_display,
         quick_commands,
@@ -1702,6 +1737,7 @@ mod first_run_entry_tests {
         fs::create_dir_all(&home).expect("create isolated home");
         env.set("HOME", &home);
         env.remove("LOONG_HOME");
+        env.remove("LOONG_CONFIG_PATH");
         env.remove("LOONGCLAW_CONFIG_PATH");
         (env, home)
     }
@@ -1713,6 +1749,25 @@ mod first_run_entry_tests {
         assert!(
             matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
             "missing config should route to onboard"
+        );
+    }
+
+    #[test]
+    fn resolve_default_entry_command_routes_to_import_preview_when_legacy_home_exists() {
+        let (_env, home) = isolated_home("loongclaw-default-entry-legacy-home");
+        let legacy_home = home.join(".loongclaw");
+        fs::create_dir_all(&legacy_home).expect("create legacy home");
+
+        assert!(
+            matches!(
+                resolve_default_entry_command(),
+                Commands::Import {
+                    preview: true,
+                    apply: false,
+                    ..
+                }
+            ),
+            "legacy home should route to import preview"
         );
     }
 
@@ -1751,6 +1806,27 @@ mod first_run_entry_tests {
         assert!(
             matches!(resolve_default_entry_command(), Commands::Welcome),
             "env override config should route to welcome"
+        );
+    }
+
+    #[test]
+    fn resolve_default_entry_command_honors_loong_config_path_override() {
+        let mut env = ScopedEnv::new();
+        let config_path = unique_temp_dir("loong-default-entry-env").join("custom-config.toml");
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config parent");
+        }
+        mvp::config::write(
+            Some(config_path.to_str().expect("utf8 config path")),
+            &mvp::config::LoongClawConfig::default(),
+            true,
+        )
+        .expect("write explicit config");
+        env.set("LOONG_CONFIG_PATH", &config_path);
+
+        assert!(
+            matches!(resolve_default_entry_command(), Commands::Welcome),
+            "new env override config should route to welcome"
         );
     }
 
@@ -1817,6 +1893,27 @@ mod first_run_entry_tests {
             error.contains("Config file not found"),
             "welcome should reject directory config paths as missing config files: {error}"
         );
+    }
+
+    #[test]
+    fn resolve_welcome_config_path_honors_loong_config_path_override() {
+        let mut env = ScopedEnv::new();
+        let config_path = unique_temp_dir("loong-welcome-present").join("welcome-config.toml");
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config parent");
+        }
+        mvp::config::write(
+            Some(config_path.to_str().expect("utf8 config path")),
+            &mvp::config::LoongClawConfig::default(),
+            true,
+        )
+        .expect("write explicit config");
+        env.set("LOONG_CONFIG_PATH", &config_path);
+
+        let resolved_path =
+            resolve_welcome_config_path().expect("new config path env should resolve correctly");
+
+        assert_eq!(resolved_path, config_path);
     }
 
     #[test]

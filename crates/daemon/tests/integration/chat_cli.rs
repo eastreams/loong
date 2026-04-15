@@ -190,7 +190,7 @@ fn chat_without_config_runs_onboard_for_explicit_yes() {
         "explicit yes should succeed, stdout={stdout:?}, stderr={stderr:?}"
     );
     assert!(
-        stdout.contains("Welcome to LoongClaw!"),
+        stdout.contains("Welcome to Loong!"),
         "missing-config onboarding flow should greet the user: {stdout:?}"
     );
     assert!(

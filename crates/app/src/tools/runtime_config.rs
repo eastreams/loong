@@ -1036,10 +1036,12 @@ impl ToolRuntimeConfig {
                 crate::config::WEB_SEARCH_PROVIDER_JINA,
             ),
         );
-        let web_search_timeout_seconds = parse_env_u64("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS")
+        let web_search_timeout_seconds = parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS")
+            .or_else(|| parse_env_u64("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS"))
             .map(|seconds| seconds.clamp(1, 60))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS);
-        let web_search_max_results = parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS")
+        let web_search_max_results = parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS")
+            .or_else(|| parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS"))
             .map(|count| count.clamp(1, 10))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
         let autonomy_profile = resolve_autonomy_profile_from_env();
@@ -1745,6 +1747,7 @@ mod tests {
     fn clear_tool_runtime_env(env: &mut ScopedEnv) {
         for key in [
             "LOONG_HOME",
+            "LOONG_CONFIG_PATH",
             "LOONGCLAW_CONFIG_PATH",
             "LOONGCLAW_FILE_ROOT",
             "LOONGCLAW_WORKSPACE_ROOT",
@@ -1772,8 +1775,11 @@ mod tests {
             "LOONGCLAW_WEB_FETCH_MAX_BYTES",
             "LOONGCLAW_WEB_FETCH_MAX_REDIRECTS",
             "LOONGCLAW_WEB_SEARCH_ENABLED",
+            "LOONG_WEB_SEARCH_PROVIDER",
             "LOONGCLAW_WEB_SEARCH_PROVIDER",
+            "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
             "LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_SEARCH_MAX_RESULTS",
             "LOONGCLAW_WEB_SEARCH_MAX_RESULTS",
             "LOONGCLAW_AUTONOMY_PROFILE",
             "BRAVE_API_KEY",
@@ -2697,9 +2703,9 @@ mod tests {
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
-        env.set("LOONGCLAW_WEB_SEARCH_PROVIDER", "DDG");
-        env.set("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS", "999");
-        env.set("LOONGCLAW_WEB_SEARCH_MAX_RESULTS", "42");
+        env.set("LOONG_WEB_SEARCH_PROVIDER", "DDG");
+        env.set("LOONG_WEB_SEARCH_TIMEOUT_SECONDS", "999");
+        env.set("LOONG_WEB_SEARCH_MAX_RESULTS", "42");
         env.set(
             crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV,
             "brave-test-key",
@@ -2754,6 +2760,23 @@ mod tests {
             config.web_search.jina_api_key.as_deref(),
             Some("jina-test-key")
         );
+    }
+
+    #[test]
+    fn from_env_preserves_legacy_web_search_env_fallbacks() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
+        env.set("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS", "41");
+        env.set("LOONGCLAW_WEB_SEARCH_MAX_RESULTS", "7");
+
+        let config = ToolRuntimeConfig::from_env();
+
+        assert_eq!(config.web_search.default_provider, "tavily");
+        assert_eq!(config.web_search.timeout_seconds, 41);
+        assert_eq!(config.web_search.max_results, 7);
     }
 
     #[test]

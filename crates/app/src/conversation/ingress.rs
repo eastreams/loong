@@ -429,23 +429,28 @@ mod tests {
 
         assert!(injected.trusted_internal_context);
         assert_eq!(
-            injected.payload["_loongclaw"]["feishu_callback"]["callback_token"],
+            injected.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]["feishu_callback"]["callback_token"],
             "callback-secret-1"
         );
         assert_eq!(
-            injected.payload["_loongclaw"]["feishu_callback"]["operator_open_id"],
+            injected.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]["feishu_callback"]["operator_open_id"],
             "ou_operator"
         );
         assert_eq!(
-            injected.payload["_loongclaw"]["feishu_callback"]["deferred_context_id"],
+            injected.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]["feishu_callback"]["deferred_context_id"],
             "evt_callback_1"
         );
         assert_eq!(
-            injected.payload["_loongclaw"]["ingress"]["channel"]["conversation_id"],
+            injected.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]["ingress"]["channel"]["conversation_id"],
             "oc_callback"
         );
         assert!(!untouched.trusted_internal_context);
-        assert!(untouched.payload.get("_loongclaw").is_none());
+        assert!(
+            untouched
+                .payload
+                .get(crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY)
+                .is_none()
+        );
     }
 
     #[test]

@@ -8,6 +8,9 @@ description = "Internal support crate for Loong: kernel primitives and governanc
 repository.workspace = true
 homepage.workspace = true
 
+[lib]
+name = "loongclaw_kernel"
+
 [dependencies]
 loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
 async-trait.workspace = true

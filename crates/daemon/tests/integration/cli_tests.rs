@@ -52,7 +52,7 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
         "welcome help should mention doctor with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("LOONGCLAW_CONFIG_PATH"),
+        help.contains("LOONG_CONFIG_PATH") || help.contains("LOONGCLAW_CONFIG_PATH"),
         "welcome help should explain how config-path environment overrides interact with the quick commands: {help}"
     );
 }
