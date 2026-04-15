@@ -34,6 +34,7 @@ mod profile_state_backend;
 mod profile_state_store;
 mod provider_keyspace;
 mod provider_validation_runtime;
+mod rate_limit;
 mod request_dispatch_runtime;
 mod request_executor;
 mod request_failover_runtime;
@@ -49,7 +50,8 @@ mod transport_profile_runtime;
 mod transport_trait;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
-pub(crate) use failover::parse_provider_failover_snapshot_payload;
+pub use failover::parse_provider_failover_snapshot_payload;
+pub use rate_limit::RateLimitObservation;
 pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::{
@@ -128,6 +130,8 @@ use failover::ProviderFailoverReason;
 #[cfg(test)]
 use failover::ProviderFailoverSnapshot;
 #[cfg(test)]
+use failover::build_model_request_error_with_rate_limit;
+#[cfg(test)]
 use failover::{ProviderFailoverStage, build_model_request_error};
 #[cfg(test)]
 use failover_telemetry_runtime::{
@@ -140,6 +144,7 @@ use model_candidate_cooldown_runtime::prioritize_model_candidates_by_cooldown;
 #[cfg(test)]
 use model_candidate_cooldown_runtime::{
     ModelCandidateCooldownPolicy, register_model_candidate_cooldown,
+    resolve_model_candidate_cooldown_duration,
 };
 #[cfg(test)]
 use model_candidate_resolver_runtime::rank_model_candidates;
@@ -321,7 +326,7 @@ pub async fn request_turn_streaming(
     .await
 }
 
-pub(crate) fn supports_turn_streaming_events(config: &LoongClawConfig) -> bool {
+pub fn supports_turn_streaming_events(config: &LoongClawConfig) -> bool {
     let runtime_contract = provider_runtime_contract(&config.provider);
     runtime_contract.supports_turn_streaming_events()
 }

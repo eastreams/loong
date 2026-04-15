@@ -1178,8 +1178,9 @@ fn acp_event_summary_cli_rejects_zero_limit() {
 
 #[test]
 fn build_acp_dispatch_address_requires_channel_for_structured_scope() {
-    let error = build_acp_dispatch_address("opaque-session", None, Some("oc_123"), None, None)
-        .expect_err("structured scope without channel must be rejected");
+    let error =
+        build_acp_dispatch_address("opaque-session", None, Some("oc_123"), None, None, None)
+            .expect_err("structured scope without channel must be rejected");
     assert!(error.contains("--channel"));
 }
 
@@ -1190,6 +1191,7 @@ fn build_acp_dispatch_address_builds_structured_scope() {
         Some("Feishu"),
         Some("oc_123"),
         Some("LARK PROD"),
+        Some("ou_sender_1"),
         Some("om_thread_1"),
     )
     .expect("structured scope should build");
@@ -1198,6 +1200,7 @@ fn build_acp_dispatch_address_builds_structured_scope() {
     assert_eq!(address.channel_id.as_deref(), Some("feishu"));
     assert_eq!(address.account_id.as_deref(), Some("lark-prod"));
     assert_eq!(address.conversation_id.as_deref(), Some("oc_123"));
+    assert_eq!(address.participant_id.as_deref(), Some("ou_sender_1"));
     assert_eq!(address.thread_id.as_deref(), Some("om_thread_1"));
 }
 
@@ -1240,6 +1243,7 @@ fn format_acp_event_summary_includes_routing_intent_and_provenance() {
             last_channel_id: Some("telegram".to_owned()),
             last_account_id: Some("bot_123456".to_owned()),
             last_channel_conversation_id: Some("42".to_owned()),
+            last_channel_participant_id: None,
             last_channel_thread_id: None,
             last_routing_intent: Some("explicit".to_owned()),
             last_routing_origin: Some("explicit_request".to_owned()),

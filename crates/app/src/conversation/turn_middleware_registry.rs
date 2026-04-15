@@ -1,6 +1,6 @@
-#[cfg(test)]
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::sync::Mutex;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::CliResult;
@@ -38,8 +38,9 @@ impl TurnMiddlewareRegistration {
 static TURN_MIDDLEWARE_REGISTRY: OnceLock<RwLock<BTreeMap<String, TurnMiddlewareRegistration>>> =
     OnceLock::new();
 #[cfg(test)]
-std::thread_local! {
-    static TURN_MIDDLEWARE_ENV_OVERRIDE: RefCell<Option<Option<String>>> = const { RefCell::new(None) };
+fn turn_middleware_env_override() -> &'static Mutex<Option<Option<String>>> {
+    static OVERRIDE: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+    OVERRIDE.get_or_init(|| Mutex::new(None))
 }
 
 fn registry() -> &'static RwLock<BTreeMap<String, TurnMiddlewareRegistration>> {
@@ -80,7 +81,10 @@ where
 
 #[cfg(test)]
 fn env_override() -> Option<Option<String>> {
-    TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| override_cell.borrow().clone())
+    let guard = turn_middleware_env_override()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.clone()
 }
 
 pub fn register_turn_middleware<F>(id: &str, factory: F) -> CliResult<()>
@@ -218,16 +222,18 @@ pub fn turn_middleware_ids_from_env() -> Option<Vec<String>> {
 
 #[cfg(test)]
 pub(crate) fn set_turn_middleware_env_override(value: Option<&str>) {
-    TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
-        *override_cell.borrow_mut() = Some(value.map(str::to_owned));
-    });
+    let mut guard = turn_middleware_env_override()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(value.map(str::to_owned));
 }
 
 #[cfg(test)]
 pub(crate) fn clear_turn_middleware_env_override() {
-    TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
-        *override_cell.borrow_mut() = None;
-    });
+    let mut guard = turn_middleware_env_override()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = None;
 }
 
 #[cfg(test)]
@@ -239,9 +245,10 @@ struct ScopedTurnMiddlewareEnvOverride {
 impl ScopedTurnMiddlewareEnvOverride {
     fn set(value: Option<&str>) -> Self {
         let previous = env_override();
-        TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
-            *override_cell.borrow_mut() = Some(value.map(str::to_owned));
-        });
+        let mut guard = turn_middleware_env_override()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(value.map(str::to_owned));
         Self { previous }
     }
 }
@@ -249,9 +256,10 @@ impl ScopedTurnMiddlewareEnvOverride {
 #[cfg(test)]
 impl Drop for ScopedTurnMiddlewareEnvOverride {
     fn drop(&mut self) {
-        TURN_MIDDLEWARE_ENV_OVERRIDE.with(|override_cell| {
-            *override_cell.borrow_mut() = self.previous.clone();
-        });
+        let mut guard = turn_middleware_env_override()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = self.previous.clone();
     }
 }
 
@@ -272,7 +280,7 @@ mod tests {
     fn registry_test_guard() -> MutexGuard<'static, ()> {
         super::super::context_engine_registry::conversation_selector_env_lock()
             .lock()
-            .expect("registry test lock")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     struct StaticIdTurnMiddleware {
@@ -457,5 +465,18 @@ mod tests {
         let _scoped_env = ScopedTurnMiddlewareEnvOverride::set(Some(" Alpha , beta ,, alpha "));
         let ids = turn_middleware_ids_from_env().expect("turn middleware ids from env");
         assert_eq!(ids, vec!["alpha".to_owned(), "beta".to_owned()]);
+    }
+
+    #[test]
+    fn turn_middleware_env_override_is_visible_across_threads() {
+        let _registry_lock = registry_test_guard();
+        let _scoped_env = ScopedTurnMiddlewareEnvOverride::set(Some("alpha,beta"));
+
+        let observed = std::thread::spawn(turn_middleware_ids_from_env)
+            .join()
+            .expect("join thread");
+
+        let expected = vec!["alpha".to_owned(), "beta".to_owned()];
+        assert_eq!(observed, Some(expected));
     }
 }

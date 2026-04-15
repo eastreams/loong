@@ -52,6 +52,7 @@ exit 0
             channel_id: Some("telegram".to_owned()),
             account_id: Some("bot_123456".to_owned()),
             conversation_id: Some("42".to_owned()),
+            participant_id: None,
             thread_id: Some("thread-42".to_owned()),
         }),
         working_directory: Some(temp_dir.clone()),

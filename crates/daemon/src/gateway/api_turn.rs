@@ -24,6 +24,8 @@ pub(crate) struct GatewayTurnRequest {
     #[serde(default)]
     pub conversation_id: Option<String>,
     #[serde(default)]
+    pub participant_id: Option<String>,
+    #[serde(default)]
     pub thread_id: Option<String>,
     #[serde(default)]
     pub working_directory: Option<String>,
@@ -95,6 +97,7 @@ pub(crate) async fn handle_turn(
         turn_request.channel_id.as_deref(),
         turn_request.conversation_id.as_deref(),
         turn_request.account_id.as_deref(),
+        turn_request.participant_id.as_deref(),
         turn_request.thread_id.as_deref(),
     ) {
         return (
@@ -135,6 +138,7 @@ pub(crate) async fn handle_turn(
                 channel_id: turn_request.channel_id.clone(),
                 account_id: turn_request.account_id.clone(),
                 conversation_id: turn_request.conversation_id.clone(),
+                participant_id: turn_request.participant_id.clone(),
                 thread_id: turn_request.thread_id.clone(),
                 metadata: turn_request.metadata.clone(),
                 acp: true,
@@ -193,6 +197,7 @@ mod tests {
             channel_id: None,
             account_id: None,
             conversation_id: None,
+            participant_id: None,
             thread_id: None,
             working_directory: None,
             metadata: BTreeMap::new(),

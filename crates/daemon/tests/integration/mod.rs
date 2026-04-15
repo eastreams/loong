@@ -987,22 +987,33 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     assert!(rendered.contains("configured_accounts=1"));
     assert!(rendered.contains("aliases=lark"));
     assert!(rendered.contains("account=feishu:cli_a1b2c3"));
+    let feishu_section = rendered
+        .split("Feishu/Lark [feishu]")
+        .nth(1)
+        .expect("feishu section should render");
+    assert!(feishu_section.contains("policy conversation_key=allowed_chat_ids"));
+    assert!(feishu_section.contains("sender_key=allowed_sender_ids"));
+    assert!(feishu_section.contains("mention_required=false"));
+    assert!(feishu_section.contains("senders=-"));
     assert!(rendered.contains(&format!(
         "op send ({}) ready: ready target_kinds=receive_id,message_reply requirements=enabled,app_id,app_secret",
         channel_send_command("feishu")
     )));
     assert!(rendered.contains(&format!(
-        "op serve ({}) misconfigured: allowed_chat_ids is empty target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,verification_token,encrypt_key",
+        "op serve ({}) misconfigured: allowed_chat_ids is empty target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,allowed_sender_ids,verification_token,encrypt_key",
         channel_serve_command("feishu")
     )));
     assert!(rendered.contains("WeCom [wecom]"));
     assert!(rendered.contains("account=wecom:bot_test"));
+    assert!(rendered.contains(
+        "policy conversation_key=allowed_conversation_ids conversation_mode=exact_allowlist sender_key=allowed_sender_ids sender_mode=open mention_required=false conversations=group_demo senders=-"
+    ));
     assert!(rendered.contains(&format!(
         "op send ({}) ready: ready target_kinds=conversation requirements=enabled,bot_id,secret,websocket_url",
         channel_send_command("wecom")
     )));
     assert!(rendered.contains(&format!(
-        "op serve ({}) ready: ready target_kinds=conversation requirements=enabled,bot_id,secret,allowed_conversation_ids,websocket_url,ping_interval_s",
+        "op serve ({}) ready: ready target_kinds=conversation requirements=enabled,bot_id,secret,allowed_conversation_ids,allowed_sender_ids,websocket_url,ping_interval_s",
         channel_serve_command("wecom")
     )));
     assert!(rendered.contains("running=false"));
@@ -1616,9 +1627,49 @@ fn build_channels_cli_json_payload_includes_operation_requirement_metadata() {
                     "app_secret",
                     "mode",
                     "allowed_chat_ids",
+                    "allowed_sender_ids",
                     "verification_token",
                     "encrypt_key",
                 ])
+    }));
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_structured_channel_access_policy_summaries() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.matrix.enabled = true;
+    config.matrix.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "matrix-token".to_owned(),
+    ));
+    config.matrix.base_url = Some("https://matrix.example.org".to_owned());
+    config.matrix.allowed_room_ids = vec!["!ops:example.org".to_owned()];
+    config.matrix.allowed_sender_ids = vec!["@alice:example.org".to_owned()];
+
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+    let access_policies = encoded["channel_access_policies"]
+        .as_array()
+        .expect("channel access policies array");
+
+    assert!(access_policies.iter().any(|policy| {
+        policy.get("channel_id").and_then(serde_json::Value::as_str) == Some("matrix")
+            && policy
+                .get("conversation_config_key")
+                .and_then(serde_json::Value::as_str)
+                == Some("allowed_room_ids")
+            && policy
+                .get("sender_config_key")
+                .and_then(serde_json::Value::as_str)
+                == Some("allowed_sender_ids")
+            && policy
+                .get("conversation_mode")
+                .and_then(serde_json::Value::as_str)
+                == Some("exact_allowlist")
+            && policy
+                .get("sender_mode")
+                .and_then(serde_json::Value::as_str)
+                == Some("exact_allowlist")
     }));
 }
 

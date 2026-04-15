@@ -62,7 +62,10 @@ impl ProviderTransportMode {
     }
 
     pub(super) fn supports_turn_streaming_events(self) -> bool {
-        matches!(self, Self::AnthropicMessages)
+        matches!(
+            self,
+            Self::AnthropicMessages | Self::OpenAiChatCompletions | Self::KimiApi
+        )
     }
 }
 

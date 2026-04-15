@@ -88,7 +88,9 @@ pub mod acp_cli;
 pub mod audit_cli;
 mod browser_companion_diagnostics;
 pub mod browser_preview;
+mod channel_access_policy_render;
 mod channel_bridge_render;
+mod channel_resolution;
 #[cfg(test)]
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
@@ -156,6 +158,9 @@ pub use self::acp_cli::{
     format_acp_event_summary, resolve_acp_status_session_key, run_acp_dispatch_cli,
     run_acp_doctor_cli, run_acp_event_summary_cli, run_acp_observability_cli, run_acp_status_cli,
     run_list_acp_backends_cli, run_list_acp_sessions_cli,
+};
+use channel_access_policy_render::{
+    channel_access_policy_by_account, render_channel_access_policy_line,
 };
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
@@ -744,6 +749,8 @@ pub enum Commands {
     Channels {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long)]
+        resolve: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -885,6 +892,8 @@ pub enum Commands {
         conversation_id: Option<String>,
         #[arg(long)]
         account_id: Option<String>,
+        #[arg(long)]
+        participant_id: Option<String>,
         #[arg(long)]
         thread_id: Option<String>,
         #[arg(long, default_value_t = false)]
@@ -3966,10 +3975,34 @@ fn render_runtime_snapshot_artifact_text(
     ]
     .join("\n")
 }
-pub fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
+pub fn run_channels_cli(
+    config_path: Option<&str>,
+    resolve: Option<&str>,
+    as_json: bool,
+) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
     let inventory = mvp::channel::channel_inventory(&config);
     let resolved_path_display = resolved_path.display().to_string();
+
+    if let Some(resolve) = resolve {
+        let resolution = channel_resolution::build_channel_resolution(
+            resolved_path_display.as_str(),
+            &config,
+            &inventory,
+            resolve,
+        )?;
+        if as_json {
+            let pretty = serde_json::to_string_pretty(&resolution)
+                .map_err(|error| format!("serialize channel resolution output failed: {error}"))?;
+            println!("{pretty}");
+            return Ok(());
+        }
+        println!(
+            "{}",
+            channel_resolution::render_channel_resolution_text(&resolution)
+        );
+        return Ok(());
+    }
 
     if as_json {
         let payload = build_channels_cli_json_payload(&resolved_path_display, &inventory);
@@ -4002,6 +4035,7 @@ pub fn render_channel_surfaces_text(
 ) -> String {
     let mut lines = vec![format!("config={config_path}")];
     let mut catalog_only_surfaces = Vec::new();
+    let channel_access_policies = channel_access_policy_by_account(inventory);
 
     for surface in &inventory.channel_surfaces {
         if surface.catalog.implementation_status
@@ -4029,6 +4063,13 @@ pub fn render_channel_surfaces_text(
             ));
             for note in &snapshot.notes {
                 lines.push(format!("    note: {note}"));
+            }
+            let access_policy_key = (
+                surface.catalog.id.to_owned(),
+                snapshot.configured_account_id.clone(),
+            );
+            if let Some(access_policy) = channel_access_policies.get(&access_policy_key) {
+                lines.push(render_channel_access_policy_line(access_policy));
             }
             for operation in &snapshot.operations {
                 let catalog_operation = surface.catalog.operation(operation.id);

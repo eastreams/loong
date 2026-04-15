@@ -1077,6 +1077,7 @@ impl ChatSessionSurface {
                     channel_id: self.runtime.session_address.channel_id.clone(),
                     account_id: self.runtime.session_address.account_id.clone(),
                     conversation_id: self.runtime.session_address.conversation_id.clone(),
+                    participant_id: self.runtime.session_address.participant_id.clone(),
                     thread_id: self.runtime.session_address.thread_id.clone(),
                     metadata: std::collections::BTreeMap::new(),
                     acp: self.runtime.explicit_acp_request,

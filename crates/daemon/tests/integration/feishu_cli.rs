@@ -21,6 +21,13 @@ fn temp_feishu_cli_dir(label: &str) -> std::path::PathBuf {
 }
 
 fn write_sample_feishu_config(dir: &std::path::Path) -> std::path::PathBuf {
+    write_sample_feishu_config_with_capabilities(dir, None)
+}
+
+fn write_sample_feishu_config_with_capabilities(
+    dir: &std::path::Path,
+    capabilities: Option<mvp::config::FeishuCapabilityConfig>,
+) -> std::path::PathBuf {
     fs::create_dir_all(dir).expect("create temp feishu config dir");
     let config_path = dir.join("loongclaw.toml");
     let sqlite_path = dir.join("feishu.sqlite3");
@@ -35,6 +42,37 @@ fn write_sample_feishu_config(dir: &std::path::Path) -> std::path::PathBuf {
         "app-secret".to_owned(),
     ));
     config.feishu_integration.sqlite_path = sqlite_path.display().to_string();
+    if let Some(capabilities) = capabilities {
+        config.feishu_integration.capabilities = capabilities;
+        config.feishu_integration.capabilities_explicitly_configured = true;
+    }
+
+    mvp::config::write(config_path.to_str(), &config, true).expect("write sample feishu config");
+    config_path
+}
+
+fn write_sample_feishu_config_with_capabilities_and_default_scopes(
+    dir: &std::path::Path,
+    capabilities: mvp::config::FeishuCapabilityConfig,
+    default_scopes: Vec<String>,
+) -> std::path::PathBuf {
+    fs::create_dir_all(dir).expect("create temp feishu config dir");
+    let config_path = dir.join("loongclaw.toml");
+    let sqlite_path = dir.join("feishu.sqlite3");
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.feishu.enabled = true;
+    config.feishu.account_id = Some("feishu_main".to_owned());
+    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
+    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "app-secret".to_owned(),
+    ));
+    config.feishu_integration.sqlite_path = sqlite_path.display().to_string();
+    config.feishu_integration.default_scopes = default_scopes;
+    config.feishu_integration.capabilities = capabilities;
+    config.feishu_integration.capabilities_explicitly_configured = true;
 
     mvp::config::write(config_path.to_str(), &config, true).expect("write sample feishu config");
     config_path
@@ -161,6 +199,32 @@ fn sample_grant(
         refresh_expires_at_s: now_s + 86_400,
         refreshed_at_s: now_s,
     }
+}
+
+fn sample_grant_covering_default_coarse_capabilities(
+    account_id: &str,
+    open_id: &str,
+    access_token: &str,
+    refresh_token: &str,
+    now_s: i64,
+) -> mvp::channel::feishu::api::FeishuGrant {
+    let mut grant = sample_grant(account_id, open_id, access_token, refresh_token, now_s);
+    let config = mvp::config::FeishuIntegrationConfig {
+        capabilities: mvp::config::FeishuCapabilityConfig {
+            docs: true,
+            messages: true,
+            calendar: true,
+            bitable: false,
+        },
+        capabilities_explicitly_configured: true,
+        ..mvp::config::FeishuIntegrationConfig::default()
+    };
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes(
+        loongclaw_daemon::feishu_support::scopes_for_configured_capabilities(
+            &loongclaw_daemon::feishu_support::configured_capabilities_from_config(&config),
+        ),
+    );
+    grant
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3924,6 +3988,112 @@ async fn feishu_auth_start_capability_can_expand_read_and_write_scope_bundles() 
 }
 
 #[tokio::test]
+async fn feishu_auth_start_uses_config_derived_bitable_scope_without_manual_scope_flags() {
+    let temp_dir = temp_feishu_cli_dir("auth-start-config-bitable");
+    let config_path = write_sample_feishu_config_with_capabilities(
+        &temp_dir,
+        Some(mvp::config::FeishuCapabilityConfig {
+            docs: true,
+            messages: true,
+            calendar: true,
+            bitable: true,
+        }),
+    );
+    let args = loongclaw_daemon::feishu_cli::FeishuAuthStartArgs {
+        common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+            config: Some(config_path.display().to_string()),
+            account: Some("feishu_main".to_owned()),
+            json: true,
+        },
+        redirect_uri: "http://127.0.0.1:34819/callback".to_owned(),
+        principal_hint: Some("operator".to_owned()),
+        scopes: Vec::new(),
+        capabilities: Vec::new(),
+        include_message_write: false,
+    };
+
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_auth_start(&args)
+        .await
+        .expect("execute feishu auth start");
+
+    let scopes = payload["scopes"]
+        .as_array()
+        .expect("scopes array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(scopes.contains(&"bitable:app"));
+    assert!(scopes.contains(&"base:table:read"));
+    assert!(scopes.contains(&"base:record:create"));
+    assert!(scopes.contains(&"base:record:retrieve"));
+    assert!(scopes.contains(&"base:record:write"));
+    assert!(scopes.contains(&"drive:drive:readonly"));
+    assert_eq!(
+        payload["capabilities"]
+            .as_array()
+            .expect("capabilities array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>(),
+        vec!["docs", "messages", "calendar", "bitable"]
+    );
+}
+
+#[tokio::test]
+async fn feishu_auth_start_prefers_explicit_default_capability_block_over_legacy_default_scopes() {
+    let temp_dir = temp_feishu_cli_dir("auth-start-explicit-default-capabilities");
+    let config_path = write_sample_feishu_config_with_capabilities_and_default_scopes(
+        &temp_dir,
+        mvp::config::FeishuCapabilityConfig::default(),
+        vec![
+            "offline_access".to_owned(),
+            "docx:document:readonly".to_owned(),
+            "im:message:readonly".to_owned(),
+            "im:message.group_msg".to_owned(),
+            "search:message".to_owned(),
+            "calendar:calendar:readonly".to_owned(),
+            "bitable:app".to_owned(),
+        ],
+    );
+    let args = loongclaw_daemon::feishu_cli::FeishuAuthStartArgs {
+        common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+            config: Some(config_path.display().to_string()),
+            account: Some("feishu_main".to_owned()),
+            json: true,
+        },
+        redirect_uri: "http://127.0.0.1:34819/callback".to_owned(),
+        principal_hint: Some("operator".to_owned()),
+        scopes: Vec::new(),
+        capabilities: Vec::new(),
+        include_message_write: false,
+    };
+
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_auth_start(&args)
+        .await
+        .expect("execute feishu auth start");
+
+    let scopes = payload["scopes"]
+        .as_array()
+        .expect("scopes array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+
+    assert!(!scopes.contains(&"bitable:app"));
+    assert!(scopes.contains(&"offline_access"));
+    assert!(scopes.contains(&"docx:document:readonly"));
+    assert_eq!(
+        payload["capabilities"]
+            .as_array()
+            .expect("capabilities array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>(),
+        vec!["docs", "messages", "calendar"]
+    );
+}
+
+#[tokio::test]
 async fn feishu_auth_exchange_sets_selected_open_id_for_new_grant() {
     let temp_dir = temp_feishu_cli_dir("auth-exchange-select");
     let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
@@ -4353,7 +4523,7 @@ async fn feishu_auth_list_reports_multiple_grants_for_account() {
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
 
-    let mut first = sample_grant(
+    let mut first = sample_grant_covering_default_coarse_capabilities(
         "feishu_main",
         "ou_123",
         "u-token-1",
@@ -4366,7 +4536,13 @@ async fn feishu_auth_list_reports_multiple_grants_for_account() {
     first.refreshed_at_s = now_s - 60;
     store.save_grant(&first).expect("seed first grant");
 
-    let mut second = sample_grant("feishu_main", "ou_456", "u-token-2", "r-token-2", now_s);
+    let mut second = sample_grant_covering_default_coarse_capabilities(
+        "feishu_main",
+        "ou_456",
+        "u-token-2",
+        "r-token-2",
+        now_s,
+    );
     second.principal.name = Some("Bob".to_owned());
     second.refreshed_at_s = now_s;
     store.save_grant(&second).expect("seed second grant");
@@ -4616,7 +4792,10 @@ async fn feishu_auth_select_includes_configured_account_in_payload() {
 #[tokio::test]
 async fn feishu_auth_status_without_open_id_summarizes_multiple_grants() {
     let temp_dir = temp_feishu_cli_dir("auth-status-multi");
-    let config_path = write_sample_feishu_config(&temp_dir);
+    let config_path = write_sample_feishu_config_with_capabilities(
+        &temp_dir,
+        Some(mvp::config::FeishuCapabilityConfig::default()),
+    );
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
 
@@ -4784,7 +4963,10 @@ async fn feishu_auth_status_account_scope_clears_stale_selected_open_id() {
 #[tokio::test]
 async fn feishu_auth_status_recommends_account_scoped_reauthorize_for_missing_write_scope() {
     let temp_dir = temp_feishu_cli_dir("auth-status-write-remediation");
-    let config_path = write_sample_feishu_config(&temp_dir);
+    let config_path = write_sample_feishu_config_with_capabilities(
+        &temp_dir,
+        Some(mvp::config::FeishuCapabilityConfig::default()),
+    );
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
 
@@ -4820,6 +5002,61 @@ async fn feishu_auth_status_recommends_account_scoped_reauthorize_for_missing_wr
     assert_eq!(
         payload["recommendations"]["auth_start_command"],
         "loong feishu auth start --account feishu_main --capability doc-write --capability message-write"
+    );
+}
+
+#[tokio::test]
+async fn feishu_auth_status_skips_write_gaps_when_capabilities_disable_docs_and_messages() {
+    let temp_dir = temp_feishu_cli_dir("auth-status-calendar-only");
+    let config_path = write_sample_feishu_config_with_capabilities(
+        &temp_dir,
+        Some(mvp::config::FeishuCapabilityConfig {
+            docs: false,
+            messages: false,
+            calendar: true,
+            bitable: false,
+        }),
+    );
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+
+    let mut grant = sample_grant("feishu_main", "ou_123", "u-token-1", "r-token-1", now_s);
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+        "offline_access",
+        "calendar:calendar:readonly",
+    ]);
+    store.save_grant(&grant).expect("seed grant");
+
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_auth_status(
+        &loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+            common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                config: Some(config_path.display().to_string()),
+                account: Some("feishu_main".to_owned()),
+                json: true,
+            },
+            open_id: Some("ou_123".to_owned()),
+        },
+    )
+    .await
+    .expect("execute feishu auth status");
+
+    assert_eq!(payload["status_scope"], "grant");
+    assert_eq!(payload["status"]["missing_scopes"], json!([]));
+    assert_eq!(payload["doc_write_status"]["ready"], true);
+    assert_eq!(payload["doc_write_status"]["accepted_scopes"], json!([]));
+    assert_eq!(payload["recommendations"]["missing_doc_write_scope"], false);
+    assert_eq!(payload["message_write_status"]["ready"], true);
+    assert_eq!(
+        payload["message_write_status"]["accepted_scopes"],
+        json!([])
+    );
+    assert_eq!(
+        payload["recommendations"]["missing_message_write_scope"],
+        false
+    );
+    assert_eq!(
+        payload["recommendations"]["auth_start_command"],
+        Value::Null
     );
 }
 
@@ -5059,6 +5296,131 @@ async fn feishu_auth_revoke_reports_reselection_needed_when_multiple_grants_rema
         payload["recommendations"]["select_command"],
         "loong feishu auth select --account feishu_main --open-id <open_id>"
     );
+}
+
+#[tokio::test]
+async fn feishu_auth_status_reports_missing_config_derived_bitable_scope() {
+    let temp_dir = temp_feishu_cli_dir("auth-status-config-bitable-gap");
+    let config_path = write_sample_feishu_config_with_capabilities(
+        &temp_dir,
+        Some(mvp::config::FeishuCapabilityConfig {
+            docs: true,
+            messages: true,
+            calendar: true,
+            bitable: true,
+        }),
+    );
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+
+    store
+        .save_grant(&sample_grant(
+            "feishu_main",
+            "ou_123",
+            "u-token-1",
+            "r-token-1",
+            now_s,
+        ))
+        .expect("seed grant");
+
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_auth_status(
+        &loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+            common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                config: Some(config_path.display().to_string()),
+                account: Some("feishu_main".to_owned()),
+                json: true,
+            },
+            open_id: Some("ou_123".to_owned()),
+        },
+    )
+    .await
+    .expect("execute feishu auth status");
+
+    let required_scopes = payload["required_scopes"]
+        .as_array()
+        .expect("required_scopes array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let missing_scopes = payload["status"]["missing_scopes"]
+        .as_array()
+        .expect("missing_scopes array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+
+    assert!(required_scopes.contains(&"bitable:app"));
+    assert!(required_scopes.contains(&"base:table:read"));
+    assert!(required_scopes.contains(&"base:record:create"));
+    assert!(required_scopes.contains(&"base:record:retrieve"));
+    assert!(required_scopes.contains(&"base:record:write"));
+    assert!(required_scopes.contains(&"drive:drive:readonly"));
+    assert!(missing_scopes.contains(&"bitable:app"));
+    assert!(missing_scopes.contains(&"base:table:read"));
+    assert!(missing_scopes.contains(&"base:record:create"));
+    assert!(missing_scopes.contains(&"base:record:retrieve"));
+    assert!(missing_scopes.contains(&"base:record:write"));
+    assert!(missing_scopes.contains(&"drive:drive:readonly"));
+}
+
+#[tokio::test]
+async fn feishu_auth_status_ignores_legacy_bitable_default_scope_when_capability_block_is_explicit()
+{
+    let temp_dir = temp_feishu_cli_dir("auth-status-explicit-default-capabilities");
+    let config_path = write_sample_feishu_config_with_capabilities_and_default_scopes(
+        &temp_dir,
+        mvp::config::FeishuCapabilityConfig::default(),
+        vec![
+            "offline_access".to_owned(),
+            "docx:document:readonly".to_owned(),
+            "im:message:readonly".to_owned(),
+            "im:message.group_msg".to_owned(),
+            "search:message".to_owned(),
+            "calendar:calendar:readonly".to_owned(),
+            "bitable:app".to_owned(),
+        ],
+    );
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+
+    store
+        .save_grant(&sample_grant(
+            "feishu_main",
+            "ou_123",
+            "u-token-1",
+            "r-token-1",
+            now_s,
+        ))
+        .expect("seed grant");
+
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_auth_status(
+        &loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+            common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                config: Some(config_path.display().to_string()),
+                account: Some("feishu_main".to_owned()),
+                json: true,
+            },
+            open_id: Some("ou_123".to_owned()),
+        },
+    )
+    .await
+    .expect("execute feishu auth status");
+
+    let required_scopes = payload["required_scopes"]
+        .as_array()
+        .expect("required_scopes array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let missing_scopes = payload["status"]["missing_scopes"]
+        .as_array()
+        .expect("missing_scopes array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+
+    assert!(!required_scopes.contains(&"bitable:app"));
+    assert!(!missing_scopes.contains(&"bitable:app"));
 }
 
 #[tokio::test]

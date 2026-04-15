@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::VecDeque,
     convert::Infallible,
     path::PathBuf,
     pin::Pin,
@@ -25,7 +25,8 @@ use crate::KernelContext;
 use crate::channel::feishu::api::{FeishuClient, resources::cards};
 use crate::channel::{
     ChannelInboundMessage, ChannelOutboundTarget, ChannelTurnFeedbackPolicy,
-    process_inbound_with_provider, runtime::state::ChannelOperationRuntimeTracker,
+    access_policy::ChannelInboundAccessPolicy, process_inbound_with_provider,
+    runtime::state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
 use crate::crypto::timing_safe_eq;
@@ -45,7 +46,7 @@ pub(super) struct FeishuWebhookState {
     account_id: String,
     verification_token: Option<String>,
     encrypt_key: Option<String>,
-    allowed_chat_ids: BTreeSet<String>,
+    access_policy: ChannelInboundAccessPolicy<String>,
     ack_reactions: bool,
     ignore_bot_messages: bool,
     seen_events: Arc<Mutex<RecentIdCache>>,
@@ -92,17 +93,18 @@ impl FeishuWebhookState {
         kernel_ctx: KernelContext,
         runtime: Arc<ChannelOperationRuntimeTracker>,
     ) -> Self {
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            resolved.allowed_chat_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+            true,
+        );
+
         Self {
             configured_account_id: resolved.configured_account_id.clone(),
             account_id: resolved.account.id.clone(),
             verification_token: resolved.verification_token(),
             encrypt_key: resolved.encrypt_key(),
-            allowed_chat_ids: resolved
-                .allowed_chat_ids
-                .iter()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .collect(),
+            access_policy,
             ack_reactions: resolved.ack_reactions,
             ignore_bot_messages: resolved.ignore_bot_messages,
             config,
@@ -119,10 +121,10 @@ impl FeishuWebhookState {
         &self,
         payload: &Value,
     ) -> CliResult<FeishuWebhookAction> {
-        super::payload::parse_feishu_inbound_payload(
+        super::payload::parse_feishu_inbound_payload_with_access_policy(
             payload,
             super::payload::FeishuTransportAuth::websocket(),
-            &self.allowed_chat_ids,
+            &self.access_policy,
             self.ignore_bot_messages,
             self.configured_account_id.as_str(),
             self.account_id.as_str(),
@@ -460,11 +462,11 @@ async fn handle_feishu_webhook_payload(
 ) -> Result<FeishuWebhookSuccessResponse, (StatusCode, String)> {
     verify_feishu_signature(headers, raw_body, &payload, state.encrypt_key.as_deref())?;
 
-    let parsed = super::payload::parse_feishu_webhook_payload(
+    let parsed = super::payload::parse_feishu_webhook_payload_with_access_policy(
         &payload,
         state.verification_token.as_deref(),
         state.encrypt_key.as_deref(),
-        &state.allowed_chat_ids,
+        &state.access_policy,
         state.ignore_bot_messages,
         state.configured_account_id.as_str(),
         state.account_id.as_str(),
@@ -944,6 +946,7 @@ mod tests {
         Json, Router,
         body::to_bytes,
         extract::{Request, State},
+        response::IntoResponse,
         routing::post,
     };
     use loongclaw_contracts::Capability;
@@ -1084,11 +1087,12 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
-    async fn record_request(State(state): State<MockServerState>, request: Request) {
+    async fn record_request(State(state): State<MockServerState>, request: Request) -> String {
         let (parts, body) = request.into_parts();
         let body = to_bytes(body, usize::MAX)
             .await
             .expect("read mock request body");
+        let body_text = String::from_utf8(body.to_vec()).expect("mock request body utf8");
         state.requests.lock().await.push(MockRequest {
             path: parts.uri.path().to_owned(),
             query: parts.uri.query().map(ToOwned::to_owned),
@@ -1097,8 +1101,59 @@ mod tests {
                 .get(axum::http::header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok())
                 .map(ToOwned::to_owned),
-            body: String::from_utf8(body.to_vec()).expect("mock request body utf8"),
+            body: body_text.clone(),
         });
+        body_text
+    }
+
+    fn mock_provider_stream_enabled(body: &str) -> bool {
+        serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|payload| payload.get("stream").and_then(Value::as_bool))
+            .unwrap_or(false)
+    }
+
+    fn mock_provider_stream_response_body(response_text: &str) -> String {
+        format!(
+            "data: {}\n\n\
+data: {}\n\n\
+data: [DONE]\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "content": response_text
+                    }
+                }]
+            }),
+            json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            }),
+        )
+    }
+
+    fn mock_provider_success_response(
+        request_body: &str,
+        response_text: &str,
+    ) -> axum::response::Response {
+        if mock_provider_stream_enabled(request_body) {
+            return (
+                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                mock_provider_stream_response_body(response_text),
+            )
+                .into_response();
+        }
+
+        Json(json!({
+            "choices": [{
+                "message": {
+                    "content": response_text
+                }
+            }]
+        }))
+        .into_response()
     }
 
     async fn wait_for_request_count(
@@ -1126,14 +1181,11 @@ mod tests {
                 move |request| {
                     let state = state.clone();
                     async move {
-                        record_request(State(state), request).await;
-                        Json(json!({
-                            "choices": [{
-                                "message": {
-                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
-                                }
-                            }]
-                        }))
+                        let request_body = record_request(State(state), request).await;
+                        mock_provider_success_response(
+                            request_body.as_str(),
+                            MOCK_PROVIDER_MARKDOWN_REPLY,
+                        )
                     }
                 }
             }),
@@ -1153,14 +1205,8 @@ mod tests {
                 move |request| {
                     let state = state.clone();
                     async move {
-                        record_request(State(state), request).await;
-                        Json(json!({
-                            "choices": [{
-                                "message": {
-                                    "content": response_text
-                                }
-                            }]
-                        }))
+                        let request_body = record_request(State(state), request).await;
+                        mock_provider_success_response(request_body.as_str(), response_text)
                     }
                 }
             }),
@@ -1207,15 +1253,12 @@ mod tests {
                 move |request| {
                     let state = state.clone();
                     async move {
-                        record_request(State(state), request).await;
+                        let request_body = record_request(State(state), request).await;
                         tokio::time::sleep(delay).await;
-                        Json(json!({
-                            "choices": [{
-                                "message": {
-                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
-                                }
-                            }]
-                        }))
+                        mock_provider_success_response(
+                            request_body.as_str(),
+                            MOCK_PROVIDER_MARKDOWN_REPLY,
+                        )
                     }
                 }
             }),
@@ -1854,6 +1897,7 @@ mod tests {
         assert_eq!(provider_requests[0].path, "/v1/chat/completions");
         let provider_body =
             serde_json::from_str::<Value>(&provider_requests[0].body).expect("provider body json");
+        assert_eq!(provider_body["stream"], json!(true));
         let provider_user_content = provider_body
             .get("messages")
             .and_then(Value::as_array)
@@ -2306,6 +2350,9 @@ mod tests {
 
         let provider_requests = provider_requests.lock().await.clone();
         assert_eq!(provider_requests.len(), 1);
+        let provider_body =
+            serde_json::from_str::<Value>(&provider_requests[0].body).expect("provider body json");
+        assert_eq!(provider_body["stream"], json!(true));
 
         let feishu_requests = wait_for_request_count(&feishu_requests, 3).await;
         assert_eq!(feishu_requests.len(), 3);

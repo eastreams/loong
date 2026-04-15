@@ -68,9 +68,11 @@ const fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedLoongClawHome;
 
     #[test]
     fn audit_config_defaults_to_fanout_under_loongclaw_home() {
+        let _home = ScopedLoongClawHome::new("loongclaw-audit-config-home");
         let config = AuditConfig::default();
 
         assert_eq!(config.mode, AuditMode::Fanout);
@@ -90,6 +92,7 @@ mod tests {
 
     #[test]
     fn audit_config_empty_path_falls_back_to_default_location() {
+        let _home = ScopedLoongClawHome::new("loongclaw-audit-path-home");
         let config = AuditConfig {
             path: "   ".to_owned(),
             ..AuditConfig::default()

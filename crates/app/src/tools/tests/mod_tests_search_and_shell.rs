@@ -325,7 +325,7 @@ async fn framework_timeout_supports_async_core_tool_calls() {
     let mut config = test_tool_runtime_config(root);
     config.tool_execution.default_timeout_seconds = Some(1);
 
-    let adapter = MvpToolAdapter::with_config(config);
+    let adapter = MvpToolAdapter::with_config(config.into_inner());
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
         payload: json!({

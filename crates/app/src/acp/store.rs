@@ -144,7 +144,7 @@ impl AcpSessionStore for AcpSqliteSessionStore {
         let conn = self.connect()?;
         conn.query_row(
             "SELECT session_key, conversation_id, binding_route_session_id, binding_channel_id,
-                    binding_account_id, binding_conversation_id, binding_thread_id, backend_id,
+                    binding_account_id, binding_conversation_id, binding_participant_id, binding_thread_id, backend_id,
                     runtime_session_name, working_directory, backend_session_id, agent_session_id,
                     activation_origin, mode, state, last_activity_ms, last_error
              FROM acp_sessions
@@ -167,7 +167,7 @@ impl AcpSessionStore for AcpSqliteSessionStore {
         let conn = self.connect()?;
         conn.query_row(
             "SELECT session_key, conversation_id, binding_route_session_id, binding_channel_id,
-                    binding_account_id, binding_conversation_id, binding_thread_id, backend_id,
+                    binding_account_id, binding_conversation_id, binding_participant_id, binding_thread_id, backend_id,
                     runtime_session_name, working_directory, backend_session_id, agent_session_id,
                     activation_origin, mode, state, last_activity_ms, last_error
              FROM acp_sessions
@@ -192,7 +192,7 @@ impl AcpSessionStore for AcpSqliteSessionStore {
         let conn = self.connect()?;
         conn.query_row(
             "SELECT session_key, conversation_id, binding_route_session_id, binding_channel_id,
-                    binding_account_id, binding_conversation_id, binding_thread_id, backend_id,
+                    binding_account_id, binding_conversation_id, binding_participant_id, binding_thread_id, backend_id,
                     runtime_session_name, working_directory, backend_session_id, agent_session_id,
                     activation_origin, mode, state, last_activity_ms, last_error
              FROM acp_sessions
@@ -211,16 +211,17 @@ impl AcpSessionStore for AcpSqliteSessionStore {
         conn.execute(
             "INSERT INTO acp_sessions(
                 session_key, conversation_id, binding_route_session_id, binding_channel_id,
-                binding_account_id, binding_conversation_id, binding_thread_id, backend_id,
+                binding_account_id, binding_conversation_id, binding_participant_id, binding_thread_id, backend_id,
                 runtime_session_name, working_directory, backend_session_id, agent_session_id,
                 activation_origin, mode, state, last_activity_ms, last_error
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(session_key) DO UPDATE SET
                 conversation_id = excluded.conversation_id,
                 binding_route_session_id = excluded.binding_route_session_id,
                 binding_channel_id = excluded.binding_channel_id,
                 binding_account_id = excluded.binding_account_id,
                 binding_conversation_id = excluded.binding_conversation_id,
+                binding_participant_id = excluded.binding_participant_id,
                 binding_thread_id = excluded.binding_thread_id,
                 backend_id = excluded.backend_id,
                 runtime_session_name = excluded.runtime_session_name,
@@ -251,6 +252,10 @@ impl AcpSessionStore for AcpSqliteSessionStore {
                     .binding
                     .as_ref()
                     .and_then(|binding| binding.conversation_id.clone()),
+                metadata
+                    .binding
+                    .as_ref()
+                    .and_then(|binding| binding.participant_id.clone()),
                 metadata
                     .binding
                     .as_ref()
@@ -291,7 +296,7 @@ impl AcpSessionStore for AcpSqliteSessionStore {
         let mut stmt = conn
             .prepare(
                 "SELECT session_key, conversation_id, binding_route_session_id, binding_channel_id,
-                        binding_account_id, binding_conversation_id, binding_thread_id, backend_id,
+                        binding_account_id, binding_conversation_id, binding_participant_id, binding_thread_id, backend_id,
                         runtime_session_name, working_directory, backend_session_id, agent_session_id,
                         activation_origin, mode, state, last_activity_ms, last_error
                  FROM acp_sessions
@@ -330,6 +335,7 @@ fn ensure_sqlite_schema(path: &PathBuf) -> CliResult<()> {
           binding_channel_id TEXT,
           binding_account_id TEXT,
           binding_conversation_id TEXT,
+          binding_participant_id TEXT,
           binding_thread_id TEXT,
           backend_id TEXT NOT NULL,
           runtime_session_name TEXT NOT NULL,
@@ -350,6 +356,7 @@ fn ensure_sqlite_schema(path: &PathBuf) -> CliResult<()> {
     ensure_sqlite_column(&conn, "acp_sessions", "binding_channel_id", "TEXT")?;
     ensure_sqlite_column(&conn, "acp_sessions", "binding_account_id", "TEXT")?;
     ensure_sqlite_column(&conn, "acp_sessions", "binding_conversation_id", "TEXT")?;
+    ensure_sqlite_column(&conn, "acp_sessions", "binding_participant_id", "TEXT")?;
     ensure_sqlite_column(&conn, "acp_sessions", "binding_thread_id", "TEXT")?;
     ensure_sqlite_column(&conn, "acp_sessions", "activation_origin", "TEXT")?;
     ensure_sqlite_column(
@@ -407,15 +414,16 @@ fn ensure_sqlite_column(
 
 #[cfg(feature = "memory-sqlite")]
 fn decode_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AcpSessionMetadata> {
-    let activation_origin_raw: Option<String> = row.get(12)?;
-    let mode_raw: Option<String> = row.get(13)?;
-    let state_raw: String = row.get(14)?;
-    let last_activity_raw: i64 = row.get(15)?;
+    let activation_origin_raw: Option<String> = row.get(13)?;
+    let mode_raw: Option<String> = row.get(14)?;
+    let state_raw: String = row.get(15)?;
+    let last_activity_raw: i64 = row.get(16)?;
     let binding_route_session_id: Option<String> = row.get(2)?;
     let binding_channel_id: Option<String> = row.get(3)?;
     let binding_account_id: Option<String> = row.get(4)?;
     let binding_conversation_id: Option<String> = row.get(5)?;
-    let binding_thread_id: Option<String> = row.get(6)?;
+    let binding_participant_id: Option<String> = row.get(6)?;
+    let binding_thread_id: Option<String> = row.get(7)?;
     Ok(AcpSessionMetadata {
         session_key: row.get(0)?,
         conversation_id: row.get(1)?,
@@ -424,19 +432,20 @@ fn decode_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AcpSessionMet
             channel_id: binding_channel_id,
             account_id: binding_account_id,
             conversation_id: binding_conversation_id,
+            participant_id: binding_participant_id,
             thread_id: binding_thread_id,
         }),
-        backend_id: row.get(7)?,
-        runtime_session_name: row.get(8)?,
-        working_directory: row.get::<_, Option<String>>(9)?.map(PathBuf::from),
-        backend_session_id: row.get(10)?,
-        agent_session_id: row.get(11)?,
+        backend_id: row.get(8)?,
+        runtime_session_name: row.get(9)?,
+        working_directory: row.get::<_, Option<String>>(10)?.map(PathBuf::from),
+        backend_session_id: row.get(11)?,
+        agent_session_id: row.get(12)?,
         activation_origin: activation_origin_raw
             .as_deref()
             .map(|raw| {
                 AcpRoutingOrigin::parse(raw).ok_or_else(|| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        12,
+                        13,
                         rusqlite::types::Type::Text,
                         Box::new(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -452,26 +461,26 @@ fn decode_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AcpSessionMet
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    13,
+                    14,
                     rusqlite::types::Type::Text,
                     Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
                 )
             })?,
         state: decode_state(&state_raw).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                14,
+                15,
                 rusqlite::types::Type::Text,
                 Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
             )
         })?,
         last_activity_ms: u64::try_from(last_activity_raw).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                15,
+                16,
                 rusqlite::types::Type::Integer,
                 Box::new(error),
             )
         })?,
-        last_error: row.get(16)?,
+        last_error: row.get(17)?,
     })
 }
 

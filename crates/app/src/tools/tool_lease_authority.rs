@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::thread;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -20,6 +21,8 @@ use sha2::Sha256;
 const TOOL_LEASE_TTL_SECONDS: u64 = 300;
 const TOOL_LEASE_SECRET_BYTES: usize = 32;
 const TOOL_LEASE_SECRET_FILE_NAME: &str = "tool-lease-secret.hex";
+const TOOL_LEASE_SECRET_PUBLICATION_RETRY_ATTEMPTS: usize = 12;
+const TOOL_LEASE_SECRET_PUBLICATION_RETRY_DELAY_MILLIS: u64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolLeaseClaims {
@@ -204,6 +207,18 @@ fn tool_lease_secret() -> Result<String, String> {
         return Ok(cached_secret);
     }
 
+    let load_lock = tool_lease_secret_load_lock();
+    let lock = load_lock.lock();
+    let _lock = match lock {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let cached_secret = cached_tool_lease_secret(secret_path.as_path());
+    if let Some(cached_secret) = cached_secret {
+        return Ok(cached_secret);
+    }
+
     let loaded_secret = load_or_create_tool_lease_secret(secret_path.as_path())?;
     cache_tool_lease_secret(secret_path, loaded_secret.clone());
     Ok(loaded_secret)
@@ -228,15 +243,7 @@ fn load_or_create_tool_lease_secret(secret_path: &Path) -> Result<String, String
     match create_result {
         Ok(()) => Ok(generated_secret),
         Err(CreateToolLeaseSecretError::AlreadyExists) => {
-            let existing_secret = read_tool_lease_secret_file(secret_path)?;
-            let Some(existing_secret) = existing_secret else {
-                let message = format!(
-                    "tool_lease_authority_unavailable: secret file appeared without readable contents at {}",
-                    secret_path.display()
-                );
-                return Err(message);
-            };
-            Ok(existing_secret)
+            read_tool_lease_secret_after_competitor_publish(secret_path)
         }
         Err(CreateToolLeaseSecretError::Io(error)) => {
             let message = format!(
@@ -246,6 +253,34 @@ fn load_or_create_tool_lease_secret(secret_path: &Path) -> Result<String, String
             Err(message)
         }
     }
+}
+
+fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result<String, String> {
+    let retry_attempts = TOOL_LEASE_SECRET_PUBLICATION_RETRY_ATTEMPTS;
+    let retry_delay = Duration::from_millis(TOOL_LEASE_SECRET_PUBLICATION_RETRY_DELAY_MILLIS);
+    let mut attempt_index = 0usize;
+
+    while attempt_index < retry_attempts {
+        let existing_secret = read_tool_lease_secret_file(secret_path)?;
+        if let Some(existing_secret) = existing_secret {
+            return Ok(existing_secret);
+        }
+
+        attempt_index += 1;
+
+        let has_more_attempts = attempt_index < retry_attempts;
+        if !has_more_attempts {
+            break;
+        }
+
+        thread::park_timeout(retry_delay);
+    }
+
+    let message = format!(
+        "tool_lease_authority_unavailable: secret file appeared without readable contents at {}",
+        secret_path.display()
+    );
+    Err(message)
 }
 
 fn ensure_tool_lease_secret_parent_dir(secret_path: &Path) -> Result<(), String> {
@@ -321,32 +356,31 @@ fn write_tool_lease_secret_if_missing(
     secret_path: &Path,
     secret: &str,
 ) -> Result<(), CreateToolLeaseSecretError> {
-    let mut options = OpenOptions::new();
-    options.write(true);
-    options.create_new(true);
-
-    let file = options.open(secret_path);
-    let mut file = match file {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(CreateToolLeaseSecretError::AlreadyExists);
-        }
+    let parent = secret_path.parent().unwrap_or_else(|| Path::new("."));
+    let staged_file_result = tempfile::NamedTempFile::new_in(parent);
+    let mut staged_file = match staged_file_result {
+        Ok(staged_file) => staged_file,
         Err(error) => return Err(CreateToolLeaseSecretError::Io(error)),
     };
 
-    let write_result = writeln!(file, "{secret}");
+    let write_result = writeln!(staged_file, "{secret}");
     if let Err(error) = write_result {
-        let _ = fs::remove_file(secret_path);
         return Err(CreateToolLeaseSecretError::Io(error));
     }
 
-    let sync_result = file.sync_all();
+    let sync_result = staged_file.as_file_mut().sync_all();
     if let Err(error) = sync_result {
-        let _ = fs::remove_file(secret_path);
         return Err(CreateToolLeaseSecretError::Io(error));
     }
 
-    Ok(())
+    let persist_result = staged_file.persist_noclobber(secret_path);
+    match persist_result {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(CreateToolLeaseSecretError::AlreadyExists)
+        }
+        Err(error) => Err(CreateToolLeaseSecretError::Io(error.error)),
+    }
 }
 
 fn cached_tool_lease_secret(secret_path: &Path) -> Option<String> {
@@ -374,6 +408,11 @@ fn tool_lease_secret_cache() -> &'static Mutex<HashMap<PathBuf, String>> {
     TOOL_LEASE_SECRET_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn tool_lease_secret_load_lock() -> &'static Mutex<()> {
+    static TOOL_LEASE_SECRET_LOAD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TOOL_LEASE_SECRET_LOAD_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn now_unix_seconds() -> u64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -382,7 +421,7 @@ fn now_unix_seconds() -> u64 {
 }
 
 #[cfg(test)]
-pub(super) fn clear_tool_lease_secret_cache_for_tests() {
+pub(crate) fn clear_tool_lease_secret_cache_for_tests() {
     let cache = tool_lease_secret_cache();
     let guard = cache.lock();
     let mut guard = match guard {
@@ -394,26 +433,22 @@ pub(super) fn clear_tool_lease_secret_cache_for_tests() {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
-
     use super::clear_tool_lease_secret_cache_for_tests;
     use super::default_tool_lease_secret_path;
+    use super::generate_tool_lease_secret;
     use super::issue_tool_lease;
+    use super::read_tool_lease_secret_after_competitor_publish;
     use super::read_tool_lease_secret_file;
     use super::validate_tool_lease;
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::ScopedLoongClawHome;
 
-    fn scoped_tool_lease_home() -> (TempDir, ScopedEnv) {
-        let temp_home = TempDir::new().expect("temp home");
-        let mut env = ScopedEnv::new();
-        env.set("LOONG_HOME", temp_home.path());
-        clear_tool_lease_secret_cache_for_tests();
-        (temp_home, env)
+    fn scoped_tool_lease_home(prefix: &str) -> ScopedLoongClawHome {
+        ScopedLoongClawHome::new(prefix)
     }
 
     #[test]
     fn issue_tool_lease_persists_secret_under_loong_home() {
-        let (_temp_home, _env) = scoped_tool_lease_home();
+        let _home = scoped_tool_lease_home("loongclaw-tool-lease-home");
         let payload = serde_json::Map::new();
 
         let lease = issue_tool_lease("file.read", &payload).expect("lease");
@@ -428,7 +463,7 @@ mod tests {
 
     #[test]
     fn issued_tool_lease_survives_authority_cache_reset() {
-        let (_temp_home, _env) = scoped_tool_lease_home();
+        let _home = scoped_tool_lease_home("loongclaw-tool-lease-cache-home");
         let payload = serde_json::Map::new();
 
         let lease = issue_tool_lease("file.read", &payload).expect("lease");
@@ -441,18 +476,79 @@ mod tests {
     }
 
     #[test]
+    fn issue_tool_lease_parallel_first_use_keeps_secret_readable() {
+        use std::sync::Arc;
+        use std::sync::Barrier;
+
+        let home = scoped_tool_lease_home("loongclaw-tool-lease-parallel-home");
+        let home_path = home.path().to_path_buf();
+        let thread_count = 8;
+        let barrier = Arc::new(Barrier::new(thread_count));
+        let mut handles = Vec::new();
+
+        for _ in 0..thread_count {
+            let barrier = Arc::clone(&barrier);
+            let home_path = home_path.clone();
+            let handle = std::thread::spawn(move || {
+                let _thread_home =
+                    crate::test_support::ScopedLoongClawHome::from_existing(home_path);
+                let payload = serde_json::Map::new();
+                barrier.wait();
+                issue_tool_lease("file.read", &payload)
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let join_result = handle.join().expect("join tool lease thread");
+            join_result.expect("lease should issue without exposing an empty secret file");
+        }
+
+        let secret_path = default_tool_lease_secret_path();
+        let persisted_secret =
+            read_tool_lease_secret_file(secret_path.as_path()).expect("persisted secret");
+
+        assert!(persisted_secret.is_some());
+
+        drop(home);
+    }
+
+    #[test]
+    fn read_tool_lease_secret_after_competitor_publish_waits_for_visible_secret() {
+        let _home = scoped_tool_lease_home("loongclaw-tool-lease-visibility-home");
+        let secret_path = default_tool_lease_secret_path();
+        let parent_dir = secret_path.parent().expect("secret parent").to_path_buf();
+        std::fs::create_dir_all(&parent_dir).expect("create secret parent");
+
+        let expected_secret = generate_tool_lease_secret();
+        let publisher_path = secret_path.clone();
+        let publisher_secret = expected_secret.clone();
+
+        let publisher = std::thread::spawn(move || {
+            let publish_delay = std::time::Duration::from_millis(10);
+            std::thread::park_timeout(publish_delay);
+            let secret_body = format!("{publisher_secret}\n");
+            std::fs::write(&publisher_path, secret_body).expect("publish secret file");
+        });
+
+        let observed_secret =
+            read_tool_lease_secret_after_competitor_publish(secret_path.as_path())
+                .expect("wait for visible secret");
+
+        publisher.join().expect("join publisher thread");
+
+        assert_eq!(observed_secret, expected_secret);
+    }
+
+    #[test]
     fn issued_tool_lease_is_home_scoped() {
-        let home_a = TempDir::new().expect("temp home");
-        let mut env = ScopedEnv::new();
-        env.set("LOONG_HOME", home_a.path());
-        clear_tool_lease_secret_cache_for_tests();
+        let home_a = scoped_tool_lease_home("loongclaw-tool-lease-home-a");
         let payload = serde_json::Map::new();
         let lease = issue_tool_lease("file.read", &payload).expect("lease");
 
-        let temp_home_b = TempDir::new().expect("temp home");
-        env.set("LOONG_HOME", temp_home_b.path());
-        clear_tool_lease_secret_cache_for_tests();
+        drop(home_a);
 
+        let _home_b = scoped_tool_lease_home("loongclaw-tool-lease-home-b");
         let validation_result = validate_tool_lease("file.read", &lease, &payload);
         let error = validation_result.expect_err("different home should reject lease");
 

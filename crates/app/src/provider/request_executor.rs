@@ -16,10 +16,12 @@ use super::{
     auth_profile_runtime::ProviderAuthProfile,
     contracts::{
         CompletionPayloadMode, ProviderApiError, ProviderCapabilityContract,
-        ProviderRuntimeContract, adapt_payload_mode_for_error, parse_provider_api_error,
+        ProviderRuntimeContract, ProviderTransportMode, adapt_payload_mode_for_error,
+        parse_provider_api_error,
     },
     failover::{
-        ModelRequestError, ProviderFailoverReason, ProviderFailoverStage, build_model_request_error,
+        ModelRequestError, ProviderFailoverReason, ProviderFailoverStage,
+        build_model_request_error, build_model_request_error_with_rate_limit,
     },
     policy,
     request_planner::{
@@ -244,6 +246,7 @@ where
                 let status = response.status;
                 let response_headers = response.headers;
                 let response_body = response.body;
+                let response_rate_limit = response.rate_limit;
 
                 if status.is_success() {
                     let parsed = parse_success(&response_body).ok_or_else(|| {
@@ -319,7 +322,7 @@ where
                         ));
                     }
                     ModelStatusOutcome::Fail { reason } => {
-                        return Err(build_model_request_error(
+                        return Err(build_model_request_error_with_rate_limit(
                             render_status_failure_message(
                                 runtime.provider,
                                 reason,
@@ -337,6 +340,7 @@ where
                             runtime.request_policy.max_attempts,
                             Some(status_code),
                             Some(api_error.clone()),
+                            response_rate_limit,
                         ));
                     }
                 }
@@ -513,6 +517,7 @@ where
                 let status = response.status;
                 let response_headers = response.headers;
                 let response_body = response.body;
+                let response_rate_limit = response.rate_limit;
 
                 let api_error = parse_provider_api_error(&response_body);
                 if let Some(next_mode) = adapt_payload_mode_for_error(
@@ -564,7 +569,7 @@ where
                         ));
                     }
                     ModelStatusOutcome::Fail { reason } => {
-                        return Err(build_model_request_error(
+                        return Err(build_model_request_error_with_rate_limit(
                             render_status_failure_message(
                                 runtime.provider,
                                 reason,
@@ -582,6 +587,7 @@ where
                             runtime.request_policy.max_attempts,
                             Some(status_code),
                             Some(api_error.clone()),
+                            response_rate_limit,
                         ));
                     }
                 }
@@ -728,52 +734,9 @@ where
     PreStatusError: FnMut(&ProviderApiError) -> bool,
 {
     let model_name = runtime.model.to_owned();
-    let stream = match execute_streaming_model_request(runtime, build_body, |data: Value| {
-        let event_type = data.get("type").and_then(|v| v.as_str())?;
-        if event_type == "content_block_start" {
-            let content_block = data.get("content_block")?;
-            if content_block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                let name = content_block
-                    .get("name")
-                    .and_then(|v| v.as_str())?
-                    .to_owned();
-                let id = content_block.get("id").and_then(|v| v.as_str())?.to_owned();
-                let index = data.get("index").and_then(|v| v.as_u64())? as usize;
-                return Some(StreamingEvent::ToolCallStart { index, name, id });
-            }
-        }
-        if event_type == "content_block_delta" {
-            let delta = data.get("delta")?;
-            let delta_type = delta.get("type").and_then(|v| v.as_str())?;
-            if delta_type == "text_delta" {
-                let text = delta.get("text").and_then(|v| v.as_str())?;
-                return Some(StreamingEvent::Text(text.to_owned()));
-            }
-            if delta_type == "input_json_delta" {
-                let partial = delta.get("partial_json").and_then(|v| v.as_str())?;
-                let index = data.get("index").and_then(|v| v.as_u64())? as usize;
-                return Some(StreamingEvent::ToolInputPartial {
-                    index,
-                    partial_json: partial.to_owned(),
-                });
-            }
-        }
-        if event_type == "message_stop" {
-            return Some(StreamingEvent::Done);
-        }
-        if event_type == "message_start" || event_type == "message_delta" {
-            return Some(StreamingEvent::Meta(data));
-        }
-        if event_type == "error" {
-            let message = data
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown streaming error")
-                .to_owned();
-            return Some(StreamingEvent::StreamError(message));
-        }
-        None
+    let transport_mode = runtime.runtime_contract.transport_mode;
+    let stream = match execute_streaming_model_request(runtime, build_body, move |data: Value| {
+        parse_streaming_event(transport_mode, data)
     })
     .await
     {
@@ -793,20 +756,33 @@ where
                 }
                 accumulator.text.push_str(&text);
             }
-            Ok(StreamingEvent::ToolCallStart { index, name, id }) => {
+            Ok(StreamingEvent::ToolCallStart {
+                index,
+                name,
+                id,
+                initial_json,
+            }) => {
                 if let Some(ref callback) = on_token {
                     callback(StreamingCallbackData::ToolCallStart {
                         index,
                         name: name.clone(),
                         id: id.clone(),
                     });
+                    if let Some(initial_json) = initial_json.clone()
+                        && !initial_json.is_empty()
+                    {
+                        callback(StreamingCallbackData::ToolCallInput {
+                            index,
+                            partial_json: initial_json,
+                        });
+                    }
                 }
                 accumulator.tool_calls.insert(
                     index,
                     ToolCallInfo {
                         name,
                         id,
-                        input: String::new(),
+                        input: initial_json.unwrap_or_default(),
                     },
                 );
             }
@@ -920,6 +896,129 @@ where
     })
 }
 
+fn parse_streaming_event(
+    transport_mode: ProviderTransportMode,
+    data: Value,
+) -> Option<StreamingEvent> {
+    match transport_mode {
+        ProviderTransportMode::AnthropicMessages => parse_anthropic_streaming_event(data),
+        ProviderTransportMode::OpenAiChatCompletions | ProviderTransportMode::KimiApi => {
+            parse_openai_streaming_event(data)
+        }
+        ProviderTransportMode::Responses
+        | ProviderTransportMode::BedrockConverse
+        | ProviderTransportMode::GoogleGenerateContent => None,
+    }
+}
+
+fn parse_anthropic_streaming_event(data: Value) -> Option<StreamingEvent> {
+    let event_type = data.get("type").and_then(|v| v.as_str())?;
+    if event_type == "content_block_start" {
+        let content_block = data.get("content_block")?;
+        if content_block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+            let name = content_block
+                .get("name")
+                .and_then(|v| v.as_str())?
+                .to_owned();
+            let id = content_block.get("id").and_then(|v| v.as_str())?.to_owned();
+            let index = data.get("index").and_then(|v| v.as_u64())? as usize;
+            return Some(StreamingEvent::ToolCallStart {
+                index,
+                name,
+                id,
+                initial_json: None,
+            });
+        }
+    }
+    if event_type == "content_block_delta" {
+        let delta = data.get("delta")?;
+        let delta_type = delta.get("type").and_then(|v| v.as_str())?;
+        if delta_type == "text_delta" {
+            let text = delta.get("text").and_then(|v| v.as_str())?;
+            return Some(StreamingEvent::Text(text.to_owned()));
+        }
+        if delta_type == "input_json_delta" {
+            let partial = delta.get("partial_json").and_then(|v| v.as_str())?;
+            let index = data.get("index").and_then(|v| v.as_u64())? as usize;
+            return Some(StreamingEvent::ToolInputPartial {
+                index,
+                partial_json: partial.to_owned(),
+            });
+        }
+    }
+    if event_type == "message_stop" {
+        return Some(StreamingEvent::Done);
+    }
+    if event_type == "message_start" || event_type == "message_delta" {
+        return Some(StreamingEvent::Meta(data));
+    }
+    if event_type == "error" {
+        let message = data
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown streaming error")
+            .to_owned();
+        return Some(StreamingEvent::StreamError(message));
+    }
+    None
+}
+
+fn parse_openai_streaming_event(data: Value) -> Option<StreamingEvent> {
+    if data.get("type").and_then(Value::as_str) == Some("message_stop") {
+        return Some(StreamingEvent::Done);
+    }
+    let choice = data
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())?;
+    if choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return Some(StreamingEvent::Done);
+    }
+    let delta = choice.get("delta")?;
+    if let Some(tool_call) = delta
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .and_then(|tool_calls| tool_calls.first())
+    {
+        let index = tool_call.get("index").and_then(Value::as_u64)? as usize;
+        let function = tool_call.get("function");
+        let initial_json = function
+            .and_then(|function| function.get("arguments"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|value| !value.is_empty());
+        if let (Some(id), Some(name)) = (
+            tool_call.get("id").and_then(Value::as_str),
+            function
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str),
+        ) {
+            return Some(StreamingEvent::ToolCallStart {
+                index,
+                name: name.to_owned(),
+                id: id.to_owned(),
+                initial_json,
+            });
+        }
+        if let Some(partial_json) = initial_json {
+            return Some(StreamingEvent::ToolInputPartial {
+                index,
+                partial_json,
+            });
+        }
+    }
+    let text = choice
+        .get("delta")
+        .and_then(|delta| delta.get("content"))
+        .and_then(Value::as_str)?;
+    Some(StreamingEvent::Text(text.to_owned()))
+}
+
 #[derive(Clone)]
 pub(crate) struct ToolCallInfo {
     pub name: String,
@@ -942,6 +1041,7 @@ pub(crate) enum StreamingEvent {
         index: usize,
         name: String,
         id: String,
+        initial_json: Option<String>,
     },
     ToolInputPartial {
         index: usize,
@@ -1361,6 +1461,7 @@ mod tests {
                     }
                 }]
             }),
+            rate_limit: None,
         })]);
         let runtime = ModelRequestRuntime {
             provider: &provider,
@@ -1470,6 +1571,90 @@ mod tests {
         let first = stream.next().await.expect("first streamed item");
         assert_eq!(first.expect("text event"), "streamed hello");
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_streaming_turn_request_reconstructs_openai_tool_calls() {
+        use crate::provider::mock_transport::MockTransport;
+
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Openai,
+            ..ProviderConfig::default()
+        };
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_stream_events([Ok(vec![
+            Ok(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": ""
+                            }
+                        }]
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "arguments": "{\"location\":\"NYC\"}"
+                            }
+                        }]
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "tool_calls"
+                }]
+            })),
+        ])]);
+        let runtime = StreamingModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let turn = execute_streaming_turn_request(
+            runtime,
+            |_| json!({}),
+            Some("session-123"),
+            Some("turn-123"),
+            &[],
+            None,
+            |_| false,
+        )
+        .await
+        .expect("openai streaming tool calls should be reconstructed");
+
+        assert!(turn.assistant_text.is_empty(), "turn={turn:?}");
+        assert_eq!(turn.tool_intents.len(), 1, "turn={turn:?}");
+        assert_eq!(turn.tool_intents[0].tool_name, "get_weather");
+        assert_eq!(turn.tool_intents[0].tool_call_id, "call_123");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"location":"NYC"}));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1590,6 +1775,7 @@ mod tests {
                         "message": "bad request"
                     }
                 }),
+                rate_limit: None,
             },
         );
         let runtime = StreamingModelRequestRuntime {

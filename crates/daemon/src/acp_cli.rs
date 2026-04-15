@@ -462,6 +462,7 @@ pub fn run_acp_dispatch_cli(
     channel: Option<&str>,
     conversation_id: Option<&str>,
     account_id: Option<&str>,
+    participant_id: Option<&str>,
     thread_id: Option<&str>,
     as_json: bool,
 ) -> CliResult<()> {
@@ -476,6 +477,7 @@ pub fn run_acp_dispatch_cli(
         channel,
         conversation_id,
         account_id,
+        participant_id,
         thread_id,
     )?;
     let decision = mvp::acp::evaluate_acp_conversation_dispatch_for_address(&config, &address)?;
@@ -496,15 +498,16 @@ pub fn run_acp_dispatch_cli(
 
     println!("config={}", resolved_path.display());
     println!(
-        "address=session:{} channel:{} account_id:{} conversation_id:{} thread_id:{}",
+        "address=session:{} channel:{} account_id:{} conversation_id:{} participant_id:{} thread_id:{}",
         address.session_id,
         address.channel_id.as_deref().unwrap_or("(none)"),
         address.account_id.as_deref().unwrap_or("(none)"),
         address.conversation_id.as_deref().unwrap_or("(none)"),
+        address.participant_id.as_deref().unwrap_or("(none)"),
         address.thread_id.as_deref().unwrap_or("(none)")
     );
     println!(
-        "dispatch=route_via_acp:{} reason:{} automatic_routing_origin:{} route_session_id:{} prefixed_agent_id:{} channel_id:{} account_id:{} conversation_id:{} thread_id:{}",
+        "dispatch=route_via_acp:{} reason:{} automatic_routing_origin:{} route_session_id:{} prefixed_agent_id:{} channel_id:{} account_id:{} conversation_id:{} participant_id:{} thread_id:{}",
         decision.route_via_acp,
         decision.reason.as_str(),
         decision
@@ -522,6 +525,11 @@ pub fn run_acp_dispatch_cli(
         decision
             .target
             .conversation_id
+            .as_deref()
+            .unwrap_or("(none)"),
+        decision
+            .target
+            .participant_id
             .as_deref()
             .unwrap_or("(none)"),
         decision.target.thread_id.as_deref().unwrap_or("(none)")
@@ -542,6 +550,7 @@ pub fn build_acp_dispatch_address(
     channel: Option<&str>,
     conversation_id: Option<&str>,
     account_id: Option<&str>,
+    participant_id: Option<&str>,
     thread_id: Option<&str>,
 ) -> CliResult<mvp::conversation::ConversationSessionAddress> {
     let session_id = session_id.trim();
@@ -554,14 +563,21 @@ pub fn build_acp_dispatch_address(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let account_id = account_id.map(str::trim).filter(|value| !value.is_empty());
+    let participant_id = participant_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let thread_id = thread_id.map(str::trim).filter(|value| !value.is_empty());
 
     let channel = match channel {
         Some(channel) => channel,
         None => {
-            if conversation_id.is_some() || account_id.is_some() || thread_id.is_some() {
+            if conversation_id.is_some()
+                || account_id.is_some()
+                || participant_id.is_some()
+                || thread_id.is_some()
+            {
                 return Err(
-                    "acp-dispatch requires --channel when using --conversation-id, --account-id, or --thread-id"
+                    "acp-dispatch requires --channel when using --conversation-id, --account-id, --participant-id, or --thread-id"
                         .to_owned(),
                 );
             }
@@ -576,6 +592,9 @@ pub fn build_acp_dispatch_address(
         .with_channel_scope(channel, conversation_id);
     if let Some(account_id) = account_id {
         address = address.with_account_id(account_id);
+    }
+    if let Some(participant_id) = participant_id {
+        address = address.with_participant_id(participant_id);
     }
     if let Some(thread_id) = thread_id {
         address = address.with_thread_id(thread_id);
@@ -669,6 +688,7 @@ pub fn acp_binding_scope_json(binding: &mvp::acp::AcpSessionBindingScope) -> Val
         "channel_id": binding.channel_id,
         "account_id": binding.account_id,
         "conversation_id": binding.conversation_id,
+        "participant_id": binding.participant_id,
         "thread_id": binding.thread_id,
     })
 }
@@ -721,6 +741,7 @@ pub fn acp_dispatch_decision_json(
                 "channel_id": decision.target.channel_id,
                 "account_id": decision.target.account_id,
                 "conversation_id": decision.target.conversation_id,
+                "participant_id": decision.target.participant_id,
                 "thread_id": decision.target.thread_id,
                 "channel_path": decision.target.channel_path,
             }
@@ -789,7 +810,7 @@ pub fn format_acp_event_summary(
             "records turn_event_records={} final_records={}\n",
             "events done={} error={} text={} usage_update={}\n",
             "turns succeeded={} cancelled={} failed={}\n",
-            "latest backend_id={} agent_id={} routing_intent={} routing_origin={} session_key={} conversation_id={} binding_route_session_id={} channel_id={} account_id={} channel_conversation_id={} channel_thread_id={} trace_id={} source_message_id={} ack_cursor={} state={} stop_reason={} error={}\n",
+            "latest backend_id={} agent_id={} routing_intent={} routing_origin={} session_key={} conversation_id={} binding_route_session_id={} channel_id={} account_id={} channel_conversation_id={} channel_participant_id={} channel_thread_id={} trace_id={} source_message_id={} ack_cursor={} state={} stop_reason={} error={}\n",
             "rollup event_types={} stop_reasons={} routing_intents={} routing_origins={}\n"
         ),
         session,
@@ -817,6 +838,10 @@ pub fn format_acp_event_summary(
         summary.last_account_id.as_deref().unwrap_or("-"),
         summary
             .last_channel_conversation_id
+            .as_deref()
+            .unwrap_or("-"),
+        summary
+            .last_channel_participant_id
             .as_deref()
             .unwrap_or("-"),
         summary.last_channel_thread_id.as_deref().unwrap_or("-"),

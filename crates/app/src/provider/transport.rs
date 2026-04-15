@@ -26,6 +26,7 @@ use crate::CliResult;
 use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind, active_cli_command_name};
 
 use super::auth_profile_runtime::ProviderAuthProfile;
+use super::rate_limit::{RateLimitObservation, parse_rate_limit_headers};
 use super::sse::SseEventStream;
 use super::transport_trait::{
     ProviderTransport, TransportError, TransportRequest, TransportResponse, TransportStream,
@@ -129,6 +130,7 @@ impl ProviderTransport for ReqwestTransport {
         .map_err(map_request_execution_error)?;
         let status = response.status();
         let headers = response.headers().clone();
+        let rate_limit = parse_transport_rate_limit(&headers);
         let body = decode_response_body(response)
             .await
             .map_err(TransportError::response_decode)?;
@@ -136,6 +138,7 @@ impl ProviderTransport for ReqwestTransport {
             status,
             headers,
             body,
+            rate_limit,
         })
     }
 
@@ -154,14 +157,16 @@ impl ProviderTransport for ReqwestTransport {
         let status = response.status();
         let headers = response.headers().clone();
         if !status.is_success() {
+            let rate_limit = parse_transport_rate_limit(&headers);
             let body = decode_response_body(response)
                 .await
                 .map_err(TransportError::response_decode)?;
-            return Ok(TransportStream::Response(TransportResponse {
+            return Ok(TransportStream::Response(Box::new(TransportResponse {
                 status,
                 headers,
                 body,
-            }));
+                rate_limit,
+            })));
         }
         let byte_stream = decode_streaming_response(response);
         let _ = status;
@@ -170,6 +175,11 @@ impl ProviderTransport for ReqwestTransport {
             events: Box::pin(SseEventStream::new(Box::pin(byte_stream))),
         })
     }
+}
+
+fn parse_transport_rate_limit(headers: &HeaderMap) -> Option<RateLimitObservation> {
+    let observation = parse_rate_limit_headers(headers);
+    observation.has_signal().then_some(observation)
 }
 
 pub(super) async fn resolve_request_auth_context(

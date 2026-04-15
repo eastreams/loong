@@ -7,7 +7,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::channel::{ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform};
+use crate::channel::{
+    ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform,
+    access_policy::ChannelInboundAccessPolicy,
+};
 
 fn parse_feishu_inbound_summary(text: &str) -> Value {
     let payload = text
@@ -158,6 +161,49 @@ fn feishu_message_event_parses_text_payload() {
     );
     assert_eq!(event.reply_target.feishu_reply_in_thread(), Some(true));
     assert_eq!(event.text, "hello loongclaw");
+}
+
+#[test]
+fn feishu_message_event_is_ignored_when_sender_is_not_allowlisted() {
+    let payload = json!({
+        "token": "token-123",
+        "header": {
+            "event_id": "evt_sender_1",
+            "event_type": "im.message.receive_v1"
+        },
+        "event": {
+            "sender": {
+                "sender_type": "user",
+                "sender_id": {
+                    "open_id": "ou_blocked"
+                }
+            },
+            "message": {
+                "chat_id": "oc_123",
+                "message_id": "om_123",
+                "message_type": "text",
+                "content": "{\"text\":\"hello loongclaw\"}"
+            }
+        }
+    });
+
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        &["oc_123".to_owned()],
+        &["ou_allowed".to_owned()],
+        true,
+    );
+    let action = parse_feishu_webhook_payload_with_access_policy(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        "work",
+        "feishu_cli_a1b2c3",
+    )
+    .expect("parse feishu event");
+
+    assert!(matches!(action, FeishuWebhookAction::Ignore));
 }
 
 #[test]
@@ -400,6 +446,52 @@ fn feishu_card_callback_v2_payload_is_not_ignored() {
                     && hint.contains("\"kind\":\"success|info|warning|error\"")
             })
     );
+}
+
+#[test]
+fn feishu_card_callback_is_ignored_when_sender_is_not_allowlisted() {
+    let payload = json!({
+        "header": {
+            "event_id": "evt_card_sender_1",
+            "event_type": "card.action.trigger",
+            "token": "token-123"
+        },
+        "event": {
+            "app_id": "cli_a1b2c3",
+            "token": "c-123",
+            "operator": {
+                "operator_id": {
+                    "open_id": "ou_blocked"
+                }
+            },
+            "action": {
+                "tag": "button",
+                "name": "approve_request"
+            },
+            "context": {
+                "open_message_id": "om_callback_1",
+                "open_chat_id": "oc_123"
+            }
+        }
+    });
+
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        &["oc_123".to_owned()],
+        &["ou_allowed".to_owned()],
+        true,
+    );
+    let action = parse_feishu_webhook_payload_with_access_policy(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        "feishu_main",
+        "feishu_main",
+    )
+    .expect("parse v2 callback payload");
+
+    assert!(matches!(action, FeishuWebhookAction::Ignore));
 }
 
 #[test]
@@ -1502,7 +1594,7 @@ fn feishu_unsupported_message_type_is_ignored() {
 }
 
 fn encrypt_event_payload_for_test(plain_payload: &str, encrypt_key: &str) -> String {
-    use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+    use cbc::cipher::{BlockModeEncrypt, KeyIvInit};
 
     let key = Sha256::digest(encrypt_key.as_bytes());
     let iv = [7_u8; 16];
@@ -1514,7 +1606,7 @@ fn encrypt_event_payload_for_test(plain_payload: &str, encrypt_key: &str) -> Str
 
     let encrypted = cbc::Encryptor::<Aes256>::new_from_slices(&key, &iv)
         .expect("create encryptor")
-        .encrypt_padded_mut::<Pkcs7>(&mut buffer, message_len)
+        .encrypt_padded::<Pkcs7>(&mut buffer, message_len)
         .expect("encrypt payload");
 
     let mut merged = iv.to_vec();

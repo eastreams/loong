@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use async_trait::async_trait;
 use loongclaw_contracts::{
@@ -90,6 +90,11 @@ async fn wait_for_delegate_announce_event(
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn delegate_announce_test_lock() -> &'static tokio::sync::Mutex<()> {
+    super::announce::delegate_announce_test_lock_for_tests()
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -910,10 +915,20 @@ enum ScopedEnvPrevious {
 
 struct ScopedEnvVar {
     previous: ScopedEnvPrevious,
+    _guard: MutexGuard<'static, ()>,
 }
 
 impl ScopedEnvVar {
     fn set(key: &'static str, value: &str) -> Self {
+        let guard = match key {
+            CONTEXT_ENGINE_ENV => context_engine_env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            TURN_MIDDLEWARE_ENV => turn_middleware_env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            _ => panic!("unexpected scoped env key: {key}"),
+        };
         let previous = match key {
             CONTEXT_ENGINE_ENV => {
                 let previous = super::context_engine_registry::context_engine_id_from_env();
@@ -928,7 +943,10 @@ impl ScopedEnvVar {
             }
             _ => panic!("unexpected scoped env key: {key}"),
         };
-        Self { previous }
+        Self {
+            previous,
+            _guard: guard,
+        }
     }
 }
 
@@ -1764,6 +1782,13 @@ fn test_config() -> LoongClawConfig {
     config
 }
 
+fn test_config_with_file_root(root: &std::path::Path) -> LoongClawConfig {
+    let mut config = test_config();
+    let file_root = root.display().to_string();
+    config.tools.file_root = Some(file_root);
+    config
+}
+
 fn enable_guided_autonomy(config: &mut LoongClawConfig) {
     config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
 }
@@ -2302,9 +2327,7 @@ async fn default_runtime_can_resolve_context_engine_from_registry() {
 }
 
 #[tokio::test]
-#[allow(clippy::await_holding_lock)] // env var mutation is process-global; keep lock for full test body.
 async fn default_runtime_prefers_configured_context_engine_when_env_not_set() {
-    let _env_lock = context_engine_env_lock().lock().expect("env lock");
     register_context_engine("stub-config", || Box::new(StubContextEngine))
         .expect("register context engine");
     let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
@@ -2412,7 +2435,6 @@ fn with_context_engine_and_turn_middlewares_retains_builtin_defaults_before_cust
 
 #[test]
 fn resolve_turn_middleware_selection_includes_builtin_defaults_when_unset() {
-    let _env_lock = turn_middleware_env_lock().lock().expect("env lock");
     let _scoped_env = ScopedEnvVar::set(TURN_MIDDLEWARE_ENV, "");
 
     let selection = resolve_turn_middleware_selection(&test_config())
@@ -2445,7 +2467,6 @@ fn default_runtime_with_context_engine_exposes_builtin_turn_middleware_metadata(
 
 #[test]
 fn collect_context_engine_runtime_snapshot_reports_turn_middleware_selection() {
-    let _env_lock = turn_middleware_env_lock().lock().expect("env lock");
     register_turn_middleware("snapshot-turn-a", || {
         Box::new(NoopTurnMiddleware::new("snapshot-turn-a"))
     })
@@ -4477,7 +4498,6 @@ async fn default_runtime_kernel_build_context_emits_context_artifact_annotations
 
 #[test]
 fn resolve_context_engine_selection_uses_default_when_unset() {
-    let _env_lock = context_engine_env_lock().lock().expect("env lock");
     let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
     let config = test_config();
     let selection = resolve_context_engine_selection(&config);
@@ -4488,7 +4508,6 @@ fn resolve_context_engine_selection_uses_default_when_unset() {
 
 #[test]
 fn resolve_context_engine_selection_prefers_env_over_config() {
-    let _env_lock = context_engine_env_lock().lock().expect("env lock");
     let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "stub-env-priority");
     let mut config = test_config();
     config.conversation.context_engine = Some("stub-config".to_owned());
@@ -4500,7 +4519,6 @@ fn resolve_context_engine_selection_prefers_env_over_config() {
 
 #[test]
 fn resolve_context_engine_selection_uses_config_when_env_missing() {
-    let _env_lock = context_engine_env_lock().lock().expect("env lock");
     let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
     let mut config = test_config();
     config.conversation.context_engine = Some("legacy".to_owned());
@@ -4512,7 +4530,6 @@ fn resolve_context_engine_selection_uses_config_when_env_missing() {
 
 #[test]
 fn collect_context_engine_runtime_snapshot_reports_compaction_and_selection() {
-    let _env_lock = context_engine_env_lock().lock().expect("env lock");
     let _scoped_env = ScopedEnvVar::set(CONTEXT_ENGINE_ENV, "");
     let mut config = test_config();
     config.conversation.compact_enabled = true;
@@ -4539,9 +4556,7 @@ fn collect_context_engine_runtime_snapshot_reports_compaction_and_selection() {
 }
 
 #[tokio::test]
-#[allow(clippy::await_holding_lock)] // env var mutation is process-global; keep lock for full test body.
 async fn default_runtime_prefers_env_context_engine_over_config() {
-    let _env_lock = context_engine_env_lock().lock().expect("env lock");
     register_context_engine("stub-config-env-priority", || Box::new(StubContextEngine))
         .expect("register config context engine");
     register_context_engine("stub-env-priority", || Box::new(StubEnvContextEngine))
@@ -7686,9 +7701,13 @@ async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provide
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::await_holding_lock)] // env override state is process-global; keep lock for full test body.
 async fn handle_turn_with_runtime_tool_search_raw_request_still_uses_followup_provider_turn() {
     use crate::test_support::TurnTestHarness;
 
+    let _env_lock = context_engine_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = TurnTestHarness::new();
     std::fs::write(
         harness.temp_dir.join("note.md"),
@@ -7830,7 +7849,7 @@ async fn handle_turn_with_runtime_continues_multi_step_tool_chain_after_first_to
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config();
+    let mut config = test_config_with_file_root(&harness.temp_dir);
     config.conversation.turn_loop.max_discovery_followup_rounds = 4;
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -7924,7 +7943,7 @@ async fn handle_turn_with_runtime_continues_direct_tool_chain_after_initial_tool
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config();
+    let mut config = test_config_with_file_root(&harness.temp_dir);
     config.conversation.turn_loop.max_discovery_followup_rounds = 4;
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -8442,7 +8461,7 @@ async fn handle_turn_with_runtime_multi_step_chain_continues_after_first_tool_su
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config();
+    let mut config = test_config_with_file_root(&harness.temp_dir);
     config.conversation.turn_loop.max_discovery_followup_rounds = 4;
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -8602,9 +8621,13 @@ async fn handle_turn_with_runtime_auto_recovers_provider_unknown_tool_into_disco
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::await_holding_lock)] // env override state is process-global; keep lock for full test body.
 async fn handle_turn_with_runtime_provider_shape_function_calls_multi_step_chain_continues() {
     use crate::test_support::TurnTestHarness;
 
+    let _env_lock = context_engine_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let harness = TurnTestHarness::new();
     let input_path = harness.temp_dir.join("note.md");
     let output_path = harness.temp_dir.join("response.log");
@@ -8658,7 +8681,7 @@ async fn handle_turn_with_runtime_provider_shape_function_calls_multi_step_chain
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config();
+    let mut config = test_config_with_file_root(&harness.temp_dir);
     config.conversation.turn_loop.max_discovery_followup_rounds = 5;
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -20827,6 +20850,8 @@ async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher() {
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-tools-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-tools", "normal-lane")
@@ -20897,6 +20922,8 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
 #[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher() {
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-sessions-send-normal-home");
     let (base_url, request_rx, server) = spawn_telegram_send_server_once();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -21019,6 +21046,7 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate-approval", "normal-lane")
@@ -21135,6 +21163,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "normal-lane")
@@ -21291,6 +21320,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "kernel-lifecycle")
@@ -21417,6 +21447,7 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_spawn_fails() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "prepare-failure")
@@ -21497,6 +21528,7 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_completion() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "end-hook-failure")
@@ -24404,6 +24436,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_terminal_event_to_pare
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_after_queueing() {
+    let _announce_lock = delegate_announce_test_lock().lock().await;
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate-async", "spawn-failed")
@@ -25546,6 +25579,8 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher() {
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-wait-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-wait", "normal-lane")
@@ -25631,7 +25666,13 @@ async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher()
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // env override state is process-global; keep lock for full test body.
 async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_dispatcher() {
+    let _env_lock = context_engine_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-tools-safe-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-tools", "safe-lane")
@@ -25702,7 +25743,13 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
 
 #[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // env override state is process-global; keep lock for full test body.
 async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_dispatcher() {
+    let _env_lock = context_engine_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-sessions-send-safe-home");
     let (base_url, request_rx, server) = spawn_telegram_send_server_once();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -25803,7 +25850,13 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // env override state is process-global; keep lock for full test body.
 async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_dispatcher() {
+    let _env_lock = context_engine_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _home =
+        crate::test_support::ScopedLoongClawHome::new("conversation-session-wait-safe-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-wait", "safe-lane")

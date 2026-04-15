@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::ProviderFailoverReason;
+use super::{ProviderFailoverReason, rate_limit::RateLimitObservation};
 
 #[derive(Debug, Clone)]
 pub(super) struct ModelCandidateCooldownPolicy {
@@ -106,24 +106,38 @@ pub(super) fn register_model_candidate_cooldown(
     policy: &ModelCandidateCooldownPolicy,
     model: &str,
     reason: ProviderFailoverReason,
+    rate_limit: Option<&RateLimitObservation>,
 ) {
     if !matches!(
         reason,
-        ProviderFailoverReason::ModelMismatch | ProviderFailoverReason::PayloadIncompatible
+        ProviderFailoverReason::ModelMismatch
+            | ProviderFailoverReason::PayloadIncompatible
+            | ProviderFailoverReason::RateLimited
+            | ProviderFailoverReason::ProviderOverloaded
     ) {
         return;
     }
+    let base_cooldown = resolve_model_candidate_cooldown_duration(policy, rate_limit);
     let key = build_model_candidate_cooldown_key(policy.namespace.as_str(), model);
     with_model_candidate_cooldowns(|cache| {
         cache.put(
             key,
             reason,
             Instant::now(),
-            policy.cooldown,
+            base_cooldown,
             policy.max_cooldown,
             policy.max_entries,
         )
     });
+}
+
+pub(super) fn resolve_model_candidate_cooldown_duration(
+    policy: &ModelCandidateCooldownPolicy,
+    rate_limit: Option<&RateLimitObservation>,
+) -> Duration {
+    rate_limit
+        .and_then(RateLimitObservation::cooldown_hint)
+        .unwrap_or(policy.cooldown)
 }
 
 pub(super) fn prioritize_model_candidates_by_cooldown(

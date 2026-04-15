@@ -10,9 +10,12 @@ on:
         description: "Tag to release (required for manual runs, for example v0.1.0 or v0.1.0-alpha.1)"
         required: true
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   BIN_NAME: loong
-  LEGACY_BIN_NAME: loongclaw
   PACKAGE_NAME: loong
   LINUX_ARM64_GLIBC_FLOOR: "2.17"
   LINUX_ARM64_ZIG_VERSION: "0.13.0"
@@ -54,6 +57,21 @@ jobs:
 
       - name: Test (all features)
         run: cargo test --workspace --all-features --locked
+
+      - name: Bootstrap local release artifacts
+        run: scripts/bootstrap_release_local_artifacts.sh
+
+      - name: Strict docs governance
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+          grep -F "## [${RELEASE_TAG#v}]" CHANGELOG.md > /dev/null
+          release_doc="docs/releases/${RELEASE_TAG}.md"
+          test -f "$release_doc"
+          grep -Fx "# Release ${RELEASE_TAG}" "$release_doc"
 
       - name: Docs build
         run: cargo doc --workspace --no-deps
@@ -164,7 +182,7 @@ jobs:
         env:
           LOONGCLAW_RELEASE_BUILD: "1"
         run: |
-          cargo zigbuild --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} \
+          cargo zigbuild --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} \
             --target "${{ matrix.target }}.${{ env.LINUX_ARM64_GLIBC_FLOOR }}"
 
       - name: Build release binary (Android/Termux)
@@ -179,13 +197,13 @@ jobs:
           export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
           export AR_aarch64_linux_android="${toolchain}/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
-          cargo build --release --locked -p loongclaw --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target "${{ matrix.target }}"
+          cargo build --release --locked -p loongclaw --bin "${BIN_NAME}" --target "${{ matrix.target }}"
 
       - name: Build release binary (native)
         if: matrix.use_zig != true && matrix.use_android_ndk != true
         env:
           LOONGCLAW_RELEASE_BUILD: "1"
-        run: cargo build --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} --target ${{ matrix.target }}
+        run: cargo build --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}
 
       - name: Package archive (Unix)
         if: matrix.archive == 'tar.gz'
@@ -196,7 +214,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           archive="${PACKAGE_NAME}-${RELEASE_TAG}-${{ matrix.target }}.tar.gz"
-          tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${BIN_NAME}${{ matrix.ext }}" "${LEGACY_BIN_NAME}${{ matrix.ext }}"
+          tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${BIN_NAME}${{ matrix.ext }}"
           cd dist && shasum -a 256 "${archive}" > "${archive}.sha256"
 
       - name: Package archive (Windows)
@@ -208,8 +226,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $archive = "${env:PACKAGE_NAME}-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
           Compress-Archive -Path @(
-            "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}",
-            "target/${{ matrix.target }}/release/${env:LEGACY_BIN_NAME}${{ matrix.ext }}"
+            "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}"
           ) -DestinationPath "dist/$archive" -Force
           $hash = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash.ToLowerInvariant()
           Set-Content -Path "dist/$archive.sha256" -Value "$hash  $archive"
@@ -225,7 +242,7 @@ jobs:
           ./scripts/check_glibc_floor.sh "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "$max_glibc"
 
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -280,7 +297,7 @@ jobs:
           fi
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           generate_release_notes: true

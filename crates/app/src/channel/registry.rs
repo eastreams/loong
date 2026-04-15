@@ -37,7 +37,9 @@ pub use self::tlon::TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
 pub use self::twitch::TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
 use super::{
     ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform,
-    core::webhook_auth::build_webhook_auth_header_from_parts, runtime::state,
+    access_policy::{ChannelInboundAccessPolicy, ChannelInboundAccessPolicySummary},
+    core::webhook_auth::build_webhook_auth_header_from_parts,
+    runtime::state,
 };
 
 #[path = "registry_bridge.rs"]
@@ -186,6 +188,17 @@ pub struct ChannelInventory {
     pub catalog_only_channels: Vec<ChannelCatalogEntry>,
     pub channel_catalog: Vec<ChannelCatalogEntry>,
     pub channel_surfaces: Vec<ChannelSurface>,
+    pub channel_access_policies: Vec<ChannelConfiguredAccountAccessPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelConfiguredAccountAccessPolicy {
+    pub channel_id: &'static str,
+    pub configured_account_id: String,
+    pub conversation_config_key: &'static str,
+    pub sender_config_key: &'static str,
+    #[serde(flatten)]
+    pub summary: ChannelInboundAccessPolicySummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -297,12 +310,36 @@ const TELEGRAM_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement 
         env_pointer_paths: &[],
         default_env_var: None,
     };
+const TELEGRAM_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "telegram.allowed_sender_ids",
+            "telegram.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TELEGRAM_REQUIRE_MENTION_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "require_mention",
+        label: "require explicit bot mention outside private chats",
+        config_paths: &[
+            "telegram.require_mention",
+            "telegram.accounts.<account>.require_mention",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
 const TELEGRAM_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
     &[TELEGRAM_ENABLED_REQUIREMENT, TELEGRAM_BOT_TOKEN_REQUIREMENT];
 const TELEGRAM_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     TELEGRAM_ENABLED_REQUIREMENT,
     TELEGRAM_BOT_TOKEN_REQUIREMENT,
     TELEGRAM_ALLOWED_CHAT_IDS_REQUIREMENT,
+    TELEGRAM_ALLOWED_SENDER_IDS_REQUIREMENT,
+    TELEGRAM_REQUIRE_MENTION_REQUIREMENT,
 ];
 
 const TELEGRAM_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
@@ -334,7 +371,7 @@ const TELEGRAM_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure telegram bot credentials and allowed chat ids in loongclaw.toml under telegram or telegram.accounts.<account>",
+    setup_hint: "configure telegram bot credentials, allowed chat ids, and optional mention gating in loongclaw.toml under telegram or telegram.accounts.<account>",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -416,6 +453,17 @@ const FEISHU_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
         env_pointer_paths: &[],
         default_env_var: None,
     };
+const FEISHU_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "feishu.allowed_sender_ids",
+            "feishu.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
 const FEISHU_MODE_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "mode",
@@ -463,6 +511,7 @@ const FEISHU_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     FEISHU_APP_SECRET_REQUIREMENT,
     FEISHU_MODE_REQUIREMENT,
     FEISHU_ALLOWED_CHAT_IDS_REQUIREMENT,
+    FEISHU_ALLOWED_SENDER_IDS_REQUIREMENT,
     FEISHU_VERIFICATION_TOKEN_REQUIREMENT,
     FEISHU_ENCRYPT_KEY_REQUIREMENT,
 ];
@@ -618,6 +667,28 @@ const MATRIX_ALLOWED_ROOM_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
         env_pointer_paths: &[],
         default_env_var: None,
     };
+const MATRIX_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "matrix.allowed_sender_ids",
+            "matrix.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATRIX_REQUIRE_MENTION_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "require_mention",
+        label: "require explicit mention in synced rooms",
+        config_paths: &[
+            "matrix.require_mention",
+            "matrix.accounts.<account>.require_mention",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
 const MATRIX_USER_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "user_id",
@@ -636,6 +707,8 @@ const MATRIX_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     MATRIX_ACCESS_TOKEN_REQUIREMENT,
     MATRIX_BASE_URL_REQUIREMENT,
     MATRIX_ALLOWED_ROOM_IDS_REQUIREMENT,
+    MATRIX_ALLOWED_SENDER_IDS_REQUIREMENT,
+    MATRIX_REQUIRE_MENTION_REQUIREMENT,
     MATRIX_USER_ID_REQUIREMENT,
 ];
 
@@ -672,7 +745,7 @@ const MATRIX_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure matrix access tokens, homeserver base url, and allowed room ids in loongclaw.toml under matrix or matrix.accounts.<account>",
+    setup_hint: "configure matrix access tokens, homeserver base url, allowed room ids, and optional mention gating in loongclaw.toml under matrix or matrix.accounts.<account>",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1033,6 +1106,17 @@ const WECOM_ALLOWED_CONVERSATION_IDS_REQUIREMENT: ChannelCatalogOperationRequire
         env_pointer_paths: &[],
         default_env_var: None,
     };
+const WECOM_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "wecom.allowed_sender_ids",
+            "wecom.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
 const WECOM_WEBSOCKET_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "websocket_url",
@@ -1066,6 +1150,7 @@ const WECOM_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
     WECOM_BOT_ID_REQUIREMENT,
     WECOM_SECRET_REQUIREMENT,
     WECOM_ALLOWED_CONVERSATION_IDS_REQUIREMENT,
+    WECOM_ALLOWED_SENDER_IDS_REQUIREMENT,
     WECOM_WEBSOCKET_URL_REQUIREMENT,
     WECOM_PING_INTERVAL_REQUIREMENT,
 ];
@@ -2458,11 +2543,13 @@ fn channel_inventory_with_now(
         channel_surface_plugin_bridge_discovery_by_id(config, &channel_catalog);
     let channel_surfaces =
         build_channel_surfaces(&channel_catalog, &channels, &plugin_bridge_discovery_by_id);
+    let channel_access_policies = build_channel_access_policies(config);
     ChannelInventory {
         channels,
         catalog_only_channels,
         channel_catalog,
         channel_surfaces,
+        channel_access_policies,
     }
 }
 
@@ -2480,6 +2567,126 @@ fn channel_status_snapshots_with_now(
         snapshots.extend(built_snapshots);
     }
     snapshots
+}
+
+fn build_channel_access_policies(
+    config: &LoongClawConfig,
+) -> Vec<ChannelConfiguredAccountAccessPolicy> {
+    let mut policies = Vec::new();
+    extend_telegram_channel_access_policies(&mut policies, config);
+    extend_feishu_channel_access_policies(&mut policies, config);
+    extend_matrix_channel_access_policies(&mut policies, config);
+    extend_wecom_channel_access_policies(&mut policies, config);
+    policies
+}
+
+fn extend_telegram_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.telegram.configured_account_ids() {
+        let resolved = config
+            .telegram
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_i64_lists(
+            resolved.allowed_chat_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+        );
+        let mut summary = access_policy.summary();
+        summary.mention_required = resolved.require_mention;
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "telegram",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_chat_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
+}
+
+fn extend_feishu_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.feishu.configured_account_ids() {
+        let resolved = config
+            .feishu
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            resolved.allowed_chat_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+            true,
+        );
+        let summary = access_policy.summary();
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "feishu",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_chat_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
+}
+
+fn extend_matrix_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.matrix.configured_account_ids() {
+        let resolved = config
+            .matrix
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            resolved.allowed_room_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+            false,
+        );
+        let mut summary = access_policy.summary();
+        summary.mention_required = resolved.require_mention;
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "matrix",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_room_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
+}
+
+fn extend_wecom_channel_access_policies(
+    policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
+    config: &LoongClawConfig,
+) {
+    for configured_account_id in config.wecom.configured_account_ids() {
+        let resolved = config
+            .wecom
+            .resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            resolved.allowed_conversation_ids.as_slice(),
+            resolved.allowed_sender_ids.as_slice(),
+            false,
+        );
+        let summary = access_policy.summary();
+        policies.push(ChannelConfiguredAccountAccessPolicy {
+            channel_id: "wecom",
+            configured_account_id: resolved.configured_account_id,
+            conversation_config_key: "allowed_conversation_ids",
+            sender_config_key: "allowed_sender_ids",
+            summary,
+        });
+    }
 }
 
 fn validate_http_url(
@@ -2584,8 +2791,13 @@ fn build_telegram_snapshot_for_account(
         send_issues.push("bot token is missing (telegram.bot_token or env)".to_owned());
     }
 
+    let access_policy = ChannelInboundAccessPolicy::from_i64_lists(
+        resolved.allowed_chat_ids.as_slice(),
+        resolved.allowed_sender_ids.as_slice(),
+    );
     let mut serve_issues = send_issues.clone();
-    if resolved.allowed_chat_ids.is_empty() {
+    let has_allowlist = access_policy.has_conversation_restrictions();
+    if !has_allowlist {
         serve_issues.push("allowed_chat_ids is empty".to_owned());
     }
 
@@ -2646,6 +2858,25 @@ fn build_telegram_snapshot_for_account(
         format!("account={}", resolved.account.label),
         format!("polling_timeout_s={}", resolved.polling_timeout_s),
     ];
+    if !resolved.allowed_chat_ids.is_empty() {
+        let allowed_chat_ids = resolved
+            .allowed_chat_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        notes.push(format!("allowed_chat_ids={allowed_chat_ids}"));
+    }
+    if !resolved.allowed_sender_ids.is_empty() {
+        let allowed_sender_ids = resolved
+            .allowed_sender_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        notes.push(format!("allowed_sender_ids={allowed_sender_ids}"));
+    }
+    notes.push(format!("require_mention={}", resolved.require_mention));
     if !resolved.acp.bootstrap_mcp_servers.is_empty() {
         notes.push(format!(
             "acp_bootstrap_mcp_servers={}",
@@ -4878,12 +5109,14 @@ fn build_feishu_snapshot_for_account(
         send_issues.push("app_secret is missing".to_owned());
     }
 
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        resolved.allowed_chat_ids.as_slice(),
+        resolved.allowed_sender_ids.as_slice(),
+        true,
+    );
     let mut serve_issues = send_issues.clone();
-    if !resolved
-        .allowed_chat_ids
-        .iter()
-        .any(|value| !value.trim().is_empty())
-    {
+    let has_allowlist = access_policy.has_conversation_restrictions();
+    if !has_allowlist {
         serve_issues.push("allowed_chat_ids is empty".to_owned());
     }
     if resolved.mode == FeishuChannelServeMode::Webhook {
@@ -4953,6 +5186,15 @@ fn build_feishu_snapshot_for_account(
         format!("mode={}", resolved.mode.as_str()),
         format!("receive_id_type={}", resolved.receive_id_type),
     ];
+    if let Some(allowed_chat_ids) = access_policy.string_conversations() {
+        notes.push(format!("allowed_chat_ids={}", allowed_chat_ids.join(",")));
+    }
+    if let Some(allowed_sender_ids) = access_policy.string_senders() {
+        notes.push(format!(
+            "allowed_sender_ids={}",
+            allowed_sender_ids.join(",")
+        ));
+    }
     if resolved.mode == FeishuChannelServeMode::Webhook {
         notes.push(format!("webhook_bind={}", resolved.webhook_bind));
         notes.push(format!("webhook_path={}", resolved.webhook_path));
@@ -5011,12 +5253,14 @@ fn build_matrix_snapshot_for_account(
         send_issues.push("base_url is missing".to_owned());
     }
 
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        resolved.allowed_room_ids.as_slice(),
+        resolved.allowed_sender_ids.as_slice(),
+        false,
+    );
     let mut serve_issues = send_issues.clone();
-    if !resolved
-        .allowed_room_ids
-        .iter()
-        .any(|value| !value.trim().is_empty())
-    {
+    let has_allowlist = access_policy.has_conversation_restrictions();
+    if !has_allowlist {
         serve_issues.push("allowed_room_ids is empty".to_owned());
     }
     let has_user_id = resolved
@@ -5026,6 +5270,9 @@ fn build_matrix_snapshot_for_account(
         .is_some_and(|value| !value.is_empty());
     if resolved.ignore_self_messages && !has_user_id {
         serve_issues.push("user_id is missing while ignore_self_messages is enabled".to_owned());
+    }
+    if resolved.require_mention && !has_user_id {
+        serve_issues.push("user_id is missing while require_mention is enabled".to_owned());
     }
 
     let send_operation = if !compiled {
@@ -5086,6 +5333,16 @@ fn build_matrix_snapshot_for_account(
         format!("sync_timeout_s={}", resolved.sync_timeout_s),
         format!("ignore_self_messages={}", resolved.ignore_self_messages),
     ];
+    if let Some(allowed_room_ids) = access_policy.string_conversations() {
+        notes.push(format!("allowed_room_ids={}", allowed_room_ids.join(",")));
+    }
+    if let Some(allowed_sender_ids) = access_policy.string_senders() {
+        notes.push(format!(
+            "allowed_sender_ids={}",
+            allowed_sender_ids.join(",")
+        ));
+    }
+    notes.push(format!("require_mention={}", resolved.require_mention));
     if let Some(user_id) = resolved.user_id.as_deref() {
         notes.push(format!("user_id={user_id}"));
     }
@@ -5150,11 +5407,13 @@ fn build_wecom_snapshot_for_account(
         &mut send_issues,
     );
 
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        resolved.allowed_conversation_ids.as_slice(),
+        resolved.allowed_sender_ids.as_slice(),
+        false,
+    );
     let mut serve_issues = send_issues.clone();
-    let has_allowlist = resolved
-        .allowed_conversation_ids
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let has_allowlist = access_policy.has_conversation_restrictions();
     if !has_allowlist {
         serve_issues.push("allowed_conversation_ids is empty".to_owned());
     }
@@ -5218,6 +5477,18 @@ fn build_wecom_snapshot_for_account(
         format!("ping_interval_s={}", resolved.ping_interval_s),
         format!("reconnect_interval_s={}", resolved.reconnect_interval_s),
     ];
+    if let Some(allowed_conversation_ids) = access_policy.string_conversations() {
+        notes.push(format!(
+            "allowed_conversation_ids={}",
+            allowed_conversation_ids.join(",")
+        ));
+    }
+    if let Some(allowed_sender_ids) = access_policy.string_senders() {
+        notes.push(format!(
+            "allowed_sender_ids={}",
+            allowed_sender_ids.join(",")
+        ));
+    }
     if !resolved.acp.bootstrap_mcp_servers.is_empty() {
         notes.push(format!(
             "acp_bootstrap_mcp_servers={}",
@@ -7047,6 +7318,10 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "imessage")
             .expect("imessage catalog entry");
+        let matrix = catalog
+            .iter()
+            .find(|entry| entry.id == "matrix")
+            .expect("matrix catalog entry");
 
         assert_eq!(
             telegram.operations[0]
@@ -7062,7 +7337,13 @@ mod tests {
                 .iter()
                 .map(|requirement| requirement.id)
                 .collect::<Vec<_>>(),
-            vec!["enabled", "bot_token", "allowed_chat_ids"]
+            vec![
+                "enabled",
+                "bot_token",
+                "allowed_chat_ids",
+                "allowed_sender_ids",
+                "require_mention"
+            ]
         );
         assert_eq!(
             telegram.operations[0].requirements[1].default_env_var,
@@ -7096,17 +7377,34 @@ mod tests {
                 "app_secret",
                 "mode",
                 "allowed_chat_ids",
+                "allowed_sender_ids",
                 "verification_token",
                 "encrypt_key",
             ]
         );
         assert_eq!(
-            feishu.operations[1].requirements[5].default_env_var,
+            feishu.operations[1].requirements[6].default_env_var,
             Some("FEISHU_VERIFICATION_TOKEN")
         );
         assert_eq!(
-            feishu.operations[1].requirements[6].default_env_var,
+            feishu.operations[1].requirements[7].default_env_var,
             Some("FEISHU_ENCRYPT_KEY")
+        );
+        assert_eq!(
+            matrix.operations[1]
+                .requirements
+                .iter()
+                .map(|requirement| requirement.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "enabled",
+                "access_token",
+                "base_url",
+                "allowed_room_ids",
+                "allowed_sender_ids",
+                "require_mention",
+                "user_id",
+            ]
         );
 
         assert_eq!(
@@ -8276,6 +8574,16 @@ mod tests {
             Some("default")
         );
         assert_eq!(discord.configured_accounts[0].id, "discord");
+        assert!(
+            inventory
+                .channel_access_policies
+                .iter()
+                .any(|policy| policy.channel_id == "telegram"
+                    && policy.configured_account_id == "default"
+                    && policy.conversation_config_key == "allowed_chat_ids"
+                    && policy.sender_config_key == "allowed_sender_ids"),
+            "channel inventory should expose structured access policy for telegram"
+        );
         let discord_encoded =
             serde_json::to_value(discord).expect("serialize discord channel surface");
         assert!(
