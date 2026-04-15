@@ -1252,6 +1252,13 @@ fn build_tool_catalog() -> ToolCatalog {
         );
         push_feishu_tool_descriptor(
             &mut descriptors,
+            "feishu.calendar.primary.get",
+            "feishu_calendar_primary_get",
+            "Fetch the Feishu primary calendar entry for the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
             "feishu.card.update",
             "feishu_card_update",
             "Update a Feishu interactive card through the delayed callback API, using the current callback token when available",
@@ -4071,6 +4078,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "feishu.calendar.list" => {
             "account_id?:string,open_id?:string,primary?:boolean,page_size?:integer,page_token?:string,sync_token?:string"
         }
+        "feishu.calendar.primary.get" => "account_id?:string,open_id?:string,user_id_type?:string",
         "feishu.card.update" => {
             "account_id?:string,callback_token?:string,card?:object,markdown?:string,shared?:boolean,open_ids?:string[]"
         }
@@ -4391,6 +4399,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("page_size", "integer"),
             ("page_token", "string"),
             ("sync_token", "string"),
+        ],
+        "feishu.calendar.primary.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("user_id_type", "string"),
         ],
         "feishu.card.update" => &[
             ("account_id", "string"),
@@ -4744,7 +4757,9 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "feishu.bitable.view.create" | "feishu.bitable.view.patch" => {
             &["feishu", "bitable", "view", "write"]
         }
-        "feishu.calendar.freebusy" | "feishu.calendar.list" => &["feishu", "calendar", "read"],
+        "feishu.calendar.freebusy" | "feishu.calendar.list" | "feishu.calendar.primary.get" => {
+            &["feishu", "calendar", "read"]
+        }
         "feishu.card.update" => &["feishu", "card", "update", "callback"],
         "feishu.doc.read" => &["feishu", "docs", "read"],
         "feishu.doc.create" | "feishu.doc.append" => &["feishu", "docs", "write"],
@@ -5088,6 +5103,16 @@ mod tests {
         assert_eq!(descriptor.name, "feishu.card.update");
         assert_eq!(descriptor.visibility_gate, ToolVisibilityGate::Feishu);
         assert!(visible_view.contains("feishu.card.update"));
+
+        let primary_descriptor = tool_catalog()
+            .resolve("feishu_calendar_primary_get")
+            .expect("feishu.calendar.primary.get descriptor");
+        assert_eq!(primary_descriptor.name, "feishu.calendar.primary.get");
+        assert_eq!(
+            primary_descriptor.visibility_gate,
+            ToolVisibilityGate::Feishu
+        );
+        assert!(visible_view.contains("feishu.calendar.primary.get"));
     }
 
     #[test]
@@ -5408,6 +5433,25 @@ mod tests {
         assert_eq!(
             calendar_list.concurrency_class,
             ToolConcurrencyClass::ReadOnly
+        );
+
+        let calendar_primary_get = find_tool_catalog_entry("feishu.calendar.primary.get")
+            .expect("feishu.calendar.primary.get entry");
+        assert_eq!(
+            calendar_primary_get.concurrency_class,
+            ToolConcurrencyClass::ReadOnly
+        );
+        assert_eq!(
+            calendar_primary_get.required_fields,
+            &[] as &[&str],
+            "primary.get has no required fields"
+        );
+        assert!(
+            calendar_primary_get.tags.contains(&"feishu")
+                && calendar_primary_get.tags.contains(&"calendar")
+                && calendar_primary_get.tags.contains(&"read"),
+            "primary.get should carry the feishu+calendar+read tags, got: {:?}",
+            calendar_primary_get.tags
         );
 
         let messages_send =

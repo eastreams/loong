@@ -1719,7 +1719,13 @@ pub async fn execute_feishu_calendar_list(args: &FeishuCalendarListArgs) -> CliR
         let calendars = mvp::channel::feishu::api::resources::calendar::get_primary_calendars(
             &client,
             &grant.access_token,
-            args.user_id_type.as_deref().or(Some("open_id")),
+            &mvp::channel::feishu::api::resources::calendar::FeishuPrimaryCalendarQuery {
+                user_id_type: Some(
+                    args.user_id_type
+                        .clone()
+                        .unwrap_or_else(|| "open_id".to_owned()),
+                ),
+            },
         )
         .await?;
         return Ok(json!({

@@ -2316,6 +2316,10 @@ mod tests {
             canonical_tool_name("feishu_calendar_freebusy"),
             "feishu.calendar.freebusy"
         );
+        assert_eq!(
+            canonical_tool_name("feishu_calendar_primary_get"),
+            "feishu.calendar.primary.get"
+        );
         assert_eq!(canonical_tool_name("file.read"), "file.read");
     }
 
@@ -4121,6 +4125,8 @@ mod tests {
         assert!(is_known_tool_name("feishu_calendar_list"));
         assert!(is_known_tool_name("feishu.calendar.freebusy"));
         assert!(is_known_tool_name("feishu_calendar_freebusy"));
+        assert!(is_known_tool_name("feishu.calendar.primary.get"));
+        assert!(is_known_tool_name("feishu_calendar_primary_get"));
         assert!(!is_known_tool_name("nonexistent.tool"));
     }
 
@@ -4158,6 +4164,7 @@ mod tests {
         assert!(names.contains(&"feishu.card.update"));
         assert!(names.contains(&"feishu.calendar.list"));
         assert!(names.contains(&"feishu.calendar.freebusy"));
+        assert!(names.contains(&"feishu.calendar.primary.get"));
     }
 
     #[cfg(feature = "feishu-integration")]

@@ -153,6 +153,7 @@ const FEISHU_TOOL_ALIAS_PAIRS: &[(&str, &str)] = &[
     ("feishu_card_update", "feishu.card.update"),
     ("feishu_calendar_list", "feishu.calendar.list"),
     ("feishu_calendar_freebusy", "feishu.calendar.freebusy"),
+    ("feishu_calendar_primary_get", "feishu.calendar.primary.get"),
 ];
 
 #[cfg(all(test, not(feature = "tool-file")))]
@@ -217,6 +218,7 @@ const FEISHU_TOOL_ALIAS_PAIRS: &[(&str, &str)] = &[
     ("feishu_card_update", "feishu.card.update"),
     ("feishu_calendar_list", "feishu.calendar.list"),
     ("feishu_calendar_freebusy", "feishu.calendar.freebusy"),
+    ("feishu_calendar_primary_get", "feishu.calendar.primary.get"),
 ];
 
 #[derive(Debug, Clone)]
@@ -772,6 +774,16 @@ struct FeishuCalendarListPayload {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+struct FeishuCalendarPrimaryGetPayload {
+    #[serde(flatten)]
+    selector: GrantSelectorPayload,
+    user_id_type: Option<String>,
+    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    internal: LoongInternalToolPayload,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct FeishuBitableListPayload {
     #[serde(flatten)]
     selector: GrantSelectorPayload,
@@ -1172,6 +1184,9 @@ pub(super) fn canonical_feishu_tool_name(raw: &str) -> Option<&'static str> {
         "feishu.card.update" | "feishu_card_update" => Some("feishu.card.update"),
         "feishu.calendar.list" | "feishu_calendar_list" => Some("feishu.calendar.list"),
         "feishu.calendar.freebusy" | "feishu_calendar_freebusy" => Some("feishu.calendar.freebusy"),
+        "feishu.calendar.primary.get" | "feishu_calendar_primary_get" => {
+            Some("feishu.calendar.primary.get")
+        }
         _ => None,
     }
 }
@@ -1363,6 +1378,11 @@ pub(super) fn feishu_tool_registry_entries() -> Vec<super::ToolRegistryEntry> {
         &mut entries,
         "feishu.calendar.list",
         "List Feishu calendars or primary calendars for the selected account grant",
+    );
+    push_feishu_registry_entry(
+        &mut entries,
+        "feishu.calendar.primary.get",
+        "Fetch the Feishu primary calendar entry for the selected account grant",
     );
     push_feishu_registry_entry(
         &mut entries,
@@ -1873,6 +1893,30 @@ pub(super) fn feishu_provider_tool_definitions() -> Vec<Value> {
                 }
             },
             "required": ["app_token", "table_id"],
+            "additionalProperties": false
+        }),
+    );
+    push_feishu_provider_tool_definition(
+        &mut tools,
+        "feishu_calendar_primary_get",
+        "Fetch the Feishu primary calendar entry for the selected account grant.",
+        json!({
+            "type": "object",
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Optional Feishu configured account id to route through."
+                },
+                "open_id": {
+                    "type": "string",
+                    "description": "Optional explicit Feishu user open_id grant selector."
+                },
+                "user_id_type": {
+                    "type": "string",
+                    "description": "Optional Feishu user id type for the response. Defaults to `open_id`."
+                }
+            },
+            "required": [],
             "additionalProperties": false
         }),
     );
@@ -2731,6 +2775,9 @@ pub(super) fn execute_feishu_tool_with_config(
         "feishu.calendar.list" => execute_feishu_calendar_list_tool_with_config(request, config),
         "feishu.calendar.freebusy" => {
             execute_feishu_calendar_freebusy_tool_with_config(request, config)
+        }
+        "feishu.calendar.primary.get" => {
+            execute_feishu_calendar_primary_get_tool_with_config(request, config)
         }
         other => Err(format!("tool_not_found: unknown feishu tool `{other}`")),
     }
@@ -4863,7 +4910,14 @@ fn execute_feishu_calendar_list_tool_with_config(
             let calendars = calendar::get_primary_calendars(
                 &context.client,
                 &grant.access_token,
-                payload.user_id_type.as_deref().or(Some("open_id")),
+                &calendar::FeishuPrimaryCalendarQuery {
+                    user_id_type: Some(
+                        payload
+                            .user_id_type
+                            .clone()
+                            .unwrap_or_else(|| "open_id".to_owned()),
+                    ),
+                },
             )
             .await?;
             return Ok(ok_outcome(
@@ -4898,6 +4952,53 @@ fn execute_feishu_calendar_list_tool_with_config(
                 "primary": false,
                 "page": page,
             }),
+        ))
+    })
+}
+
+fn execute_feishu_calendar_primary_get_tool_with_config(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let payload = parse_payload::<FeishuCalendarPrimaryGetPayload>(
+        "feishu.calendar.primary.get",
+        request.payload,
+    )?;
+    let context = load_feishu_tool_context(
+        config,
+        requested_account_id(payload.selector.account_id.as_deref(), &payload.internal),
+    )?;
+    let grant = require_selected_grant(&context, payload.selector.open_id.as_deref())?;
+    let tool_name = request.tool_name;
+
+    run_feishu_future(async move {
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
+        ensure_required_scopes(&grant, &["calendar:calendar:readonly"], tool_name.as_str())?;
+        let calendars = calendar::get_primary_calendars(
+            &context.client,
+            &grant.access_token,
+            &calendar::FeishuPrimaryCalendarQuery {
+                user_id_type: Some(
+                    payload
+                        .user_id_type
+                        .clone()
+                        .unwrap_or_else(|| "open_id".to_owned()),
+                ),
+            },
+        )
+        .await?;
+
+        Ok(ok_outcome(
+            tool_name.as_str(),
+            context.configured_account_label.as_str(),
+            context.account_id.as_str(),
+            &grant.principal,
+            json!({ "calendars": calendars }),
         ))
     })
 }
@@ -5834,4 +5935,43 @@ where
 
 fn trimmed_opt(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn feishu_calendar_primary_get_payload_accepts_selector_and_user_id_type() {
+        let payload: FeishuCalendarPrimaryGetPayload = serde_json::from_value(json!({
+            "account_id": "acct-001",
+            "open_id": "ou_abc",
+            "user_id_type": "union_id"
+        }))
+        .expect("primary get payload parses");
+        assert_eq!(payload.selector.account_id.as_deref(), Some("acct-001"));
+        assert_eq!(payload.selector.open_id.as_deref(), Some("ou_abc"));
+        assert_eq!(payload.user_id_type.as_deref(), Some("union_id"));
+    }
+
+    #[test]
+    fn feishu_calendar_primary_get_payload_defaults_to_empty() {
+        let payload: FeishuCalendarPrimaryGetPayload =
+            serde_json::from_value(json!({})).expect("empty primary get payload parses");
+        assert!(payload.selector.account_id.is_none());
+        assert!(payload.selector.open_id.is_none());
+        assert!(payload.user_id_type.is_none());
+    }
+
+    #[test]
+    fn feishu_calendar_primary_get_payload_rejects_unknown_fields() {
+        let err = serde_json::from_value::<FeishuCalendarPrimaryGetPayload>(json!({
+            "unexpected_field": true
+        }))
+        .expect_err("unknown fields must be rejected");
+        assert!(
+            err.to_string().contains("unexpected_field"),
+            "error should mention the unknown field, got: {err}"
+        );
+    }
 }
