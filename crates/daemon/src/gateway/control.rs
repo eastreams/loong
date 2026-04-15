@@ -34,6 +34,7 @@ use super::api_events::handle_events;
 use super::api_health::handle_health;
 use super::api_turn::handle_turn;
 use super::event_bus::GatewayEventBus;
+use super::openai_compat::{handle_chat_completions, handle_models};
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
     GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
@@ -45,7 +46,9 @@ use super::state::{
     load_gateway_owner_status, request_gateway_stop,
 };
 
+#[cfg(unix)]
 const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
+#[cfg(unix)]
 const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 const GATEWAY_ACP_SESSION_LIST_DEFAULT_LIMIT: usize = 50;
 const GATEWAY_ACP_SESSION_LIST_MAX_LIMIT: usize = 200;
@@ -94,6 +97,7 @@ impl GatewayControlAppState {
             catalog_only_channels: vec![],
             channel_catalog: vec![],
             channel_surfaces: vec![],
+            channel_access_policies: vec![],
         };
         let runtime_snapshot = GatewayRuntimeSnapshotReadModel {
             config: String::new(),
@@ -332,6 +336,8 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
         .route("/v1/events", get(handle_events))
         .route("/v1/turn", post(handle_turn))
+        .route("/v1/models", get(handle_models))
+        .route("/v1/chat/completions", post(handle_chat_completions))
         .route("/health", get(handle_health))
         .with_state(app_state)
 }

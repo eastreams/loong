@@ -562,6 +562,7 @@ fn browser_companion_command(
 fn browser_companion_scope_id_from_payload(payload: &Map<String, Value>) -> String {
     payload
         .get(super::BROWSER_SESSION_SCOPE_FIELD)
+        .or_else(|| payload.get(super::LEGACY_BROWSER_SESSION_SCOPE_FIELD))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -572,6 +573,7 @@ fn browser_companion_scope_id_from_payload(payload: &Map<String, Value>) -> Stri
 fn browser_companion_arguments(payload: &Map<String, Value>) -> Value {
     let mut arguments = payload.clone();
     arguments.remove(super::BROWSER_SESSION_SCOPE_FIELD);
+    arguments.remove(super::LEGACY_BROWSER_SESSION_SCOPE_FIELD);
     arguments.remove("session_id");
     Value::Object(arguments)
 }

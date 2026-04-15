@@ -34,9 +34,9 @@ tasks:
   smoke:
     desc: Run representative spec-runner smoke scenarios
     cmds:
-      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/runtime-extension.json --print-audit
-      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/tool-search.json --print-audit
-      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/programmatic-tool-call.json --print-audit
+      - cargo run -p loong --bin loong -- run-spec --spec examples/spec/runtime-extension.json --print-audit
+      - cargo run -p loong --bin loong -- run-spec --spec examples/spec/tool-search.json --print-audit
+      - cargo run -p loong --bin loong -- run-spec --spec examples/spec/programmatic-tool-call.json --print-audit
 
   benchmark:pressure:
     desc: Run programmatic pressure benchmark with gate enforcement
@@ -51,7 +51,7 @@ tasks:
   check:docs:strict:
     desc: Validate doc governance in strict release mode (missing .docs artifacts fail)
     cmds:
-      - LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+      - LOONG_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
 
   check:github-labels:
     desc: Validate generated GitHub label taxonomy artifacts
@@ -67,7 +67,7 @@ tasks:
   check:architecture:strict:
     desc: Fail on any architecture boundary budget violations
     cmds:
-      - LOONGCLAW_ARCH_STRICT=true scripts/check_architecture_boundaries.sh
+      - LOONG_ARCH_STRICT=true scripts/check_architecture_boundaries.sh
 
   check:conventions:
     desc: Validate repo convention contracts

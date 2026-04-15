@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -10,7 +11,9 @@ use std::sync::{
 use tokio::sync::Notify;
 
 use crate::CliResult;
-use crate::acp::{AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink};
+use crate::acp::{
+    AcpConversationTurnOptions, AcpTurnEventSink, AcpTurnProvenance, JsonlAcpTurnEventSink,
+};
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 mod cli_input;
@@ -65,16 +68,17 @@ use self::operator_surfaces::render_cli_chat_status_lines_with_width;
 use self::operator_surfaces::render_manual_compaction_lines_with_width;
 use self::operator_surfaces::should_run_missing_config_onboard;
 
-use super::config::{self, ConversationConfig, LoongClawConfig};
+use super::config::{self, ConversationConfig, LoongConfig};
 #[cfg(test)]
 use super::conversation::ContextCompactionReport;
 #[cfg(test)]
 use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
 use super::conversation::{
-    ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
-    ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
-    ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent, ConversationTurnToolEvent,
-    ConversationTurnToolState, ExecutionLane, ProviderErrorMode, parse_approval_prompt_view,
+    ConversationIngressContext, ConversationRuntimeBinding, ConversationSessionAddress,
+    ConversationTurnCoordinator, ConversationTurnObserver, ConversationTurnObserverHandle,
+    ConversationTurnPhase, ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent,
+    ConversationTurnToolEvent, ConversationTurnToolState, ExecutionLane, ProviderErrorMode,
+    parse_approval_prompt_view,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -108,7 +112,8 @@ use crate::tools::runtime_events::{ToolCommandMetrics, ToolFileChangePreview, To
 use crate::tools::runtime_events::{ToolFileChangeKind, ToolRuntimeEvent, ToolRuntimeStream};
 
 pub const DEFAULT_FIRST_PROMPT: &str = "Summarize this repository and suggest the best next step.";
-const TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONGCLAW_TEST_ONBOARD_EXECUTABLE";
+const TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONG_TEST_ONBOARD_EXECUTABLE";
+const LEGACY_TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONGCLAW_TEST_ONBOARD_EXECUTABLE";
 const CLI_CHAT_HELP_COMMAND: &str = "/help";
 const CLI_CHAT_COMPACT_COMMAND: &str = "/compact";
 const CLI_CHAT_STATUS_COMMAND: &str = "/status";
@@ -128,7 +133,7 @@ pub struct CliChatOptions {
 #[derive(Debug, Clone)]
 pub struct ConcurrentCliHostOptions {
     pub resolved_path: PathBuf,
-    pub config: LoongClawConfig,
+    pub config: LoongConfig,
     pub session_id: String,
     pub shutdown: ConcurrentCliShutdown,
     pub initialize_runtime_environment: bool,
@@ -203,6 +208,7 @@ fn append_onboard_target_args(
 fn resolve_onboard_executable_path() -> CliResult<PathBuf> {
     if cfg!(debug_assertions)
         && let Some(executable_path) = std::env::var_os(TEST_ONBOARD_EXECUTABLE_ENV)
+            .or_else(|| std::env::var_os(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV))
     {
         return Ok(PathBuf::from(executable_path));
     }
@@ -243,24 +249,28 @@ fn format_onboard_command_hint(config_path: Option<&str>, resolved_config_path: 
     command
 }
 
-struct CliTurnRuntime {
-    resolved_path: PathBuf,
-    config: LoongClawConfig,
-    session_id: String,
-    session_address: ConversationSessionAddress,
-    turn_coordinator: ConversationTurnCoordinator,
-    kernel_ctx: crate::KernelContext,
-    explicit_acp_request: bool,
-    effective_bootstrap_mcp_servers: Vec<String>,
-    effective_working_directory: Option<PathBuf>,
-    memory_label: String,
+pub(crate) struct CliTurnRuntime {
+    pub(crate) resolved_path: PathBuf,
+    pub(crate) config: LoongConfig,
+    pub(crate) session_id: String,
+    pub(crate) session_address: ConversationSessionAddress,
+    pub(crate) turn_coordinator: ConversationTurnCoordinator,
+    pub(crate) kernel_ctx: crate::KernelContext,
+    pub(crate) explicit_acp_request: bool,
+    pub(crate) effective_bootstrap_mcp_servers: Vec<String>,
+    pub(crate) effective_working_directory: Option<PathBuf>,
+    pub(crate) memory_label: String,
     #[cfg(feature = "memory-sqlite")]
-    memory_config: MemoryRuntimeConfig,
+    pub(crate) memory_config: MemoryRuntimeConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CliSessionRequirement {
+pub(crate) enum CliSessionRequirement {
+    /// Interactive entrypoints may fall back to the implicit default session
+    /// (and, with sqlite memory enabled, resolve the `latest` selector).
     AllowImplicitDefault,
+    /// Embedded or multiplexed hosts must provide a session id explicitly so
+    /// they never attach to the wrong transcript by accident.
     RequireExplicit,
 }
 
@@ -276,6 +286,7 @@ pub async fn run_cli_chat(
     session_hint: Option<&str>,
     options: &CliChatOptions,
 ) -> CliResult<()> {
+    ensure_cli_channel_enabled_for_entrypoint(config_path)?;
     if session_surface::interactive_terminal_surface_supported() {
         return session_surface::run_cli_chat_surface(config_path, session_hint, options).await;
     }
@@ -392,6 +403,7 @@ pub async fn run_cli_ask(
     if input.is_empty() {
         return Err("ask message must not be empty".to_owned());
     }
+    ensure_cli_channel_enabled_for_entrypoint(config_path)?;
 
     let runtime = initialize_cli_turn_runtime(config_path, session_hint, options, "cli-ask")?;
     let acp_event_printer = options
@@ -411,6 +423,7 @@ pub async fn run_cli_ask(
 }
 
 pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<()> {
+    reject_disabled_cli_channel(&options.config)?;
     if session_surface::interactive_terminal_surface_supported() {
         return session_surface::run_concurrent_cli_host_surface(options);
     }
@@ -442,7 +455,39 @@ fn run_concurrent_cli_host_repl(options: &ConcurrentCliHostOptions) -> CliResult
     })
 }
 
-fn initialize_cli_turn_runtime(
+pub(crate) fn reject_disabled_cli_channel(config: &LoongConfig) -> CliResult<()> {
+    if config.cli.enabled {
+        return Ok(());
+    }
+
+    Err("CLI channel is disabled by config.cli.enabled=false".to_owned())
+}
+
+fn ensure_cli_channel_enabled_for_entrypoint(config_path: Option<&str>) -> CliResult<()> {
+    let resolved_config_path = config_path
+        .map(config::expand_path)
+        .unwrap_or_else(config::default_config_path);
+    let config_exists = resolved_config_path.try_exists().map_err(|error| {
+        format!(
+            "failed to access config path {}: {error}",
+            resolved_config_path.display()
+        )
+    })?;
+    if !config_exists {
+        return Ok(());
+    }
+
+    let (_resolved_path, config) = config::load(config_path)?;
+    reject_disabled_cli_channel(&config)
+}
+
+/// Assemble a CLI turn runtime starting from a config path on disk.
+///
+/// This is the highest-level bootstrap used by `chat`/`ask`: it loads the
+/// config, permits implicit default-session resolution, exports runtime
+/// environment variables, bootstraps a fresh kernel context, and delegates the
+/// final session/memory assembly to the lower-level helpers below.
+pub(crate) fn initialize_cli_turn_runtime(
     config_path: Option<&str>,
     session_hint: Option<&str>,
     options: &CliChatOptions,
@@ -460,9 +505,20 @@ fn initialize_cli_turn_runtime(
     )
 }
 
-fn initialize_cli_turn_runtime_with_loaded_config(
+/// Assemble a CLI turn runtime when the caller already owns a resolved config.
+///
+/// Compared with `initialize_cli_turn_runtime`, this skips config loading but
+/// still normalizes the runtime workspace root, optionally exports runtime
+/// environment variables, bootstraps a fresh kernel context, and then delegates
+/// the final session/memory assembly to
+/// `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx`.
+///
+/// Use the `_and_kernel_ctx` variant when the caller must reuse an existing
+/// kernel authority—such as channel-triggered turns—rather than minting a new
+/// token for the same logical operation.
+pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     session_hint: Option<&str>,
     options: &CliChatOptions,
     kernel_scope: &'static str,
@@ -470,13 +526,14 @@ fn initialize_cli_turn_runtime_with_loaded_config(
     initialize_runtime_environment: bool,
 ) -> CliResult<CliTurnRuntime> {
     let mut config = config;
-    if !config.cli.enabled {
-        return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
-    }
-
+    // Interactive chat surfaces should anchor tool-relative filesystem access
+    // to the launch directory when possible, rather than forcing every turn to
+    // inherit the static configured file root.
     let runtime_workspace_root = std::env::current_dir()
         .ok()
         .unwrap_or_else(|| config.tools.resolved_file_root());
+    let runtime_workspace_root =
+        dunce::canonicalize(&runtime_workspace_root).unwrap_or(runtime_workspace_root);
     let runtime_workspace_root = runtime_workspace_root.display().to_string();
     config.tools.runtime_workspace_root = Some(runtime_workspace_root);
 
@@ -485,6 +542,32 @@ fn initialize_cli_turn_runtime_with_loaded_config(
     }
     let kernel_ctx =
         bootstrap_kernel_context_with_config(kernel_scope, DEFAULT_TOKEN_TTL_S, &config)?;
+    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+        resolved_path,
+        config,
+        session_hint,
+        options,
+        kernel_ctx,
+        session_requirement,
+    )
+}
+
+/// Final assembly step for CLI/chat turn state once config and kernel authority
+/// are already available.
+///
+/// This helper resolves ACP defaults, prepares memory/sqlite state, derives the
+/// effective session id/address, and constructs the `CliTurnRuntime`. It
+/// deliberately does not mutate process environment variables or bootstrap a
+/// new kernel context; callers use it when those concerns were already handled
+/// by an outer runtime surface.
+pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+    resolved_path: PathBuf,
+    config: LoongConfig,
+    session_hint: Option<&str>,
+    options: &CliChatOptions,
+    kernel_ctx: crate::KernelContext,
+    session_requirement: CliSessionRequirement,
+) -> CliResult<CliTurnRuntime> {
     let explicit_acp_request = options.requests_explicit_acp();
     let effective_bootstrap_mcp_servers = config
         .acp
@@ -849,9 +932,33 @@ async fn process_cli_chat_input(
         ChatCommandMatchResult::NotMatched => {}
     }
 
-    Ok(CliChatLoopControl::AssistantText(
-        run_cli_turn(runtime, input, event_sink, true).await?,
-    ))
+    let agent_runtime = crate::agent_runtime::AgentRuntime::new();
+    let turn_result = agent_runtime
+        .run_turn_with_runtime(
+            runtime,
+            &crate::agent_runtime::AgentTurnRequest {
+                message: input.to_owned(),
+                turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+                channel_id: runtime.session_address.channel_id.clone(),
+                account_id: runtime.session_address.account_id.clone(),
+                conversation_id: runtime.session_address.conversation_id.clone(),
+                participant_id: runtime.session_address.participant_id.clone(),
+                thread_id: runtime.session_address.thread_id.clone(),
+                metadata: BTreeMap::new(),
+                acp: runtime.explicit_acp_request,
+                acp_event_stream: event_sink.is_some(),
+                acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
+                acp_cwd: runtime
+                    .effective_working_directory
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                live_surface_enabled: true,
+            },
+            event_sink,
+        )
+        .await?;
+
+    Ok(CliChatLoopControl::AssistantText(turn_result.output_text))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1398,12 +1505,88 @@ fn normalize_markdown_display_line(line: &str) -> String {
     trimmed_end.to_owned()
 }
 
-async fn run_cli_turn(
+pub(crate) async fn run_cli_turn(
     runtime: &CliTurnRuntime,
     input: &str,
     event_sink: Option<&dyn AcpTurnEventSink>,
     live_surface_enabled: bool,
 ) -> CliResult<String> {
+    run_cli_turn_with_address(
+        runtime,
+        &runtime.session_address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        None,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn run_cli_turn_with_address(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    observer_override: Option<ConversationTurnObserverHandle>,
+) -> CliResult<String> {
+    run_cli_turn_with_address_and_ingress_and_error_mode(
+        runtime,
+        address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        metadata,
+        None,
+        AcpTurnProvenance::default(),
+        ProviderErrorMode::InlineMessage,
+        observer_override,
+    )
+    .await
+}
+
+pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    ingress: Option<&ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'_>,
+    provider_error_mode: ProviderErrorMode,
+    observer_override: Option<ConversationTurnObserverHandle>,
+) -> CliResult<String> {
+    run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+        runtime,
+        address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        metadata,
+        ingress,
+        provenance,
+        provider_error_mode,
+        observer_override,
+    )
+    .await
+    .map(|outcome| outcome.reply)
+}
+
+pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    ingress: Option<&ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'_>,
+    provider_error_mode: ProviderErrorMode,
+    observer_override: Option<ConversationTurnObserverHandle>,
+) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
     let acp_options = if runtime.explicit_acp_request {
         AcpConversationTurnOptions::explicit()
@@ -1412,35 +1595,58 @@ async fn run_cli_turn(
     }
     .with_event_sink(event_sink)
     .with_additional_bootstrap_mcp_servers(&runtime.effective_bootstrap_mcp_servers)
-    .with_working_directory(runtime.effective_working_directory.as_deref());
-    let live_surface_observer = if live_surface_enabled {
+    .with_working_directory(runtime.effective_working_directory.as_deref())
+    .with_metadata(metadata)
+    .with_provenance(provenance);
+    let live_surface_observer = if let Some(observer) = observer_override {
+        Some(observer)
+    } else if live_surface_enabled {
         let render_width = detect_cli_chat_render_width();
         Some(build_cli_chat_live_surface_observer(render_width))
     } else {
         None
     };
-    runtime
-        .turn_coordinator
-        .handle_production_turn_with_address_and_acp_options_and_observer(
-            &turn_config,
-            &runtime.session_address,
-            input,
-            ProviderErrorMode::InlineMessage,
-            &acp_options,
-            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            live_surface_observer,
-        )
-        .await
+    if let Some(ingress) = ingress {
+        runtime
+            .turn_coordinator
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+                &turn_config,
+                address,
+                input,
+                provider_error_mode,
+                &acp_options,
+                crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                Some(ingress),
+                live_surface_observer,
+            )
+            .await
+            .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
+    } else {
+        runtime
+            .turn_coordinator
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
+                &turn_config,
+                address,
+                input,
+                provider_error_mode,
+                &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+                &acp_options,
+                crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                None,
+                live_surface_observer,
+            )
+            .await
+    }
 }
 
-fn reload_cli_turn_config(
-    config: &LoongClawConfig,
-    resolved_path: &Path,
-) -> CliResult<LoongClawConfig> {
+fn reload_cli_turn_config(config: &LoongConfig, resolved_path: &Path) -> CliResult<LoongConfig> {
+    if resolved_path.as_os_str().is_empty() {
+        return Ok(config.clone());
+    }
     config.reload_provider_runtime_state_from_path(resolved_path)
 }
 
-fn is_exit_command(config: &LoongClawConfig, input: &str) -> bool {
+fn is_exit_command(config: &LoongConfig, input: &str) -> bool {
     let lower = input.to_ascii_lowercase();
     config
         .cli
@@ -1528,7 +1734,7 @@ async fn print_safe_lane_summary(
 #[allow(clippy::print_stdout)] // CLI output
 async fn print_turn_checkpoint_summary(
     turn_coordinator: &ConversationTurnCoordinator,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
@@ -1571,7 +1777,7 @@ async fn print_turn_checkpoint_summary(
 #[allow(clippy::print_stdout)] // CLI output
 async fn print_turn_checkpoint_repair(
     turn_coordinator: &ConversationTurnCoordinator,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<()> {
@@ -2460,7 +2666,7 @@ fn build_turn_checkpoint_summary_message_spec(
 #[cfg(test)]
 async fn load_turn_checkpoint_summary_output(
     turn_coordinator: &ConversationTurnCoordinator,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
@@ -3284,6 +3490,7 @@ fn format_average(sum: u64, samples: u32) -> String {
 mod tests {
     use super::*;
     use crate::conversation::ConversationRuntimeBinding;
+    use crate::test_support::ScopedEnv;
     use serde_json::json;
     use std::ffi::OsStr;
     use std::path::PathBuf;
@@ -3307,8 +3514,8 @@ mod tests {
     use serde_json::Value;
 
     #[cfg(feature = "memory-sqlite")]
-    fn test_config() -> LoongClawConfig {
-        let mut config = LoongClawConfig::default();
+    fn test_config() -> LoongConfig {
+        let mut config = LoongConfig::default();
         config.provider = crate::config::ProviderConfig::default();
         config.audit.mode = crate::config::AuditMode::InMemory;
         config
@@ -3406,6 +3613,33 @@ mod tests {
     }
 
     #[test]
+    fn build_onboard_command_prefers_loong_test_override() {
+        let mut env = ScopedEnv::new();
+        env.remove(TEST_ONBOARD_EXECUTABLE_ENV);
+        env.remove(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV);
+        env.set(TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/loong-onboard");
+        env.set(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/legacy-onboard");
+
+        let command =
+            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
+
+        assert_eq!(command.get_program(), OsStr::new("/tmp/loong-onboard"));
+    }
+
+    #[test]
+    fn build_onboard_command_falls_back_to_legacy_override() {
+        let mut env = ScopedEnv::new();
+        env.remove(TEST_ONBOARD_EXECUTABLE_ENV);
+        env.remove(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV);
+        env.set(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/legacy-onboard");
+
+        let command =
+            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
+
+        assert_eq!(command.get_program(), OsStr::new("/tmp/legacy-onboard"));
+    }
+
+    #[test]
     fn build_onboard_command_forwards_explicit_config_path_to_output() {
         let command = build_onboard_command_for_executable(
             PathBuf::from("/tmp/loongclaw"),
@@ -3455,11 +3689,11 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     pub(super) fn init_chat_test_memory(
         label: &str,
-    ) -> (LoongClawConfig, MemoryRuntimeConfig, PathBuf) {
+    ) -> (LoongConfig, MemoryRuntimeConfig, PathBuf) {
         let sqlite_path = unique_chat_sqlite_path(label);
         cleanup_chat_test_memory(&sqlite_path);
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.audit.mode = crate::config::AuditMode::InMemory;
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
@@ -3778,7 +4012,7 @@ mod tests {
         let shutdown = ConcurrentCliShutdown::new();
         let error = run_concurrent_cli_host(&ConcurrentCliHostOptions {
             resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
-            config: LoongClawConfig::default(),
+            config: LoongConfig::default(),
             session_id: "   ".to_owned(),
             shutdown,
             initialize_runtime_environment: false,
@@ -4257,9 +4491,7 @@ mod tests {
         );
 
         assert!(
-            lines
-                .first()
-                .is_some_and(|line| line.starts_with("LOONGCLAW")),
+            lines.first().is_some_and(|line| line.starts_with("LOONG")),
             "chat startup should now use the shared compact brand header: {lines:#?}"
         );
         assert!(
@@ -4415,9 +4647,7 @@ mod tests {
         let lines = render_cli_chat_missing_config_lines_with_width(command, 80);
 
         assert!(
-            lines
-                .first()
-                .is_some_and(|line| line.starts_with("LOONGCLAW")),
+            lines.first().is_some_and(|line| line.starts_with("LOONG")),
             "missing-config setup prompt should keep the shared compact header: {lines:#?}"
         );
         assert!(
@@ -5545,7 +5775,7 @@ allowed_decisions: yes / auto / full / esc";
         ));
         let path_string = path.display().to_string();
 
-        let mut in_memory = LoongClawConfig::default();
+        let mut in_memory = LoongConfig::default();
         in_memory.cli.exit_commands = vec!["/bye".to_owned()];
         let mut openai =
             crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);

@@ -1,0 +1,61 @@
+---
+title: DingTalk
+description: Configure the DingTalk channel surface in Loong.
+---
+
+# DingTalk
+
+This is a shipped config-backed outbound surface. Dingtalk custom robot surface is outbound-only
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `dingtalk` |
+| Config key | `dingtalk` |
+| Implementation status | `config_backed` |
+| Transport | `dingtalk_custom_robot_webhook` |
+| Aliases | `ding`, `ding-bot` |
+| Default send target kind | `endpoint` |
+
+## Minimal Config
+
+```toml
+[dingtalk]
+enabled = true
+webhook_url_env = "DINGTALK_WEBHOOK_URL"
+```
+
+## Smoke Test
+
+```bash
+loong dingtalk-send --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| custom robot send | `dingtalk-send` | Usage: loong dingtalk-send [OPTIONS] --text &lt;TEXT&gt; |
+| outgoing callback service | `dingtalk-serve` | dingtalk custom robot surface is outbound-only |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `dingtalk.enabled`<br/>`dingtalk.accounts.<account>.enabled` | none | none |
+| custom robot webhook url | `dingtalk.webhook_url`<br/>`dingtalk.accounts.<account>.webhook_url` | `dingtalk.webhook_url_env`<br/>`dingtalk.accounts.<account>.webhook_url_env` | `DINGTALK_WEBHOOK_URL` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- The custom robot `secret` is optional and only matters when the DingTalk webhook is configured for signed requests.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

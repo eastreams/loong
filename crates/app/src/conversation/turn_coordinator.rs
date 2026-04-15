@@ -14,6 +14,12 @@ use tokio::sync::Mutex;
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, timeout};
 
+#[path = "turn_coordinator/safe_lane_events.rs"]
+mod safe_lane_events;
+#[path = "turn_coordinator/safe_lane_execution.rs"]
+mod safe_lane_execution;
+#[path = "turn_coordinator/safe_lane_routing.rs"]
+mod safe_lane_routing;
 #[path = "turn_coordinator_support.rs"]
 mod support;
 
@@ -32,6 +38,10 @@ use crate::operator::delegate_runtime::{
 };
 use crate::runtime_self_continuity;
 
+use self::safe_lane_events::*;
+use self::safe_lane_execution::*;
+pub(crate) use self::safe_lane_routing::SafeLaneFailureRoute;
+use self::safe_lane_routing::*;
 use super::super::config::{LoongClawConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
@@ -591,6 +601,7 @@ impl ProviderTurnLanePlan {
 struct ProviderTurnLaneExecution {
     lane: ExecutionLane,
     assistant_preface: String,
+    provider_usage: Option<Value>,
     had_tool_intents: bool,
     tool_request_summary: Option<String>,
     discovery_search_turn: bool,
@@ -821,8 +832,16 @@ enum ResolvedProviderTurn {
 }
 
 impl ResolvedProviderTurn {
-    fn persist_reply(reply: String, checkpoint: TurnCheckpointSnapshot) -> Self {
-        Self::PersistReply(ResolvedProviderReply { reply, checkpoint })
+    fn persist_reply(
+        reply: String,
+        usage: Option<Value>,
+        checkpoint: TurnCheckpointSnapshot,
+    ) -> Self {
+        Self::PersistReply(ResolvedProviderReply {
+            reply,
+            usage,
+            checkpoint,
+        })
     }
 
     fn return_error(error: String, checkpoint: TurnCheckpointSnapshot) -> Self {
@@ -849,6 +868,7 @@ impl ResolvedProviderTurn {
                         session,
                         reply.reply.as_str(),
                     ),
+                    usage: reply.usage.clone(),
                 })
             }
             Self::ReturnError(error) => {
@@ -879,7 +899,14 @@ impl ResolvedProviderTurn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedProviderReply {
     reply: String,
+    usage: Option<Value>,
     checkpoint: TurnCheckpointSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationTurnOutcome {
+    pub reply: String,
+    pub usage: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -902,7 +929,7 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
         session_id: &str,
         user_input: &str,
         binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
+    ) -> CliResult<ConversationTurnOutcome> {
         match self {
             Self::PersistReply(phase) => {
                 finalize_provider_turn_reply(
@@ -911,6 +938,7 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
                     session_id,
                     user_input,
                     &phase.tail_phase,
+                    phase.usage,
                     phase.checkpoint,
                     binding,
                 )
@@ -934,6 +962,7 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
 struct ProviderTurnPersistReplyPhase<'a> {
     checkpoint: &'a TurnCheckpointSnapshot,
     tail_phase: ProviderTurnReplyTailPhase,
+    usage: Option<Value>,
 }
 
 #[derive(Debug)]
@@ -975,7 +1004,7 @@ impl ProviderTurnRequestTerminalPhase {
                         ReplyPersistenceMode::InlineProviderError,
                     ),
                 );
-                ResolvedProviderTurn::persist_reply(reply, checkpoint)
+                ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
             }
             Self::ReturnError { error } => {
                 let checkpoint = build_resolved_provider_checkpoint(
@@ -1582,6 +1611,9 @@ impl ConversationTurnCoordinator {
         config: &LoongClawConfig,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> CliResult<DefaultConversationRuntime<Box<dyn ConversationContextEngine>>> {
+        // Keep runtime-construction failures visible to the turn observer so
+        // operator surfaces receive the same failed phase signal as execution
+        // errors later in the turn pipeline.
         let runtime_result = DefaultConversationRuntime::from_config_or_env(config);
         let runtime = match runtime_result {
             Ok(runtime) => runtime,
@@ -1913,7 +1945,36 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
-        let turn_result: CliResult<(String, bool)> = async {
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            binding,
+            ingress,
+            observer,
+        )
+        .await
+        .map(|outcome| outcome.reply)
+    }
+
+    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongClawConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+    ) -> CliResult<ConversationTurnOutcome> {
+        let turn_result: CliResult<(ConversationTurnOutcome, bool)> = async {
             let session_id = address.session_id.as_str();
             #[cfg(feature = "memory-sqlite")]
             if let Some(reply) = self
@@ -1928,7 +1989,7 @@ impl ConversationTurnCoordinator {
                 )
                 .await?
             {
-                return Ok((reply, false));
+                return Ok((ConversationTurnOutcome { reply, usage: None }, false));
             }
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
@@ -1955,7 +2016,7 @@ impl ConversationTurnCoordinator {
                         }
                     };
                     let reply = turn_result?;
-                    return Ok((reply, true));
+                    return Ok((ConversationTurnOutcome { reply, usage: None }, true));
                 }
                 AcpConversationTurnEntryDecision::RouteViaAcp => {
                     let reply = self
@@ -1969,7 +2030,7 @@ impl ConversationTurnCoordinator {
                             binding,
                         )
                         .await?;
-                    return Ok((reply, true));
+                    return Ok((ConversationTurnOutcome { reply, usage: None }, true));
                 }
                 AcpConversationTurnEntryDecision::StayOnProvider => {}
             }
@@ -2182,7 +2243,7 @@ impl ConversationTurnCoordinator {
             observer,
         )
         .await?;
-        Ok(Some(reply))
+        Ok(Some(reply.reply))
     }
 
     fn reload_followup_provider_config_after_tool_turn(
@@ -2955,6 +3016,10 @@ fn scope_provider_turn_tool_intents(
     turn
 }
 
+fn provider_turn_usage(turn: &ProviderTurn) -> Option<Value> {
+    turn.raw_meta.get("usage").cloned()
+}
+
 fn build_turn_loop_circuit_breaker_resolved_turn(
     preparation: &ProviderTurnPreparation,
     user_input: &str,
@@ -2970,7 +3035,7 @@ fn build_turn_loop_circuit_breaker_resolved_turn(
         None,
         TurnFinalizationCheckpoint::persist_reply(ReplyPersistenceMode::Success),
     );
-    ResolvedProviderTurn::persist_reply(reply, checkpoint)
+    ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
 }
 
 async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
@@ -3156,7 +3221,11 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         match reply_decision {
             ReplyLoopDecision::FinalizeDirect(reply) => {
                 let checkpoint = current_continue_phase.checkpoint(preparation, user_input, &reply);
-                return ResolvedProviderTurn::persist_reply(reply, checkpoint);
+                return ResolvedProviderTurn::persist_reply(
+                    reply,
+                    current_continue_phase.lane_execution.provider_usage.clone(),
+                    checkpoint,
+                );
             }
             ReplyLoopDecision::Followup {
                 raw_reply,
@@ -3207,7 +3276,11 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 user_input,
                                 raw_reply.as_str(),
                             );
-                            return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
+                            return ResolvedProviderTurn::persist_reply(
+                                raw_reply,
+                                current_continue_phase.lane_execution.provider_usage.clone(),
+                                checkpoint,
+                            );
                         }
                     };
                     let followup_message_count = followup_preparation.session.messages.len();
@@ -3360,7 +3433,11 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 user_input,
                                 raw_reply.as_str(),
                             );
-                            return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
+                            return ResolvedProviderTurn::persist_reply(
+                                raw_reply,
+                                current_continue_phase.lane_execution.provider_usage.clone(),
+                                checkpoint,
+                            );
                         }
                     }
                 }
@@ -3375,12 +3452,16 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     .await;
                     let checkpoint =
                         current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                    return ResolvedProviderTurn::persist_reply(reply, checkpoint);
+                    return ResolvedProviderTurn::persist_reply(reply, None, checkpoint);
                 }
 
                 let checkpoint =
                     current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
-                return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
+                return ResolvedProviderTurn::persist_reply(
+                    raw_reply,
+                    current_continue_phase.lane_execution.provider_usage.clone(),
+                    checkpoint,
+                );
             }
             ReplyLoopDecision::GuardFollowup {
                 raw_reply,
@@ -3407,7 +3488,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 .await;
                 let checkpoint =
                     current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                return ResolvedProviderTurn::persist_reply(reply, checkpoint);
+                return ResolvedProviderTurn::persist_reply(reply, None, checkpoint);
             }
         }
     }
@@ -3694,9 +3775,25 @@ async fn load_turn_checkpoint_tail_runtime_eligibility<R: ConversationRuntime + 
     }
 
     let repair_plan = build_turn_checkpoint_repair_plan(summary);
-    let assembled = runtime
+    let assembled = match runtime
         .build_context(config, session_id, true, binding)
-        .await?;
+        .await
+    {
+        Ok(assembled) => assembled,
+        Err(error) => {
+            tracing::warn!(
+                target: "loongclaw.conversation",
+                session_id = %session_id,
+                error = %error,
+                "failed to assemble runtime context for turn checkpoint tail repair; degrading to manual inspection"
+            );
+            return Ok(TurnCheckpointTailRuntimeEligibility::Manual {
+                action: TurnCheckpointRecoveryAction::InspectManually,
+                reason: TurnCheckpointTailRepairReason::CheckpointStateRequiresManualInspection,
+                source: TurnCheckpointTailRepairSource::Runtime,
+            });
+        }
+    };
     match TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &entry.checkpoint) {
         Ok(resume_input) => Ok(TurnCheckpointTailRuntimeEligibility::Runnable {
             action,
@@ -3737,11 +3834,15 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     session_id: &str,
     user_input: &str,
     tail_phase: &ProviderTurnReplyTailPhase,
+    usage: Option<Value>,
     checkpoint: &TurnCheckpointSnapshot,
     binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<String> {
+) -> CliResult<ConversationTurnOutcome> {
     let Some(persistence_mode) = checkpoint.finalization.persistence_mode() else {
-        return Ok(tail_phase.reply().to_owned());
+        return Ok(ConversationTurnOutcome {
+            reply: tail_phase.reply().to_owned(),
+            usage,
+        });
     };
     persist_reply_turns_with_mode(
         runtime,
@@ -3852,7 +3953,10 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         binding,
     )
     .await?;
-    Ok(tail_phase.reply().to_owned())
+    Ok(ConversationTurnOutcome {
+        reply: tail_phase.reply().to_owned(),
+        usage,
+    })
 }
 
 async fn persist_resolved_provider_error_checkpoint<R: ConversationRuntime + ?Sized>(
@@ -3882,7 +3986,7 @@ async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized>(
     resolved: &ResolvedProviderTurn,
     binding: ConversationRuntimeBinding<'_>,
     observer: Option<&ConversationTurnObserverHandle>,
-) -> CliResult<String> {
+) -> CliResult<ConversationTurnOutcome> {
     if let Some(error_text) = resolved.provider_error_text() {
         emit_provider_failover_trust_event_if_needed(
             config, runtime, session_id, error_text, binding,
@@ -4595,6 +4699,10 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     timeout_seconds: u64,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    // This resumes execution after the child session row/workspace have already
+    // been created. The remaining job is to run the child turn with the shared
+    // runtime/binding, enforce timeout + unwind containment, and then finalize
+    // the persisted delegate session/announcement state from the outcome.
     let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
     let start = Instant::now();
     let child_coordinator = ConversationTurnCoordinator::new();
@@ -4879,6 +4987,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             return ProviderTurnLaneExecution {
                 lane,
                 assistant_preface,
+                provider_usage: provider_turn_usage(turn),
                 had_tool_intents,
                 tool_request_summary,
                 discovery_search_turn,
@@ -5027,6 +5136,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
+        provider_usage: provider_turn_usage(turn),
         had_tool_intents,
         tool_request_summary,
         discovery_search_turn,
@@ -5492,205 +5602,6 @@ async fn evaluate_safe_lane_round(
     }
 }
 
-async fn emit_safe_lane_event<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
-    runtime: &R,
-    session_id: &str,
-    event_name: &str,
-    payload: Value,
-    binding: ConversationRuntimeBinding<'_>,
-) {
-    if !should_emit_safe_lane_event(config, event_name, &payload) {
-        return;
-    }
-    let _ = persist_conversation_event(runtime, session_id, event_name, payload, binding).await;
-    if let Some(ctx) = binding.kernel_context() {
-        let _ = ctx.kernel.record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.safe_lane".to_owned(),
-                delegated_core_adapter: None,
-                operation: format!("conversation.safe_lane.{event_name}"),
-                required_capabilities: Vec::new(),
-            },
-        );
-    }
-}
-
-async fn emit_fast_lane_tool_batch_event<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    trace: &ToolBatchExecutionTrace,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
-    persist_conversation_event(
-        runtime,
-        session_id,
-        "fast_lane_tool_batch",
-        trace.as_event_payload(),
-        binding,
-    )
-    .await
-}
-
-async fn persist_fast_lane_tool_trace<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    trace: &ToolBatchExecutionTrace,
-    binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
-    for record in &trace.decision_records {
-        persist_tool_decision(
-            runtime,
-            session_id,
-            &record.turn_id,
-            &record.tool_call_id,
-            &record.decision,
-            binding,
-        )
-        .await?;
-    }
-
-    for record in &trace.outcome_records {
-        persist_tool_outcome(
-            runtime,
-            session_id,
-            &record.turn_id,
-            &record.tool_call_id,
-            &record.outcome,
-            binding,
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-async fn emit_turn_ingress_event<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    session_id: &str,
-    ingress: Option<&ConversationIngressContext>,
-    binding: ConversationRuntimeBinding<'_>,
-) {
-    let Some(ingress) = ingress else {
-        return;
-    };
-    let _ = persist_conversation_event(
-        runtime,
-        session_id,
-        "turn_ingress",
-        ingress.as_event_payload(),
-        binding,
-    )
-    .await;
-}
-
-fn should_emit_safe_lane_event(
-    config: &LoongClawConfig,
-    event_name: &str,
-    payload: &Value,
-) -> bool {
-    if !config.conversation.safe_lane_emit_runtime_events {
-        return false;
-    }
-
-    if is_safe_lane_critical_event(event_name) {
-        return true;
-    }
-
-    let sample_every = config.conversation.safe_lane_event_sample_every();
-    if sample_every <= 1 {
-        return true;
-    }
-
-    if config.conversation.safe_lane_event_adaptive_sampling
-        && safe_lane_failure_pressure(payload)
-            >= config
-                .conversation
-                .safe_lane_event_adaptive_failure_threshold() as u64
-    {
-        return true;
-    }
-
-    let round = payload
-        .get("round")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    round.is_multiple_of(sample_every as u64)
-}
-
-fn is_safe_lane_critical_event(event_name: &str) -> bool {
-    matches!(
-        event_name,
-        "lane_selected" | "verify_failed" | "final_status"
-    )
-}
-
-fn safe_lane_failure_pressure(payload: &Value) -> u64 {
-    let mut pressure = 0u64;
-
-    if payload
-        .get("status")
-        .and_then(Value::as_str)
-        .map(|status| status == "failed")
-        .unwrap_or(false)
-    {
-        pressure = pressure.saturating_add(1);
-    }
-
-    if payload
-        .get("failure_kind")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
-        pressure = pressure.saturating_add(1);
-    }
-
-    if payload
-        .get("route_decision")
-        .and_then(Value::as_str)
-        .map(|decision| decision == "replan" || decision == "terminal")
-        .unwrap_or(false)
-    {
-        pressure = pressure.saturating_add(1);
-    }
-
-    if payload
-        .get("failure_code")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
-        pressure = pressure.saturating_add(1);
-    }
-
-    if payload
-        .get("tool_output_stats")
-        .and_then(|stats| stats.get("truncated_result_lines"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
-        > 0
-    {
-        pressure = pressure.saturating_add(1);
-    }
-
-    if payload
-        .get("metrics")
-        .and_then(|metrics| metrics.get("verify_failures"))
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
-        > 0
-    {
-        pressure = pressure.saturating_add(1);
-    }
-
-    pressure
-}
-
 fn build_safe_lane_plan_graph(
     config: &LoongClawConfig,
     lane_decision: &LaneDecision,
@@ -6141,671 +6052,6 @@ fn safe_lane_backpressure_budget(config: &LoongClawConfig) -> Option<SafeLaneBac
                 config.conversation.safe_lane_backpressure_max_replans(),
             )
         })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub(super) struct SafeLaneFailureRoute {
-    decision: SafeLaneFailureRouteDecision,
-    reason: SafeLaneFailureRouteReason,
-    source: SafeLaneFailureRouteSource,
-}
-
-impl SafeLaneFailureRoute {
-    fn from_failure(failure: &TurnFailure, replan_budget: SafeLaneReplanBudget) -> Self {
-        if let SafeLaneContinuationBudgetDecision::Terminal { reason } =
-            replan_budget.continuation_decision()
-        {
-            return Self::terminal(reason);
-        }
-
-        match failure.code.as_str() {
-            "kernel_policy_denied"
-            | "tool_not_found"
-            | "max_tool_steps_exceeded"
-            | "no_kernel_context" => {
-                return Self::terminal(SafeLaneFailureRouteReason::PolicyDenied);
-            }
-            "tool_execution_failed" => {
-                if failure.retryable {
-                    return Self::replan(SafeLaneFailureRouteReason::RetryableFailure);
-                }
-                return Self::terminal(SafeLaneFailureRouteReason::RetryableFlagFalse);
-            }
-            "kernel_execution_failed" => {
-                return Self::terminal(SafeLaneFailureRouteReason::NonRetryableFailure);
-            }
-            _ => {}
-        }
-
-        if let Some(code) = SafeLaneFailureCode::parse(failure.code.as_str()) {
-            match code {
-                SafeLaneFailureCode::PlanNodePolicyDenied => {
-                    return Self::terminal(SafeLaneFailureRouteReason::PolicyDenied);
-                }
-                SafeLaneFailureCode::VerifyFailed => {
-                    if failure.retryable {
-                        return Self::replan(SafeLaneFailureRouteReason::RetryableFailure);
-                    }
-                    return Self::terminal(SafeLaneFailureRouteReason::NonRetryableFailure);
-                }
-                SafeLaneFailureCode::PlanNodeRetryableError => {
-                    if failure.retryable {
-                        return Self::replan(SafeLaneFailureRouteReason::RetryableFailure);
-                    }
-                    return Self::terminal(SafeLaneFailureRouteReason::RetryableFlagFalse);
-                }
-                SafeLaneFailureCode::VerifyFailedBudgetExhausted => {
-                    return Self::terminal(SafeLaneFailureRouteReason::RoundBudgetExhausted);
-                }
-                SafeLaneFailureCode::PlanValidationFailed
-                | SafeLaneFailureCode::PlanTopologyResolutionFailed
-                | SafeLaneFailureCode::PlanBudgetExceeded
-                | SafeLaneFailureCode::PlanWallTimeExceeded
-                | SafeLaneFailureCode::PlanNodeNonRetryableError
-                | SafeLaneFailureCode::VerifyFailedBackpressureGuard
-                | SafeLaneFailureCode::VerifyFailedSessionGovernor
-                | SafeLaneFailureCode::PlanBackpressureGuard
-                | SafeLaneFailureCode::PlanSessionGovernorNoReplan => {
-                    return Self::terminal(SafeLaneFailureRouteReason::NonRetryableFailure);
-                }
-            }
-        }
-
-        match failure.kind {
-            TurnFailureKind::Retryable if failure.retryable => {
-                Self::replan(SafeLaneFailureRouteReason::RetryableFailure)
-            }
-            TurnFailureKind::Retryable => {
-                Self::terminal(SafeLaneFailureRouteReason::RetryableFlagFalse)
-            }
-            TurnFailureKind::PolicyDenied => {
-                Self::terminal(SafeLaneFailureRouteReason::PolicyDenied)
-            }
-            TurnFailureKind::NonRetryable => {
-                Self::terminal(SafeLaneFailureRouteReason::NonRetryableFailure)
-            }
-            TurnFailureKind::Provider => {
-                Self::terminal(SafeLaneFailureRouteReason::ProviderFailure)
-            }
-        }
-    }
-
-    fn replan(reason: SafeLaneFailureRouteReason) -> Self {
-        Self {
-            decision: SafeLaneFailureRouteDecision::Replan,
-            reason,
-            source: SafeLaneFailureRouteSource::BaseRouting,
-        }
-    }
-
-    fn terminal(reason: SafeLaneFailureRouteReason) -> Self {
-        Self {
-            decision: SafeLaneFailureRouteDecision::Terminal,
-            reason,
-            source: SafeLaneFailureRouteSource::BaseRouting,
-        }
-    }
-
-    fn terminal_with_source(
-        reason: SafeLaneFailureRouteReason,
-        source: SafeLaneFailureRouteSource,
-    ) -> Self {
-        Self {
-            decision: SafeLaneFailureRouteDecision::Terminal,
-            reason,
-            source,
-        }
-    }
-
-    fn is_base_round_budget_terminal(self) -> bool {
-        self.decision == SafeLaneFailureRouteDecision::Terminal
-            && self.source == SafeLaneFailureRouteSource::BaseRouting
-            && self.reason == SafeLaneFailureRouteReason::RoundBudgetExhausted
-    }
-
-    fn should_replan(self) -> bool {
-        self.decision == SafeLaneFailureRouteDecision::Replan
-    }
-
-    fn decision_label(self) -> &'static str {
-        self.decision.as_str()
-    }
-
-    fn source_label(self) -> &'static str {
-        self.source.as_str()
-    }
-
-    fn verify_terminal_summary_label(self) -> &'static str {
-        match (self.source, self.reason) {
-            (SafeLaneFailureRouteSource::BackpressureGuard, _) => {
-                "verify_failed_backpressure_guard"
-            }
-            (SafeLaneFailureRouteSource::SessionGovernor, _) => "verify_failed_session_governor",
-            (
-                SafeLaneFailureRouteSource::BaseRouting,
-                SafeLaneFailureRouteReason::RoundBudgetExhausted,
-            ) => "verify_failed_budget_exhausted",
-            (SafeLaneFailureRouteSource::BaseRouting, _) => "verify_failed_non_retryable",
-        }
-    }
-
-    fn terminal_verify_failure_code(self, retryable_signal: bool) -> SafeLaneFailureCode {
-        match (self.source, self.reason, retryable_signal) {
-            (SafeLaneFailureRouteSource::BackpressureGuard, _, _) => {
-                SafeLaneFailureCode::VerifyFailedBackpressureGuard
-            }
-            (SafeLaneFailureRouteSource::SessionGovernor, _, _) => {
-                SafeLaneFailureCode::VerifyFailedSessionGovernor
-            }
-            (
-                SafeLaneFailureRouteSource::BaseRouting,
-                SafeLaneFailureRouteReason::RoundBudgetExhausted,
-                true,
-            ) => SafeLaneFailureCode::VerifyFailedBudgetExhausted,
-            (SafeLaneFailureRouteSource::BaseRouting, _, _) => SafeLaneFailureCode::VerifyFailed,
-        }
-    }
-
-    fn terminal_plan_failure_code(self) -> Option<SafeLaneFailureCode> {
-        match self.source {
-            SafeLaneFailureRouteSource::BackpressureGuard => {
-                Some(SafeLaneFailureCode::PlanBackpressureGuard)
-            }
-            SafeLaneFailureRouteSource::SessionGovernor => {
-                Some(SafeLaneFailureCode::PlanSessionGovernorNoReplan)
-            }
-            SafeLaneFailureRouteSource::BaseRouting => None,
-        }
-    }
-
-    fn with_backpressure_guard(
-        self,
-        backpressure_budget: Option<SafeLaneBackpressureBudget>,
-        metrics: SafeLaneExecutionMetrics,
-    ) -> Self {
-        if !self.should_replan() {
-            return self;
-        }
-
-        let Some(reason) = backpressure_budget.and_then(|budget| {
-            match budget
-                .continuation_decision(metrics.total_attempts_used, metrics.replans_triggered)
-            {
-                SafeLaneContinuationBudgetDecision::Continue => None,
-                SafeLaneContinuationBudgetDecision::Terminal { reason } => Some(reason),
-            }
-        }) else {
-            return self;
-        };
-
-        Self::terminal_with_source(reason, SafeLaneFailureRouteSource::BackpressureGuard)
-    }
-
-    fn with_session_governor_override(self, governor: &SafeLaneSessionGovernorDecision) -> Self {
-        if governor.force_no_replan && self.is_base_round_budget_terminal() {
-            return Self::terminal_with_source(
-                SafeLaneFailureRouteReason::SessionGovernorNoReplan,
-                SafeLaneFailureRouteSource::SessionGovernor,
-            );
-        }
-        self
-    }
-}
-
-#[derive(Debug, Clone)]
-enum SafeLaneRoundDecision {
-    Finalize {
-        result: TurnResult,
-    },
-    Replan {
-        reason: String,
-        next_plan_start_tool_index: usize,
-        next_seed_tool_outputs: Vec<String>,
-    },
-}
-
-fn decide_safe_lane_failure_route(
-    config: &LoongClawConfig,
-    failure: &TurnFailure,
-    replan_budget: SafeLaneReplanBudget,
-    metrics: SafeLaneExecutionMetrics,
-    governor: &SafeLaneSessionGovernorDecision,
-) -> SafeLaneFailureRoute {
-    SafeLaneFailureRoute::from_failure(failure, replan_budget)
-        .with_backpressure_guard(safe_lane_backpressure_budget(config), metrics)
-        .with_session_governor_override(governor)
-}
-
-fn decide_safe_lane_verify_failure_action(
-    verify_error: &str,
-    retryable_signal: bool,
-    route: SafeLaneFailureRoute,
-) -> SafeLaneRoundDecision {
-    if !route.should_replan() {
-        return SafeLaneRoundDecision::Finalize {
-            result: TurnResult::ToolError(terminal_turn_failure_from_verify_failure(
-                verify_error,
-                retryable_signal,
-                route,
-            )),
-        };
-    }
-
-    SafeLaneRoundDecision::Replan {
-        reason: "verify_failed".to_owned(),
-        next_plan_start_tool_index: 0,
-        next_seed_tool_outputs: Vec::new(),
-    }
-}
-
-fn should_replan_for_verification_failure(report: &PlanVerificationReport) -> bool {
-    !report.failure_codes.iter().any(|code| {
-        matches!(
-            code,
-            PlanVerificationFailureCode::DenyMarkerDetected
-                | PlanVerificationFailureCode::MissingStatusPrefix
-                | PlanVerificationFailureCode::MissingSemanticAnchors
-        )
-    })
-}
-
-fn format_verification_failure_code(code: &PlanVerificationFailureCode) -> &'static str {
-    match code {
-        PlanVerificationFailureCode::EmptyOutput => "empty_output",
-        PlanVerificationFailureCode::OutputTooShort => "output_too_short",
-        PlanVerificationFailureCode::DenyMarkerDetected => "deny_marker_detected",
-        PlanVerificationFailureCode::InsufficientResultLines => "insufficient_result_lines",
-        PlanVerificationFailureCode::MissingStatusPrefix => "missing_status_prefix",
-        PlanVerificationFailureCode::FailureStatusDetected => "failure_status_detected",
-        PlanVerificationFailureCode::MissingSemanticAnchors => "missing_semantic_anchors",
-    }
-}
-
-fn collect_semantic_anchors(tool_intents: &[ToolIntent]) -> BTreeSet<String> {
-    let mut anchors = BTreeSet::new();
-    for intent in tool_intents {
-        collect_value_anchors(None, &intent.args_json, &mut anchors);
-    }
-    anchors
-}
-
-fn collect_value_anchors(parent_key: Option<&str>, value: &Value, anchors: &mut BTreeSet<String>) {
-    #[allow(clippy::wildcard_enum_match_arm)]
-    match value {
-        Value::String(text) => {
-            if parent_key.map(is_anchor_key_allowed).unwrap_or(false) {
-                push_anchor_candidate(text.as_str(), anchors);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_value_anchors(parent_key, item, anchors);
-            }
-        }
-        Value::Object(map) => {
-            for (key, item) in map {
-                if is_sensitive_key(key.as_str()) {
-                    continue;
-                }
-                collect_value_anchors(Some(key.as_str()), item, anchors);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn is_anchor_key_allowed(key: &str) -> bool {
-    matches!(
-        key.trim().to_ascii_lowercase().as_str(),
-        "path"
-            | "file"
-            | "filename"
-            | "url"
-            | "endpoint"
-            | "target"
-            | "query"
-            | "operation"
-            | "command"
-            | "cwd"
-            | "dir"
-            | "directory"
-    )
-}
-
-fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key.trim().to_ascii_lowercase();
-    [
-        "token",
-        "secret",
-        "password",
-        "credential",
-        "api_key",
-        "apikey",
-        "auth",
-        "authorization",
-        "cookie",
-        "session",
-        "bearer",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
-}
-
-fn push_anchor_candidate(text: &str, anchors: &mut BTreeSet<String>) {
-    let normalized = text.trim().to_ascii_lowercase();
-    if normalized.len() < 3 || normalized.len() > 96 {
-        return;
-    }
-    if normalized.contains(' ') {
-        return;
-    }
-    anchors.insert(normalized.clone());
-    if let Some(last_segment) = normalized.rsplit('/').next()
-        && last_segment.len() >= 3
-    {
-        anchors.insert(last_segment.to_owned());
-    }
-}
-
-fn derive_replan_cursor(
-    failure: &PlanRunFailure,
-    round_tool_outputs: &[String],
-    tool_count: usize,
-) -> (usize, Vec<String>) {
-    #[allow(clippy::wildcard_enum_match_arm)]
-    match failure {
-        PlanRunFailure::NodeFailed { node_id, .. } => {
-            if let Ok(index) = parse_tool_node_index(node_id.as_str())
-                && index < tool_count
-            {
-                return (index, round_tool_outputs.to_vec());
-            }
-            (0, Vec::new())
-        }
-        _ => (0, Vec::new()),
-    }
-}
-
-fn summarize_plan_failure(failure: &PlanRunFailure) -> String {
-    match failure {
-        PlanRunFailure::ValidationFailed(error) => {
-            format!("validation_failed:{error}")
-        }
-        PlanRunFailure::TopologyResolutionFailed => "topology_resolution_failed".to_owned(),
-        PlanRunFailure::BudgetExceeded {
-            attempts_used,
-            limit,
-        } => {
-            format!("budget_exceeded attempts_used={attempts_used} limit={limit}")
-        }
-        PlanRunFailure::WallTimeExceeded {
-            elapsed_ms,
-            limit_ms,
-        } => {
-            format!("wall_time_exceeded elapsed_ms={elapsed_ms} limit_ms={limit_ms}")
-        }
-        PlanRunFailure::NodeFailed {
-            node_id,
-            last_error_kind,
-            last_error,
-            ..
-        } => {
-            format!("node_failed node={node_id} error_kind={last_error_kind:?} reason={last_error}")
-        }
-    }
-}
-
-fn format_turn_failure_kind(kind: TurnFailureKind) -> &'static str {
-    match kind {
-        TurnFailureKind::PolicyDenied => "policy_denied",
-        TurnFailureKind::Retryable => "retryable",
-        TurnFailureKind::NonRetryable => "non_retryable",
-        TurnFailureKind::Provider => "provider",
-    }
-}
-
-fn turn_failure_from_plan_failure(failure: &PlanRunFailure) -> TurnFailure {
-    let (code, kind) = classify_safe_lane_plan_failure(failure);
-    match failure {
-        PlanRunFailure::ValidationFailed(error) => {
-            code.into_turn_failure(kind, format!("{}: {error}", code.as_str()))
-        }
-        PlanRunFailure::TopologyResolutionFailed => code.into_turn_failure(kind, code.as_str()),
-        PlanRunFailure::BudgetExceeded {
-            attempts_used,
-            limit,
-        } => code.into_turn_failure(
-            kind,
-            format!(
-                "{} attempts_used={attempts_used} limit={limit}",
-                code.as_str()
-            ),
-        ),
-        PlanRunFailure::WallTimeExceeded {
-            elapsed_ms,
-            limit_ms,
-        } => code.into_turn_failure(
-            kind,
-            format!(
-                "{} elapsed_ms={elapsed_ms} limit_ms={limit_ms}",
-                code.as_str()
-            ),
-        ),
-        PlanRunFailure::NodeFailed { last_error, .. } => {
-            code.into_turn_failure(kind, last_error.clone())
-        }
-    }
-}
-
-fn turn_failure_from_verify_failure(verify_error: &str, retryable: bool) -> TurnFailure {
-    SafeLaneFailureCode::VerifyFailed.into_turn_failure(
-        if retryable {
-            TurnFailureKind::Retryable
-        } else {
-            TurnFailureKind::NonRetryable
-        },
-        format!(
-            "{}: {verify_error}",
-            SafeLaneFailureCode::VerifyFailed.as_str()
-        ),
-    )
-}
-
-fn terminal_turn_failure_from_verify_failure(
-    verify_error: &str,
-    retryable_signal: bool,
-    route: SafeLaneFailureRoute,
-) -> TurnFailure {
-    route
-        .terminal_verify_failure_code(retryable_signal)
-        .into_turn_failure(
-            TurnFailureKind::NonRetryable,
-            format!(
-                "{}: {verify_error}",
-                SafeLaneFailureCode::VerifyFailed.as_str()
-            ),
-        )
-}
-
-fn turn_result_from_plan_failure(failure: PlanRunFailure) -> TurnResult {
-    let failure_meta = turn_failure_from_plan_failure(&failure);
-    if matches!(failure_meta.kind, TurnFailureKind::PolicyDenied) {
-        TurnResult::ToolDenied(failure_meta)
-    } else if matches!(failure_meta.kind, TurnFailureKind::Provider) {
-        TurnResult::ProviderError(failure_meta)
-    } else {
-        TurnResult::ToolError(failure_meta)
-    }
-}
-
-fn terminal_turn_result_from_plan_failure_with_route(
-    failure: PlanRunFailure,
-    route: SafeLaneFailureRoute,
-) -> TurnResult {
-    if let Some(code) = route.terminal_plan_failure_code() {
-        let summary = summarize_plan_failure(&failure);
-        return TurnResult::ToolError(code.into_turn_failure(
-            TurnFailureKind::NonRetryable,
-            format!("{}: {summary}", code.as_str()),
-        ));
-    }
-    turn_result_from_plan_failure(failure)
-}
-
-fn decide_safe_lane_plan_failure_action(
-    failure: PlanRunFailure,
-    route: SafeLaneFailureRoute,
-    next_plan_start_tool_index: usize,
-    next_seed_tool_outputs: Vec<String>,
-) -> SafeLaneRoundDecision {
-    if route.should_replan() {
-        return SafeLaneRoundDecision::Replan {
-            reason: summarize_plan_failure(&failure),
-            next_plan_start_tool_index,
-            next_seed_tool_outputs,
-        };
-    }
-
-    SafeLaneRoundDecision::Finalize {
-        result: terminal_turn_result_from_plan_failure_with_route(failure, route),
-    }
-}
-
-struct SafeLanePlanNodeExecutor<'a> {
-    tool_intents: &'a [ToolIntent],
-    session_context: &'a SessionContext,
-    app_dispatcher: &'a dyn AppToolDispatcher,
-    binding: ConversationRuntimeBinding<'a>,
-    ingress: Option<&'a ConversationIngressContext>,
-    verify_output_non_empty: bool,
-    tool_outputs: Mutex<Vec<String>>,
-    tool_result_payload_summary_limit_chars: usize,
-}
-
-impl<'a> SafeLanePlanNodeExecutor<'a> {
-    fn new(
-        tool_intents: &'a [ToolIntent],
-        session_context: &'a SessionContext,
-        app_dispatcher: &'a dyn AppToolDispatcher,
-        binding: ConversationRuntimeBinding<'a>,
-        ingress: Option<&'a ConversationIngressContext>,
-        verify_output_non_empty: bool,
-        seed_tool_outputs: Vec<String>,
-        tool_result_payload_summary_limit_chars: usize,
-    ) -> Self {
-        Self {
-            tool_intents,
-            session_context,
-            app_dispatcher,
-            binding,
-            ingress,
-            verify_output_non_empty,
-            tool_outputs: Mutex::new(seed_tool_outputs),
-            tool_result_payload_summary_limit_chars,
-        }
-    }
-
-    async fn tool_outputs_snapshot(&self) -> Vec<String> {
-        self.tool_outputs.lock().await.clone()
-    }
-}
-
-#[async_trait]
-impl PlanNodeExecutor for SafeLanePlanNodeExecutor<'_> {
-    async fn execute(&self, node: &PlanNode, _attempt: u8) -> Result<(), PlanNodeError> {
-        match node.kind {
-            PlanNodeKind::Tool => {
-                let index = parse_tool_node_index(node.id.as_str())?;
-                let intent = self.tool_intents.get(index).ok_or_else(|| {
-                    PlanNodeError::non_retryable(format!(
-                        "missing tool intent for node `{}`",
-                        node.id
-                    ))
-                })?;
-                let output = execute_single_tool_intent(
-                    intent,
-                    self.session_context,
-                    self.app_dispatcher,
-                    self.binding,
-                    self.ingress,
-                    self.tool_result_payload_summary_limit_chars,
-                )
-                .await?;
-                self.tool_outputs.lock().await.push(output);
-                Ok(())
-            }
-            PlanNodeKind::Verify => {
-                if !self.verify_output_non_empty {
-                    return Ok(());
-                }
-                let outputs = self.tool_outputs.lock().await;
-                if outputs.is_empty() || outputs.iter().any(|line| line.trim().is_empty()) {
-                    return Err(PlanNodeError::non_retryable(
-                        "verify_failed:empty_tool_output".to_owned(),
-                    ));
-                }
-                Ok(())
-            }
-            PlanNodeKind::Transform | PlanNodeKind::Respond => Ok(()),
-        }
-    }
-}
-
-fn parse_tool_node_index(node_id: &str) -> Result<usize, PlanNodeError> {
-    let suffix = node_id
-        .strip_prefix("tool-")
-        .ok_or_else(|| PlanNodeError::non_retryable(format!("invalid tool node id `{node_id}`")))?;
-    let parsed = suffix.parse::<usize>().map_err(|error| {
-        PlanNodeError::non_retryable(format!("invalid tool node id `{node_id}`: {error}"))
-    })?;
-    if parsed == 0 {
-        return Err(PlanNodeError::non_retryable(format!(
-            "invalid tool node ordinal in `{node_id}`"
-        )));
-    }
-    Ok(parsed - 1)
-}
-
-async fn execute_single_tool_intent(
-    intent: &ToolIntent,
-    session_context: &SessionContext,
-    app_dispatcher: &dyn AppToolDispatcher,
-    binding: ConversationRuntimeBinding<'_>,
-    ingress: Option<&ConversationIngressContext>,
-    payload_summary_limit_chars: usize,
-) -> Result<String, PlanNodeError> {
-    let engine = TurnEngine::with_tool_result_payload_summary_limit(1, payload_summary_limit_chars);
-    let turn = ProviderTurn {
-        assistant_text: String::new(),
-        tool_intents: vec![intent.clone()],
-        raw_meta: Value::Null,
-    };
-
-    match engine
-        .execute_turn_in_context(&turn, session_context, app_dispatcher, binding, ingress)
-        .await
-    {
-        TurnResult::FinalText(output) => Ok(output),
-        TurnResult::StreamingText(text) => Ok(text),
-        TurnResult::StreamingDone(text) => Ok(text),
-        TurnResult::NeedsApproval(requirement) => Err(PlanNodeError::policy_denied(
-            format_approval_required_reply("", &requirement),
-        )),
-        TurnResult::ToolDenied(failure) => Err(PlanNodeError::policy_denied(failure.reason)),
-        TurnResult::ToolError(failure) => Err(PlanNodeError {
-            kind: match failure.kind {
-                TurnFailureKind::Retryable => PlanNodeErrorKind::Retryable,
-                TurnFailureKind::PolicyDenied
-                | TurnFailureKind::NonRetryable
-                | TurnFailureKind::Provider => PlanNodeErrorKind::NonRetryable,
-            },
-            message: failure.reason,
-        }),
-        TurnResult::ProviderError(failure) => Err(PlanNodeError {
-            kind: PlanNodeErrorKind::NonRetryable,
-            message: failure.reason,
-        }),
-    }
 }
 
 #[cfg(test)]
@@ -7646,6 +6892,7 @@ mod tests {
     async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsupported() {
         let mut config = LoongClawConfig::default();
         config.provider.kind = crate::config::ProviderKind::Openai;
+        config.provider.wire_api = crate::config::ProviderWireApi::Responses;
 
         let runtime = ObserverFallbackRuntime::default();
         let observer = Arc::new(RecordingTurnObserver::default());
@@ -10026,6 +9273,7 @@ mod tests {
             ProviderTurnLaneExecution {
                 lane: ExecutionLane::Safe,
                 assistant_preface: "preface".to_owned(),
+                provider_usage: None,
                 had_tool_intents: true,
                 tool_request_summary: None,
                 discovery_search_turn: false,
@@ -10248,6 +9496,7 @@ mod tests {
             ProviderTurnLaneExecution {
                 lane: ExecutionLane::Fast,
                 assistant_preface: "preface".to_owned(),
+                provider_usage: None,
                 had_tool_intents: false,
                 tool_request_summary: None,
                 discovery_search_turn: false,
@@ -10309,6 +9558,7 @@ mod tests {
 
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
             reply: "preface\nsafe lane terminal".to_owned(),
+            usage: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: Some(TurnCheckpointIdentity::from_turn(
                     "deploy to production",
@@ -10416,6 +9666,7 @@ mod tests {
     fn resolved_provider_turn_checkpoint_keeps_inline_provider_error_terminal_shape() {
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
             reply: "provider unavailable".to_owned(),
+            usage: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: Some(TurnCheckpointIdentity::from_turn(
                     "say hello",
@@ -10514,6 +9765,7 @@ mod tests {
         );
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
             reply: "done".to_owned(),
+            usage: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: Some(TurnCheckpointIdentity::from_turn("say hello", "done")),
                 preparation: ProviderTurnPreparation::from_assembled_context(

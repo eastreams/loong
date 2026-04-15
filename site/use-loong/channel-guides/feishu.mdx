@@ -1,0 +1,83 @@
+---
+title: Feishu/Lark
+description: Configure the Feishu/Lark channel surface in Loong.
+---
+
+# Feishu/Lark
+
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `feishu` |
+| Config key | `feishu` |
+| Implementation status | `runtime_backed` |
+| Transport | `feishu_openapi_webhook_or_websocket` |
+| Aliases | `lark` |
+| Default send target kind | `receive_id`, `message_reply` |
+
+## Minimal Config
+
+```toml
+[feishu]
+enabled = true
+domain = "lark"
+mode = "websocket"
+receive_id_type = "chat_id"
+app_id_env = "FEISHU_APP_ID"
+app_secret_env = "FEISHU_APP_SECRET"
+allowed_chat_ids = ["oc_ops_room"]
+```
+
+## Smoke Test
+
+```bash
+loong feishu-send --target "ou_xxxxxxxxxxxxx" --text "hello from loong"
+loong feishu-serve
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| direct send | `feishu-send` | Usage: loong feishu-send [OPTIONS] --target &lt;TARGET&gt; |
+| inbound reply service | `feishu-serve` | Usage: loong feishu-serve [OPTIONS] |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `feishu.enabled`<br/>`feishu.accounts.<account>.enabled` | none | none |
+| app id | `feishu.app_id`<br/>`feishu.accounts.<account>.app_id` | `feishu.app_id_env`<br/>`feishu.accounts.<account>.app_id_env` | `FEISHU_APP_ID` |
+| app secret | `feishu.app_secret`<br/>`feishu.accounts.<account>.app_secret` | `feishu.app_secret_env`<br/>`feishu.accounts.<account>.app_secret_env` | `FEISHU_APP_SECRET` |
+
+## Required Fields For Serve
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `feishu.enabled`<br/>`feishu.accounts.<account>.enabled` | none | none |
+| app id | `feishu.app_id`<br/>`feishu.accounts.<account>.app_id` | `feishu.app_id_env`<br/>`feishu.accounts.<account>.app_id_env` | `FEISHU_APP_ID` |
+| app secret | `feishu.app_secret`<br/>`feishu.accounts.<account>.app_secret` | `feishu.app_secret_env`<br/>`feishu.accounts.<account>.app_secret_env` | `FEISHU_APP_SECRET` |
+| serve mode | `feishu.mode`<br/>`feishu.accounts.<account>.mode` | none | none |
+| allowed chat ids | `feishu.allowed_chat_ids`<br/>`feishu.accounts.<account>.allowed_chat_ids` | none | none |
+| verification token (webhook mode only) | `feishu.verification_token`<br/>`feishu.accounts.<account>.verification_token` | `feishu.verification_token_env`<br/>`feishu.accounts.<account>.verification_token_env` | `FEISHU_VERIFICATION_TOKEN` |
+| encrypt key (webhook mode only) | `feishu.encrypt_key`<br/>`feishu.accounts.<account>.encrypt_key` | `feishu.encrypt_key_env`<br/>`feishu.accounts.<account>.encrypt_key_env` | `FEISHU_ENCRYPT_KEY` |
+
+## Gateway And Ownership
+
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+
+## Operator Notes
+
+- Webhook mode additionally needs `verification_token` and `encrypt_key`; websocket mode does not.
+- Use `allowed_chat_ids` as the trust boundary instead of treating it as a convenience filter.
+- Keep `domain = "lark"` for the Lark lane and `domain = "feishu"` for the Feishu lane; the runtime contract is the same family.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) when this surface needs longer-lived runtime ownership.

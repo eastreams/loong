@@ -71,7 +71,7 @@ pub(crate) use channels::{
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
-pub use feishu_integration::FeishuIntegrationConfig;
+pub use feishu_integration::{FeishuCapabilityConfig, FeishuIntegrationConfig};
 pub(crate) use irc::{
     IRC_NICKNAME_ENV, IRC_SERVER_ENV, IrcServerEndpoint, IrcServerTransport,
     parse_irc_server_endpoint,
@@ -108,10 +108,10 @@ pub use runtime::{
     PROVIDER_SELECTOR_COMPACT_NOTE, PROVIDER_SELECTOR_HUMAN_SUMMARY, PROVIDER_SELECTOR_NOTE,
     PROVIDER_SELECTOR_PLACEHOLDER, PROVIDER_SELECTOR_TARGET_SUMMARY, ProviderSelectorProfileRef,
     ProviderSelectorResolution, accepted_provider_selectors, default_config_path,
-    default_loongclaw_home, describe_provider_selector_target, load, normalize_validation_locale,
-    preferred_provider_selector, provider_selector_catalog, provider_selector_recommendation_hint,
-    render, resolve_provider_selector, supported_validation_locales, validate_file,
-    validate_file_with_locale, write, write_template,
+    default_loong_home, default_loongclaw_home, describe_provider_selector_target, load,
+    normalize_validation_locale, preferred_provider_selector, provider_selector_catalog,
+    provider_selector_recommendation_hint, render, resolve_provider_selector,
+    supported_validation_locales, validate_file, validate_file_with_locale, write, write_template,
 };
 pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
 pub(crate) use shared::ConfigValidationIssue;
@@ -122,6 +122,16 @@ pub use shared::{
     detect_invoked_cli_command_name_from_arg0, detect_legacy_home, expand_path,
     set_active_cli_command_name,
 };
+pub(crate) use shared::{
+    pop_default_loongclaw_home_env_override_for_tests,
+    push_default_loongclaw_home_env_override_for_tests,
+};
+#[cfg(test)]
+pub(crate) use shared::{
+    pop_default_loongclaw_home_override_for_tests, push_default_loongclaw_home_override_for_tests,
+};
+
+pub type LoongConfig = LoongClawConfig;
 #[allow(unused_imports)]
 pub use tools::{
     AUTONOMY_PROFILE_VALID_VALUES, AutonomyProfile, BrowserCompanionToolConfig, BrowserToolConfig,
@@ -159,7 +169,7 @@ mod tests {
     use loongclaw_contracts::SecretRef;
 
     use super::*;
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
     use std::collections::BTreeSet;
 
     fn clear_config_test_secret_envs(env: &mut ScopedEnv) {
@@ -911,6 +921,7 @@ mod tests {
             Some(std::path::PathBuf::from(":memory:"))
         );
 
+        let _home = ScopedLoongClawHome::new("loongclaw-provider-profile-home");
         let profile_sqlite_default = ProviderConfig::default();
         let expected_default = default_loongclaw_home().join("provider-profile-state.sqlite3");
         assert_eq!(

@@ -1,0 +1,80 @@
+---
+title: WhatsApp
+description: Configure the WhatsApp channel surface in Loong.
+---
+
+# WhatsApp
+
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `whatsapp` |
+| Config key | `whatsapp` |
+| Implementation status | `runtime_backed` |
+| Transport | `whatsapp_cloud_api` |
+| Aliases | `wa`, `whatsapp-cloud` |
+| Default send target kind | `address` |
+
+## Minimal Config
+
+```toml
+[whatsapp]
+enabled = true
+webhook_bind = "127.0.0.1:8080"
+webhook_path = "/whatsapp/webhook"
+access_token_env = "WHATSAPP_ACCESS_TOKEN"
+phone_number_id_env = "WHATSAPP_PHONE_NUMBER_ID"
+verify_token_env = "WHATSAPP_VERIFY_TOKEN"
+app_secret_env = "WHATSAPP_APP_SECRET"
+```
+
+## Smoke Test
+
+```bash
+loong whatsapp-send --target "+15551234567" --text "hello from loong"
+loong whatsapp-serve
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| business send | `whatsapp-send` | Usage: loong whatsapp-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| cloud webhook service | `whatsapp-serve` | Usage: loong whatsapp-serve [OPTIONS] |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `whatsapp.enabled`<br/>`whatsapp.accounts.<account>.enabled` | none | none |
+| cloud api access token | `whatsapp.access_token`<br/>`whatsapp.accounts.<account>.access_token` | `whatsapp.access_token_env`<br/>`whatsapp.accounts.<account>.access_token_env` | `WHATSAPP_ACCESS_TOKEN` |
+| phone number id | `whatsapp.phone_number_id`<br/>`whatsapp.accounts.<account>.phone_number_id` | `whatsapp.phone_number_id_env`<br/>`whatsapp.accounts.<account>.phone_number_id_env` | `WHATSAPP_PHONE_NUMBER_ID` |
+
+## Required Fields For Serve
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `whatsapp.enabled`<br/>`whatsapp.accounts.<account>.enabled` | none | none |
+| cloud api access token | `whatsapp.access_token`<br/>`whatsapp.accounts.<account>.access_token` | `whatsapp.access_token_env`<br/>`whatsapp.accounts.<account>.access_token_env` | `WHATSAPP_ACCESS_TOKEN` |
+| phone number id | `whatsapp.phone_number_id`<br/>`whatsapp.accounts.<account>.phone_number_id` | `whatsapp.phone_number_id_env`<br/>`whatsapp.accounts.<account>.phone_number_id_env` | `WHATSAPP_PHONE_NUMBER_ID` |
+| webhook verify token | `whatsapp.verify_token`<br/>`whatsapp.accounts.<account>.verify_token` | `whatsapp.verify_token_env`<br/>`whatsapp.accounts.<account>.verify_token_env` | `WHATSAPP_VERIFY_TOKEN` |
+| meta app secret | `whatsapp.app_secret`<br/>`whatsapp.accounts.<account>.app_secret` | `whatsapp.app_secret_env`<br/>`whatsapp.accounts.<account>.app_secret_env` | `WHATSAPP_APP_SECRET` |
+
+## Gateway And Ownership
+
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+
+## Operator Notes
+
+- WhatsApp is currently a real runtime-backed surface: outbound sends are shipped and the webhook reply service is also implemented.
+- Serve mode needs `verify_token` and `app_secret` in addition to the Cloud API access token and phone number id.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) when this surface needs longer-lived runtime ownership.

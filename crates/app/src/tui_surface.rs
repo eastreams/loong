@@ -605,10 +605,8 @@ mod tests {
         let lines = render_tui_screen_spec(&spec, 80, false);
 
         assert!(
-            lines
-                .first()
-                .is_some_and(|line| line.starts_with("LOONGCLAW")),
-            "compact header should keep the LOONGCLAW wordmark: {lines:#?}"
+            lines.first().is_some_and(|line| line.starts_with("LOONG")),
+            "compact header should keep the LOONG wordmark: {lines:#?}"
         );
         assert!(
             lines

@@ -1,20 +1,13 @@
-use std::collections::BTreeMap;
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::pin::Pin;
-use std::str::from_utf8;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use bytes::Bytes;
 use futures_util::Stream;
-use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::time::sleep;
 
-use crate::CliResult;
-use crate::acp::AcpTurnEventSink;
 use crate::config::ProviderAuthScheme;
 use crate::config::ProviderConfig;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
@@ -23,17 +16,20 @@ use super::{
     auth_profile_runtime::ProviderAuthProfile,
     contracts::{
         CompletionPayloadMode, ProviderApiError, ProviderCapabilityContract,
-        ProviderRuntimeContract, adapt_payload_mode_for_error, parse_provider_api_error,
+        ProviderRuntimeContract, ProviderTransportMode, adapt_payload_mode_for_error,
+        parse_provider_api_error,
     },
     failover::{
-        ModelRequestError, ProviderFailoverReason, ProviderFailoverStage, build_model_request_error,
+        ModelRequestError, ProviderFailoverReason, ProviderFailoverStage,
+        build_model_request_error, build_model_request_error_with_rate_limit,
     },
     policy,
     request_planner::{
         ModelRequestStatusPlan, classify_model_status_failure_reason_with_capability,
         plan_model_request_status_with_capability, plan_transport_error_retry,
     },
-    transport::{self, RequestExecutionError},
+    transport,
+    transport_trait::{ProviderTransport, TransportEventStream, TransportStream},
 };
 
 pub(super) struct ModelRequestRuntime<'a> {
@@ -47,7 +43,7 @@ pub(super) struct ModelRequestRuntime<'a> {
     pub(super) endpoint: &'a str,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a policy::ProviderRequestPolicy,
-    pub(super) client: &'a reqwest::Client,
+    pub(super) transport: &'a dyn ProviderTransport,
     pub(super) auth_context: &'a transport::RequestAuthContext,
 }
 
@@ -62,7 +58,7 @@ pub(super) struct StreamingModelRequestRuntime<'a> {
     pub(super) endpoint: &'a str,
     pub(super) headers: &'a reqwest::header::HeaderMap,
     pub(super) request_policy: &'a policy::ProviderRequestPolicy,
-    pub(super) client: &'a reqwest::Client,
+    pub(super) transport: &'a dyn ProviderTransport,
     pub(super) auth_context: &'a transport::RequestAuthContext,
 }
 
@@ -219,85 +215,38 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(
-            &mut headers,
+        let request = transport::build_transport_request(
+            reqwest::Method::POST,
+            request_endpoint.clone(),
+            headers,
+            body_bytes,
             Some(runtime.auth_profile),
             runtime.request_auth_scheme,
         )
-        .map_err(
-            |error| {
-                build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                        model = runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                )
-            },
-        )?;
-        let req = runtime
-            .client
-            .post(request_endpoint.as_str())
-            .headers(headers)
-            .body(body_bytes.clone())
-            .build()
-            .map_err(|error| {
-                build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                        model = runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                )
-            })?;
+        .map_err(|error| {
+            build_model_request_error(
+                format!(
+                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                    model = runtime.model,
+                    max_attempts = runtime.request_policy.max_attempts
+                ),
+                false,
+                ProviderFailoverReason::TransportFailure,
+                ProviderFailoverStage::TransportFailure,
+                runtime.model,
+                attempt,
+                runtime.request_policy.max_attempts,
+                None,
+                None,
+            )
+        })?;
 
-        match transport::execute_request(
-            runtime.client,
-            req,
-            Some(body_bytes.as_slice()),
-            runtime.auth_context,
-            Some(transport::BedrockService::Runtime),
-        )
-        .await
-        {
+        match runtime.transport.execute(request).await {
             Ok(response) => {
-                let status = response.status();
-                let response_headers = response.headers().clone();
-                let response_body = transport::decode_response_body(response)
-                    .await
-                    .map_err(|error| {
-                        build_model_request_error(
-                            format!(
-                                "provider response decode failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                                model = runtime.model,
-                                max_attempts = runtime.request_policy.max_attempts
-                            ),
-                            false,
-                            ProviderFailoverReason::ResponseDecodeFailure,
-                            ProviderFailoverStage::ResponseDecode,
-                            runtime.model,
-                            attempt,
-                            runtime.request_policy.max_attempts,
-                            None,
-                            None,
-                        )
-                    })?;
+                let status = response.status;
+                let response_headers = response.headers;
+                let response_body = response.body;
+                let response_rate_limit = response.rate_limit;
 
                 if status.is_success() {
                     let parsed = parse_success(&response_body).ok_or_else(|| {
@@ -373,7 +322,7 @@ where
                         ));
                     }
                     ModelStatusOutcome::Fail { reason } => {
-                        return Err(build_model_request_error(
+                        return Err(build_model_request_error_with_rate_limit(
                             render_status_failure_message(
                                 runtime.provider,
                                 reason,
@@ -391,11 +340,12 @@ where
                             runtime.request_policy.max_attempts,
                             Some(status_code),
                             Some(api_error.clone()),
+                            response_rate_limit,
                         ));
                     }
                 }
             }
-            Err(transport::RequestExecutionError::Transport(error)) => {
+            Err(error) => {
                 if let Some((retry_delay_ms, next_backoff_ms)) =
                     plan_transport_error_retry(attempt, runtime.request_policy, &error, backoff_ms)
                 {
@@ -404,344 +354,45 @@ where
                     continue;
                 }
                 let error_message = error.to_string();
-                let mut message = format!(
-                    "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
-                    runtime.model,
-                    max_attempts = runtime.request_policy.max_attempts
-                );
-                if let Some(route_hint) = transport::render_transport_route_hint(
-                    request_endpoint.as_str(),
-                    error_message.as_str(),
-                    error.is_timeout(),
-                    error.is_connect(),
-                ) {
+                let mut message = match error.reason() {
+                    ProviderFailoverReason::ResponseDecodeFailure => format!(
+                        "provider response decode failed for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
+                        runtime.model,
+                        max_attempts = runtime.request_policy.max_attempts
+                    ),
+                    ProviderFailoverReason::ResponseShapeInvalid => format!(
+                        "provider response shape invalid for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
+                        runtime.model,
+                        max_attempts = runtime.request_policy.max_attempts
+                    ),
+                    ProviderFailoverReason::ModelMismatch
+                    | ProviderFailoverReason::RateLimited
+                    | ProviderFailoverReason::ProviderOverloaded
+                    | ProviderFailoverReason::AuthRejected
+                    | ProviderFailoverReason::PayloadIncompatible
+                    | ProviderFailoverReason::TransportFailure
+                    | ProviderFailoverReason::RequestRejected => format!(
+                        "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
+                        runtime.model,
+                        max_attempts = runtime.request_policy.max_attempts
+                    ),
+                };
+                if error.reason() == ProviderFailoverReason::TransportFailure
+                    && let Some(route_hint) = transport::render_transport_route_hint(
+                        request_endpoint.as_str(),
+                        error_message.as_str(),
+                        error.is_timeout(),
+                        error.is_connect(),
+                    )
+                {
                     message.push(' ');
                     message.push_str(route_hint.as_str());
                 }
                 return Err(build_model_request_error(
                     message,
                     false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                ));
-            }
-            Err(transport::RequestExecutionError::Setup(error)) => {
-                return Err(build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{}` on attempt {attempt}/{max_attempts}: {error}",
-                        runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                ));
-            }
-        }
-    }
-}
-
-pub(super) async fn execute_openai_streaming_turn_request<BuildBody>(
-    runtime: ModelRequestRuntime<'_>,
-    mut build_body: BuildBody,
-    messages: &[Value],
-    session_id: &str,
-    turn_id: &str,
-    event_sink: &dyn AcpTurnEventSink,
-) -> Result<ProviderTurn, ModelRequestError>
-where
-    BuildBody: FnMut(CompletionPayloadMode) -> Value,
-{
-    let mut attempt = 0usize;
-    let mut backoff_ms = runtime.request_policy.initial_backoff_ms;
-    let mut payload_mode =
-        CompletionPayloadMode::default_for_contract(runtime.provider, runtime.runtime_contract);
-    let mut tried_payload_modes = vec![payload_mode];
-
-    loop {
-        attempt += 1;
-        let mut body = build_body(payload_mode);
-        force_stream_flag(&mut body);
-        let request_endpoint =
-            transport::resolve_request_endpoint(runtime.provider, runtime.endpoint, runtime.model);
-        let request_endpoint = transport::resolve_request_url(
-            runtime.provider,
-            request_endpoint.as_str(),
-            runtime.auth_context,
-        )
-        .map_err(|error| {
-            build_model_request_error(
-                format!(
-                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                    model = runtime.model,
-                    max_attempts = runtime.request_policy.max_attempts
-                ),
-                false,
-                ProviderFailoverReason::TransportFailure,
-                ProviderFailoverStage::TransportFailure,
-                runtime.model,
-                attempt,
-                runtime.request_policy.max_attempts,
-                None,
-                None,
-            )
-        })?;
-        let body_bytes = transport::encode_json_request_body(&body).map_err(|error| {
-            build_model_request_error(
-                format!(
-                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                    model = runtime.model,
-                    max_attempts = runtime.request_policy.max_attempts
-                ),
-                false,
-                ProviderFailoverReason::TransportFailure,
-                ProviderFailoverStage::TransportFailure,
-                runtime.model,
-                attempt,
-                runtime.request_policy.max_attempts,
-                None,
-                None,
-            )
-        })?;
-        let mut headers = runtime.headers.clone();
-        transport::apply_json_request_defaults(&mut headers).map_err(|error| {
-            build_model_request_error(
-                format!(
-                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                    model = runtime.model,
-                    max_attempts = runtime.request_policy.max_attempts
-                ),
-                false,
-                ProviderFailoverReason::TransportFailure,
-                ProviderFailoverStage::TransportFailure,
-                runtime.model,
-                attempt,
-                runtime.request_policy.max_attempts,
-                None,
-                None,
-            )
-        })?;
-        transport::apply_auth_profile_headers(
-            &mut headers,
-            Some(runtime.auth_profile),
-            runtime.request_auth_scheme,
-        )
-        .map_err(|error| {
-            build_model_request_error(
-                format!(
-                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                    model = runtime.model,
-                    max_attempts = runtime.request_policy.max_attempts
-                ),
-                false,
-                ProviderFailoverReason::TransportFailure,
-                ProviderFailoverStage::TransportFailure,
-                runtime.model,
-                attempt,
-                runtime.request_policy.max_attempts,
-                None,
-                None,
-            )
-        })?;
-        let req = runtime
-            .client
-            .post(request_endpoint.as_str())
-            .headers(headers)
-            .body(body_bytes.clone())
-            .build()
-            .map_err(|error| {
-                build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                        model = runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                )
-            })?;
-
-        match transport::execute_request(
-            runtime.client,
-            req,
-            Some(body_bytes.as_slice()),
-            runtime.auth_context,
-            Some(transport::BedrockService::Runtime),
-        )
-        .await
-        {
-            Ok(response) => {
-                let status = response.status();
-                let response_headers = response.headers().clone();
-                if status.is_success() {
-                    match decode_openai_streaming_turn(
-                        response, messages, session_id, turn_id, event_sink,
-                    )
-                    .await
-                    {
-                        Ok(turn) => return Ok(turn),
-                        Err(error) => {
-                            return Err(build_model_request_error(
-                                format!(
-                                    "provider streaming decode failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                                    model = runtime.model,
-                                    max_attempts = runtime.request_policy.max_attempts
-                                ),
-                                false,
-                                ProviderFailoverReason::ResponseDecodeFailure,
-                                ProviderFailoverStage::ResponseDecode,
-                                runtime.model,
-                                attempt,
-                                runtime.request_policy.max_attempts,
-                                None,
-                                None,
-                            ));
-                        }
-                    }
-                }
-
-                let response_body = transport::decode_response_body(response)
-                    .await
-                    .map_err(|error| {
-                        build_model_request_error(
-                            format!(
-                                "provider response decode failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                                model = runtime.model,
-                                max_attempts = runtime.request_policy.max_attempts
-                            ),
-                            false,
-                            ProviderFailoverReason::ResponseDecodeFailure,
-                            ProviderFailoverStage::ResponseDecode,
-                            runtime.model,
-                            attempt,
-                            runtime.request_policy.max_attempts,
-                            None,
-                            None,
-                        )
-                    })?;
-
-                let api_error = parse_provider_api_error(&response_body);
-                if let Some(next_mode) = adapt_payload_mode_for_error(
-                    payload_mode,
-                    runtime.provider,
-                    runtime.runtime_contract,
-                    &api_error,
-                ) && !tried_payload_modes.contains(&next_mode)
-                {
-                    payload_mode = next_mode;
-                    tried_payload_modes.push(next_mode);
-                    continue;
-                }
-
-                let status_code = status.as_u16();
-                match plan_model_status_outcome(
-                    status_code,
-                    &response_headers,
-                    &api_error,
-                    attempt,
-                    runtime.request_policy,
-                    backoff_ms,
-                    runtime.auto_model_mode,
-                    runtime.runtime_contract,
-                    runtime.capability,
-                ) {
-                    ModelStatusOutcome::Retry {
-                        delay_ms,
-                        next_backoff_ms,
-                    } => {
-                        sleep(Duration::from_millis(delay_ms)).await;
-                        backoff_ms = next_backoff_ms;
-                        continue;
-                    }
-                    ModelStatusOutcome::TryNextModel => {
-                        return Err(build_model_request_error(
-                            format!(
-                                "model `{}` rejected by provider endpoint; trying next candidate. status {status_code}: {response_body}",
-                                runtime.model
-                            ),
-                            true,
-                            ProviderFailoverReason::ModelMismatch,
-                            ProviderFailoverStage::ModelCandidateRejected,
-                            runtime.model,
-                            attempt,
-                            runtime.request_policy.max_attempts,
-                            Some(status_code),
-                            Some(api_error.clone()),
-                        ));
-                    }
-                    ModelStatusOutcome::Fail { reason } => {
-                        return Err(build_model_request_error(
-                            render_status_failure_message(
-                                runtime.provider,
-                                reason,
-                                status_code,
-                                runtime.model,
-                                attempt,
-                                runtime.request_policy.max_attempts,
-                                &response_body,
-                            ),
-                            false,
-                            reason,
-                            ProviderFailoverStage::StatusFailure,
-                            runtime.model,
-                            attempt,
-                            runtime.request_policy.max_attempts,
-                            Some(status_code),
-                            Some(api_error.clone()),
-                        ));
-                    }
-                }
-            }
-            Err(transport::RequestExecutionError::Transport(error)) => {
-                if let Some((retry_delay_ms, next_backoff_ms)) =
-                    plan_transport_error_retry(attempt, runtime.request_policy, &error, backoff_ms)
-                {
-                    sleep(Duration::from_millis(retry_delay_ms)).await;
-                    backoff_ms = next_backoff_ms;
-                    continue;
-                }
-                return Err(build_model_request_error(
-                    format!(
-                        "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error}",
-                        runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                ));
-            }
-            Err(transport::RequestExecutionError::Setup(error)) => {
-                return Err(build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{}` on attempt {attempt}/{max_attempts}: {error}",
-                        runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
+                    error.reason(),
+                    error.stage(),
                     runtime.model,
                     attempt,
                     runtime.request_policy.max_attempts,
@@ -831,92 +482,42 @@ where
                 None,
             )
         })?;
-        transport::apply_auth_profile_headers(
-            &mut headers,
+        let request = transport::build_transport_request(
+            reqwest::Method::POST,
+            request_endpoint.clone(),
+            headers,
+            body_bytes,
             Some(runtime.auth_profile),
             runtime.request_auth_scheme,
         )
-        .map_err(
-            |error| {
-                build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                        model = runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                )
-            },
-        )?;
-        let req = runtime
-            .client
-            .post(request_endpoint.as_str())
-            .headers(headers)
-            .body(body_bytes.clone())
-            .build()
-            .map_err(|error| {
-                build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                        model = runtime.model,
-                        max_attempts = runtime.request_policy.max_attempts
-                    ),
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                )
-            })?;
+        .map_err(|error| {
+            build_model_request_error(
+                format!(
+                    "provider request setup failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
+                    model = runtime.model,
+                    max_attempts = runtime.request_policy.max_attempts
+                ),
+                false,
+                ProviderFailoverReason::TransportFailure,
+                ProviderFailoverStage::TransportFailure,
+                runtime.model,
+                attempt,
+                runtime.request_policy.max_attempts,
+                None,
+                None,
+            )
+        })?;
 
-        match transport::execute_request(
-            runtime.client,
-            req,
-            Some(body_bytes.as_slice()),
-            runtime.auth_context,
-            Some(transport::BedrockService::Runtime),
-        )
-        .await
-        {
-            Ok(response) => {
-                let status = response.status();
-                let response_headers = response.headers().clone();
-
-                if status.is_success() {
-                    let byte_stream = transport::decode_streaming_response(response);
-                    let stream = SseByteStreamParser::new(Box::pin(byte_stream), parse_stream_item);
-                    return Ok(stream);
-                }
-
-                let response_body = transport::decode_response_body(response)
-                    .await
-                    .map_err(|error| {
-                        build_model_request_error(
-                            format!(
-                                "provider response decode failed for model `{model}` on attempt {attempt}/{max_attempts}: {error}",
-                                model = runtime.model,
-                                max_attempts = runtime.request_policy.max_attempts
-                            ),
-                            false,
-                            ProviderFailoverReason::ResponseDecodeFailure,
-                            ProviderFailoverStage::ResponseDecode,
-                            runtime.model,
-                            attempt,
-                            runtime.request_policy.max_attempts,
-                            None,
-                            None,
-                        )
-                    })?;
+        match runtime.transport.stream(request).await {
+            Ok(TransportStream::Events { events }) => {
+                let stream = ParsedTransportStream::new(events, parse_stream_item);
+                return Ok(stream);
+            }
+            Ok(TransportStream::Response(response)) => {
+                let status = response.status;
+                let response_headers = response.headers;
+                let response_body = response.body;
+                let response_rate_limit = response.rate_limit;
 
                 let api_error = parse_provider_api_error(&response_body);
                 if let Some(next_mode) = adapt_payload_mode_for_error(
@@ -968,7 +569,7 @@ where
                         ));
                     }
                     ModelStatusOutcome::Fail { reason } => {
-                        return Err(build_model_request_error(
+                        return Err(build_model_request_error_with_rate_limit(
                             render_status_failure_message(
                                 runtime.provider,
                                 reason,
@@ -986,11 +587,12 @@ where
                             runtime.request_policy.max_attempts,
                             Some(status_code),
                             Some(api_error.clone()),
+                            response_rate_limit,
                         ));
                     }
                 }
             }
-            Err(transport::RequestExecutionError::Transport(error)) => {
+            Err(error) => {
                 if let Some((retry_delay_ms, next_backoff_ms)) =
                     plan_transport_error_retry(attempt, runtime.request_policy, &error, backoff_ms)
                 {
@@ -999,42 +601,46 @@ where
                     continue;
                 }
                 let error_message = error.to_string();
-                let mut message = format!(
-                    "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
-                    runtime.model,
-                    max_attempts = runtime.request_policy.max_attempts
-                );
-                if let Some(route_hint) = transport::render_transport_route_hint(
-                    request_endpoint.as_str(),
-                    error_message.as_str(),
-                    error.is_timeout(),
-                    error.is_connect(),
-                ) {
-                    message.push(' ');
-                    message.push_str(route_hint.as_str());
-                }
-                return Err(build_model_request_error(
-                    message,
-                    false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
-                    runtime.model,
-                    attempt,
-                    runtime.request_policy.max_attempts,
-                    None,
-                    None,
-                ));
-            }
-            Err(transport::RequestExecutionError::Setup(error)) => {
-                return Err(build_model_request_error(
-                    format!(
-                        "provider request setup failed for model `{}` on attempt {attempt}/{max_attempts}: {error}",
+                let message = match error.reason() {
+                    ProviderFailoverReason::ResponseDecodeFailure => format!(
+                        "provider response decode failed for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
                         runtime.model,
                         max_attempts = runtime.request_policy.max_attempts
                     ),
+                    ProviderFailoverReason::ResponseShapeInvalid => format!(
+                        "provider response shape invalid for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
+                        runtime.model,
+                        max_attempts = runtime.request_policy.max_attempts
+                    ),
+                    ProviderFailoverReason::ModelMismatch
+                    | ProviderFailoverReason::RateLimited
+                    | ProviderFailoverReason::ProviderOverloaded
+                    | ProviderFailoverReason::AuthRejected
+                    | ProviderFailoverReason::PayloadIncompatible
+                    | ProviderFailoverReason::TransportFailure
+                    | ProviderFailoverReason::RequestRejected => {
+                        let mut message = format!(
+                            "provider request failed for model `{}` on attempt {attempt}/{max_attempts}: {error_message}",
+                            runtime.model,
+                            max_attempts = runtime.request_policy.max_attempts
+                        );
+                        if let Some(route_hint) = transport::render_transport_route_hint(
+                            request_endpoint.as_str(),
+                            error_message.as_str(),
+                            error.is_timeout(),
+                            error.is_connect(),
+                        ) {
+                            message.push(' ');
+                            message.push_str(route_hint.as_str());
+                        }
+                        message
+                    }
+                };
+                return Err(build_model_request_error(
+                    message,
                     false,
-                    ProviderFailoverReason::TransportFailure,
-                    ProviderFailoverStage::TransportFailure,
+                    error.reason(),
+                    error.stage(),
                     runtime.model,
                     attempt,
                     runtime.request_policy.max_attempts,
@@ -1046,35 +652,26 @@ where
     }
 }
 
-struct SseByteStreamParser<T, ParseStreamItem> {
-    byte_stream: Pin<Box<dyn Stream<Item = Result<Bytes, RequestExecutionError>> + Send>>,
+struct ParsedTransportStream<T, ParseStreamItem> {
+    event_stream: TransportEventStream,
     parse_stream_item: ParseStreamItem,
-    line_buffer: Vec<u8>,
-    event_type: Option<String>,
     pending: VecDeque<Result<T, ModelRequestError>>,
-    _phantom: PhantomData<T>,
 }
 
-impl<T, ParseStreamItem> SseByteStreamParser<T, ParseStreamItem>
+impl<T, ParseStreamItem> ParsedTransportStream<T, ParseStreamItem>
 where
     ParseStreamItem: FnMut(Value) -> Option<T>,
 {
-    fn new(
-        byte_stream: Pin<Box<dyn Stream<Item = Result<Bytes, RequestExecutionError>> + Send>>,
-        parse_stream_item: ParseStreamItem,
-    ) -> Self {
+    fn new(event_stream: TransportEventStream, parse_stream_item: ParseStreamItem) -> Self {
         Self {
-            byte_stream,
+            event_stream,
             parse_stream_item,
-            line_buffer: Vec::new(),
-            event_type: None,
             pending: VecDeque::new(),
-            _phantom: PhantomData,
         }
     }
 }
 
-impl<T, ParseStreamItem> Stream for SseByteStreamParser<T, ParseStreamItem>
+impl<T, ParseStreamItem> Stream for ParsedTransportStream<T, ParseStreamItem>
 where
     T: Unpin,
     ParseStreamItem: FnMut(Value) -> Option<T> + Unpin,
@@ -1087,101 +684,24 @@ where
             if let Some(item) = this.pending.pop_front() {
                 return Poll::Ready(Some(item));
             }
-            match this.byte_stream.as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok(bytes))) => {
-                    for byte in bytes {
-                        if byte == b'\n' {
-                            let line = std::mem::take(&mut this.line_buffer);
-                            let line_str = match from_utf8(&line) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    this.pending.push_back(Err(build_model_request_error(
-                                        format!("invalid UTF-8 in SSE stream: {e}"),
-                                        false,
-                                        ProviderFailoverReason::ResponseShapeInvalid,
-                                        ProviderFailoverStage::ResponseDecode,
-                                        "",
-                                        1,
-                                        1,
-                                        None,
-                                        None,
-                                    )));
-                                    continue;
-                                }
-                            };
-                            let parsed_line = transport::parse_sse_line(line_str);
-                            match parsed_line {
-                                transport::SseLine::EventType { name } => {
-                                    this.event_type = Some(name);
-                                }
-                                transport::SseLine::Data { content } => {
-                                    let current_event_type = this.event_type.take();
-                                    if !content.is_empty() {
-                                        match transport::SseStreamEvent::from_sse_lines(
-                                            current_event_type,
-                                            &[content],
-                                        ) {
-                                            Ok(Some(event)) => match event {
-                                                transport::SseStreamEvent::Message {
-                                                    data, ..
-                                                } => {
-                                                    let parse_fn = &mut this.parse_stream_item;
-                                                    if let Some(item) = parse_fn(data) {
-                                                        this.pending.push_back(Ok(item));
-                                                    }
-                                                }
-                                                transport::SseStreamEvent::Error { message } => {
-                                                    this.pending.push_back(Err(build_model_request_error(
-                                                        message,
-                                                        false,
-                                                        ProviderFailoverReason::ResponseShapeInvalid,
-                                                        ProviderFailoverStage::ResponseDecode,
-                                                        "",
-                                                        1,
-                                                        1,
-                                                        None,
-                                                        None,
-                                                    )));
-                                                }
-                                                transport::SseStreamEvent::Done => {
-                                                    return Poll::Ready(None);
-                                                }
-                                            },
-                                            Ok(None) => {}
-                                            Err(error) => {
-                                                this.pending
-                                                    .push_back(Err(build_model_request_error(
-                                                    format!(
-                                                        "streaming event parse failed: {error}"
-                                                    ),
-                                                    false,
-                                                    ProviderFailoverReason::ResponseShapeInvalid,
-                                                    ProviderFailoverStage::ResponseDecode,
-                                                    "",
-                                                    1,
-                                                    1,
-                                                    None,
-                                                    None,
-                                                )));
-                                            }
-                                        }
-                                    }
-                                }
-                                transport::SseLine::Empty => {}
-                                transport::SseLine::Comment => {}
-                                transport::SseLine::Retry { .. } => {}
-                            }
-                        } else if byte != b'\r' {
-                            this.line_buffer.push(byte);
-                        }
+            match this.event_stream.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(data))) => {
+                    let parse_fn = &mut this.parse_stream_item;
+                    if let Some(item) = parse_fn(data) {
+                        this.pending.push_back(Ok(item));
                     }
                 }
-                Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Some(Err(error))) => {
+                    let message = if error.reason() == ProviderFailoverReason::TransportFailure {
+                        format!("streaming response error: {error}")
+                    } else {
+                        error.to_string()
+                    };
                     return Poll::Ready(Some(Err(build_model_request_error(
-                        format!("streaming response error: {:?}", e),
+                        message,
                         false,
-                        ProviderFailoverReason::TransportFailure,
-                        ProviderFailoverStage::TransportFailure,
+                        error.reason(),
+                        error.stage(),
                         "",
                         1,
                         1,
@@ -1200,181 +720,6 @@ where
     }
 }
 
-fn force_stream_flag(body: &mut Value) {
-    if let Some(object) = body.as_object_mut() {
-        object.insert("stream".to_owned(), Value::Bool(true));
-    }
-}
-
-#[derive(Default)]
-struct PartialToolCall {
-    id: Option<String>,
-    name: String,
-    arguments: String,
-}
-
-async fn decode_openai_streaming_turn(
-    response: reqwest::Response,
-    messages: &[Value],
-    session_id: &str,
-    turn_id: &str,
-    event_sink: &dyn AcpTurnEventSink,
-) -> CliResult<ProviderTurn> {
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-
-    if !content_type.contains("text/event-stream") {
-        let body = transport::decode_response_body(response).await?;
-        return super::shape::extract_provider_turn_with_scope_and_messages(
-            &body,
-            Some(session_id),
-            Some(turn_id),
-            messages,
-        )
-        .ok_or_else(|| "provider response missing choices[0].message".to_owned());
-    }
-
-    let mut assistant_text = String::new();
-    let mut tool_calls: BTreeMap<usize, PartialToolCall> = BTreeMap::new();
-    let mut done_received = false;
-    let mut pending = String::new();
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|error| format!("read streaming response chunk failed: {error}"))?;
-        pending.push_str(String::from_utf8_lossy(&chunk).as_ref());
-
-        while let Some(newline_index) = pending.find('\n') {
-            let line = pending[..newline_index].trim_end_matches('\r').to_owned();
-            pending.drain(..=newline_index);
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with(':') {
-                continue;
-            }
-            let Some(payload) = trimmed.strip_prefix("data:") else {
-                continue;
-            };
-            let payload = payload.trim();
-            if payload == "[DONE]" {
-                done_received = true;
-                continue;
-            }
-
-            let event: Value = serde_json::from_str(payload).map_err(|error| {
-                format!("decode streaming event failed: {error}; payload={payload}")
-            })?;
-            let Some(choice) = event
-                .get("choices")
-                .and_then(Value::as_array)
-                .and_then(|choices| choices.first())
-            else {
-                continue;
-            };
-
-            if let Some(delta) = choice.get("delta") {
-                if let Some(content) = delta.get("content").and_then(Value::as_str)
-                    && !content.is_empty()
-                {
-                    assistant_text.push_str(content);
-                    event_sink.on_event(&serde_json::json!({
-                        "type": "text",
-                        "content": content,
-                    }))?;
-                }
-
-                if let Some(tool_call_deltas) = delta.get("tool_calls").and_then(Value::as_array) {
-                    for tool_call_delta in tool_call_deltas {
-                        let index = tool_call_delta
-                            .get("index")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(tool_calls.len() as u64)
-                            as usize;
-                        let partial = tool_calls.entry(index).or_default();
-                        if partial.id.is_none() {
-                            partial.id = tool_call_delta
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .map(ToOwned::to_owned);
-                        }
-                        if let Some(function) = tool_call_delta.get("function") {
-                            if let Some(name) = function.get("name").and_then(Value::as_str) {
-                                partial.name.push_str(name);
-                            }
-                            if let Some(arguments) =
-                                function.get("arguments").and_then(Value::as_str)
-                            {
-                                partial.arguments.push_str(arguments);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if !pending.trim().is_empty() {
-        let trimmed = pending.trim();
-        if let Some(payload) = trimmed.strip_prefix("data:") {
-            let payload = payload.trim();
-            if payload != "[DONE]" {
-                let _event: Value = serde_json::from_str(payload).map_err(|error| {
-                    format!("decode trailing streaming event failed: {error}; payload={payload}")
-                })?;
-            } else {
-                done_received = true;
-            }
-        }
-    }
-
-    if !done_received && assistant_text.is_empty() && tool_calls.is_empty() {
-        return Err("stream completed without any assistant deltas".to_owned());
-    }
-
-    let tool_calls = tool_calls
-        .into_iter()
-        .map(|(index, partial)| {
-            serde_json::json!({
-                "index": index,
-                "id": partial.id.unwrap_or_else(|| format!("call_{index}")),
-                "type": "function",
-                "function": {
-                    "name": partial.name,
-                    "arguments": partial.arguments,
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let mut message = serde_json::json!({
-        "role": "assistant",
-        "content": assistant_text,
-    });
-    if !tool_calls.is_empty()
-        && let Some(object) = message.as_object_mut()
-    {
-        object.insert("tool_calls".to_owned(), Value::Array(tool_calls));
-    }
-
-    let body = serde_json::json!({
-        "choices": [{
-            "message": message
-        }]
-    });
-
-    super::shape::extract_provider_turn_with_scope_and_messages(
-        &body,
-        Some(session_id),
-        Some(turn_id),
-        messages,
-    )
-    .ok_or_else(|| "provider stream missing reconstructable assistant message".to_owned())
-}
-
 #[allow(clippy::result_large_err)]
 pub(super) async fn execute_streaming_turn_request<PreStatusError>(
     runtime: StreamingModelRequestRuntime<'_>,
@@ -1389,52 +734,9 @@ where
     PreStatusError: FnMut(&ProviderApiError) -> bool,
 {
     let model_name = runtime.model.to_owned();
-    let stream = match execute_streaming_model_request(runtime, build_body, |data: Value| {
-        let event_type = data.get("type").and_then(|v| v.as_str())?;
-        if event_type == "content_block_start" {
-            let content_block = data.get("content_block")?;
-            if content_block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                let name = content_block
-                    .get("name")
-                    .and_then(|v| v.as_str())?
-                    .to_owned();
-                let id = content_block.get("id").and_then(|v| v.as_str())?.to_owned();
-                let index = data.get("index").and_then(|v| v.as_u64())? as usize;
-                return Some(StreamingEvent::ToolCallStart { index, name, id });
-            }
-        }
-        if event_type == "content_block_delta" {
-            let delta = data.get("delta")?;
-            let delta_type = delta.get("type").and_then(|v| v.as_str())?;
-            if delta_type == "text_delta" {
-                let text = delta.get("text").and_then(|v| v.as_str())?;
-                return Some(StreamingEvent::Text(text.to_owned()));
-            }
-            if delta_type == "input_json_delta" {
-                let partial = delta.get("partial_json").and_then(|v| v.as_str())?;
-                let index = data.get("index").and_then(|v| v.as_u64())? as usize;
-                return Some(StreamingEvent::ToolInputPartial {
-                    index,
-                    partial_json: partial.to_owned(),
-                });
-            }
-        }
-        if event_type == "message_stop" {
-            return Some(StreamingEvent::Done);
-        }
-        if event_type == "message_start" || event_type == "message_delta" {
-            return Some(StreamingEvent::Meta(data));
-        }
-        if event_type == "error" {
-            let message = data
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown streaming error")
-                .to_owned();
-            return Some(StreamingEvent::StreamError(message));
-        }
-        None
+    let transport_mode = runtime.runtime_contract.transport_mode;
+    let stream = match execute_streaming_model_request(runtime, build_body, move |data: Value| {
+        parse_streaming_event(transport_mode, data)
     })
     .await
     {
@@ -1454,20 +756,33 @@ where
                 }
                 accumulator.text.push_str(&text);
             }
-            Ok(StreamingEvent::ToolCallStart { index, name, id }) => {
+            Ok(StreamingEvent::ToolCallStart {
+                index,
+                name,
+                id,
+                initial_json,
+            }) => {
                 if let Some(ref callback) = on_token {
                     callback(StreamingCallbackData::ToolCallStart {
                         index,
                         name: name.clone(),
                         id: id.clone(),
                     });
+                    if let Some(initial_json) = initial_json.clone()
+                        && !initial_json.is_empty()
+                    {
+                        callback(StreamingCallbackData::ToolCallInput {
+                            index,
+                            partial_json: initial_json,
+                        });
+                    }
                 }
                 accumulator.tool_calls.insert(
                     index,
                     ToolCallInfo {
                         name,
                         id,
-                        input: String::new(),
+                        input: initial_json.unwrap_or_default(),
                     },
                 );
             }
@@ -1581,6 +896,129 @@ where
     })
 }
 
+fn parse_streaming_event(
+    transport_mode: ProviderTransportMode,
+    data: Value,
+) -> Option<StreamingEvent> {
+    match transport_mode {
+        ProviderTransportMode::AnthropicMessages => parse_anthropic_streaming_event(data),
+        ProviderTransportMode::OpenAiChatCompletions | ProviderTransportMode::KimiApi => {
+            parse_openai_streaming_event(data)
+        }
+        ProviderTransportMode::Responses
+        | ProviderTransportMode::BedrockConverse
+        | ProviderTransportMode::GoogleGenerateContent => None,
+    }
+}
+
+fn parse_anthropic_streaming_event(data: Value) -> Option<StreamingEvent> {
+    let event_type = data.get("type").and_then(|v| v.as_str())?;
+    if event_type == "content_block_start" {
+        let content_block = data.get("content_block")?;
+        if content_block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+            let name = content_block
+                .get("name")
+                .and_then(|v| v.as_str())?
+                .to_owned();
+            let id = content_block.get("id").and_then(|v| v.as_str())?.to_owned();
+            let index = data.get("index").and_then(|v| v.as_u64())? as usize;
+            return Some(StreamingEvent::ToolCallStart {
+                index,
+                name,
+                id,
+                initial_json: None,
+            });
+        }
+    }
+    if event_type == "content_block_delta" {
+        let delta = data.get("delta")?;
+        let delta_type = delta.get("type").and_then(|v| v.as_str())?;
+        if delta_type == "text_delta" {
+            let text = delta.get("text").and_then(|v| v.as_str())?;
+            return Some(StreamingEvent::Text(text.to_owned()));
+        }
+        if delta_type == "input_json_delta" {
+            let partial = delta.get("partial_json").and_then(|v| v.as_str())?;
+            let index = data.get("index").and_then(|v| v.as_u64())? as usize;
+            return Some(StreamingEvent::ToolInputPartial {
+                index,
+                partial_json: partial.to_owned(),
+            });
+        }
+    }
+    if event_type == "message_stop" {
+        return Some(StreamingEvent::Done);
+    }
+    if event_type == "message_start" || event_type == "message_delta" {
+        return Some(StreamingEvent::Meta(data));
+    }
+    if event_type == "error" {
+        let message = data
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown streaming error")
+            .to_owned();
+        return Some(StreamingEvent::StreamError(message));
+    }
+    None
+}
+
+fn parse_openai_streaming_event(data: Value) -> Option<StreamingEvent> {
+    if data.get("type").and_then(Value::as_str) == Some("message_stop") {
+        return Some(StreamingEvent::Done);
+    }
+    let choice = data
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())?;
+    if choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return Some(StreamingEvent::Done);
+    }
+    let delta = choice.get("delta")?;
+    if let Some(tool_call) = delta
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .and_then(|tool_calls| tool_calls.first())
+    {
+        let index = tool_call.get("index").and_then(Value::as_u64)? as usize;
+        let function = tool_call.get("function");
+        let initial_json = function
+            .and_then(|function| function.get("arguments"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|value| !value.is_empty());
+        if let (Some(id), Some(name)) = (
+            tool_call.get("id").and_then(Value::as_str),
+            function
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str),
+        ) {
+            return Some(StreamingEvent::ToolCallStart {
+                index,
+                name: name.to_owned(),
+                id: id.to_owned(),
+                initial_json,
+            });
+        }
+        if let Some(partial_json) = initial_json {
+            return Some(StreamingEvent::ToolInputPartial {
+                index,
+                partial_json,
+            });
+        }
+    }
+    let text = choice
+        .get("delta")
+        .and_then(|delta| delta.get("content"))
+        .and_then(Value::as_str)?;
+    Some(StreamingEvent::Text(text.to_owned()))
+}
+
 #[derive(Clone)]
 pub(crate) struct ToolCallInfo {
     pub name: String,
@@ -1603,6 +1041,7 @@ pub(crate) enum StreamingEvent {
         index: usize,
         name: String,
         id: String,
+        initial_json: Option<String>,
     },
     ToolInputPartial {
         index: usize,
@@ -1814,7 +1253,7 @@ mod tests {
 
     #[test]
     fn sse_stream_event_assembles_anthropic_delta_correctly() {
-        use crate::provider::transport::SseStreamEvent;
+        use crate::provider::sse::SseStreamEvent;
         let event_type = Some("content_block_delta".to_owned());
         let data_lines = vec!["{\"type\":\"text_delta\",\"text\":\"Hello\"}".to_owned()];
         let event = SseStreamEvent::from_sse_lines(event_type, &data_lines);
@@ -1989,5 +1428,378 @@ mod tests {
 
         let final_text = accumulator.text.clone();
         assert_eq!(final_text, "Hello World");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_model_request_uses_mock_transport_without_http() {
+        use crate::provider::mock_transport::MockTransport;
+        use crate::provider::transport_trait::TransportResponse;
+        use loongclaw_contracts::SecretRef;
+
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Openai,
+            api_key: Some(SecretRef::Inline("mock-transport-secret".to_owned())),
+            api_key_env: None,
+            oauth_access_token: None,
+            oauth_access_token_env: None,
+            ..ProviderConfig::default()
+        };
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_execute_responses([Ok(TransportResponse {
+            status: reqwest::StatusCode::OK,
+            headers: reqwest::header::HeaderMap::new(),
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "content": "mocked completion"
+                    }
+                }]
+            }),
+            rate_limit: None,
+        })]);
+        let runtime = ModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let result = execute_model_request(
+            runtime,
+            |_| {
+                json!({
+                    "messages": [{
+                        "role": "user",
+                        "content": "ping"
+                    }]
+                })
+            },
+            crate::provider::shape::extract_message_content,
+            "choices[0].message.content",
+            |_| false,
+        )
+        .await
+        .expect("mock completion should succeed");
+
+        assert_eq!(result, "mocked completion");
+        let recorded_requests = transport.requests();
+        assert_eq!(recorded_requests.len(), 1);
+        assert_eq!(
+            recorded_requests[0].url,
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(recorded_requests[0].method, reqwest::Method::POST);
+        assert_eq!(
+            recorded_requests[0]
+                .headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer mock-transport-secret")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_streaming_model_request_uses_mock_transport_events() {
+        use crate::provider::mock_transport::MockTransport;
+        use futures_util::StreamExt;
+
+        let provider = ProviderConfig::default();
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_stream_events([Ok(vec![
+            Ok(json!({
+                "type": "content_block_delta",
+                "delta": {
+                    "type": "text_delta",
+                    "text": "streamed hello"
+                }
+            })),
+            Ok(json!({
+                "type": "message_delta",
+                "delta": {
+                    "type": "message_stop"
+                }
+            })),
+        ])]);
+        let runtime = StreamingModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let mut stream = execute_streaming_model_request(
+            runtime,
+            |_| json!({}),
+            |data: Value| {
+                data.get("delta")
+                    .and_then(|delta| delta.get("text"))
+                    .and_then(|text| text.as_str())
+                    .map(str::to_owned)
+            },
+        )
+        .await
+        .expect("mock stream should succeed");
+
+        let first = stream.next().await.expect("first streamed item");
+        assert_eq!(first.expect("text event"), "streamed hello");
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_streaming_turn_request_reconstructs_openai_tool_calls() {
+        use crate::provider::mock_transport::MockTransport;
+
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Openai,
+            ..ProviderConfig::default()
+        };
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_stream_events([Ok(vec![
+            Ok(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": ""
+                            }
+                        }]
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "arguments": "{\"location\":\"NYC\"}"
+                            }
+                        }]
+                    }
+                }]
+            })),
+            Ok(json!({
+                "choices": [{
+                    "delta": {},
+                    "finish_reason": "tool_calls"
+                }]
+            })),
+        ])]);
+        let runtime = StreamingModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let turn = execute_streaming_turn_request(
+            runtime,
+            |_| json!({}),
+            Some("session-123"),
+            Some("turn-123"),
+            &[],
+            None,
+            |_| false,
+        )
+        .await
+        .expect("openai streaming tool calls should be reconstructed");
+
+        assert!(turn.assistant_text.is_empty(), "turn={turn:?}");
+        assert_eq!(turn.tool_intents.len(), 1, "turn={turn:?}");
+        assert_eq!(turn.tool_intents[0].tool_name, "get_weather");
+        assert_eq!(turn.tool_intents[0].tool_call_id, "call_123");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"location":"NYC"}));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_model_request_preserves_response_decode_failure_reason() {
+        use crate::provider::mock_transport::MockTransport;
+
+        let provider = ProviderConfig::default();
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_execute_responses([Err(
+            crate::provider::transport_trait::TransportError::response_decode(
+                "read response body failed",
+            ),
+        )]);
+        let runtime = ModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let error = execute_model_request(
+            runtime,
+            |_| json!({}),
+            |_| Some("ok".to_owned()),
+            "choices[0].message.content",
+            |_| false,
+        )
+        .await
+        .expect_err("decode failures should surface as model request errors");
+
+        assert_eq!(error.reason, ProviderFailoverReason::ResponseDecodeFailure);
+        assert_eq!(error.snapshot.stage, ProviderFailoverStage::ResponseDecode);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn streaming_transport_errors_preserve_response_shape_invalid_reason() {
+        use crate::provider::mock_transport::MockTransport;
+        use futures_util::StreamExt;
+
+        let provider = ProviderConfig::default();
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_stream_events([Ok(vec![Err(
+            crate::provider::transport_trait::TransportError::response_shape_invalid(
+                "invalid UTF-8 in SSE stream",
+            ),
+        )])]);
+        let runtime = StreamingModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let mut stream =
+            execute_streaming_model_request(runtime, |_| json!({}), |_| Some("ok".to_owned()))
+                .await
+                .expect("stream should be created");
+
+        let error = stream
+            .next()
+            .await
+            .expect("stream item")
+            .expect_err("malformed SSE should fail");
+
+        assert_eq!(error.reason, ProviderFailoverReason::ResponseShapeInvalid);
+        assert_eq!(
+            error.snapshot.stage,
+            ProviderFailoverStage::ResponseShapeInvalid
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn execute_streaming_model_request_handles_response_branch_without_http() {
+        use crate::provider::mock_transport::MockTransport;
+
+        let provider = ProviderConfig::default();
+        let runtime_contract = provider_runtime_contract(&provider);
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let headers = reqwest::header::HeaderMap::new();
+        let auth_context = transport::RequestAuthContext::default();
+        let auth_profiles =
+            crate::provider::auth_profile_runtime::resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_stream_response(
+            crate::provider::transport_trait::TransportResponse {
+                status: reqwest::StatusCode::BAD_REQUEST,
+                headers: reqwest::header::HeaderMap::new(),
+                body: json!({
+                    "error": {
+                        "message": "bad request"
+                    }
+                }),
+                rate_limit: None,
+            },
+        );
+        let runtime = StreamingModelRequestRuntime {
+            provider: &provider,
+            model: "gpt-5.4",
+            runtime_contract,
+            capability: runtime_contract.capability,
+            auto_model_mode: false,
+            auth_profile,
+            request_auth_scheme: crate::config::ProviderAuthScheme::Bearer,
+            endpoint: "https://api.openai.com/v1/chat/completions",
+            headers: &headers,
+            request_policy: &request_policy,
+            transport: &transport,
+            auth_context: &auth_context,
+        };
+
+        let error =
+            execute_streaming_model_request(runtime, |_| json!({}), |_| Some("ok".to_owned()))
+                .await
+                .err()
+                .expect("non-event transport response should fail");
+
+        assert_eq!(error.snapshot.stage, ProviderFailoverStage::StatusFailure);
+        assert_eq!(error.snapshot.status_code, Some(400));
     }
 }

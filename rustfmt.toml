@@ -1,4 +1,4 @@
-# Rustfmt configuration for loongclaw workspace
+# Rustfmt configuration for loong workspace
 edition = "2024"
 max_width = 100
 hard_tabs = false

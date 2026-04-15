@@ -3,7 +3,7 @@
 ## Purpose
 
 This document defines how validated runtime behavior should become a durable
-capability asset in LoongClaw.
+capability asset in Loong.
 
 Promotion should be treated as governed codification, not live
 self-modification.

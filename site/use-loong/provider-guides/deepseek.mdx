@@ -1,0 +1,66 @@
+---
+title: DeepSeek
+description: Configure the DeepSeek provider profile in Loong.
+---
+
+# DeepSeek
+
+Use this when your team already runs on DeepSeek and you want that vendor family to stay explicit in Loong config instead of disappearing behind a generic compatibility route.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `deepseek` |
+| Provider group | Direct Hosted Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | DEEPSEEK_API_KEY |
+| Aliases | `deepseek_compatible` |
+| Default base URL | `https://api.deepseek.com` |
+| Request endpoint | `https://api.deepseek.com/v1/chat/completions` |
+| Models endpoint | `https://api.deepseek.com/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "deepseek"
+
+[providers.deepseek]
+kind = "deepseek"
+api_key = { env = "DEEPSEEK_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `DEEPSEEK_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://api.deepseek.com/v1/chat/completions` |
+| Primary model-catalog route | `https://api.deepseek.com/v1/models` |
+
+## Operator Notes
+
+- Reviewed onboarding fallback when `model = "auto"` cannot probe cleanly: `deepseek-chat`.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

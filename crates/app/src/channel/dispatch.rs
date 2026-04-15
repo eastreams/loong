@@ -30,6 +30,8 @@ use crate::CliResult;
     feature = "channel-imessage",
 ))]
 use crate::KernelContext;
+#[cfg(test)]
+use crate::acp::AcpConversationTurnOptions;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-discord",
@@ -52,7 +54,7 @@ use crate::KernelContext;
     feature = "channel-whatsapp",
     feature = "channel-imessage",
 ))]
-use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
+use crate::acp::AcpTurnProvenance;
 use crate::config::LoongClawConfig;
 #[cfg(any(
     feature = "channel-telegram",
@@ -150,8 +152,7 @@ use crate::config::ResolvedWhatsappChannelConfig;
 use crate::conversation::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
     ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
-    ConversationIngressPrivateContext, ConversationRuntime, ConversationRuntimeBinding,
-    DefaultConversationRuntime,
+    ConversationIngressPrivateContext,
 };
 #[cfg(any(
     feature = "channel-telegram",
@@ -160,8 +161,25 @@ use crate::conversation::{
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]
+#[cfg(test)]
+use crate::conversation::{ConversationRuntime, ConversationRuntimeBinding};
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+))]
+#[cfg(test)]
 use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+use super::access_policy::ChannelInboundAccessPolicy;
 pub(super) use super::commands::{
     ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command,
 };
@@ -2879,10 +2897,14 @@ pub(crate) async fn send_text_to_known_session(
                             .to_owned(),
                     );
                 }
-                if !crate::channel::feishu::feishu_allowlist_allows_chat(
-                    &resolved.allowed_chat_ids,
-                    &conversation_id,
-                ) {
+                let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+                    resolved.allowed_chat_ids.as_slice(),
+                    resolved.allowed_sender_ids.as_slice(),
+                    true,
+                );
+                let target_allowed =
+                    access_policy.allows_conversation_str(conversation_id.as_str());
+                if !target_allowed {
                     return Err(format!(
                         "sessions_send_target_not_allowed: feishu target `{conversation_id}` is not present in feishu.allowed_chat_ids"
                     ));
@@ -3029,6 +3051,7 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
+#[cfg(test)]
 pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
@@ -3068,6 +3091,14 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
+/// Bridge an inbound channel message into the shared chat/provider turn
+/// runtime.
+///
+/// Unlike the CLI entrypoints, channel surfaces already own the surrounding
+/// kernel authority for the serve loop. This helper therefore reloads
+/// provider-facing config, derives channel-specific ACP hints, reuses the
+/// supplied `kernel_ctx`, and assembles a one-shot chat runtime around the
+/// channel session address before handing execution to `AgentRuntime`.
 pub(crate) async fn process_inbound_with_provider(
     config: &LoongClawConfig,
     resolved_path: Option<&std::path::Path>,
@@ -3077,19 +3108,59 @@ pub(crate) async fn process_inbound_with_provider(
 ) -> CliResult<String> {
     let started_at = std::time::Instant::now();
     let result = match reload_channel_turn_config(config, resolved_path) {
-        Ok(turn_config) => match DefaultConversationRuntime::from_config_or_env(&turn_config) {
-            Ok(runtime) => {
-                process_inbound_with_runtime_and_feedback(
-                    &turn_config,
+        Ok(turn_config) => {
+            let address = message.session.conversation_address();
+            let acp_turn_hints = resolve_channel_acp_turn_hints(&turn_config, &message.session)?;
+            let request = crate::agent_runtime::AgentTurnRequest {
+                message: message.text.clone(),
+                turn_mode: crate::agent_runtime::AgentTurnMode::Oneshot,
+                channel_id: address.channel_id.clone(),
+                account_id: address.account_id.clone(),
+                conversation_id: address.conversation_id.clone(),
+                participant_id: address.participant_id.clone(),
+                thread_id: address.thread_id.clone(),
+                acp_bootstrap_mcp_servers: acp_turn_hints.bootstrap_mcp_servers.clone(),
+                acp_cwd: acp_turn_hints
+                    .working_directory
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                ..Default::default()
+            };
+            let runtime =
+                crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+                    resolved_path
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_default(),
+                    turn_config,
+                    Some(address.session_id.as_str()),
+                    &crate::chat::CliChatOptions {
+                        acp_requested: false,
+                        acp_event_stream: false,
+                        acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
+                        acp_working_directory: request
+                            .acp_cwd
+                            .as_deref()
+                            .map(std::path::PathBuf::from),
+                    },
+                    kernel_ctx.clone(),
+                    crate::chat::CliSessionRequirement::AllowImplicitDefault,
+                )?;
+            let ingress = channel_message_ingress_context(message);
+            let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
+            let observer = feedback_capture.observer_handle();
+            let result = crate::agent_runtime::AgentRuntime::new()
+                .run_turn_with_runtime_and_observer_and_context_and_error_mode(
                     &runtime,
-                    message,
-                    ConversationRuntimeBinding::kernel(kernel_ctx),
-                    feedback_policy,
+                    &request,
+                    None,
+                    observer,
+                    ingress.as_ref(),
+                    channel_message_acp_turn_provenance(message),
+                    crate::conversation::ProviderErrorMode::Propagate,
                 )
-                .await
-            }
-            Err(error) => Err(error),
-        },
+                .await?;
+            Ok(feedback_capture.render_reply(result.output_text))
+        }
         Err(error) => Err(error),
     };
     let duration_ms = started_at.elapsed().as_millis();
@@ -3170,6 +3241,11 @@ pub(crate) async fn process_inbound_with_provider(
     result
 }
 
+/// Reload only the provider runtime portion of channel config for a new turn.
+///
+/// This intentionally does not re-resolve channel serve account selection or
+/// mutate the long-lived channel loop state; it only refreshes the provider
+/// data that turn execution depends on.
 pub(super) fn reload_channel_turn_config(
     config: &LoongClawConfig,
     resolved_path: Option<&std::path::Path>,
@@ -3383,7 +3459,12 @@ fn normalized_feishu_callback_context(
 pub(super) fn validate_telegram_security_config(
     config: &ResolvedTelegramChannelConfig,
 ) -> CliResult<()> {
-    if config.allowed_chat_ids.is_empty() {
+    let access_policy = ChannelInboundAccessPolicy::from_i64_lists(
+        config.allowed_chat_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
+    if !has_allowlist {
         return Err(
             "telegram.allowed_chat_ids is empty; configure at least one trusted chat id".to_owned(),
         );
@@ -3395,10 +3476,12 @@ pub(super) fn validate_telegram_security_config(
 pub(super) fn validate_feishu_security_config(
     config: &ResolvedFeishuChannelConfig,
 ) -> CliResult<()> {
-    let has_allowlist = config
-        .allowed_chat_ids
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        config.allowed_chat_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+        true,
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
     if !has_allowlist {
         return Err(
             "feishu.allowed_chat_ids is empty; configure at least one trusted chat id".to_owned(),
@@ -3435,10 +3518,12 @@ pub(super) fn validate_feishu_security_config(
 pub(super) fn validate_matrix_security_config(
     config: &ResolvedMatrixChannelConfig,
 ) -> CliResult<()> {
-    let has_allowlist = config
-        .allowed_room_ids
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        config.allowed_room_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+        false,
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
     if !has_allowlist {
         return Err(
             "matrix.allowed_room_ids is empty; configure at least one trusted room id".to_owned(),
@@ -3469,16 +3554,24 @@ pub(super) fn validate_matrix_security_config(
                 .to_owned(),
         );
     }
+    if config.require_mention && !has_user_id {
+        return Err(
+            "matrix.user_id is missing; configure user_id when require_mention is enabled"
+                .to_owned(),
+        );
+    }
 
     Ok(())
 }
 
 #[cfg(feature = "channel-wecom")]
 pub(super) fn validate_wecom_security_config(config: &ResolvedWecomChannelConfig) -> CliResult<()> {
-    let has_allowlist = config
-        .allowed_conversation_ids
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        config.allowed_conversation_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+        false,
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
     if !has_allowlist {
         return Err(
             "wecom.allowed_conversation_ids is empty; configure at least one trusted conversation id"

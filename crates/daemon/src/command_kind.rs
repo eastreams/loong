@@ -6,6 +6,9 @@ impl Commands {
             Self::Welcome => "welcome",
             Self::Demo => "demo",
             Self::RunTask { .. } => "run_task",
+            Self::Turn { command } => match command {
+                crate::TurnCommands::Run { .. } => "turn_run",
+            },
             Self::InvokeConnector { .. } => "invoke_connector",
             Self::AuditDemo => "audit_demo",
             Self::InitSpec { .. } => "init_spec",
@@ -86,7 +89,6 @@ impl Commands {
             Self::Gateway { .. } => "gateway",
             Self::Feishu { .. } => "feishu",
             Self::Completions { .. } => "completions",
-            Self::Web { .. } => "web",
             Self::WorkUnit { .. } => "work_unit",
         }
     }

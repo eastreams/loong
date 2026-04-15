@@ -48,7 +48,7 @@ fn render_output(bytes: &[u8]) -> String {
 }
 
 fn run_work_unit_cli_process(args: Vec<String>, context: &str) {
-    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = Command::new(env!("CARGO_BIN_EXE_loong"))
         .args(args)
         .output()
         .expect(context);
@@ -534,7 +534,7 @@ fn work_unit_cli_update_text_output_uses_snake_case_status_labels() {
         .expect("create work unit fixture");
 
     let config_path_string = config_path.display().to_string();
-    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
             "work-unit",
             "update",

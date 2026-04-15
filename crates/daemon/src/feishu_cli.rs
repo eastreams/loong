@@ -7,10 +7,12 @@ use loongclaw_spec::CliResult;
 use serde_json::{Value, json};
 
 use crate::feishu_support::{
-    FeishuAuthCapability, FeishuDaemonContext, build_account_recommendations,
-    build_grant_recommendations, build_pkce_pair, feishu_auth_start_command_hint,
-    generate_oauth_state, load_feishu_daemon_context, normalized_auth_start_capabilities,
-    resolve_scopes, unix_ts_now,
+    FeishuAuthCapability, FeishuConfiguredCapability, FeishuDaemonContext,
+    build_account_recommendations, build_grant_recommendations, build_pkce_pair,
+    configured_capabilities_from_config, feishu_auth_start_command_hint, generate_oauth_state,
+    load_feishu_daemon_context, normalized_auth_start_capabilities,
+    summarize_required_doc_write_scope_status, summarize_required_message_write_scope_status,
+    unix_ts_now,
 };
 
 const DEFAULT_FEISHU_REDIRECT_URI: &str = "http://127.0.0.1:34819/callback";
@@ -1055,12 +1057,23 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
     let client = context.build_client()?;
     let capabilities =
         normalized_auth_start_capabilities(&args.capabilities, args.include_message_write);
-    let scopes = resolve_scopes(
-        &context.default_scopes(),
-        &args.scopes,
-        &capabilities,
-        args.include_message_write,
-    );
+    let scopes = context.required_scopes(&args.scopes, &capabilities, args.include_message_write);
+    let reported_capabilities = if capabilities.is_empty()
+        && context
+            .config
+            .feishu_integration
+            .has_explicit_capability_config()
+    {
+        configured_capabilities_from_config(&context.config.feishu_integration)
+            .into_iter()
+            .map(FeishuConfiguredCapability::as_config_key)
+            .collect::<Vec<_>>()
+    } else {
+        capabilities
+            .iter()
+            .map(|capability| capability.as_cli_value())
+            .collect::<Vec<_>>()
+    };
     let state = generate_oauth_state();
     let (code_verifier, code_challenge) = build_pkce_pair();
     let now_s = unix_ts_now();
@@ -1095,10 +1108,7 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
         "authorize_url": authorize_url,
         "sqlite_path": context.store.path().display().to_string(),
         "expires_at_s": record.expires_at_s,
-        "capabilities": capabilities
-            .iter()
-            .map(|capability| capability.as_cli_value())
-            .collect::<Vec<_>>(),
+        "capabilities": reported_capabilities,
         "scopes": scopes,
     }))
 }
@@ -1161,7 +1171,7 @@ pub async fn execute_feishu_auth_list(args: &FeishuAuthListArgs) -> CliResult<Va
         args.common.config.as_deref(),
         args.common.account.as_deref(),
     )?;
-    let required_scopes = context.default_scopes();
+    let required_scopes = context.required_scopes(&[], &[], false);
     let now_s = unix_ts_now();
     let inventory = mvp::channel::feishu::api::inspect_grants_for_account(
         &context.store,
@@ -1231,7 +1241,7 @@ pub async fn execute_feishu_auth_select(args: &FeishuAuthSelectArgs) -> CliResul
             &grant,
             context.resolved.configured_account_id.as_str(),
             now_s,
-            &context.default_scopes(),
+            &context.required_scopes(&[], &[], false),
             Some(open_id),
             Some(open_id),
         ),
@@ -1243,7 +1253,7 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
         args.common.config.as_deref(),
         args.common.account.as_deref(),
     )?;
-    let required_scopes = context.default_scopes();
+    let required_scopes = context.required_scopes(&[], &[], false);
     let now_s = unix_ts_now();
     let inventory = mvp::channel::feishu::api::inspect_grants_for_account(
         &context.store,
@@ -1317,8 +1327,8 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
             "requested_open_id": requested_open_id,
             "available_open_ids": available_open_ids,
             "status": mvp::channel::feishu::api::auth::summarize_grant_status(None, now_s, &required_scopes),
-            "doc_write_status": mvp::channel::feishu::api::summarize_doc_write_scope_status(None),
-            "message_write_status": mvp::channel::feishu::api::summarize_message_write_scope_status(None),
+            "doc_write_status": summarize_required_doc_write_scope_status(None, &required_scopes),
+            "message_write_status": summarize_required_message_write_scope_status(None, &required_scopes),
             "recommendations": crate::feishu_support::FeishuGrantRecommendations {
                 auth_start_command: None,
                 select_command: Some(crate::feishu_support::feishu_auth_select_command_hint(
@@ -1350,8 +1360,8 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
         "requested_open_id": requested_open_id,
         "available_open_ids": available_open_ids,
         "status": status,
-        "doc_write_status": mvp::channel::feishu::api::summarize_doc_write_scope_status(grant.as_ref()),
-        "message_write_status": mvp::channel::feishu::api::summarize_message_write_scope_status(grant.as_ref()),
+        "doc_write_status": summarize_required_doc_write_scope_status(grant.as_ref(), &required_scopes),
+        "message_write_status": summarize_required_message_write_scope_status(grant.as_ref(), &required_scopes),
         "recommendations": build_grant_recommendations(
             context.resolved.configured_account_id.as_str(),
             grant.as_ref(),
@@ -2949,8 +2959,8 @@ fn serialize_grant_summary(
         "refresh_expires_at_s": grant.refresh_expires_at_s,
         "refreshed_at_s": grant.refreshed_at_s,
         "status": mvp::channel::feishu::api::auth::summarize_grant_status(Some(grant), now_s, required_scopes),
-        "doc_write_status": mvp::channel::feishu::api::summarize_doc_write_scope_status(Some(grant)),
-        "message_write_status": mvp::channel::feishu::api::summarize_message_write_scope_status(Some(grant)),
+        "doc_write_status": summarize_required_doc_write_scope_status(Some(grant), required_scopes),
+        "message_write_status": summarize_required_message_write_scope_status(Some(grant), required_scopes),
         "recommendations": build_grant_recommendations(
             configured_account_id,
             Some(grant),

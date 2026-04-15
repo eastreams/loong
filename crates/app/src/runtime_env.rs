@@ -2,13 +2,27 @@ use std::path::Path;
 
 use crate::config::LoongClawConfig;
 
+/// Mirror config-backed runtime knobs into process environment and singleton
+/// runtime caches.
+///
+/// Use this before spawning child processes or surfaces that still consume
+/// `LOONGCLAW_*` environment variables. This helper intentionally does not
+/// bootstrap a kernel token, choose a chat session, or validate durable chat
+/// state; higher-level entrypoints compose those steps separately.
 pub fn initialize_runtime_environment(
     config: &LoongClawConfig,
     resolved_config_path: Option<&Path>,
 ) {
     match resolved_config_path {
-        Some(path) => set_env_var("LOONGCLAW_CONFIG_PATH", path.display().to_string()),
-        None => remove_env_var("LOONGCLAW_CONFIG_PATH"),
+        Some(path) => {
+            let value = path.display().to_string();
+            set_env_var("LOONG_CONFIG_PATH", value.clone());
+            set_env_var("LOONGCLAW_CONFIG_PATH", value);
+        }
+        None => {
+            remove_env_var("LOONG_CONFIG_PATH");
+            remove_env_var("LOONGCLAW_CONFIG_PATH");
+        }
     }
 
     set_env_var(
@@ -56,6 +70,7 @@ pub fn initialize_runtime_environment(
     let workspace_root = std::env::current_dir()
         .ok()
         .unwrap_or_else(|| config.tools.resolved_file_root());
+    let workspace_root = dunce::canonicalize(&workspace_root).unwrap_or(workspace_root);
     set_env_var(
         "LOONGCLAW_WORKSPACE_ROOT",
         workspace_root.display().to_string(),
@@ -306,6 +321,8 @@ mod tests {
         );
         let expected_workspace_root =
             std::env::current_dir().expect("current_dir should resolve during runtime env tests");
+        let expected_workspace_root =
+            dunce::canonicalize(&expected_workspace_root).unwrap_or(expected_workspace_root);
         let expected_workspace_root = expected_workspace_root.display().to_string();
         assert_eq!(
             std::env::var("LOONGCLAW_WORKSPACE_ROOT").ok().as_deref(),

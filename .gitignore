@@ -1,7 +1,7 @@
 /target/
 .DS_Store
 /.docs
-/.loongclaw.local.toml
+/.loong.local.toml
 /.env.local
 /.tmp-web-*.log
 .worktrees/
@@ -11,3 +11,4 @@
 .claude
 __pycache__/
 *.pyc
+.omx/

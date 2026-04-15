@@ -9,12 +9,12 @@ This document defines which SDK-adjacent surfaces should be treated as:
 - experimental
 - internal
 
-Its purpose is to prevent LoongClaw from making accidental compatibility
+Its purpose is to prevent Loong from making accidental compatibility
 promises in the wrong layers.
 
 ## Core Rule
 
-LoongClaw should stabilize artifact and workflow contracts before stabilizing
+Loong should stabilize artifact and workflow contracts before stabilizing
 internal helper APIs.
 
 The default order should be:

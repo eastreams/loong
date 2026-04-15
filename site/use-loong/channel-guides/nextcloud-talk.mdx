@@ -1,0 +1,59 @@
+---
+title: Nextcloud Talk
+description: Configure the Nextcloud Talk channel surface in Loong.
+---
+
+# Nextcloud Talk
+
+This is a shipped config-backed outbound surface. Nextcloud talk bot callback serve is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `nextcloud-talk` |
+| Config key | `nextcloud_talk` |
+| Implementation status | `config_backed` |
+| Transport | `nextcloud_talk_bot_api` |
+| Aliases | `nextcloud`, `nextcloudtalk` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[nextcloud_talk]
+enabled = true
+server_url_env = "NEXTCLOUD_TALK_SERVER_URL"
+shared_secret_env = "NEXTCLOUD_TALK_SHARED_SECRET"
+```
+
+## Smoke Test
+
+```bash
+loong nextcloud-talk-send --target "room-token" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| room send | `nextcloud-talk-send` | Usage: loong nextcloud-talk-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| talk room service | `nextcloud-talk-serve` | nextcloud talk bot callback serve is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `nextcloud_talk.enabled`<br/>`nextcloud_talk.accounts.<account>.enabled` | none | none |
+| server url | `nextcloud_talk.server_url`<br/>`nextcloud_talk.accounts.<account>.server_url` | `nextcloud_talk.server_url_env`<br/>`nextcloud_talk.accounts.<account>.server_url_env` | `NEXTCLOUD_TALK_SERVER_URL` |
+| bot shared secret | `nextcloud_talk.shared_secret`<br/>`nextcloud_talk.accounts.<account>.shared_secret` | `nextcloud_talk.shared_secret_env`<br/>`nextcloud_talk.accounts.<account>.shared_secret_env` | `NEXTCLOUD_TALK_SHARED_SECRET` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

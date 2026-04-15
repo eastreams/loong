@@ -46,6 +46,7 @@ pub struct AcpConversationDispatchTarget {
     pub channel_id: Option<String>,
     pub account_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub participant_id: Option<String>,
     pub thread_id: Option<String>,
     pub channel_path: Vec<String>,
 }
@@ -286,39 +287,65 @@ pub fn describe_acp_conversation_dispatch_target_for_address(
         .as_deref()
         .and_then(normalize_dispatch_account_id);
     let explicit_conversation_id = trimmed_non_empty(address.conversation_id.as_deref());
+    let explicit_participant_id = trimmed_non_empty(address.participant_id.as_deref());
     let explicit_thread_id = trimmed_non_empty(address.thread_id.as_deref());
     let explicit_channel_path = address.structured_channel_path();
     let explicit_route_session_id = address.structured_route_session_id();
 
-    let (route_session_id, channel_id, account_id, conversation_id, thread_id, channel_path) =
-        if let Some(channel_id) = explicit_channel_id {
-            let route_session_id = explicit_route_session_id.unwrap_or_else(|| channel_id.clone());
+    let (
+        route_session_id,
+        channel_id,
+        account_id,
+        conversation_id,
+        participant_id,
+        thread_id,
+        channel_path,
+    ) = if let Some(channel_id) = explicit_channel_id {
+        let route_session_id = explicit_route_session_id.unwrap_or_else(|| channel_id.clone());
+        (
+            route_session_id,
+            Some(channel_id),
+            explicit_account_id,
+            explicit_conversation_id,
+            explicit_participant_id,
+            explicit_thread_id,
+            explicit_channel_path,
+        )
+    } else if let Some((parsed_channel_id, channel_path)) =
+        parse_route_session_id(parsed_route_session_id.as_str())?
+    {
+        if let Some(channel_id) = normalize_dispatch_channel_id(parsed_channel_id.as_str()) {
             (
-                route_session_id,
+                parsed_route_session_id,
                 Some(channel_id),
-                explicit_account_id,
-                explicit_conversation_id,
-                explicit_thread_id,
-                explicit_channel_path,
+                None,
+                None,
+                None,
+                None,
+                channel_path,
             )
-        } else if let Some((parsed_channel_id, channel_path)) =
-            parse_route_session_id(parsed_route_session_id.as_str())?
-        {
-            if let Some(channel_id) = normalize_dispatch_channel_id(parsed_channel_id.as_str()) {
-                (
-                    parsed_route_session_id,
-                    Some(channel_id),
-                    None,
-                    None,
-                    None,
-                    channel_path,
-                )
-            } else {
-                (parsed_route_session_id, None, None, None, None, Vec::new())
-            }
         } else {
-            (parsed_route_session_id, None, None, None, None, Vec::new())
-        };
+            (
+                parsed_route_session_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+            )
+        }
+    } else {
+        (
+            parsed_route_session_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+    };
 
     Ok(AcpConversationDispatchTarget {
         original_session_id: original_session_id.to_owned(),
@@ -327,6 +354,7 @@ pub fn describe_acp_conversation_dispatch_target_for_address(
         channel_id,
         account_id,
         conversation_id,
+        participant_id,
         thread_id,
         channel_path,
     })
@@ -375,6 +403,26 @@ pub(crate) async fn execute_acp_conversation_turn_for_address(
 ) -> CliResult<ExecutedAcpConversationTurn> {
     let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
     let manager = shared_acp_session_manager(config)?;
+    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
+}
+
+pub(crate) async fn execute_acp_conversation_turn_for_address_with_manager(
+    config: &LoongClawConfig,
+    address: &ConversationSessionAddress,
+    user_input: &str,
+    options: &AcpConversationTurnOptions<'_>,
+    manager: Arc<AcpSessionManager>,
+) -> CliResult<ExecutedAcpConversationTurn> {
+    let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
+    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
+}
+
+async fn execute_prepared_acp_conversation_turn(
+    config: &LoongClawConfig,
+    prepared: PreparedAcpConversationTurn,
+    options: &AcpConversationTurnOptions<'_>,
+    manager: Arc<AcpSessionManager>,
+) -> CliResult<ExecutedAcpConversationTurn> {
     let backend_selection = resolve_acp_backend_selection(config);
     let persistence_event_sink = config
         .acp
@@ -504,6 +552,17 @@ pub fn prepare_acp_conversation_turn_for_address(
     options
         .provenance
         .extend_request_metadata(&mut request_metadata);
+    if let Some(extra_metadata) = options.metadata {
+        for (key, value) in extra_metadata {
+            let is_reserved_key =
+                key.starts_with("loongclaw.acp.") || key.starts_with("loongclaw.channel.");
+            if is_reserved_key {
+                continue;
+            }
+            insert_trimmed_metadata(&mut bootstrap_metadata, key.as_str(), Some(value.as_str()));
+            insert_trimmed_metadata(&mut request_metadata, key.as_str(), Some(value.as_str()));
+        }
+    }
     let additional_bootstrap_mcp_servers = options.additional_bootstrap_mcp_servers.unwrap_or(&[]);
     let bootstrap_mcp_servers = config
         .acp
@@ -677,6 +736,12 @@ pub fn derive_acp_conversation_route_for_address(
             conversation_id.to_owned(),
         );
     }
+    if let Some(participant_id) = target.participant_id.as_deref() {
+        metadata.insert(
+            "channel_participant_id".to_owned(),
+            participant_id.to_owned(),
+        );
+    }
     if let Some(thread_id) = target.thread_id.as_deref() {
         metadata.insert("channel_thread_id".to_owned(), thread_id.to_owned());
     }
@@ -700,6 +765,7 @@ fn binding_scope_from_dispatch_target(
         channel_id: target.channel_id.clone(),
         account_id: target.account_id.clone(),
         conversation_id: target.conversation_id.clone(),
+        participant_id: target.participant_id.clone(),
         thread_id: target.thread_id.clone(),
     })
 }
@@ -1237,6 +1303,7 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("agent:claude:opaque-session")
             .with_channel_scope("feishu", "oc_123")
             .with_account_id("lark_cli_a1b2c3")
+            .with_participant_id("ou_sender_1")
             .with_thread_id("om_thread_1");
 
         let target = describe_acp_conversation_dispatch_target_for_address(&address)
@@ -1245,18 +1312,20 @@ mod tests {
         assert_eq!(target.original_session_id, "agent:claude:opaque-session");
         assert_eq!(
             target.route_session_id,
-            "feishu:lark_cli_a1b2c3:oc_123:om_thread_1"
+            "feishu:lark_cli_a1b2c3:oc_123:ou_sender_1:om_thread_1"
         );
         assert_eq!(target.prefixed_agent_id.as_deref(), Some("claude"));
         assert_eq!(target.channel_id.as_deref(), Some("feishu"));
         assert_eq!(target.account_id.as_deref(), Some("lark_cli_a1b2c3"));
         assert_eq!(target.conversation_id.as_deref(), Some("oc_123"));
+        assert_eq!(target.participant_id.as_deref(), Some("ou_sender_1"));
         assert_eq!(target.thread_id.as_deref(), Some("om_thread_1"));
         assert_eq!(
             target.channel_path,
             vec![
                 "lark_cli_a1b2c3".to_owned(),
                 "oc_123".to_owned(),
+                "ou_sender_1".to_owned(),
                 "om_thread_1".to_owned()
             ]
         );
@@ -1268,6 +1337,7 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("opaque-session")
             .with_channel_scope("feishu", "oc_123")
             .with_account_id("lark-prod")
+            .with_participant_id("ou_sender_1")
             .with_thread_id("om_thread_1");
 
         let route = derive_acp_conversation_route_for_address(&config, &address)
@@ -1278,7 +1348,7 @@ mod tests {
                 .binding
                 .as_ref()
                 .map(|binding| binding.route_session_id.as_str()),
-            Some("feishu:lark-prod:oc_123:om_thread_1")
+            Some("feishu:lark-prod:oc_123:ou_sender_1:om_thread_1")
         );
         assert_eq!(
             route
@@ -1286,6 +1356,13 @@ mod tests {
                 .as_ref()
                 .and_then(|binding| binding.account_id.as_deref()),
             Some("lark-prod")
+        );
+        assert_eq!(
+            route
+                .binding
+                .as_ref()
+                .and_then(|binding| binding.participant_id.as_deref()),
+            Some("ou_sender_1")
         );
         assert_eq!(
             route

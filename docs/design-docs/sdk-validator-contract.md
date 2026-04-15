@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines what LoongClaw validates for public capability artifacts.
+This document defines what Loong validates for public capability artifacts.
 
 It exists to answer one practical question:
 
@@ -66,7 +66,7 @@ Recommended categories:
 
 ## Validation Phases
 
-LoongClaw should validate public capability artifacts in this sequence:
+Loong should validate public capability artifacts in this sequence:
 
 1. discovery and root resolution
 2. structural safety
@@ -112,7 +112,7 @@ Promotion validation should enforce:
 
 Validator meaning should be treated as Additive moving toward Stable.
 
-LoongClaw should stabilize the meaning of:
+Loong should stabilize the meaning of:
 
 - errors vs warnings
 - major diagnostic categories

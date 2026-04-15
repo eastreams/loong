@@ -1,12 +1,15 @@
 [package]
-name = "loongclaw-contracts"
+name = "loong-contracts"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Internal support crate for LoongClaw: stable shared contracts"
+description = "Internal support crate for Loong: stable shared contracts"
 repository.workspace = true
 homepage.workspace = true
+
+[lib]
+name = "loongclaw_contracts"
 
 [dependencies]
 serde.workspace = true

@@ -87,7 +87,7 @@ pub(super) const TLON_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 pub(super) const TLON_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
-        setup_hint: "configure a Tlon ship account in loongclaw.toml under tlon or tlon.accounts.<account>; outbound ship sends are shipped for DMs and chat groups, while inbound serve support remains planned",
+        setup_hint: "configure a Tlon ship account in loong.toml under tlon or tlon.accounts.<account>; outbound ship sends are shipped for DMs and chat groups, while inbound serve support remains planned",
         status_command: "loong doctor",
         repair_command: Some("loong doctor --fix"),
     };

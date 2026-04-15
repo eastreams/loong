@@ -1,13 +1,20 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
+use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::Value;
 use serde_json::json;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::catalog::ToolDescriptor;
+use super::catalog::{ToolDescriptor, ToolView};
+use super::runtime_config;
+use super::{
+    LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY, LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY,
+    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, canonical_tool_name, issue_tool_lease, memory_tools,
+};
 
 const COARSE_FALLBACK_DISCOVERY_CONCEPTS: &[&str] =
     &["fetch", "inspect", "list", "read", "search", "status"];
@@ -36,6 +43,288 @@ pub(super) struct RankedSearchableToolEntry {
 pub(super) struct ToolSearchRanking {
     pub(super) results: Vec<RankedSearchableToolEntry>,
     pub(super) diagnostics_reason: Option<&'static str>,
+}
+
+pub(super) fn execute_tool_search_tool_with_config(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| "tool.search payload must be an object".to_owned())?;
+    let query = tool_search_query_from_payload(payload).map(Cow::into_owned);
+    let requested_exact_tool_id = payload
+        .get("exact_tool_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let exact_tool_id = requested_exact_tool_id
+        .as_deref()
+        .map(canonical_tool_name)
+        .map(str::to_owned);
+
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(1, 8) as usize)
+        .unwrap_or(5);
+    let granted_capabilities = payload
+        .get(TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
+    let visible_tool_view = search_tool_view_from_payload(payload, config);
+
+    let searchable_entries =
+        super::runtime_discoverable_tool_entries(config, Some(&visible_tool_view))
+            .into_iter()
+            .filter(|entry| {
+                tool_search_entry_is_capability_usable(
+                    entry.canonical_name.as_str(),
+                    granted_capabilities.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
+    let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
+        searchable_entries
+            .iter()
+            .find(|entry| entry.canonical_name == *exact_tool_id)
+            .cloned()
+    });
+    let exact_match_found = exact_match_entry.is_some();
+    let mut diagnostics_reason = None;
+    let results: Vec<Value> = if let Some(entry) = exact_match_entry {
+        let why = Vec::new();
+        let entry_json = tool_search_result_entry_json(&entry, why, payload)?;
+        vec![entry_json]
+    } else if let Some(query) = query.as_deref() {
+        let ranking = rank_searchable_entries(searchable_entries, query, limit);
+        diagnostics_reason = ranking.diagnostics_reason;
+
+        ranking
+            .results
+            .into_iter()
+            .map(|ranked_entry| {
+                let RankedSearchableToolEntry { entry, why } = ranked_entry;
+
+                tool_search_result_entry_json(&entry, why, payload)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let ranking = rank_searchable_entries(searchable_entries, "", limit);
+        diagnostics_reason = ranking.diagnostics_reason;
+
+        ranking
+            .results
+            .into_iter()
+            .map(|ranked_entry| {
+                let RankedSearchableToolEntry { entry, why } = ranked_entry;
+
+                tool_search_result_entry_json(&entry, why, payload)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let diagnostics = tool_search_diagnostics_json(
+        requested_exact_tool_id.as_deref(),
+        exact_match_found,
+        query.as_deref(),
+        diagnostics_reason,
+    );
+    let response_exact_tool_id = if exact_match_found {
+        exact_tool_id
+    } else {
+        requested_exact_tool_id
+    };
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "core-tools",
+            "tool_name": request.tool_name,
+            "query": query,
+            "exact_tool_id": response_exact_tool_id,
+            "returned": results.len(),
+            "results": results,
+            "diagnostics": diagnostics,
+        }),
+    })
+}
+
+fn tool_search_result_entry_json(
+    entry: &SearchableToolEntry,
+    why: Vec<String>,
+    payload: &serde_json::Map<String, Value>,
+) -> Result<Value, String> {
+    let lease = issue_tool_lease(entry.canonical_name.as_str(), payload)?;
+    Ok(json!({
+        "tool_id": entry.canonical_name,
+        "summary": entry.summary,
+        "search_hint": entry.search_hint,
+        "argument_hint": entry.argument_hint,
+        "required_fields": entry.required_fields,
+        "required_field_groups": entry.required_field_groups,
+        "schema_preview": entry.schema_preview,
+        "tags": entry.tags,
+        "why": why,
+        "lease": lease,
+    }))
+}
+
+fn tool_search_diagnostics_json(
+    requested_exact_tool_id: Option<&str>,
+    exact_match_found: bool,
+    query: Option<&str>,
+    diagnostics_reason: Option<&str>,
+) -> Value {
+    if let Some(requested_exact_tool_id) = requested_exact_tool_id {
+        if exact_match_found {
+            return Value::Null;
+        }
+
+        return json!({
+            "reason": "exact_tool_id_not_visible",
+            "requested_tool_id": requested_exact_tool_id,
+        });
+    }
+
+    if let Some(reason) = diagnostics_reason {
+        let diagnostics_query = query.unwrap_or_default();
+
+        return json!({
+            "reason": reason,
+            "query": diagnostics_query,
+        });
+    }
+
+    Value::Null
+}
+
+fn tool_search_query_from_payload(
+    payload: &serde_json::Map<String, Value>,
+) -> Option<Cow<'_, str>> {
+    const QUERY_KEYS: &[&str] = &["query", "input", "text", "prompt", "keyword", "keywords"];
+
+    for key in QUERY_KEYS {
+        let Some(value) = payload.get(*key) else {
+            continue;
+        };
+
+        if let Some(query) = tool_search_query_from_value(value) {
+            return Some(query);
+        }
+    }
+
+    None
+}
+
+fn tool_search_query_from_value(value: &Value) -> Option<Cow<'_, str>> {
+    let string_value = value.as_str();
+    if let Some(string_value) = string_value {
+        let trimmed_value = string_value.trim();
+        if !trimmed_value.is_empty() {
+            return Some(Cow::Borrowed(trimmed_value));
+        }
+    }
+
+    let values = value.as_array()?;
+    let joined_value = join_tool_search_query_values(values);
+    if joined_value.is_empty() {
+        return None;
+    }
+
+    Some(Cow::Owned(joined_value))
+}
+
+fn join_tool_search_query_values(values: &[Value]) -> String {
+    let mut query_parts = Vec::new();
+
+    for value in values {
+        let query_part = tool_search_query_part(value);
+        if query_part.is_empty() {
+            continue;
+        }
+
+        query_parts.push(query_part);
+    }
+
+    query_parts.join(" ")
+}
+
+fn tool_search_query_part(value: &Value) -> String {
+    let string_value = value.as_str();
+    if let Some(string_value) = string_value {
+        return string_value.trim().to_owned();
+    }
+
+    value.to_string()
+}
+
+pub(super) fn tool_search_entry_is_runtime_usable(
+    tool_name: &str,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> bool {
+    match tool_name {
+        "shell.exec" => {
+            !config.shell_allow.is_empty()
+                || matches!(
+                    config.shell_default_mode,
+                    crate::tools::shell_policy_ext::ShellPolicyDefault::Allow
+                )
+        }
+        "bash.exec" => config.bash_exec.is_discoverable(),
+        "external_skills.fetch"
+        | "external_skills.install"
+        | "external_skills.inspect"
+        | "external_skills.invoke"
+        | "external_skills.list"
+        | "external_skills.remove" => config.external_skills.enabled,
+        #[cfg(feature = "tool-file")]
+        "memory_search" => memory_tools::memory_corpus_available(config),
+        #[cfg(feature = "tool-file")]
+        "memory_get" => memory_tools::workspace_memory_corpus_available(config),
+        _ => true,
+    }
+}
+
+pub(super) fn tool_search_entry_is_capability_usable(
+    tool_name: &str,
+    granted_capabilities: Option<&BTreeSet<Capability>>,
+) -> bool {
+    let Some(granted_capabilities) = granted_capabilities else {
+        return true;
+    };
+    let required = super::required_capabilities_for_tool_name_and_payload(tool_name, &json!({}));
+    required
+        .iter()
+        .all(|capability| granted_capabilities.contains(capability))
+}
+
+pub(super) fn search_tool_view_from_payload(
+    payload: &serde_json::Map<String, Value>,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> ToolView {
+    let payload_value = Value::Object(payload.clone());
+    let visible_tool_names = if super::trusted_internal_tool_payload_enabled() {
+        super::trusted_internal_tool_context_from_payload(&payload_value)
+            .and_then(|body| body.get(LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY))
+            .and_then(|body| body.get(LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY))
+            .and_then(Value::as_array)
+            .map(|tool_names| {
+                tool_names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(canonical_tool_name)
+                    .collect::<Vec<_>>()
+            })
+    } else {
+        None
+    };
+
+    match visible_tool_names {
+        Some(visible_tool_names) => ToolView::from_tool_names(visible_tool_names),
+        None => super::full_runtime_tool_view_for_runtime_config(config),
+    }
 }
 
 #[derive(Debug, Clone)]

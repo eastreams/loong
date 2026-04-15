@@ -14,6 +14,7 @@ fn feishu_multi_account_resolution_merges_base_and_account_overrides() {
         "webhook_bind": "127.0.0.1:8080",
         "webhook_path": "/feishu/events",
         "allowed_chat_ids": ["oc_base"],
+        "allowed_sender_ids": ["ou_base"],
         "acp": {
             "bootstrap_mcp_servers": ["filesystem"],
             "working_directory": " /workspace/base "
@@ -27,6 +28,7 @@ fn feishu_multi_account_resolution_merges_base_and_account_overrides() {
                 "verification_token": "verify",
                 "encrypt_key": "encrypt",
                 "allowed_chat_ids": ["oc_lark"],
+                "allowed_sender_ids": ["ou_lark"],
                 "acp": {
                     "bootstrap_mcp_servers": ["search"],
                     "working_directory": "/workspace/lark-prod"
@@ -55,6 +57,7 @@ fn feishu_multi_account_resolution_merges_base_and_account_overrides() {
     assert_eq!(resolved.account.id, "lark_cli_lark_123");
     assert_eq!(resolved.account.label, "lark:cli_lark_123");
     assert_eq!(resolved.allowed_chat_ids, vec!["oc_lark".to_owned()]);
+    assert_eq!(resolved.allowed_sender_ids, vec!["ou_lark".to_owned()]);
     assert_eq!(
         resolved.acp.bootstrap_mcp_servers,
         vec!["search".to_owned()]
@@ -74,6 +77,7 @@ fn feishu_multi_account_resolution_merges_base_and_account_overrides() {
     assert_eq!(disabled.configured_account_id, "feishu-backup");
     assert!(!disabled.enabled);
     assert_eq!(disabled.allowed_chat_ids, vec!["oc_base".to_owned()]);
+    assert_eq!(disabled.allowed_sender_ids, vec!["ou_base".to_owned()]);
     assert_eq!(
         disabled.acp.bootstrap_mcp_servers,
         vec!["filesystem".to_owned()]

@@ -52,6 +52,7 @@ pub use runtime::{
 };
 pub(crate) use runtime::{
     AcpConversationTurnExecutionOutcome, execute_acp_conversation_turn_for_address,
+    execute_acp_conversation_turn_for_address_with_manager,
 };
 #[cfg(feature = "memory-sqlite")]
 pub use store::AcpSqliteSessionStore;

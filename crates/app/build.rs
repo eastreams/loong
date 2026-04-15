@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=LOONG_RELEASE_BUILD");
+    println!("cargo:rerun-if-env-changed=LOONG_BUILD_CHANNEL");
+    println!("cargo:rerun-if-env-changed=LOONG_GIT_SHA");
     println!("cargo:rerun-if-env-changed=LOONGCLAW_RELEASE_BUILD");
     println!("cargo:rerun-if-env-changed=LOONGCLAW_BUILD_CHANNEL");
     println!("cargo:rerun-if-env-changed=LOONGCLAW_GIT_SHA");
@@ -13,9 +16,15 @@ fn main() {
     let repo_root = repo_root();
     emit_git_rerun_hints(&repo_root);
 
-    let release_build_env = env::var("LOONGCLAW_RELEASE_BUILD").ok();
-    let channel_env = env::var("LOONGCLAW_BUILD_CHANNEL").ok();
-    let sha_env = env::var("LOONGCLAW_GIT_SHA").ok();
+    let release_build_env = env::var("LOONG_RELEASE_BUILD")
+        .ok()
+        .or_else(|| env::var("LOONGCLAW_RELEASE_BUILD").ok());
+    let channel_env = env::var("LOONG_BUILD_CHANNEL")
+        .ok()
+        .or_else(|| env::var("LOONGCLAW_BUILD_CHANNEL").ok());
+    let sha_env = env::var("LOONG_GIT_SHA")
+        .ok()
+        .or_else(|| env::var("LOONGCLAW_GIT_SHA").ok());
     let git_branch = git_output(&repo_root, &["branch", "--show-current"]);
     let git_sha = git_output(&repo_root, &["rev-parse", "--short=7", "HEAD"]);
 
@@ -28,13 +37,22 @@ fn main() {
     );
 
     emit_rustc_env(
+        "LOONG_RELEASE_BUILD",
+        if metadata.release_build { "1" } else { "" },
+    );
+    emit_rustc_env(
         "LOONGCLAW_RELEASE_BUILD",
         if metadata.release_build { "1" } else { "" },
+    );
+    emit_rustc_env(
+        "LOONG_BUILD_CHANNEL",
+        metadata.channel.as_deref().unwrap_or(""),
     );
     emit_rustc_env(
         "LOONGCLAW_BUILD_CHANNEL",
         metadata.channel.as_deref().unwrap_or(""),
     );
+    emit_rustc_env("LOONG_GIT_SHA", metadata.short_sha.as_deref().unwrap_or(""));
     emit_rustc_env(
         "LOONGCLAW_GIT_SHA",
         metadata.short_sha.as_deref().unwrap_or(""),

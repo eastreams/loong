@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -15,6 +14,7 @@ use crate::config::{self, ResolvedMatrixChannelConfig};
 use super::{
     ChannelAdapter, ChannelDelivery, ChannelInboundMessage, ChannelOutboundMessage,
     ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform, ChannelSession,
+    access_policy::ChannelInboundAccessPolicy,
 };
 
 pub(super) struct MatrixAdapter {
@@ -23,7 +23,8 @@ pub(super) struct MatrixAdapter {
     access_token: String,
     base_url: String,
     timeout_ms: u64,
-    allowlist: BTreeSet<String>,
+    access_policy: ChannelInboundAccessPolicy<String>,
+    require_mention: bool,
     ignore_self_messages: bool,
     cursor_tracker: MatrixSyncCursorTracker,
 }
@@ -76,19 +77,20 @@ impl MatrixAdapter {
             matrix_sync_cursor_path_for_account(cursor_home.as_path(), config.account.id.as_str());
         let current_cursor =
             load_cursor_for_account(cursor_home.as_path(), config.account.id.as_str());
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            config.allowed_room_ids.as_slice(),
+            config.allowed_sender_ids.as_slice(),
+            false,
+        );
+
         Self {
             account_id: config.account.id.clone(),
             user_id: config.user_id.clone(),
             access_token,
             base_url: config.resolved_base_url().unwrap_or_default(),
             timeout_ms: config.sync_timeout_s.clamp(1, 300).saturating_mul(1000),
-            allowlist: config
-                .allowed_room_ids
-                .iter()
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .collect(),
+            access_policy,
+            require_mention: config.require_mention,
             ignore_self_messages: config.ignore_self_messages,
             cursor_tracker: MatrixSyncCursorTracker::new(cursor_path, current_cursor),
         }
@@ -153,10 +155,11 @@ impl ChannelAdapter for MatrixAdapter {
 
         let (inbox, next_cursor) = parse_matrix_sync_response(
             &payload,
-            &self.allowlist,
+            &self.access_policy,
             self.account_id.as_str(),
             self.user_id.as_deref(),
             self.ignore_self_messages,
+            self.require_mention,
         )?;
         self.cursor_tracker.remember_polled_cursor(next_cursor);
         Ok(inbox)
@@ -265,10 +268,11 @@ fn build_matrix_send_target(
 
 pub(super) fn parse_matrix_sync_response(
     payload: &Value,
-    allowlist: &BTreeSet<String>,
+    access_policy: &ChannelInboundAccessPolicy<String>,
     account_id: &str,
     user_id: Option<&str>,
     ignore_self_messages: bool,
+    require_mention: bool,
 ) -> CliResult<(Vec<ChannelInboundMessage>, Option<String>)> {
     let next_cursor = payload
         .get("next_batch")
@@ -287,7 +291,7 @@ pub(super) fn parse_matrix_sync_response(
     let mut inbox = Vec::new();
     for (room_id, room) in joined_rooms.into_iter().flat_map(|rooms| rooms.iter()) {
         let room_id = room_id.trim();
-        if room_id.is_empty() || !allowlist.contains(room_id) {
+        if room_id.is_empty() {
             continue;
         }
 
@@ -339,6 +343,14 @@ pub(super) fn parse_matrix_sync_response(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned);
+            let sender_ref = sender.as_deref();
+            let allowed = access_policy.allows_str(room_id, sender_ref);
+            if !allowed {
+                continue;
+            }
+            if require_mention && !matrix_message_mentions_user(&content, text.as_str(), user_id) {
+                continue;
+            }
 
             let mut session =
                 ChannelSession::with_account(ChannelPlatform::Matrix, account_id, room_id);
@@ -372,6 +384,43 @@ pub(super) fn parse_matrix_sync_response(
     }
 
     Ok((inbox, Some(next_cursor)))
+}
+
+fn matrix_message_mentions_user(content: &Value, body: &str, user_id: Option<&str>) -> bool {
+    let Some(user_id) = user_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+
+    let mentions = content.get("m.mentions");
+    let room_mention = mentions
+        .and_then(|mentions| mentions.get("room"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if room_mention {
+        return true;
+    }
+
+    let user_mentions = mentions
+        .and_then(|mentions| mentions.get("user_ids"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for mentioned_user in user_mentions {
+        let mentioned_user = mentioned_user.as_str().map(str::trim).unwrap_or_default();
+        if mentioned_user == user_id {
+            return true;
+        }
+    }
+
+    if body.contains(user_id) {
+        return true;
+    }
+
+    content
+        .get("formatted_body")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|formatted_body| formatted_body.contains(user_id))
 }
 
 pub(super) fn build_matrix_client_url(base_url: &str) -> CliResult<Url> {
@@ -579,13 +628,18 @@ mod tests {
             }
         });
 
-        let allowlist = BTreeSet::from(["!ops:example.org".to_owned()]);
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &[],
+            false,
+        );
         let (inbox, next_cursor) = parse_matrix_sync_response(
             &payload,
-            &allowlist,
+            &access_policy,
             "ops-bot",
             Some("@ops-bot:example.org"),
             true,
+            false,
         )
         .expect("parse matrix sync response");
 
@@ -605,7 +659,11 @@ mod tests {
 
     #[test]
     fn matrix_parser_requires_non_empty_next_batch_cursor() {
-        let allowlist = BTreeSet::from(["!ops:example.org".to_owned()]);
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &[],
+            false,
+        );
 
         for payload in [
             json!({
@@ -622,10 +680,11 @@ mod tests {
         ] {
             let error = parse_matrix_sync_response(
                 &payload,
-                &allowlist,
+                &access_policy,
                 "ops-bot",
                 Some("@ops-bot:example.org"),
                 true,
+                false,
             )
             .expect_err("missing or empty next_batch should be rejected");
             assert!(
@@ -660,13 +719,18 @@ mod tests {
             }
         });
 
-        let allowlist = BTreeSet::from(["!ops:example.org".to_owned()]);
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &[],
+            false,
+        );
         let (inbox, next_cursor) = parse_matrix_sync_response(
             &payload,
-            &allowlist,
+            &access_policy,
             "ops-bot",
             Some("@ops-bot:example.org"),
             true,
+            false,
         )
         .expect("parse matrix sync response");
 
@@ -699,13 +763,18 @@ mod tests {
             }
         });
 
-        let allowlist = BTreeSet::from(["!ops:example.org".to_owned()]);
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &[],
+            false,
+        );
         let (inbox, _) = parse_matrix_sync_response(
             &payload,
-            &allowlist,
+            &access_policy,
             "ops-bot",
             Some("@ops-bot:example.org"),
             true,
+            false,
         )
         .expect("parse matrix sync response");
 
@@ -718,6 +787,168 @@ mod tests {
             inbox[0].reply_target.idempotency_key(),
             Some("$reply:example.org")
         );
+    }
+
+    #[test]
+    fn matrix_parser_filters_non_allowlisted_senders() {
+        let payload = json!({
+            "next_batch": "s72595_4483_1934",
+            "rooms": {
+                "join": {
+                    "!ops:example.org": {
+                        "timeline": {
+                            "events": [
+                                {
+                                    "event_id": "$allowed:example.org",
+                                    "type": "m.room.message",
+                                    "sender": "@alice:example.org",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "hello matrix"
+                                    }
+                                },
+                                {
+                                    "event_id": "$blocked:example.org",
+                                    "type": "m.room.message",
+                                    "sender": "@bob:example.org",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "blocked matrix"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        });
+
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &["@alice:example.org".to_owned()],
+            false,
+        );
+        let (inbox, next_cursor) = parse_matrix_sync_response(
+            &payload,
+            &access_policy,
+            "ops-bot",
+            Some("@ops-bot:example.org"),
+            true,
+            false,
+        )
+        .expect("parse matrix sync response");
+
+        assert_eq!(next_cursor.as_deref(), Some("s72595_4483_1934"));
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].text, "hello matrix");
+        assert_eq!(
+            inbox[0].delivery.sender_principal_key.as_deref(),
+            Some("matrix:user:@alice:example.org")
+        );
+    }
+
+    #[test]
+    fn matrix_parser_requires_explicit_mentions_when_enabled() {
+        let payload = json!({
+            "next_batch": "next",
+            "rooms": {
+                "join": {
+                    "!ops:example.org": {
+                        "timeline": {
+                            "events": [
+                                {
+                                    "event_id": "$plain:example.org",
+                                    "type": "m.room.message",
+                                    "sender": "@alice:example.org",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "hello team"
+                                    }
+                                },
+                                {
+                                    "event_id": "$mention:example.org",
+                                    "type": "m.room.message",
+                                    "sender": "@alice:example.org",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "hello @ops-bot:example.org",
+                                        "m.mentions": {
+                                            "user_ids": ["@ops-bot:example.org"]
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        });
+
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &[],
+            false,
+        );
+        let (inbox, next_cursor) = parse_matrix_sync_response(
+            &payload,
+            &access_policy,
+            "ops-bot",
+            Some("@ops-bot:example.org"),
+            true,
+            true,
+        )
+        .expect("parse matrix sync response");
+
+        assert_eq!(next_cursor.as_deref(), Some("next"));
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].text, "hello @ops-bot:example.org");
+    }
+
+    #[test]
+    fn matrix_parser_accepts_room_mentions_when_enabled() {
+        let payload = json!({
+            "next_batch": "next",
+            "rooms": {
+                "join": {
+                    "!ops:example.org": {
+                        "timeline": {
+                            "events": [
+                                {
+                                    "event_id": "$room:example.org",
+                                    "type": "m.room.message",
+                                    "sender": "@alice:example.org",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "attention room",
+                                        "m.mentions": {
+                                            "room": true
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        });
+
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &[],
+            false,
+        );
+        let (inbox, _next_cursor) = parse_matrix_sync_response(
+            &payload,
+            &access_policy,
+            "ops-bot",
+            Some("@ops-bot:example.org"),
+            true,
+            true,
+        )
+        .expect("parse matrix sync response");
+
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].text, "attention room");
     }
 
     #[test]
@@ -758,13 +989,18 @@ mod tests {
             }
         });
 
-        let allowlist = BTreeSet::from(["!ops:example.org".to_owned()]);
+        let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+            &["!ops:example.org".to_owned()],
+            &[],
+            false,
+        );
         let (inbox, next_cursor) = parse_matrix_sync_response(
             &payload,
-            &allowlist,
+            &access_policy,
             "ops-bot",
             Some("@ops-bot:example.org"),
             true,
+            false,
         )
         .expect("parse matrix sync response");
 

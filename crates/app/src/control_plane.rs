@@ -1786,7 +1786,8 @@ impl ControlPlaneAcpView {
         if self.current_session_id == DEFAULT_CONTROL_PLANE_SESSION_ID {
             return Ok(None);
         }
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+        let memory_config =
+            MemoryRuntimeConfig::from_memory_config_without_env_overrides(&self.config.memory);
         SessionRepository::new(&memory_config).map(Some)
     }
 
@@ -2758,6 +2759,7 @@ mod tests {
                     channel_id: Some("feishu".to_owned()),
                     account_id: Some("lark-prod".to_owned()),
                     conversation_id: Some("oc_visible".to_owned()),
+                    participant_id: None,
                     thread_id: Some("thread-visible".to_owned()),
                 }),
                 activation_origin: Some(AcpRoutingOrigin::ExplicitRequest),
@@ -2781,6 +2783,7 @@ mod tests {
                     channel_id: Some("telegram".to_owned()),
                     account_id: None,
                     conversation_id: Some("hidden".to_owned()),
+                    participant_id: None,
                     thread_id: None,
                 }),
                 activation_origin: Some(AcpRoutingOrigin::AutomaticDispatch),

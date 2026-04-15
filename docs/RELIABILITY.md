@@ -1,6 +1,33 @@
 # Reliability
 
-Reliability expectations and invariants for LoongClaw.
+Reliability expectations and invariants for Loong.
+
+The public reader-facing summary for this material lives in
+[`../site/reference/security-and-reliability.mdx`](../site/reference/security-and-reliability.mdx).
+This file remains the repository-native reliability and invariant reference.
+
+## Route By Audience
+
+| If you are trying to... | Start here |
+| --- | --- |
+| read the public summary first | [`../site/reference/security-and-reliability.mdx`](../site/reference/security-and-reliability.mdx) |
+| inspect repository-native invariants and verification expectations | this file |
+| understand the broader repository docs layering | [`README.md`](README.md) |
+
+## Read This File When
+
+- you need the source-level invariant and verification contract
+- you are checking whether a change weakens an existing reliability guarantee
+- you need the repository-native commands and guardrails behind the public summary
+
+## Reliability Areas
+
+| Area | What this file covers |
+| --- | --- |
+| build invariants | CI-parity commands that must stay green |
+| runtime guardrails | execution behavior that should not silently degrade |
+| architecture guardrails | machine-checkable boundary and complexity rules |
+| kernel and channel invariants | fail-closed and persistence behavior that should remain stable |
 
 ## Build Invariants
 
@@ -25,22 +52,22 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 1. **Complexity budgets are locally machine-checkable** — run `./scripts/check_architecture_boundaries.sh` directly, or `task check:architecture` when the optional `task` CLI wrapper is installed, to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`, `acp/manager`, `acp/acpx`, `channel/registry`, `config/channels`, `chat`, `channel/mod`, `conversation/turn_coordinator`, `tools/mod`, `daemon/lib`, `daemon/onboard_cli`). The generated drift report also classifies each hotspot by `foundation`, `structural_size`, and `operational_density` pressure so release reviews can distinguish large-surface drift from runtime-density risk.
 2. **Memory operation literals are boundary-guarded** — memory core operation strings (`append_turn`, `window`, `clear_session`) must remain centralized in `crates/app/src/memory/*` and never spread into callsites.
-3. **`spec` stays detached from `app`** — the architecture guardrails treat any direct `loongclaw-app` dependency in `crates/spec/Cargo.toml` as a boundary regression, and `./scripts/check_dep_graph.sh` must stay green.
+3. **`spec` stays detached from `app`** — the architecture guardrails treat any direct `loong-app` dependency in `crates/spec/Cargo.toml` as a boundary regression, and `./scripts/check_dep_graph.sh` must stay green.
 4. **Strict enforcement is an extended local gate** — use `LOONGCLAW_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh` directly, or `task check:architecture:strict` when the optional `task` CLI wrapper is installed, to make architecture budget violations fail non-zero. This check is part of `task verify:full`, not the canonical CI-parity gate.
 
 ## Kernel Invariants
 
 1. **Token authorization is fail-closed** — if the policy engine cannot determine authorization (e.g., mutex poisoned), the operation is denied.
-2. **Audit events are never silently dropped** — kernel sinks fail closed on write errors instead of silently downgrading. Production app bootstraps default to `FanoutAuditSink` backed by `~/.loongclaw/audit/events.jsonl`, `LoongClawKernel::new()` defaults to `InMemoryAuditSink`, and spec/test/demo helpers may intentionally use explicit in-memory audit seams for side-effect-free reporting. `NoopAuditSink` remains reserved for callers that explicitly opt into `new_without_audit(...)` or wire a noop sink themselves.
+2. **Audit events are never silently dropped** — kernel sinks fail closed on write errors instead of silently downgrading. Production app bootstraps default to `FanoutAuditSink` backed by `~/.loong/audit/events.jsonl`, `LoongKernel::new()` defaults to `InMemoryAuditSink`, and spec/test/demo helpers may intentionally use explicit in-memory audit seams for side-effect-free reporting. `NoopAuditSink` remains reserved for callers that explicitly opt into `new_without_audit(...)` or wire a noop sink themselves.
 3. **Pack registration is idempotent-safe** — duplicate pack IDs return `DuplicatePack` error, never silently overwrite.
 4. **Generation-based revocation is monotonic** — the revocation threshold only increases, never decreases.
 5. **TaskState transitions are irreversible from terminal states** — `Completed` and `Faulted` states cannot transition.
 
 ## MVP Channel Invariants
 
-1. **Kernel context is bootstrapped at startup** — CLI chat, Telegram, and Feishu channels all create `KernelContext` before processing messages.
+1. **Kernel context is bootstrapped at startup** — the base CLI loop and shipped service-channel runtimes create `KernelContext` before processing messages.
 2. **Memory persistence failures are surfaced** — `persist_turn` errors propagate to the caller, never silently swallowed.
-3. **Provider errors have two modes** — `Propagate` (return error) or `InlineMessage` (synthetic reply). Behavior is explicit per channel.
+3. **Provider errors have two modes** — `Propagate` (return error) or `InlineMessage` (synthetic reply). Behavior is explicit per operator or channel surface.
 
 ## Test Expectations
 

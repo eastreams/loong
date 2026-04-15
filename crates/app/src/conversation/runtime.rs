@@ -17,7 +17,7 @@ use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{ToolView, delegate_child_tool_view_for_contract};
 
 use super::super::memory;
-use super::super::{config::LoongClawConfig, provider};
+use super::super::{config::LoongConfig, provider};
 use super::context_engine::ContextArtifactKind;
 use super::context_engine::{
     AssembledConversationContext, ContextEngineBootstrapResult, ContextEngineIngestResult,
@@ -458,7 +458,7 @@ struct PersistedSessionSnapshot {
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn open_session_repository(config: &LoongClawConfig) -> CliResult<SessionRepository> {
+fn open_session_repository(config: &LoongConfig) -> CliResult<SessionRepository> {
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     SessionRepository::new(&memory_config)
         .map_err(|error| format!("open session repository failed: {error}"))
@@ -565,15 +565,13 @@ fn load_persisted_session_snapshot(
 
 #[cfg(feature = "memory-sqlite")]
 fn build_base_tool_view_from_snapshot(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     repo: &SessionRepository,
     session_id: &str,
     snapshot: Option<&PersistedSessionSnapshot>,
 ) -> CliResult<ToolView> {
     let Some(snapshot) = snapshot else {
-        return Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
-            config,
-        ));
+        return Ok(crate::tools::runtime_tool_view_from_loong_config(config));
     };
 
     let is_delegate_child = snapshot.parent_session_id.is_some() || snapshot.is_delegate_child;
@@ -602,14 +600,12 @@ fn build_base_tool_view_from_snapshot(
         ));
     }
 
-    Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
-        config,
-    ))
+    Ok(crate::tools::runtime_tool_view_from_loong_config(config))
 }
 
 #[cfg(feature = "memory-sqlite")]
 fn build_session_context_from_snapshot(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     repo: &SessionRepository,
     session_id: &str,
     base_tool_view: ToolView,
@@ -661,7 +657,7 @@ fn build_session_context_from_snapshot(
 
 #[cfg(feature = "memory-sqlite")]
 fn load_persisted_session_context(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     tool_view: &ToolView,
 ) -> CliResult<Option<SessionContext>> {
@@ -746,12 +742,12 @@ pub trait AsyncDelegateSpawner: Send + Sync {
 #[cfg(feature = "memory-sqlite")]
 #[derive(Clone)]
 struct DefaultAsyncDelegateSpawner {
-    config: Arc<LoongClawConfig>,
+    config: Arc<LoongConfig>,
 }
 
 #[cfg(feature = "memory-sqlite")]
 impl DefaultAsyncDelegateSpawner {
-    fn new(config: &LoongClawConfig) -> Self {
+    fn new(config: &LoongConfig) -> Self {
         Self {
             config: Arc::new(config.clone()),
         }
@@ -769,7 +765,7 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
 
 #[cfg(feature = "memory-sqlite")]
 pub async fn execute_async_delegate_spawn_request(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     request: AsyncDelegateSpawnRequest,
 ) -> Result<(), String> {
     let AsyncDelegateSpawnRequest {
@@ -932,7 +928,7 @@ pub struct TurnMiddlewareRuntimeSnapshot {
     pub available: Vec<TurnMiddlewareMetadata>,
 }
 
-pub fn resolve_context_engine_selection(config: &LoongClawConfig) -> ContextEngineSelection {
+pub fn resolve_context_engine_selection(config: &LoongConfig) -> ContextEngineSelection {
     if let Some(id) = context_engine_id_from_env() {
         return ContextEngineSelection {
             id,
@@ -954,7 +950,7 @@ pub fn resolve_context_engine_selection(config: &LoongClawConfig) -> ContextEngi
 }
 
 pub fn resolve_turn_middleware_selection(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> CliResult<TurnMiddlewareSelection> {
     let mut ids = default_turn_middleware_ids()?;
     if let Some(env_ids) = turn_middleware_ids_from_env() {
@@ -981,7 +977,7 @@ pub fn resolve_turn_middleware_selection(
 }
 
 pub fn collect_context_engine_runtime_snapshot(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> CliResult<ContextEngineRuntimeSnapshot> {
     let selected = resolve_context_engine_selection(config);
     let selected_metadata = describe_context_engine(Some(selected.id.as_str()))?;
@@ -1053,7 +1049,7 @@ where
 {
     async fn build_context_for_tool_view(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_context: &SessionContext,
         include_system_prompt: bool,
         requested_tool_view: &ToolView,
@@ -1069,8 +1065,7 @@ where
             }
             None => config,
         };
-        let runtime_tool_view =
-            crate::tools::runtime_tool_view_from_loongclaw_config(effective_config);
+        let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(effective_config);
         let mut assembled = self
             .context_engine
             .assemble_context(
@@ -1138,7 +1133,7 @@ where
 
     async fn run_turn_middlewares_bootstrap(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
@@ -1162,7 +1157,7 @@ where
 
     async fn apply_turn_middlewares_to_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         mut assembled: AssembledConversationContext,
@@ -1210,7 +1205,7 @@ where
 
     async fn run_turn_middlewares_compact_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
         kernel_ctx: &KernelContext,
@@ -1258,7 +1253,7 @@ impl DefaultConversationRuntime<Box<dyn ConversationContextEngine>> {
         Ok(Self::with_context_engine(context_engine))
     }
 
-    pub fn from_config_or_env(config: &LoongClawConfig) -> CliResult<Self> {
+    pub fn from_config_or_env(config: &LoongConfig) -> CliResult<Self> {
         let selection = resolve_context_engine_selection(config);
         let turn_middleware_selection = resolve_turn_middleware_selection(config)?;
         let context_engine = resolve_context_engine(Some(selection.id.as_str()))?;
@@ -1274,7 +1269,7 @@ impl DefaultConversationRuntime<Box<dyn ConversationContextEngine>> {
 pub trait ConversationRuntime: Send + Sync {
     fn session_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<SessionContext> {
@@ -1292,20 +1287,18 @@ pub trait ConversationRuntime: Send + Sync {
 
     fn tool_view(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ToolView> {
         let _ = (session_id, binding);
-        Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
-            config,
-        ))
+        Ok(crate::tools::runtime_tool_view_from_loong_config(config))
     }
 
     #[cfg(feature = "memory-sqlite")]
     fn async_delegate_spawner(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
     ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
         Some(Arc::new(DefaultAsyncDelegateSpawner::new(config)))
     }
@@ -1313,14 +1306,14 @@ pub trait ConversationRuntime: Send + Sync {
     #[cfg(feature = "memory-sqlite")]
     fn background_task_spawner(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
     ) -> Option<Arc<dyn AsyncDelegateSpawner>> {
         None
     }
 
     async fn bootstrap(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
@@ -1338,7 +1331,7 @@ pub trait ConversationRuntime: Send + Sync {
 
     async fn build_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
@@ -1356,7 +1349,7 @@ pub trait ConversationRuntime: Send + Sync {
     }
     async fn build_messages(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         tool_view: &ToolView,
@@ -1365,14 +1358,14 @@ pub trait ConversationRuntime: Send + Sync {
 
     async fn request_completion(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         messages: &[Value],
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String>;
 
     async fn request_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1382,7 +1375,7 @@ pub trait ConversationRuntime: Send + Sync {
 
     async fn request_turn_with_event_sink(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1397,7 +1390,7 @@ pub trait ConversationRuntime: Send + Sync {
 
     async fn request_turn_streaming(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1427,7 +1420,7 @@ pub trait ConversationRuntime: Send + Sync {
 
     async fn compact_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _messages: &[Value],
         _kernel_ctx: &KernelContext,
@@ -1461,7 +1454,7 @@ where
 {
     fn session_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<SessionContext> {
@@ -1497,7 +1490,7 @@ where
 
     fn tool_view(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ToolView> {
@@ -1517,14 +1510,12 @@ where
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
-        Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
-            config,
-        ))
+        Ok(crate::tools::runtime_tool_view_from_loong_config(config))
     }
 
     async fn bootstrap(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
@@ -1554,7 +1545,7 @@ where
 
     async fn build_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
@@ -1572,7 +1563,7 @@ where
 
     async fn build_messages(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         tool_view: &ToolView,
@@ -1592,7 +1583,7 @@ where
 
     async fn request_completion(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         messages: &[Value],
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
@@ -1601,7 +1592,7 @@ where
 
     async fn request_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1616,7 +1607,7 @@ where
 
     async fn request_turn_with_event_sink(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1638,7 +1629,7 @@ where
 
     async fn request_turn_streaming(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1723,7 +1714,7 @@ where
 
     async fn compact_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
         kernel_ctx: &KernelContext,
@@ -1782,13 +1773,13 @@ fn provider_runtime_binding(
 }
 
 fn delegate_child_runtime_contract_prompt_summary(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_context: &SessionContext,
 ) -> Option<String> {
     session_context.parent_session_id.as_ref()?;
     session_context.subagent_runtime_narrowing()?;
     let subagent_contract = session_context.resolved_subagent_contract();
-    crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None)
+    crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None)
         .delegate_child_prompt_summary(subagent_contract.as_ref())
 }
 
@@ -1823,7 +1814,7 @@ fn delegate_child_profile_prompt_summary(session_context: &SessionContext) -> Op
 }
 
 fn runtime_self_continuity_prompt_summary(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_context: &SessionContext,
 ) -> Option<String> {
     let stored_continuity = session_context.runtime_self_continuity.as_ref()?;

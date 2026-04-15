@@ -1,0 +1,62 @@
+---
+title: Twitch
+description: Configure the Twitch channel surface in Loong.
+---
+
+# Twitch
+
+This is a shipped config-backed outbound surface. Twitch EventSub or chat-listener serve support is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `twitch` |
+| Config key | `twitch` |
+| Implementation status | `config_backed` |
+| Transport | `twitch_chat_api` |
+| Aliases | `tmi` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[twitch]
+enabled = true
+access_token_env = "TWITCH_ACCESS_TOKEN"
+```
+
+## Smoke Test
+
+```bash
+loong twitch-send --target "example_channel" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| chat send | `twitch-send` | Usage: loong twitch-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| chat listener | `twitch-serve` | twitch EventSub or chat-listener serve support is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `twitch.enabled`<br/>`twitch.accounts.<account>.enabled` | none | none |
+| user access token | `twitch.access_token`<br/>`twitch.accounts.<account>.access_token` | `twitch.access_token_env`<br/>`twitch.accounts.<account>.access_token_env` | `TWITCH_ACCESS_TOKEN` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- Use a user access token that carries `user:write:chat`.
+- The send path validates the token and derives sender identity from Twitch instead of duplicating that identity in config.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
