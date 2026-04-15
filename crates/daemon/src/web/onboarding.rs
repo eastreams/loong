@@ -72,8 +72,7 @@ struct ProviderValidationResult {
 
 impl ProviderValidationResult {
     fn passed(self) -> bool {
-        self.endpoint_status == "reachable"
-            && matches!(self.credential_status, "validated" | "request_rejected")
+        self.endpoint_status == "reachable" && self.credential_status == "validated"
     }
 }
 
@@ -323,6 +322,21 @@ mod tests {
         assert_eq!(
             config.provider.endpoint(),
             "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions"
+        );
+    }
+
+    #[test]
+    fn provider_validation_result_does_not_treat_request_rejected_as_passed() {
+        let validation = ProviderValidationResult {
+            endpoint_status: "reachable",
+            endpoint_status_code: Some(400),
+            credential_status: "request_rejected",
+            credential_status_code: Some(400),
+        };
+
+        assert!(
+            !validation.passed(),
+            "request_rejected should block Web entry and provider apply"
         );
     }
 }
