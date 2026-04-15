@@ -52,6 +52,7 @@ pub struct AcpTurnEventSummary {
     pub last_channel_id: Option<String>,
     pub last_account_id: Option<String>,
     pub last_channel_conversation_id: Option<String>,
+    pub last_channel_participant_id: Option<String>,
     pub last_channel_thread_id: Option<String>,
     pub last_routing_intent: Option<String>,
     pub last_routing_origin: Option<String>,
@@ -361,6 +362,11 @@ fn fold_last_turn_context(payload: &Value, summary: &mut AcpTurnEventSummary) {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .or_else(|| summary.last_channel_conversation_id.clone());
+    summary.last_channel_participant_id = payload
+        .get("channel_participant_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| summary.last_channel_participant_id.clone());
     summary.last_channel_thread_id = payload
         .get("channel_thread_id")
         .and_then(Value::as_str)
@@ -417,6 +423,9 @@ fn append_binding_scope_fields(
     }
     if let Some(conversation_id) = binding.conversation_id.as_deref() {
         payload.insert("channel_conversation_id".to_owned(), json!(conversation_id));
+    }
+    if let Some(participant_id) = binding.participant_id.as_deref() {
+        payload.insert("channel_participant_id".to_owned(), json!(participant_id));
     }
     if let Some(thread_id) = binding.thread_id.as_deref() {
         payload.insert("channel_thread_id".to_owned(), json!(thread_id));
@@ -639,6 +648,7 @@ mod tests {
             channel_id: Some("feishu".to_owned()),
             account_id: Some("lark-prod".to_owned()),
             conversation_id: Some("oc_123".to_owned()),
+            participant_id: Some("ou_sender_1".to_owned()),
             thread_id: Some("om_thread_1".to_owned()),
         };
         let payload = build_persisted_turn_event_payload(
@@ -662,6 +672,7 @@ mod tests {
         assert_eq!(payload["channel_id"], "feishu");
         assert_eq!(payload["account_id"], "lark-prod");
         assert_eq!(payload["channel_conversation_id"], "oc_123");
+        assert_eq!(payload["channel_participant_id"], "ou_sender_1");
         assert_eq!(payload["channel_thread_id"], "om_thread_1");
     }
 
@@ -725,6 +736,7 @@ mod tests {
             channel_id: Some("telegram".to_owned()),
             account_id: Some("bot_123456".to_owned()),
             conversation_id: Some("42".to_owned()),
+            participant_id: Some("user-7".to_owned()),
             thread_id: Some("thread-a".to_owned()),
         };
         let payload = build_persisted_turn_final_payload(
@@ -750,6 +762,7 @@ mod tests {
         assert_eq!(payload["channel_id"], "telegram");
         assert_eq!(payload["account_id"], "bot_123456");
         assert_eq!(payload["channel_conversation_id"], "42");
+        assert_eq!(payload["channel_participant_id"], "user-7");
         assert_eq!(payload["channel_thread_id"], "thread-a");
         assert_eq!(payload["state"], "error");
         assert_eq!(payload["error"], "synthetic failure");

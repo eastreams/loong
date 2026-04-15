@@ -1,11 +1,11 @@
 [package]
-name = "loongclaw"
+name = "loong"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 default-run = "loong"
-description = "Primary CLI crate for LoongClaw vertical AI agents"
+description = "Primary CLI crate for Loong vertical AI agents"
 repository.workspace = true
 homepage.workspace = true
 readme = "../../README.md"
@@ -62,14 +62,14 @@ libc = "0.2"
 async-trait.workspace = true
 axum = { workspace = true, features = ["query"] }
 clap.workspace = true
-clap_complete = "4.5"
+clap_complete = "4.6"
 dialoguer.workspace = true
-kernel = { package = "loongclaw-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
-loongclaw-bench = { version = "0.1.0-alpha.3", path = "../bench" }
-loongclaw-app = { version = "0.1.0-alpha.3", path = "../app", default-features = false }
-loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-protocol = { version = "0.1.0-alpha.3", path = "../protocol" }
-loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec" }
+kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loongclaw-bench = { package = "loong-bench", version = "0.1.0-alpha.3", path = "../bench" }
+loongclaw-app = { package = "loong-app", version = "0.1.0-alpha.3", path = "../app", default-features = false }
+loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
+loongclaw-protocol = { package = "loong-protocol", version = "0.1.0-alpha.3", path = "../protocol" }
+loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
 futures-util.workspace = true
@@ -95,12 +95,8 @@ wait-timeout = "0.2"
 name = "loong"
 path = "src/main.rs"
 
-[[bin]]
-name = "loongclaw"
-path = "src/main.rs"
-
 [dev-dependencies]
-loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec", features = ["test-hooks"] }
+loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec", features = ["test-hooks"] }
 async-trait.workspace = true
 sha2.workspace = true
 syn = { version = "2", features = ["full", "visit"] }

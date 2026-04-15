@@ -58,6 +58,7 @@ pub(super) async fn run_cli_chat_surface(
 }
 
 pub(super) fn run_concurrent_cli_host_surface(options: &ConcurrentCliHostOptions) -> CliResult<()> {
+    reject_disabled_cli_channel(&options.config)?;
     let chat_options = CliChatOptions::default();
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         options.resolved_path.clone(),
@@ -1067,30 +1068,33 @@ impl ChatSessionSurface {
         self.render()?;
 
         let observer = build_surface_live_observer(self.state.clone(), self.term.clone());
-        let assistant_text = self
-            .runtime
-            .turn_coordinator
-            .handle_turn_with_address_and_acp_options_and_observer(
-                &reload_cli_turn_config(
-                    &self.runtime.config,
-                    self.runtime.resolved_path.as_path(),
-                )?,
-                &self.runtime.session_address,
-                trimmed,
-                ProviderErrorMode::InlineMessage,
-                &if self.runtime.explicit_acp_request {
-                    AcpConversationTurnOptions::explicit()
-                } else {
-                    AcpConversationTurnOptions::automatic()
-                }
-                .with_additional_bootstrap_mcp_servers(
-                    &self.runtime.effective_bootstrap_mcp_servers,
-                )
-                .with_working_directory(self.runtime.effective_working_directory.as_deref()),
-                crate::conversation::ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx),
+        let assistant_text = crate::agent_runtime::AgentRuntime::new()
+            .run_turn_with_runtime_and_observer(
+                &self.runtime,
+                &crate::agent_runtime::AgentTurnRequest {
+                    message: trimmed.to_owned(),
+                    turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+                    channel_id: self.runtime.session_address.channel_id.clone(),
+                    account_id: self.runtime.session_address.account_id.clone(),
+                    conversation_id: self.runtime.session_address.conversation_id.clone(),
+                    participant_id: self.runtime.session_address.participant_id.clone(),
+                    thread_id: self.runtime.session_address.thread_id.clone(),
+                    metadata: std::collections::BTreeMap::new(),
+                    acp: self.runtime.explicit_acp_request,
+                    acp_event_stream: false,
+                    acp_bootstrap_mcp_servers: self.runtime.effective_bootstrap_mcp_servers.clone(),
+                    acp_cwd: self
+                        .runtime
+                        .effective_working_directory
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                    live_surface_enabled: true,
+                },
+                None,
                 Some(observer),
             )
-            .await?;
+            .await?
+            .output_text;
 
         {
             let mut state = self.lock_state();
@@ -2330,8 +2334,8 @@ fn session_surface_subtitle(state: &SurfaceState) -> &str {
 
 fn default_export_path(session_id: &str) -> String {
     let sanitized_session_id = sanitize_session_id_for_export(session_id);
-    let file_name = format!("loongclaw-{sanitized_session_id}-transcript.txt");
-    let exports_dir = loongclaw_exports_dir();
+    let file_name = format!("loong-{sanitized_session_id}-transcript.txt");
+    let exports_dir = loong_exports_dir();
     let export_path = exports_dir.join(file_name);
 
     export_path.display().to_string()
@@ -2350,9 +2354,9 @@ fn sanitize_session_id_for_export(session_id: &str) -> String {
         .collect()
 }
 
-fn loongclaw_exports_dir() -> PathBuf {
-    let loongclaw_home = crate::config::default_loongclaw_home();
-    loongclaw_home.join("exports")
+fn loong_exports_dir() -> PathBuf {
+    let loong_home = crate::config::default_loong_home();
+    loong_home.join("exports")
 }
 
 fn ensure_parent_directory_exists(path: &Path) -> CliResult<()> {
@@ -2808,7 +2812,7 @@ mod tests {
     }
 
     #[test]
-    fn default_export_path_uses_loongclaw_exports_directory() {
+    fn default_export_path_uses_loong_exports_directory() {
         let export_path = PathBuf::from(default_export_path("session:/bad"));
         let file_name = export_path
             .file_name()
@@ -2821,7 +2825,7 @@ mod tests {
             .expect("export parent directory");
 
         assert_eq!(parent_dir, "exports");
-        assert_eq!(file_name, "loongclaw-session__bad-transcript.txt");
+        assert_eq!(file_name, "loong-session__bad-transcript.txt");
     }
 
     #[test]

@@ -917,8 +917,8 @@ impl ToolConfig {
                 code: super::shared::ConfigValidationCode::NumericRange,
                 field_path: "tools.web_search.timeout_seconds".to_owned(),
                 inline_field_path: "tools.web_search.timeout_seconds".to_owned(),
-                example_env_name: "LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS".to_owned(),
-                suggested_env_name: Some("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS".to_owned()),
+                example_env_name: "LOONG_WEB_SEARCH_TIMEOUT_SECONDS".to_owned(),
+                suggested_env_name: Some("LOONG_WEB_SEARCH_TIMEOUT_SECONDS".to_owned()),
                 extra_message_variables: vars,
             })
         });
@@ -962,8 +962,8 @@ impl ToolConfig {
                 code: super::shared::ConfigValidationCode::UnknownSearchProvider,
                 field_path: "tools.web_search.default_provider".to_owned(),
                 inline_field_path: "tools.web_search.default_provider".to_owned(),
-                example_env_name: "LOONGCLAW_WEB_SEARCH_PROVIDER".to_owned(),
-                suggested_env_name: Some("LOONGCLAW_WEB_SEARCH_PROVIDER".to_owned()),
+                example_env_name: "LOONG_WEB_SEARCH_PROVIDER".to_owned(),
+                suggested_env_name: Some("LOONG_WEB_SEARCH_PROVIDER".to_owned()),
                 extra_message_variables,
             });
         }
@@ -1410,7 +1410,7 @@ fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
 
     #[test]
     fn tool_config_defaults_expose_session_runtime_policy() {
@@ -2048,13 +2048,11 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
     #[test]
     fn bash_tool_config_defaults_to_loongclaw_home_rules_dir() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", home.path());
+        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-home");
 
         assert_eq!(
             BashToolConfig::default().resolved_rules_dir(),
-            crate::config::default_loongclaw_home().join("rules")
+            home.path().join("rules")
         );
     }
 
@@ -2070,9 +2068,8 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
     #[test]
     fn bash_tool_config_treats_blank_rules_dir_override_as_unset() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", home.path());
+        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-blank-home");
+        let expected_rules_dir = home.path().join("rules");
 
         for raw in ["", "   "] {
             let config = BashToolConfig {
@@ -2082,7 +2079,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
             assert_eq!(
                 config.resolved_rules_dir(),
-                crate::config::default_loongclaw_home().join("rules"),
+                expected_rules_dir,
                 "blank rules_dir `{raw}` should fall back to the default home rules dir"
             );
         }

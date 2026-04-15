@@ -44,10 +44,7 @@ pub(crate) fn format_ask_with_config(config_path: &str, message: &str) -> String
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        format_ask_with_config, format_ask_with_config_for_command, format_subcommand_with_config,
-        format_subcommand_with_config_for_command, shell_quote_argument,
-    };
+    use super::{format_ask_with_config, format_subcommand_with_config, shell_quote_argument};
 
     #[test]
     fn shell_quote_argument_escapes_single_quotes() {
@@ -78,30 +75,6 @@ mod tests {
         assert_eq!(
             format_ask_with_config("/tmp/loongclaw.toml", "say \"hi\" and print $HOME"),
             "loong ask --config '/tmp/loongclaw.toml' --message 'say \"hi\" and print $HOME'"
-        );
-    }
-
-    #[test]
-    fn format_subcommand_with_config_can_render_legacy_binary_name() {
-        assert_eq!(
-            format_subcommand_with_config_for_command(
-                crate::LEGACY_CLI_COMMAND_NAME,
-                "doctor",
-                "/tmp/loongclaw.toml",
-            ),
-            "loongclaw doctor --config '/tmp/loongclaw.toml'"
-        );
-    }
-
-    #[test]
-    fn format_ask_with_config_can_render_legacy_binary_name() {
-        assert_eq!(
-            format_ask_with_config_for_command(
-                crate::LEGACY_CLI_COMMAND_NAME,
-                "/tmp/loongclaw.toml",
-                "say hi",
-            ),
-            "loongclaw ask --config '/tmp/loongclaw.toml' --message 'say hi'"
         );
     }
 }

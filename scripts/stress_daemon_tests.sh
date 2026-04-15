@@ -7,9 +7,9 @@ cd "$REPO_ROOT"
 ROUNDS="${1:-10}"
 THREAD_MODES="${2:-default,2,1}"
 LOG_DIR="${3:-target/test-stress/daemon}"
-TRAP_MODES="${4:-${LOONGCLAW_STRESS_WASM_TRAPS_MODES:-auto}}"
-LOCKED="${LOONGCLAW_STRESS_LOCKED:-true}"
-CONTINUE_ON_FAILURE="${LOONGCLAW_STRESS_CONTINUE_ON_FAILURE:-false}"
+TRAP_MODES="${4:-${LOONG_STRESS_WASM_TRAPS_MODES:-${LOONGCLAW_STRESS_WASM_TRAPS_MODES:-auto}}}"
+LOCKED="${LOONG_STRESS_LOCKED:-${LOONGCLAW_STRESS_LOCKED:-true}}"
+CONTINUE_ON_FAILURE="${LOONG_STRESS_CONTINUE_ON_FAILURE:-${LOONGCLAW_STRESS_CONTINUE_ON_FAILURE:-false}}"
 
 if ! [[ "$ROUNDS" =~ ^[0-9]+$ ]] || [[ "$ROUNDS" -le 0 ]]; then
   echo "invalid ROUNDS: $ROUNDS (expected positive integer)" >&2
@@ -17,12 +17,12 @@ if ! [[ "$ROUNDS" =~ ^[0-9]+$ ]] || [[ "$ROUNDS" -le 0 ]]; then
 fi
 
 if [[ "$LOCKED" != "true" && "$LOCKED" != "false" ]]; then
-  echo "invalid LOONGCLAW_STRESS_LOCKED: $LOCKED (expected true|false)" >&2
+  echo "invalid LOONG_STRESS_LOCKED/LOONGCLAW_STRESS_LOCKED: $LOCKED (expected true|false)" >&2
   exit 2
 fi
 
 if [[ "$CONTINUE_ON_FAILURE" != "true" && "$CONTINUE_ON_FAILURE" != "false" ]]; then
-  echo "invalid LOONGCLAW_STRESS_CONTINUE_ON_FAILURE: $CONTINUE_ON_FAILURE (expected true|false)" >&2
+  echo "invalid LOONG_STRESS_CONTINUE_ON_FAILURE/LOONGCLAW_STRESS_CONTINUE_ON_FAILURE: $CONTINUE_ON_FAILURE (expected true|false)" >&2
   exit 2
 fi
 
@@ -47,7 +47,7 @@ run_mode() {
     local log_file="$LOG_DIR/traps-${trap_mode}-mode-${mode}-run-${run_index}.log"
     local cmd=(
       cargo test
-      -p loongclaw
+      -p loong
       --bin loong
       --all-features
     )
@@ -61,10 +61,10 @@ run_mode() {
     echo "[stress] traps=${trap_mode} mode=${mode} run=${run_index}/${ROUNDS}"
     local status="PASS"
     if [[ "$trap_mode" == "auto" ]]; then
-      if ! env -u LOONGCLAW_WASM_SIGNALS_BASED_TRAPS "${cmd[@]}" >"$log_file" 2>&1; then
+      if ! env -u LOONG_WASM_SIGNALS_BASED_TRAPS -u LOONGCLAW_WASM_SIGNALS_BASED_TRAPS "${cmd[@]}" >"$log_file" 2>&1; then
         status="FAIL"
       fi
-    elif ! LOONGCLAW_WASM_SIGNALS_BASED_TRAPS="$trap_mode" "${cmd[@]}" >"$log_file" 2>&1; then
+    elif ! LOONG_WASM_SIGNALS_BASED_TRAPS="$trap_mode" LOONGCLAW_WASM_SIGNALS_BASED_TRAPS="$trap_mode" "${cmd[@]}" >"$log_file" 2>&1; then
       status="FAIL"
     fi
 

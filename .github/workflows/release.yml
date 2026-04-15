@@ -10,6 +10,10 @@ on:
         description: "Tag to release (required for manual runs, for example v0.1.0 or v0.1.0-alpha.1)"
         required: true
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   BIN_NAME: loong
   LEGACY_BIN_NAME: loongclaw
@@ -55,6 +59,21 @@ jobs:
       - name: Test (all features)
         run: cargo test --workspace --all-features --locked
 
+      - name: Bootstrap local release artifacts
+        run: scripts/bootstrap_release_local_artifacts.sh
+
+      - name: Strict docs governance
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          LOONG_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+          grep -F "## [${RELEASE_TAG#v}]" CHANGELOG.md > /dev/null
+          release_doc="docs/releases/${RELEASE_TAG}.md"
+          test -f "$release_doc"
+          grep -Fx "# Release ${RELEASE_TAG}" "$release_doc"
+
       - name: Docs build
         run: cargo doc --workspace --no-deps
 
@@ -62,7 +81,7 @@ jobs:
         run: chmod +x ./scripts/check_dep_graph.sh && ./scripts/check_dep_graph.sh
 
       - name: Strict architecture contract
-        run: chmod +x ./scripts/check_architecture_boundaries.sh && LOONGCLAW_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh
+        run: chmod +x ./scripts/check_architecture_boundaries.sh && LOONG_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh
 
   build-binaries:
     name: Build ${{ matrix.target }} on ${{ matrix.os }}
@@ -162,16 +181,16 @@ jobs:
       - name: Build release binary with cargo-zigbuild
         if: matrix.use_zig == true
         env:
-          LOONGCLAW_RELEASE_BUILD: "1"
+          LOONG_RELEASE_BUILD: "1"
         run: |
-          cargo zigbuild --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} \
+          cargo zigbuild --release --locked -p loong --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} \
             --target "${{ matrix.target }}.${{ env.LINUX_ARM64_GLIBC_FLOOR }}"
 
       - name: Build release binary (Android/Termux)
         if: matrix.use_android_ndk == true
         shell: bash
         env:
-          LOONGCLAW_RELEASE_BUILD: "1"
+          LOONG_RELEASE_BUILD: "1"
         run: |
           set -euo pipefail
           toolchain="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -179,13 +198,13 @@ jobs:
           export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
           export AR_aarch64_linux_android="${toolchain}/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
-          cargo build --release --locked -p loongclaw --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target "${{ matrix.target }}"
+          cargo build --release --locked -p loong --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target "${{ matrix.target }}"
 
       - name: Build release binary (native)
         if: matrix.use_zig != true && matrix.use_android_ndk != true
         env:
-          LOONGCLAW_RELEASE_BUILD: "1"
-        run: cargo build --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} --target ${{ matrix.target }}
+          LOONG_RELEASE_BUILD: "1"
+        run: cargo build --release --locked -p loong --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} --target ${{ matrix.target }}
 
       - name: Package archive (Unix)
         if: matrix.archive == 'tar.gz'
@@ -225,7 +244,7 @@ jobs:
           ./scripts/check_glibc_floor.sh "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "$max_glibc"
 
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -280,7 +299,7 @@ jobs:
           fi
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           generate_release_notes: true

@@ -354,6 +354,9 @@ fn initialize_turn_loop_session(
     user_input: &str,
     policy: &TurnLoopPolicy,
 ) -> TurnLoopSessionState {
+    // Seed the loop with the just-arrived user turn before any tool followups
+    // are generated so budgeting, raw-output handling, and repetition
+    // supervision all observe a complete round transcript.
     messages.push(json!({
         "role": "user",
         "content": user_input,

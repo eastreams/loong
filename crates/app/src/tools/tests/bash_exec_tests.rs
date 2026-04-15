@@ -434,9 +434,9 @@ fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
 fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_config_path() {
     use std::fs;
 
-    let home = unique_tool_temp_dir("loongclaw-bash-home-rules");
+    let home = crate::test_support::ScopedLoongClawHome::new("loongclaw-bash-home-rules");
     let workspace = unique_tool_temp_dir("loongclaw-bash-home-rules-workspace");
-    let rules_dir = home.join(crate::config::HOME_DIR_NAME).join("rules");
+    let rules_dir = home.path().join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
         rules_dir.join("allow.rules"),
@@ -444,10 +444,6 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
     )
     .expect("rule file");
     fs::create_dir_all(&workspace).expect("workspace");
-
-    let mut env = ScopedEnv::new();
-    env.set("HOME", &home);
-    env.remove("LOONG_HOME");
     let _cwd = ScopedCurrentDir::new(&workspace);
 
     let mut runtime = runtime_config::ToolRuntimeConfig::from_loongclaw_config(
@@ -457,11 +453,11 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
     assert_eq!(runtime.bash_exec.governance.rules_dir, rules_dir);
     assert!(
         runtime.bash_exec.governance.load_error.is_none(),
-        "default HOME-scoped rules should load cleanly"
+        "default runtime-home rules should load cleanly"
     );
 
     let log_path = home.join("bash-args.log");
-    let runtime_path = write_fake_bash_runtime(&home, "fake-bash", &log_path);
+    let runtime_path = write_fake_bash_runtime(home.path(), "fake-bash", &log_path);
     runtime.bash_exec.available = true;
     runtime.bash_exec.command = Some(runtime_path);
 
@@ -483,8 +479,7 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
     );
 
     drop(_cwd);
-    drop(env);
-    fs::remove_dir_all(&home).ok();
+    drop(home);
     fs::remove_dir_all(&workspace).ok();
 }
 

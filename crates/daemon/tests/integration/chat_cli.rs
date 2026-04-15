@@ -55,7 +55,7 @@ fn stdout_contains_compacted_hint(stdout: &str, expected_hint: &str) -> bool {
 
 fn invoked_chat_cli_command_name() -> &'static str {
     mvp::config::detect_invoked_cli_command_name_from_arg0(Some(OsStr::new(env!(
-        "CARGO_BIN_EXE_loongclaw"
+        "CARGO_BIN_EXE_loong"
     ))))
 }
 
@@ -132,7 +132,7 @@ impl ChatCliFixture {
         fake_onboard_exit_code: Option<i32>,
     ) -> Output {
         let loongclaw_home = self.home_dir.join(".loongclaw");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_loongclaw"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_loong"));
         command
             .arg("chat")
             .current_dir(&self.root)
@@ -190,7 +190,7 @@ fn chat_without_config_runs_onboard_for_explicit_yes() {
         "explicit yes should succeed, stdout={stdout:?}, stderr={stderr:?}"
     );
     assert!(
-        stdout.contains("Welcome to LoongClaw!"),
+        stdout.contains("Welcome to Loong!"),
         "missing-config onboarding flow should greet the user: {stdout:?}"
     );
     assert!(

@@ -1,0 +1,57 @@
+---
+title: LINE
+description: Configure the LINE channel surface in Loong.
+---
+
+# LINE
+
+This is a shipped config-backed outbound surface. Line serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `line` |
+| Config key | `line` |
+| Implementation status | `config_backed` |
+| Transport | `line_messaging_api` |
+| Aliases | `line-bot` |
+| Default send target kind | `address` |
+
+## Minimal Config
+
+```toml
+[line]
+enabled = true
+channel_access_token_env = "LINE_CHANNEL_ACCESS_TOKEN"
+```
+
+## Smoke Test
+
+```bash
+loong line-send --target "U4af4980629..." --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| push send | `line-send` | Usage: loong line-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| webhook reply loop | `line-serve` | line serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `line.enabled`<br/>`line.accounts.<account>.enabled` | none | none |
+| channel access token | `line.channel_access_token`<br/>`line.accounts.<account>.channel_access_token` | `line.channel_access_token_env`<br/>`line.accounts.<account>.channel_access_token_env` | `LINE_CHANNEL_ACCESS_TOKEN` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

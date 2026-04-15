@@ -57,13 +57,13 @@ write_fixture_release_doc() {
 ## Artifacts
 | Asset | Size (bytes) | SHA256 | Download |
 |---|---:|---|---|
-| \`loong-${tag}-x86_64-unknown-linux-gnu.tar.gz\` | 1 | \`deadbeef\` | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/${tag}/linux.tar.gz) |
+| \`loong-${tag}-x86_64-unknown-linux-gnu.tar.gz\` | 1 | \`deadbeef\` | [link](https://github.com/eastreams/loong/releases/download/${tag}/linux.tar.gz) |
 
 ## Verification
 | Check | Result | Evidence |
 |---|---|---|
-| Release workflow completed successfully | PASS | [workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/${workflow_run_id}) |
-| GitHub release is not draft | PASS | [release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/${tag}) |
+| Release workflow completed successfully | PASS | [workflow run](https://github.com/eastreams/loong/actions/runs/${workflow_run_id}) |
+| GitHub release is not draft | PASS | [release page](https://github.com/eastreams/loong/releases/tag/${tag}) |
 
 ## Refactor Budget
 - Hotspot metric paid down: none
@@ -78,8 +78,8 @@ write_fixture_release_doc() {
 
 ## Detail Links
 - [Changelog entry](../../CHANGELOG.md)
-- [Release workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/${workflow_run_id})
-- [GitHub release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/${tag})
+- [Release workflow run](https://github.com/eastreams/loong/actions/runs/${workflow_run_id})
+- [GitHub release page](https://github.com/eastreams/loong/releases/tag/${tag})
 - [Release workflow definition](../../.github/workflows/release.yml)
 - Trace directory: \`${trace_path}\`
 - Local debug log: \`.docs/releases/${tag}-debug.md\`
@@ -93,6 +93,7 @@ make_fixture_repo() {
     "$fixture/scripts" \
     "$fixture/docs/design-docs" \
     "$fixture/docs/releases" \
+    "$fixture/docs/releases/support" \
     "$fixture/crates/contracts/src" \
     "$fixture/.github/ISSUE_TEMPLATE" \
     "$fixture/.github/workflows"
@@ -104,7 +105,8 @@ make_fixture_repo() {
   chmod +x "$fixture/scripts/check-docs.sh"
   chmod +x "$fixture/scripts/check_governance_docs_consistency.sh"
   cp "$REPO_ROOT/docs/releases/README.md" "$fixture/docs/releases/README.md"
-  cp "$REPO_ROOT/docs/releases/TEMPLATE.md" "$fixture/docs/releases/TEMPLATE.md"
+  cp "$REPO_ROOT/docs/releases/support/README.md" "$fixture/docs/releases/support/README.md"
+  cp "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$fixture/docs/releases/support/TEMPLATE.md"
   cp "$REPO_ROOT/crates/contracts/src/audit_types.rs" \
     "$fixture/crates/contracts/src/audit_types.rs"
   cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/config.yml" "$fixture/.github/ISSUE_TEMPLATE/config.yml"
@@ -148,7 +150,7 @@ EOF
   cp "$fixture/AGENTS.md" "$fixture/CLAUDE.md"
 
   cat >"$fixture/docs/ROADMAP.md" <<'EOF'
-# LoongClaw Roadmap
+# Loong Roadmap
 
 - kernel-level request-policy gate for tool calls through `PolicyEngine::authorize(...)`
   plus `PolicyExtensionChain`, with explicit deny/approval-required outcomes before
@@ -201,6 +203,7 @@ make_prerelease_fixture_repo() {
     "$fixture/scripts" \
     "$fixture/docs/design-docs" \
     "$fixture/docs/releases" \
+    "$fixture/docs/releases/support" \
     "$fixture/crates/contracts/src" \
     "$fixture/.github/ISSUE_TEMPLATE" \
     "$fixture/.github/workflows"
@@ -212,7 +215,8 @@ make_prerelease_fixture_repo() {
   chmod +x "$fixture/scripts/check-docs.sh"
   chmod +x "$fixture/scripts/check_governance_docs_consistency.sh"
   cp "$REPO_ROOT/docs/releases/README.md" "$fixture/docs/releases/README.md"
-  cp "$REPO_ROOT/docs/releases/TEMPLATE.md" "$fixture/docs/releases/TEMPLATE.md"
+  cp "$REPO_ROOT/docs/releases/support/README.md" "$fixture/docs/releases/support/README.md"
+  cp "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$fixture/docs/releases/support/TEMPLATE.md"
   cp "$REPO_ROOT/crates/contracts/src/audit_types.rs" \
     "$fixture/crates/contracts/src/audit_types.rs"
   cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/config.yml" "$fixture/.github/ISSUE_TEMPLATE/config.yml"
@@ -248,13 +252,13 @@ EOF
 ## Artifacts
 | Asset | Size (bytes) | SHA256 | Download |
 |---|---:|---|---|
-| `loong-v0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz` | 1 | `deadbeef` | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/v0.1.0-alpha.1/linux.tar.gz) |
+| `loong-v0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz` | 1 | `deadbeef` | [link](https://github.com/eastreams/loong/releases/download/v0.1.0-alpha.1/linux.tar.gz) |
 
 ## Verification
 | Check | Result | Evidence |
 |---|---|---|
-| Release workflow completed successfully | PASS | [workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/1) |
-| GitHub release is not draft | PASS | [release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/v0.1.0-alpha.1) |
+| Release workflow completed successfully | PASS | [workflow run](https://github.com/eastreams/loong/actions/runs/1) |
+| GitHub release is not draft | PASS | [release page](https://github.com/eastreams/loong/releases/tag/v0.1.0-alpha.1) |
 
 ## Refactor Budget
 - Hotspot metric paid down: none
@@ -269,8 +273,8 @@ EOF
 
 ## Detail Links
 - [Changelog entry](../../CHANGELOG.md)
-- [Release workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/1)
-- [GitHub release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/v0.1.0-alpha.1)
+- [Release workflow run](https://github.com/eastreams/loong/actions/runs/1)
+- [GitHub release page](https://github.com/eastreams/loong/releases/tag/v0.1.0-alpha.1)
 - Trace directory: `.docs/traces/20260317T000000Z-post-release-v0.1.0-alpha.1-prealpha01`
 - Local debug log: `.docs/releases/v0.1.0-alpha.1-debug.md`
 EOF
@@ -281,7 +285,7 @@ EOF
   cp "$fixture/AGENTS.md" "$fixture/CLAUDE.md"
 
   cat >"$fixture/docs/ROADMAP.md" <<'EOF'
-# LoongClaw Roadmap
+# Loong Roadmap
 
 - kernel-level request-policy gate for tool calls through `PolicyEngine::authorize(...)`
   plus `PolicyExtensionChain`, with explicit deny/approval-required outcomes before

@@ -25,6 +25,7 @@ const BASH_EXEC_ALLOWED_FIELDS: &[&str] = &[
     "command",
     "cwd",
     "timeout_ms",
+    super::LOONG_INTERNAL_TOOL_CONTEXT_KEY,
     super::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY,
 ];
 
@@ -66,13 +67,21 @@ pub(super) fn detect_bash_runtime_policy() -> BashExecRuntimePolicy {
         if probe_bash_candidate(&candidate) {
             return BashExecRuntimePolicy {
                 available: true,
-                command: Some(candidate),
+                command: Some(resolve_bash_command(candidate)),
                 ..BashExecRuntimePolicy::default()
             };
         }
     }
 
     unavailable_bash_runtime_policy()
+}
+
+fn resolve_bash_command(candidate: PathBuf) -> PathBuf {
+    if candidate.components().count() > 1 {
+        return candidate;
+    }
+
+    which::which(candidate.as_path()).unwrap_or(candidate)
 }
 
 pub(super) fn execute_bash_tool_with_config(
@@ -295,6 +304,13 @@ mod tests {
         assert_eq!(policy.warning.as_deref(), Some(BASH_UNAVAILABLE_WARNING));
     }
 
+    #[test]
+    fn resolve_bash_command_prefers_absolute_path_for_path_lookups() {
+        let resolved = resolve_bash_command(PathBuf::from("bash"));
+
+        assert!(resolved.is_absolute() || resolved == std::path::Path::new("bash"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn probe_bash_candidate_with_timeout_returns_false_for_slow_candidate() {
@@ -412,21 +428,21 @@ mod tests {
     #[cfg(feature = "tool-shell")]
     #[test]
     fn execute_bash_tool_with_config_emits_runtime_output_delta_and_single_metrics_event() {
-        let bash_available = probe_bash_candidate(Path::new("bash"));
-        if !bash_available {
+        let bash_runtime = detect_bash_runtime_policy();
+        let Some(bash_command) = bash_runtime.command else {
             eprintln!("skipping bash runtime event test because bash is unavailable");
             return;
-        }
+        };
 
         let root = tempfile::tempdir().expect("tempdir");
-        let root_path = root.path().to_path_buf();
+        let root_path = std::fs::canonicalize(root.path()).expect("canonicalize tempdir");
         let mut config = ToolRuntimeConfig {
             file_root: Some(root_path.clone()),
             shell_allow: ["printf".to_owned()].into_iter().collect(),
             ..ToolRuntimeConfig::default()
         };
         config.bash_exec.available = true;
-        config.bash_exec.command = Some(PathBuf::from("bash"));
+        config.bash_exec.command = Some(bash_command);
         config.bash_exec.governance.rules = compile_compatibility_rules(
             "test_allow",
             PrefixRuleDecision::Allow,

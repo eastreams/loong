@@ -8,7 +8,7 @@ fn validate_config_logging_redacts_raw_config_path_from_tracing_fields() {
     ));
     let missing_path = missing_path.display().to_string();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args(["validate-config", "--config", missing_path.as_str()])
         .env("LOONGCLAW_LOG", "debug")
         .env("LOONGCLAW_LOG_FORMAT", "compact")

@@ -1,15 +1,18 @@
 [package]
-name = "loongclaw-kernel"
+name = "loong-kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Internal support crate for LoongClaw: kernel primitives and governance core"
+description = "Internal support crate for Loong: kernel primitives and governance core"
 repository.workspace = true
 homepage.workspace = true
 
+[lib]
+name = "loongclaw_kernel"
+
 [dependencies]
-loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
+loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
 async-trait.workspace = true
 futures-util.workspace = true
 hex.workspace = true

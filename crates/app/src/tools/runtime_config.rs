@@ -751,6 +751,10 @@ impl ToolRuntimeConfig {
         configured_root.unwrap_or(fallback_root)
     }
 
+    pub fn from_loong_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
+        Self::from_loongclaw_config(config, config_path)
+    }
+
     pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
         let file_root = config.tools.configured_file_root();
         let workspace_root = config
@@ -935,8 +939,9 @@ impl ToolRuntimeConfig {
         });
         let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
-        let config_path = std::env::var("LOONGCLAW_CONFIG_PATH")
+        let config_path = std::env::var("LOONG_CONFIG_PATH")
             .ok()
+            .or_else(|| std::env::var("LOONGCLAW_CONFIG_PATH").ok())
             .map(PathBuf::from);
         let shell_allow: BTreeSet<String> = crate::config::DEFAULT_SHELL_ALLOW
             .iter()
@@ -989,7 +994,8 @@ impl ToolRuntimeConfig {
         let web_fetch_max_redirects = parse_env_usize("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS);
         let web_search_enabled = parse_env_bool("LOONGCLAW_WEB_SEARCH_ENABLED").unwrap_or(true);
-        let web_search_default_provider = parse_env_string("LOONGCLAW_WEB_SEARCH_PROVIDER")
+        let web_search_default_provider = parse_env_string("LOONG_WEB_SEARCH_PROVIDER")
+            .or_else(|| parse_env_string("LOONGCLAW_WEB_SEARCH_PROVIDER"))
             .as_deref()
             .and_then(crate::config::normalize_web_search_provider)
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
@@ -1030,10 +1036,12 @@ impl ToolRuntimeConfig {
                 crate::config::WEB_SEARCH_PROVIDER_JINA,
             ),
         );
-        let web_search_timeout_seconds = parse_env_u64("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS")
+        let web_search_timeout_seconds = parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS")
+            .or_else(|| parse_env_u64("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS"))
             .map(|seconds| seconds.clamp(1, 60))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS);
-        let web_search_max_results = parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS")
+        let web_search_max_results = parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS")
+            .or_else(|| parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS"))
             .map(|count| count.clamp(1, 10))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
         let autonomy_profile = resolve_autonomy_profile_from_env();
@@ -1732,13 +1740,14 @@ pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
     #[cfg(feature = "feishu-integration")]
     use std::collections::BTreeMap;
 
     fn clear_tool_runtime_env(env: &mut ScopedEnv) {
         for key in [
             "LOONG_HOME",
+            "LOONG_CONFIG_PATH",
             "LOONGCLAW_CONFIG_PATH",
             "LOONGCLAW_FILE_ROOT",
             "LOONGCLAW_WORKSPACE_ROOT",
@@ -1766,8 +1775,11 @@ mod tests {
             "LOONGCLAW_WEB_FETCH_MAX_BYTES",
             "LOONGCLAW_WEB_FETCH_MAX_REDIRECTS",
             "LOONGCLAW_WEB_SEARCH_ENABLED",
+            "LOONG_WEB_SEARCH_PROVIDER",
             "LOONGCLAW_WEB_SEARCH_PROVIDER",
+            "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
             "LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_SEARCH_MAX_RESULTS",
             "LOONGCLAW_WEB_SEARCH_MAX_RESULTS",
             "LOONGCLAW_AUTONOMY_PROFILE",
             "BRAVE_API_KEY",
@@ -1965,9 +1977,7 @@ mod tests {
 
     #[test]
     fn tool_runtime_config_uses_loongclaw_home_rules_dir_when_unset() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", home.path());
+        let home = ScopedLoongClawHome::new("loongclaw-runtime-config-home");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
             &LoongClawConfig::default(),
@@ -1976,7 +1986,7 @@ mod tests {
 
         assert_eq!(
             runtime.bash_exec.governance.rules_dir,
-            crate::config::default_loongclaw_home().join("rules")
+            home.path().join("rules")
         );
     }
 
@@ -2002,11 +2012,8 @@ mod tests {
 
     #[test]
     fn bash_governance_runtime_treats_missing_rules_dir_as_empty_rule_set() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", tempdir.path());
-        env.remove("LOONG_HOME");
-        let config_path = tempdir.path().join("loongclaw.toml");
+        let home = ScopedLoongClawHome::new("loongclaw-runtime-governance-home");
+        let config_path = home.path().join("loongclaw.toml");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
             &LoongClawConfig::default(),
@@ -2019,14 +2026,12 @@ mod tests {
 
     #[test]
     fn bash_governance_runtime_preserves_rule_load_error_for_broken_rule_file() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let mut env = ScopedEnv::new();
-        env.set("HOME", tempdir.path());
-        let rules_dir = crate::config::default_loongclaw_home().join("rules");
+        let home = ScopedLoongClawHome::new("loongclaw-runtime-governance-broken-home");
+        let rules_dir = home.path().join("rules");
         std::fs::create_dir_all(&rules_dir).expect("create rules dir");
         std::fs::write(rules_dir.join("broken.rules"), "not valid starlark")
             .expect("write broken rule file");
-        let config_path = tempdir.path().join("loongclaw.toml");
+        let config_path = home.path().join("loongclaw.toml");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
             &LoongClawConfig::default(),
@@ -2309,31 +2314,29 @@ mod tests {
     #[test]
     fn memory_sqlite_path_from_env_falls_back_to_loongclaw_home() {
         let mut env = ScopedEnv::new();
-        let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-home");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONG_HOME", &runtime_home);
+        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-memory-home");
 
         let runtime = ToolRuntimeConfig::from_env();
 
         assert_eq!(
             runtime.memory_sqlite_path,
-            Some(runtime_home.join("memory.sqlite3"))
+            Some(runtime_home.path().join("memory.sqlite3"))
         );
     }
 
     #[test]
     fn empty_legacy_memory_sqlite_path_falls_back_to_loongclaw_home() {
         let mut env = ScopedEnv::new();
-        let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-empty-sqlite-path");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONG_HOME", &runtime_home);
+        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-empty-sqlite-home");
         env.set("LOONGCLAW_SQLITE_PATH", "");
 
         let runtime = ToolRuntimeConfig::from_env();
 
         assert_eq!(
             runtime.memory_sqlite_path,
-            Some(runtime_home.join("memory.sqlite3"))
+            Some(runtime_home.path().join("memory.sqlite3"))
         );
     }
 
@@ -2700,9 +2703,9 @@ mod tests {
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
-        env.set("LOONGCLAW_WEB_SEARCH_PROVIDER", "DDG");
-        env.set("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS", "999");
-        env.set("LOONGCLAW_WEB_SEARCH_MAX_RESULTS", "42");
+        env.set("LOONG_WEB_SEARCH_PROVIDER", "DDG");
+        env.set("LOONG_WEB_SEARCH_TIMEOUT_SECONDS", "999");
+        env.set("LOONG_WEB_SEARCH_MAX_RESULTS", "42");
         env.set(
             crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV,
             "brave-test-key",
@@ -2757,6 +2760,23 @@ mod tests {
             config.web_search.jina_api_key.as_deref(),
             Some("jina-test-key")
         );
+    }
+
+    #[test]
+    fn from_env_preserves_legacy_web_search_env_fallbacks() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
+        env.set("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS", "41");
+        env.set("LOONGCLAW_WEB_SEARCH_MAX_RESULTS", "7");
+
+        let config = ToolRuntimeConfig::from_env();
+
+        assert_eq!(config.web_search.default_provider, "tavily");
+        assert_eq!(config.web_search.timeout_seconds, 41);
+        assert_eq!(config.web_search.max_results, 7);
     }
 
     #[test]
@@ -3548,6 +3568,7 @@ Treat these as enforced limits for this child session."
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         clear_feishu_runtime_env(&mut env);
+        let _home = ScopedLoongClawHome::new("loongclaw-feishu-runtime-home");
         env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
         env.set("FEISHU_APP_SECRET", "env-secret");
 

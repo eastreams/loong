@@ -11,6 +11,7 @@ pub struct ConversationSessionAddress {
     pub channel_id: Option<String>,
     pub account_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub participant_id: Option<String>,
     pub thread_id: Option<String>,
 }
 
@@ -43,6 +44,11 @@ impl ConversationSessionAddress {
         self
     }
 
+    pub fn with_participant_id(mut self, participant_id: impl Into<String>) -> Self {
+        self.participant_id = trimmed_non_empty(participant_id.into());
+        self
+    }
+
     pub fn canonical_channel_id(&self) -> Option<String> {
         self.channel_id
             .as_deref()
@@ -56,6 +62,9 @@ impl ConversationSessionAddress {
         }
         if let Some(conversation_id) = self.conversation_id.as_ref().and_then(trimmed_non_empty) {
             path.push(conversation_id);
+        }
+        if let Some(participant_id) = self.participant_id.as_ref().and_then(trimmed_non_empty) {
+            path.push(participant_id);
         }
         if let Some(thread_id) = self.thread_id.as_ref().and_then(trimmed_non_empty) {
             path.push(thread_id);
@@ -144,11 +153,12 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("opaque")
             .with_channel_scope(" Feishu ", "oc_123")
             .with_account_id("lark_cli_a1b2c3")
+            .with_participant_id("ou_sender_1")
             .with_thread_id("om_thread_1");
 
         assert_eq!(
             address.structured_route_session_id().as_deref(),
-            Some("feishu:lark_cli_a1b2c3:oc_123:om_thread_1")
+            Some("feishu:lark_cli_a1b2c3:oc_123:ou_sender_1:om_thread_1")
         );
     }
 
@@ -169,6 +179,7 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("opaque")
             .with_channel_scope("matrix", "!ops:example.org")
             .with_account_id("@bot:example.org")
+            .with_participant_id("@alice:example.org")
             .with_thread_id("$thread:example.org");
 
         let route = address
@@ -187,6 +198,7 @@ mod tests {
             vec![
                 "bot-example-org".to_owned(),
                 "!ops:example.org".to_owned(),
+                "@alice:example.org".to_owned(),
                 "$thread:example.org".to_owned()
             ]
         );

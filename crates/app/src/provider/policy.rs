@@ -4,6 +4,8 @@ use std::time::{Duration, SystemTime};
 use time::OffsetDateTime;
 use time::format_description::well_known::{Rfc2822, Rfc3339};
 
+use super::transport_trait::TransportError;
+
 const MIN_BACKOFF_MS: u64 = 50;
 
 pub(super) struct ProviderRequestPolicy {
@@ -36,7 +38,7 @@ pub(super) fn should_retry_status(status_code: u16) -> bool {
     matches!(status_code, 408 | 409 | 425 | 429 | 500 | 502 | 503 | 504)
 }
 
-pub(super) fn should_retry_error(error: &reqwest::Error) -> bool {
+pub(super) fn should_retry_error(error: &TransportError) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request()
 }
 
@@ -62,7 +64,11 @@ pub(super) fn next_backoff_ms(current: u64, max_backoff_ms: u64) -> u64 {
     current.saturating_mul(2).min(max_backoff_ms)
 }
 
-fn parse_retry_after_ms(response_headers: &HeaderMap) -> Option<u64> {
+pub(super) fn parse_retry_after_duration(response_headers: &HeaderMap) -> Option<Duration> {
+    parse_retry_after_ms(response_headers).map(Duration::from_millis)
+}
+
+pub(super) fn parse_retry_after_ms(response_headers: &HeaderMap) -> Option<u64> {
     parse_retry_after_ms_at(response_headers, SystemTime::now())
 }
 

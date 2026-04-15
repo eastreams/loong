@@ -5,11 +5,42 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 . "$REPO_ROOT/scripts/architecture_budget_lib.sh"
 
-REPORT_MONTH="${LOONGCLAW_ARCH_REPORT_MONTH:-$(date +%Y-%m)}"
-OUTPUT_PATH="${1:-docs/releases/architecture-drift-${REPORT_MONTH}.md}"
-EXPLICIT_BASELINE="${LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT:-}"
-EXPLICIT_BASELINE_DIR="${LOONGCLAW_ARCH_DRIFT_BASELINE_DIR:-}"
+REPORT_MONTH="${LOONG_ARCH_REPORT_MONTH:-${LOONGCLAW_ARCH_REPORT_MONTH:-$(date +%Y-%m)}}"
+OUTPUT_PATH="${1:-docs/releases/support/architecture-drift-${REPORT_MONTH}.md}"
+EXPLICIT_BASELINE="${LOONG_ARCH_DRIFT_BASELINE_REPORT:-${LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT:-}}"
+EXPLICIT_BASELINE_DIR="${LOONG_ARCH_DRIFT_BASELINE_DIR:-${LOONGCLAW_ARCH_DRIFT_BASELINE_DIR:-}}"
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+derive_link_reference_path() {
+  python3 - "$OUTPUT_PATH" <<'PY'
+import sys
+from pathlib import PurePosixPath
+
+output_path = sys.argv[1].replace("\\", "/")
+marker = "docs/releases/"
+index = output_path.find(marker)
+if index >= 0:
+    print(output_path[index:])
+else:
+    print(PurePosixPath(output_path).as_posix())
+PY
+}
+
+LINK_REFERENCE_PATH="${LOONG_ARCH_REPORT_LINK_PATH:-$(derive_link_reference_path)}"
+LINK_REFERENCE_DIR="$(dirname "$LINK_REFERENCE_PATH")"
+
+relative_link_from_output_dir() {
+  local target_path="${1:?target_path is required}"
+  python3 - "$LINK_REFERENCE_DIR" "$target_path" <<'PY'
+import os
+import sys
+
+output_dir = sys.argv[1].replace("\\", "/")
+target_path = sys.argv[2].replace("\\", "/")
+
+print(os.path.relpath(target_path, start=output_dir).replace("\\", "/"))
+PY
+}
 
 derive_previous_month() {
   local label="$1"
@@ -212,7 +243,30 @@ else
 fi
 
 {
+  release_template_link="$(relative_link_from_output_dir "docs/releases/support/TEMPLATE.md")"
+  architecture_gate_link="$(relative_link_from_output_dir "scripts/check_architecture_boundaries.sh")"
+  ci_workflow_link="$(relative_link_from_output_dir ".github/workflows/ci.yml")"
+
   echo "# Architecture Drift Report ${REPORT_MONTH}"
+  echo
+  echo "This report is a repository maintenance artifact for architecture-governance and"
+  echo "release review. It is not part of the primary public release trail."
+  echo
+  echo "## Route By Audience"
+  echo
+  echo "| If you are trying to... | Start here |"
+  echo "| --- | --- |"
+  echo "| read public release history | the top-level \`../vX.Y.Z*.md\` and \`../*-announcement.md\` files |"
+  echo "| inspect architecture-maintenance and release-governance evidence | this report |"
+  echo "| understand the release-support file boundary | [\`README.md\`](README.md) |"
+  echo
+  echo "## Read This File When"
+  echo
+  echo "- you are reviewing release-support architecture evidence for \`${REPORT_MONTH}\`"
+  echo "- you need the generated hotspot and boundary-check snapshot behind release"
+  echo "  governance"
+  echo "- you are validating whether release-support automation still matches the"
+  echo "  repository's current architecture boundaries"
   echo
   echo "## Summary"
   echo "- Generated at: ${GENERATED_AT}"
@@ -267,13 +321,21 @@ fi
   echo
   echo "## Refactor Budget Policy"
   echo "- Monthly drift report command: \`scripts/generate_architecture_drift_report.sh\`"
-  echo "- Release checklist budget field lives in \`docs/releases/TEMPLATE.md\`."
+  echo "- Release checklist budget field lives in \`docs/releases/support/TEMPLATE.md\`."
   echo "- Rule: each release must name at least one hotspot metric paid down or explicitly state why no paydown happened."
   echo
   echo "## Detail Links"
-  echo "- [Architecture gate](../../scripts/check_architecture_boundaries.sh)"
-  echo "- [Release template](TEMPLATE.md)"
-  echo "- [CI workflow](../../.github/workflows/ci.yml)"
+  echo "- [Architecture gate](${architecture_gate_link})"
+  echo "- [Release template](${release_template_link})"
+  echo "- [CI workflow](${ci_workflow_link})"
+  echo
+  echo "## Do Not Use This File For"
+  echo
+  echo "- public release-history reading that should start from \`vX.Y.Z*.md\`,"
+  echo "  \`*-announcement.md\`, \`CHANGELOG.md\`, or GitHub Releases"
+  echo "- temporary maintainer scratch notes or architecture experiments that should"
+  echo "  live outside the tracked release-doc path"
+  echo "- backlog planning packages that do not belong in the OSS repository"
   echo
   while IFS='|' read -r key _classes _file lines _max_lines _line_headroom functions _max_functions _fn_headroom _peak_usage _pressure _prev_lines _line_growth _growth_status _prev_functions; do
     echo "<!-- arch-hotspot key=${key} lines=${lines} functions=${functions} -->"

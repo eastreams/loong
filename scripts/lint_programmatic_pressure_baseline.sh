@@ -18,7 +18,7 @@ fi
 COMMAND_ARGS+=(cargo)
 COMMAND_ARGS+=(run)
 COMMAND_ARGS+=(-p)
-COMMAND_ARGS+=(loongclaw)
+COMMAND_ARGS+=(loong)
 COMMAND_ARGS+=(--bin)
 COMMAND_ARGS+=(loong)
 COMMAND_ARGS+=(--)

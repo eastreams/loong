@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::runtime_binding::ProviderRuntimeBinding;
 use crate::CliResult;
 use crate::KernelContext;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 use crate::conversation::{
     ContextArtifactDescriptor, ContextArtifactKind, PromptCompiler, PromptFragment, PromptLane,
     PromptRenderPolicy, ToolOutputStreamingPolicy,
@@ -34,16 +34,16 @@ struct BasePromptProjection {
 }
 
 pub(super) fn build_system_message(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
 ) -> Option<Value> {
-    let runtime_tool_view = tools::runtime_tool_view_from_loongclaw_config(config);
+    let runtime_tool_view = tools::runtime_tool_view_from_loong_config(config);
 
     build_system_message_for_view(config, include_system_prompt, &runtime_tool_view)
 }
 
 pub(super) fn build_system_message_for_view(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
 ) -> Option<Value> {
@@ -51,7 +51,7 @@ pub(super) fn build_system_message_for_view(
         config,
         include_system_prompt,
         tool_view,
-        &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
+        &tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None),
     );
 
     projection.system_message
@@ -59,7 +59,7 @@ pub(super) fn build_system_message_for_view(
 
 #[cfg(test)]
 pub(super) async fn build_base_messages_with_binding(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     binding: ProviderRuntimeBinding<'_>,
 ) -> Vec<Value> {
@@ -67,7 +67,7 @@ pub(super) async fn build_base_messages_with_binding(
         return Vec::new();
     }
 
-    let runtime_tool_view = tools::runtime_tool_view_from_loongclaw_config(config);
+    let runtime_tool_view = tools::runtime_tool_view_from_loong_config(config);
     let projection = build_base_prompt_projection_for_view_with_binding(
         config,
         include_system_prompt,
@@ -80,7 +80,7 @@ pub(super) async fn build_base_messages_with_binding(
 }
 
 async fn build_base_prompt_projection_for_view_with_binding(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     binding: ProviderRuntimeBinding<'_>,
@@ -89,14 +89,14 @@ async fn build_base_prompt_projection_for_view_with_binding(
         config,
         include_system_prompt,
         tool_view,
-        &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
+        &tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None),
         binding,
     )
     .await
 }
 
 fn build_base_prompt_projection_with_tool_runtime_config(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
@@ -122,7 +122,7 @@ fn build_base_prompt_projection_with_tool_runtime_config(
 
 #[cfg(test)]
 fn build_system_message_with_tool_runtime_config(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
@@ -138,7 +138,7 @@ fn build_system_message_with_tool_runtime_config(
 }
 
 async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
@@ -168,7 +168,7 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
 }
 
 fn build_base_prompt_projection_from_runtime_self_model(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
@@ -209,7 +209,7 @@ fn build_base_prompt_projection_from_runtime_self_model(
 }
 
 fn build_prompt_fragments_from_runtime_self_model(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     runtime_self_model: Option<runtime_self::RuntimeSelfModel>,
@@ -314,9 +314,7 @@ fn build_prompt_fragments_from_runtime_self_model(
     prompt_fragments
 }
 
-fn render_deferred_tool_text_workflow_section_if_needed(
-    config: &LoongClawConfig,
-) -> Option<String> {
+fn render_deferred_tool_text_workflow_section_if_needed(config: &LoongConfig) -> Option<String> {
     let tool_schema_mode = config.provider.resolved_tool_schema_mode_config();
     let tool_schema_disabled =
         tool_schema_mode == crate::config::ProviderToolSchemaModeConfig::Disabled;
@@ -479,11 +477,11 @@ pub(super) fn push_history_message(messages: &mut Vec<Value>, role: &str, conten
 }
 
 pub(super) fn build_messages_for_session(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     include_system_prompt: bool,
 ) -> CliResult<Vec<Value>> {
-    let runtime_tool_view = tools::runtime_tool_view_from_loongclaw_config(config);
+    let runtime_tool_view = tools::runtime_tool_view_from_loong_config(config);
 
     build_projected_context_for_session_in_view(
         config,
@@ -496,11 +494,11 @@ pub(super) fn build_messages_for_session(
 
 #[cfg(test)]
 pub(crate) fn build_projected_context_for_session(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     include_system_prompt: bool,
 ) -> CliResult<ProjectedMessageContext> {
-    let runtime_tool_view = tools::runtime_tool_view_from_loongclaw_config(config);
+    let runtime_tool_view = tools::runtime_tool_view_from_loong_config(config);
 
     build_projected_context_for_session_in_view(
         config,
@@ -511,12 +509,12 @@ pub(crate) fn build_projected_context_for_session(
 }
 
 pub(crate) async fn build_projected_context_for_session_with_binding(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     include_system_prompt: bool,
     binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<ProjectedMessageContext> {
-    let runtime_tool_view = tools::runtime_tool_view_from_loongclaw_config(config);
+    let runtime_tool_view = tools::runtime_tool_view_from_loong_config(config);
 
     build_projected_context_for_session_in_view_with_binding(
         config,
@@ -529,7 +527,7 @@ pub(crate) async fn build_projected_context_for_session_with_binding(
 }
 
 pub(crate) fn build_projected_context_for_session_in_view(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     include_system_prompt: bool,
     tool_view: &ToolView,
@@ -560,7 +558,7 @@ pub(crate) fn build_projected_context_for_session_in_view(
             config,
             include_system_prompt,
             tool_view,
-            &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
+            &tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None),
         );
         let system_message = projection.system_message;
         let prompt_fragments = projection.prompt_fragments;
@@ -574,7 +572,7 @@ pub(crate) fn build_projected_context_for_session_in_view(
 }
 
 pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     include_system_prompt: bool,
     tool_view: &ToolView,
@@ -616,16 +614,16 @@ pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn resolved_workspace_root(config: &LoongClawConfig) -> Option<std::path::PathBuf> {
+fn resolved_workspace_root(config: &LoongConfig) -> Option<std::path::PathBuf> {
     let tool_runtime_config =
-        tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+        tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let workspace_root = tool_runtime_config.effective_workspace_root()?;
     let workspace_root = workspace_root.to_path_buf();
     Some(workspace_root)
 }
 
 pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     binding: ProviderRuntimeBinding<'_>,
@@ -663,7 +661,7 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
 }
 
 pub(crate) fn project_hydrated_memory_context_for_view(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
@@ -672,7 +670,7 @@ pub(crate) fn project_hydrated_memory_context_for_view(
         config,
         include_system_prompt,
         tool_view,
-        &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
+        &tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None),
     );
     let system_message = projection.system_message;
     let mut prompt_fragments = projection.prompt_fragments;
@@ -887,7 +885,7 @@ mod tests {
 
     #[test]
     fn build_system_message_returns_none_when_disabled() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         assert_eq!(build_system_message(&config, false), None);
     }
 
@@ -931,7 +929,7 @@ mod tests {
     #[test]
     fn project_hydrated_memory_context_skips_tool_discovery_fragment_when_system_prompt_is_disabled()
      {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let hydrated = hydrated_context_with_tool_discovery_event();
         let projected = project_hydrated_memory_context_for_view(
             &config,
@@ -948,7 +946,7 @@ mod tests {
     #[tokio::test]
     async fn project_hydrated_memory_context_with_binding_skips_tool_discovery_fragment_when_system_prompt_is_disabled()
      {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let hydrated = hydrated_context_with_tool_discovery_event();
         let projected = project_hydrated_memory_context_for_view_with_binding(
             &config,
@@ -965,7 +963,7 @@ mod tests {
 
     #[test]
     fn projected_context_exposes_prompt_fragments_for_system_prompt_sources() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let projected =
             build_projected_context_for_session(&config, "prompt-fragment-session", true)
                 .expect("build projected context");
@@ -996,7 +994,7 @@ mod tests {
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let agents_path = harness.temp_dir.join("AGENTS.md");
         let agents_text = "Do not read me when system prompts are disabled.";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::write(&agents_path, agents_text).expect("write AGENTS");
 
@@ -1037,7 +1035,7 @@ mod tests {
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let agents_path = harness.temp_dir.join("AGENTS.md");
         let agents_text = "Only existing runtime-self files should be read.";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::write(&agents_path, agents_text).expect("write AGENTS");
 
@@ -1080,7 +1078,7 @@ mod tests {
         let decoy_tool_root = harness.temp_dir.join("tool-root-decoy");
         let agents_path = harness.temp_dir.join("AGENTS.md");
         let agents_text = "Runtime self should follow the runtime workspace root.";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::create_dir_all(&decoy_tool_root).expect("create decoy tool root");
         std::fs::write(&agents_path, agents_text).expect("write AGENTS");
@@ -1116,7 +1114,7 @@ mod tests {
 
     #[test]
     fn build_system_message_includes_deferred_tool_text_workflow_when_tool_schema_disabled() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.tool_schema_mode = crate::config::ProviderToolSchemaModeConfig::Disabled;
 
         let system_message =
@@ -1137,7 +1135,7 @@ mod tests {
         ];
 
         for tool_schema_mode in non_disabled_modes {
-            let mut config = LoongClawConfig::default();
+            let mut config = LoongConfig::default();
             config.provider.tool_schema_mode = tool_schema_mode;
 
             let system_message =
@@ -1157,7 +1155,7 @@ mod tests {
         let agents_text = "a".repeat(1_024);
         let user_text = "later user context should still surface a truncation notice";
         let total_budget = agents_text.chars().count();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::write(&agents_path, &agents_text).expect("write AGENTS");
         std::fs::write(&user_path, user_text).expect("write USER");
@@ -1187,7 +1185,7 @@ mod tests {
         let user_text =
             "later user context raw prefix should not leak into compact truncation rendering";
         let total_budget = agents_text.chars().count() + compact_budget;
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::write(&agents_path, &agents_text).expect("write AGENTS");
         std::fs::write(&user_path, user_text).expect("write USER");
@@ -1210,7 +1208,7 @@ mod tests {
         let harness = TurnTestHarness::new();
         let agents_path = harness.temp_dir.join("AGENTS.md");
         let agents_text = "runtime self should still load for binding-aware prompts";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::write(&agents_path, agents_text).expect("write AGENTS");
 
@@ -1237,7 +1235,7 @@ mod tests {
 
     #[test]
     fn build_system_message_includes_custom_prompt_and_capability_snapshot() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.cli.prompt_pack_id = None;
         config.cli.personality = None;
         config.cli.system_prompt = "Stay concise and technical.".to_owned();
@@ -1278,7 +1276,7 @@ mod tests {
 
     #[test]
     fn message_builder_uses_rendered_prompt_from_pack_metadata() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.cli.personality = Some(crate::prompt::PromptPersonality::Hermit);
         config.cli.system_prompt = String::new();
         let session_id = format!(
@@ -1305,7 +1303,7 @@ mod tests {
 
     #[test]
     fn message_builder_keeps_legacy_inline_prompt_when_pack_is_disabled() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.cli.prompt_pack_id = None;
         config.cli.personality = None;
         config.cli.system_prompt = "You are a legacy inline prompt.".to_owned();
@@ -1340,7 +1338,7 @@ mod tests {
         std::fs::write(&identity_path, identity_text).expect("write IDENTITY");
         std::fs::write(&user_path, user_text).expect("write USER");
 
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let tool_view = tools::runtime_tool_view();
 
         let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
@@ -1380,7 +1378,7 @@ mod tests {
 
         std::fs::write(workspace_root.join("AGENTS.md"), agents_text).expect("write AGENTS");
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let legacy_profile_note =
             "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
         config.memory.profile_note = Some(legacy_profile_note.to_owned());
@@ -1416,7 +1414,7 @@ mod tests {
         let workspace_identity = "# Identity\n\n- Name: Workspace build copilot";
         std::fs::write(&identity_path, workspace_identity).expect("write IDENTITY");
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let legacy_profile_note =
             "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
         config.memory.profile_note = Some(legacy_profile_note.to_owned());
@@ -1452,7 +1450,7 @@ mod tests {
 
         std::fs::write(&soul_path, soul_text).expect("write SOUL");
 
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let tool_view = tools::runtime_tool_view();
         let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
             file_root: Some(workspace_root.to_path_buf()),
@@ -1482,7 +1480,7 @@ mod tests {
         let db_path = tmp.join("provider-summary.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.memory.sqlite_path = db_path.display().to_string();
         config.memory.profile = MemoryProfile::WindowPlusSummary;
         config.memory.sliding_window = 2;
@@ -1538,7 +1536,7 @@ mod tests {
         .expect("write daily durable memory");
 
         let db_path = workspace_root.join("provider-durable-recall.sqlite3");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 
@@ -1572,7 +1570,7 @@ mod tests {
         let curated_memory_path = workspace_root.join("MEMORY.md");
         let recent_daily_path = memory_dir.join("2026-03-23.md");
         let db_path = temp_dir.path().join("provider-durable-recall-env.sqlite3");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::create_dir_all(&memory_dir).expect("create memory dir");
         std::fs::create_dir_all(&decoy_tool_root).expect("create decoy tool root");
@@ -1632,7 +1630,7 @@ mod tests {
         .expect("write daily durable memory");
 
         let db_path = workspace_root.join("provider-workspace-recall.sqlite3");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
         config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
@@ -1723,7 +1721,7 @@ mod tests {
         .expect("write identity-like durable memory");
 
         let db_path = workspace_root.join("provider-durable-recall-identity.sqlite3");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 
@@ -1781,7 +1779,7 @@ mod tests {
         std::fs::write(&curated_memory_path, memory_text).expect("write curated memory");
 
         let db_path = workspace_root.join("provider-durable-recall-governance.sqlite3");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 
@@ -1865,7 +1863,7 @@ mod tests {
         .expect("write curated memory");
 
         let db_path = workspace_root.join("provider-durable-recall-missing-root.sqlite3");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.memory.sqlite_path = db_path.display().to_string();
 
         let messages = build_messages_for_session(&config, "durable-recall-without-root", true)
@@ -1893,7 +1891,7 @@ mod tests {
         std::fs::write(&agents_path, oversized_content).expect("write oversized AGENTS");
 
         let db_path = workspace_root.join("provider-runtime-self-budget.sqlite3");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.tools.file_root = Some(workspace_root.display().to_string());
         config.memory.sqlite_path = db_path.display().to_string();
 

@@ -1,0 +1,63 @@
+---
+title: Nostr
+description: Configure the Nostr channel surface in Loong.
+---
+
+# Nostr
+
+This is a shipped config-backed outbound surface. Nostr relay subscriber runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `nostr` |
+| Config key | `nostr` |
+| Implementation status | `config_backed` |
+| Transport | `nostr_relays` |
+| Aliases | none |
+| Default send target kind | `address` |
+
+## Minimal Config
+
+```toml
+[nostr]
+enabled = true
+relay_urls_env = "NOSTR_RELAY_URLS"
+private_key_env = "NOSTR_PRIVATE_KEY"
+```
+
+## Smoke Test
+
+```bash
+loong nostr-send --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| relay publish | `nostr-send` | Usage: loong nostr-send [OPTIONS] --text &lt;TEXT&gt; |
+| relay subscriber | `nostr-serve` | nostr relay subscriber runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `nostr.enabled`<br/>`nostr.accounts.<account>.enabled` | none | none |
+| relay urls | `nostr.relay_urls`<br/>`nostr.accounts.<account>.relay_urls` | `nostr.relay_urls_env`<br/>`nostr.accounts.<account>.relay_urls_env` | `NOSTR_RELAY_URLS` |
+| private key | `nostr.private_key`<br/>`nostr.accounts.<account>.private_key` | `nostr.private_key_env`<br/>`nostr.accounts.<account>.private_key_env` | `NOSTR_PRIVATE_KEY` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Operator Notes
+
+- Nostr send publishes signed notes to one or more relays. The relay-subscriber serve contract remains planned.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

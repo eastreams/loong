@@ -580,6 +580,7 @@ fn parse_optional_string(payload: &Map<String, Value>, key: &str) -> Option<Stri
 
 fn browser_scope_id_from_payload(payload: &Map<String, Value>) -> String {
     parse_optional_string(payload, super::BROWSER_SESSION_SCOPE_FIELD)
+        .or_else(|| parse_optional_string(payload, super::LEGACY_BROWSER_SESSION_SCOPE_FIELD))
         .unwrap_or_else(|| DEFAULT_BROWSER_SCOPE_ID.to_owned())
 }
 

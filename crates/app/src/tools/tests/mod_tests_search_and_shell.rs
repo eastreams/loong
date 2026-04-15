@@ -325,7 +325,7 @@ async fn framework_timeout_supports_async_core_tool_calls() {
     let mut config = test_tool_runtime_config(root);
     config.tool_execution.default_timeout_seconds = Some(1);
 
-    let adapter = MvpToolAdapter::with_config(config);
+    let adapter = MvpToolAdapter::with_config(config.into_inner());
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
         payload: json!({
@@ -390,7 +390,9 @@ fn tool_invoke_shell_exec_normalizes_embedded_whitespace_into_args_when_args_mis
     let command = "echo hello from invoke";
     #[cfg(windows)]
     let command = "cmd /C echo hello from invoke";
-    let lease = issue_tool_lease("shell.exec", &serde_json::Map::new());
+    let lease =
+        crate::tools::tool_lease_authority::issue_tool_lease("shell.exec", &serde_json::Map::new())
+            .expect("tool lease");
     let outcome = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "tool.invoke".to_owned(),

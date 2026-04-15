@@ -8,15 +8,17 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$REPO_ROOT/scripts/release_artifact_lib.sh"
 ERRORS=0
 WARNINGS=0
-PUBLIC_GITHUB_REPO="${LOONGCLAW_PUBLIC_REPO:-loongclaw-ai/loongclaw}"
+PUBLIC_GITHUB_REPO="${LOONG_PUBLIC_REPO:-eastreams/loong}"
 PUBLIC_GITHUB_BASE="https://github.com/${PUBLIC_GITHUB_REPO}"
 
-if [ -n "${LOONGCLAW_RELEASE_DOCS_STRICT:-}" ]; then
-    case "${LOONGCLAW_RELEASE_DOCS_STRICT}" in
+RELEASE_DOCS_STRICT="${LOONG_RELEASE_DOCS_STRICT:-${LOONGCLAW_RELEASE_DOCS_STRICT:-}}"
+
+if [ -n "${RELEASE_DOCS_STRICT:-}" ]; then
+    case "${RELEASE_DOCS_STRICT}" in
         1|true|TRUE|yes|YES) STRICT_RELEASE_DOCS=1 ;;
         0|false|FALSE|no|NO) STRICT_RELEASE_DOCS=0 ;;
         *)
-            echo "FAIL: invalid LOONGCLAW_RELEASE_DOCS_STRICT value '${LOONGCLAW_RELEASE_DOCS_STRICT}' (expected 0/1)"
+            echo "FAIL: invalid LOONG_RELEASE_DOCS_STRICT/LOONGCLAW_RELEASE_DOCS_STRICT value '${RELEASE_DOCS_STRICT}' (expected 0/1)"
             exit 1
             ;;
     esac
@@ -296,7 +298,7 @@ check_canonical_github_links() {
     fi
 }
 
-for release_doc in "$REPO_ROOT/docs/releases/TEMPLATE.md" "$REPO_ROOT"/docs/releases/v*.md; do
+for release_doc in "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$REPO_ROOT"/docs/releases/v*.md; do
     [ -f "$release_doc" ] || continue
     if grep -Fq "github.com/<org>/<repo>" "$release_doc"; then
         echo "FAIL: ${release_doc} still contains placeholder github.com/<org>/<repo>"

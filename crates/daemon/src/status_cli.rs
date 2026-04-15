@@ -134,7 +134,7 @@ fn select_gateway_owner_status_for_config(
 
 async fn collect_status_cli_acp_read_model(
     config_path: &str,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> StatusCliAcpReadModel {
     let enabled = config.acp.enabled;
     let persisted_session_count = load_persisted_acp_session_count(config);
@@ -191,7 +191,7 @@ fn build_unavailable_acp_read_model(
 }
 
 fn collect_status_cli_work_unit_read_model(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> StatusCliWorkUnitReadModel {
     #[cfg(not(feature = "memory-sqlite"))]
     {
@@ -239,7 +239,7 @@ fn collect_status_cli_work_unit_read_model(
     }
 }
 
-fn load_persisted_acp_session_count(config: &mvp::config::LoongClawConfig) -> Option<usize> {
+fn load_persisted_acp_session_count(config: &mvp::config::LoongConfig) -> Option<usize> {
     #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
     {
         let _ = config;

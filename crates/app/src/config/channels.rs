@@ -32,6 +32,14 @@ mod twitch;
 
 #[allow(unused_imports)]
 pub use self::twitch::{ResolvedTwitchChannelConfig, TwitchAccountConfig, TwitchChannelConfig};
+#[path = "channels_defaults.rs"]
+mod defaults;
+
+use self::defaults::*;
+#[path = "channels_validation.rs"]
+mod validation_support;
+
+use self::validation_support::*;
 #[allow(unused_imports)]
 pub use bridge::{
     OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
@@ -181,6 +189,10 @@ pub struct TelegramChannelConfig {
     #[serde(default)]
     pub allowed_chat_ids: Vec<i64>,
     #[serde(default)]
+    pub allowed_sender_ids: Vec<i64>,
+    #[serde(default)]
+    pub require_mention: bool,
+    #[serde(default)]
     pub acp: ChannelAcpConfig,
     #[serde(default)]
     pub streaming_mode: TelegramStreamingMode,
@@ -292,6 +304,10 @@ pub struct TelegramAccountConfig {
     #[serde(default)]
     pub allowed_chat_ids: Option<Vec<i64>>,
     #[serde(default)]
+    pub allowed_sender_ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub require_mention: Option<bool>,
+    #[serde(default)]
     pub acp: Option<ChannelAcpConfig>,
     #[serde(default)]
     pub streaming_mode: Option<TelegramStreamingMode>,
@@ -310,6 +326,8 @@ pub struct ResolvedTelegramChannelConfig {
     pub base_url: String,
     pub polling_timeout_s: u64,
     pub allowed_chat_ids: Vec<i64>,
+    pub allowed_sender_ids: Vec<i64>,
+    pub require_mention: bool,
     pub acp: ChannelAcpConfig,
     pub streaming_mode: TelegramStreamingMode,
     pub ack_reactions: bool,
@@ -358,6 +376,8 @@ pub struct FeishuAccountConfig {
     #[serde(default)]
     pub allowed_chat_ids: Option<Vec<String>>,
     #[serde(default)]
+    pub allowed_sender_ids: Option<Vec<String>>,
+    #[serde(default)]
     pub ack_reactions: Option<bool>,
     #[serde(default)]
     pub ignore_bot_messages: Option<bool>,
@@ -403,6 +423,7 @@ pub struct ResolvedFeishuChannelConfig {
     pub encrypt_key: Option<SecretRef>,
     pub encrypt_key_env: Option<String>,
     pub allowed_chat_ids: Vec<String>,
+    pub allowed_sender_ids: Vec<String>,
     pub ack_reactions: bool,
     pub ignore_bot_messages: bool,
     pub acp: ChannelAcpConfig,
@@ -457,6 +478,10 @@ pub struct MatrixAccountConfig {
     #[serde(default)]
     pub allowed_room_ids: Option<Vec<String>>,
     #[serde(default)]
+    pub allowed_sender_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub require_mention: Option<bool>,
+    #[serde(default)]
     pub ignore_self_messages: Option<bool>,
     #[serde(default)]
     pub acp: Option<ChannelAcpConfig>,
@@ -474,6 +499,8 @@ pub struct ResolvedMatrixChannelConfig {
     pub base_url: Option<String>,
     pub sync_timeout_s: u64,
     pub allowed_room_ids: Vec<String>,
+    pub allowed_sender_ids: Vec<String>,
+    pub require_mention: bool,
     pub ignore_self_messages: bool,
     pub acp: ChannelAcpConfig,
 }
@@ -515,6 +542,8 @@ pub struct WecomAccountConfig {
     #[serde(default)]
     pub allowed_conversation_ids: Option<Vec<String>>,
     #[serde(default)]
+    pub allowed_sender_ids: Option<Vec<String>>,
+    #[serde(default)]
     pub acp: Option<ChannelAcpConfig>,
 }
 
@@ -532,6 +561,7 @@ pub struct ResolvedWecomChannelConfig {
     pub ping_interval_s: u64,
     pub reconnect_interval_s: u64,
     pub allowed_conversation_ids: Vec<String>,
+    pub allowed_sender_ids: Vec<String>,
     pub acp: ChannelAcpConfig,
 }
 
@@ -592,6 +622,8 @@ pub struct FeishuChannelConfig {
     pub encrypt_key_env: Option<String>,
     #[serde(default)]
     pub allowed_chat_ids: Vec<String>,
+    #[serde(default)]
+    pub allowed_sender_ids: Vec<String>,
     #[serde(default = "default_true")]
     pub ack_reactions: bool,
     #[serde(default = "default_true")]
@@ -622,6 +654,10 @@ pub struct MatrixChannelConfig {
     pub sync_timeout_s: u64,
     #[serde(default)]
     pub allowed_room_ids: Vec<String>,
+    #[serde(default)]
+    pub allowed_sender_ids: Vec<String>,
+    #[serde(default)]
+    pub require_mention: bool,
     #[serde(default = "default_true")]
     pub ignore_self_messages: bool,
     #[serde(default)]
@@ -654,6 +690,8 @@ pub struct WecomChannelConfig {
     pub reconnect_interval_s: u64,
     #[serde(default)]
     pub allowed_conversation_ids: Vec<String>,
+    #[serde(default)]
+    pub allowed_sender_ids: Vec<String>,
     #[serde(default)]
     pub acp: ChannelAcpConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1953,6 +1991,8 @@ impl Default for TelegramChannelConfig {
             base_url: default_telegram_base_url(),
             polling_timeout_s: default_telegram_timeout_seconds(),
             allowed_chat_ids: Vec::new(),
+            allowed_sender_ids: Vec::new(),
+            require_mention: false,
             acp: ChannelAcpConfig::default(),
             streaming_mode: TelegramStreamingMode::default(),
             ack_reactions: true,
@@ -2072,6 +2112,12 @@ impl TelegramChannelConfig {
             allowed_chat_ids: account_override
                 .and_then(|account| account.allowed_chat_ids.clone())
                 .unwrap_or_else(|| self.allowed_chat_ids.clone()),
+            allowed_sender_ids: account_override
+                .and_then(|account| account.allowed_sender_ids.clone())
+                .unwrap_or_else(|| self.allowed_sender_ids.clone()),
+            require_mention: account_override
+                .and_then(|account| account.require_mention)
+                .unwrap_or(self.require_mention),
             acp: resolve_channel_acp_config(
                 &self.acp,
                 account_override.and_then(|account| account.acp.as_ref()),
@@ -2096,6 +2142,8 @@ impl TelegramChannelConfig {
             base_url: merged.base_url,
             polling_timeout_s: merged.polling_timeout_s,
             allowed_chat_ids: merged.allowed_chat_ids,
+            allowed_sender_ids: merged.allowed_sender_ids,
+            require_mention: merged.require_mention,
             acp: merged.acp,
             streaming_mode: merged.streaming_mode,
             ack_reactions: merged.ack_reactions,
@@ -2173,6 +2221,7 @@ impl Default for FeishuChannelConfig {
             encrypt_key: None,
             encrypt_key_env: Some(FEISHU_ENCRYPT_KEY_ENV.to_owned()),
             allowed_chat_ids: Vec::new(),
+            allowed_sender_ids: Vec::new(),
             ack_reactions: true,
             ignore_bot_messages: true,
             acp: ChannelAcpConfig::default(),
@@ -2193,6 +2242,8 @@ impl Default for MatrixChannelConfig {
             base_url: None,
             sync_timeout_s: default_matrix_sync_timeout_seconds(),
             allowed_room_ids: Vec::new(),
+            allowed_sender_ids: Vec::new(),
+            require_mention: false,
             ignore_self_messages: true,
             acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
@@ -2214,6 +2265,7 @@ impl Default for WecomChannelConfig {
             ping_interval_s: default_wecom_ping_interval_seconds(),
             reconnect_interval_s: default_wecom_reconnect_interval_seconds(),
             allowed_conversation_ids: Vec::new(),
+            allowed_sender_ids: Vec::new(),
             acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
         }
@@ -2744,6 +2796,9 @@ impl FeishuChannelConfig {
             allowed_chat_ids: account_override
                 .and_then(|account| account.allowed_chat_ids.clone())
                 .unwrap_or_else(|| self.allowed_chat_ids.clone()),
+            allowed_sender_ids: account_override
+                .and_then(|account| account.allowed_sender_ids.clone())
+                .unwrap_or_else(|| self.allowed_sender_ids.clone()),
             ack_reactions: account_override
                 .and_then(|account| account.ack_reactions)
                 .unwrap_or(self.ack_reactions),
@@ -2778,6 +2833,7 @@ impl FeishuChannelConfig {
             encrypt_key: merged.encrypt_key,
             encrypt_key_env: merged.encrypt_key_env,
             allowed_chat_ids: merged.allowed_chat_ids,
+            allowed_sender_ids: merged.allowed_sender_ids,
             ack_reactions: merged.ack_reactions,
             ignore_bot_messages: merged.ignore_bot_messages,
             acp: merged.acp,
@@ -2961,6 +3017,12 @@ impl MatrixChannelConfig {
             allowed_room_ids: account_override
                 .and_then(|account| account.allowed_room_ids.clone())
                 .unwrap_or_else(|| self.allowed_room_ids.clone()),
+            allowed_sender_ids: account_override
+                .and_then(|account| account.allowed_sender_ids.clone())
+                .unwrap_or_else(|| self.allowed_sender_ids.clone()),
+            require_mention: account_override
+                .and_then(|account| account.require_mention)
+                .unwrap_or(self.require_mention),
             ignore_self_messages: account_override
                 .and_then(|account| account.ignore_self_messages)
                 .unwrap_or(self.ignore_self_messages),
@@ -2983,6 +3045,8 @@ impl MatrixChannelConfig {
             base_url: merged.base_url,
             sync_timeout_s: merged.sync_timeout_s,
             allowed_room_ids: merged.allowed_room_ids,
+            allowed_sender_ids: merged.allowed_sender_ids,
+            require_mention: merged.require_mention,
             ignore_self_messages: merged.ignore_self_messages,
             acp: merged.acp,
         })
@@ -3172,6 +3236,9 @@ impl WecomChannelConfig {
             allowed_conversation_ids: account_override
                 .and_then(|account| account.allowed_conversation_ids.clone())
                 .unwrap_or_else(|| self.allowed_conversation_ids.clone()),
+            allowed_sender_ids: account_override
+                .and_then(|account| account.allowed_sender_ids.clone())
+                .unwrap_or_else(|| self.allowed_sender_ids.clone()),
             acp: resolve_channel_acp_config(
                 &self.acp,
                 account_override.and_then(|account| account.acp.as_ref()),
@@ -3193,6 +3260,7 @@ impl WecomChannelConfig {
             ping_interval_s: merged.ping_interval_s.clamp(1, 300),
             reconnect_interval_s: merged.reconnect_interval_s.clamp(1, 300),
             allowed_conversation_ids: merged.allowed_conversation_ids,
+            allowed_sender_ids: merged.allowed_sender_ids,
             acp: merged.acp,
         })
     }
@@ -6460,166 +6528,6 @@ impl TlonChannelConfig {
     }
 }
 
-fn default_telegram_base_url() -> String {
-    "https://api.telegram.org".to_owned()
-}
-
-const fn default_telegram_timeout_seconds() -> u64 {
-    15
-}
-
-const fn default_true() -> bool {
-    true
-}
-
-fn default_feishu_receive_id_type() -> String {
-    "chat_id".to_owned()
-}
-
-fn default_feishu_webhook_bind() -> String {
-    "127.0.0.1:8080".to_owned()
-}
-
-fn default_feishu_webhook_path() -> String {
-    "/feishu/events".to_owned()
-}
-
-const fn default_matrix_sync_timeout_seconds() -> u64 {
-    30
-}
-
-fn default_wecom_websocket_url() -> String {
-    "wss://openws.work.weixin.qq.com".to_owned()
-}
-
-const fn default_wecom_ping_interval_seconds() -> u64 {
-    30
-}
-
-const fn default_wecom_reconnect_interval_seconds() -> u64 {
-    5
-}
-
-fn default_discord_api_base_url() -> String {
-    "https://discord.com/api/v10".to_owned()
-}
-
-fn default_discord_bot_token_env() -> Option<String> {
-    Some(DISCORD_BOT_TOKEN_ENV.to_owned())
-}
-
-fn default_line_api_base_url() -> String {
-    "https://api.line.me/v2/bot".to_owned()
-}
-
-fn default_email_smtp_username_env() -> Option<String> {
-    Some(EMAIL_SMTP_USERNAME_ENV.to_owned())
-}
-
-fn default_email_smtp_password_env() -> Option<String> {
-    Some(EMAIL_SMTP_PASSWORD_ENV.to_owned())
-}
-
-fn default_email_imap_username_env() -> Option<String> {
-    Some(EMAIL_IMAP_USERNAME_ENV.to_owned())
-}
-
-fn default_email_imap_password_env() -> Option<String> {
-    Some(EMAIL_IMAP_PASSWORD_ENV.to_owned())
-}
-
-fn default_webhook_endpoint_url_env() -> Option<String> {
-    Some(WEBHOOK_ENDPOINT_URL_ENV.to_owned())
-}
-
-fn default_webhook_auth_token_env() -> Option<String> {
-    Some(WEBHOOK_AUTH_TOKEN_ENV.to_owned())
-}
-
-fn default_webhook_signing_secret_env() -> Option<String> {
-    Some(WEBHOOK_SIGNING_SECRET_ENV.to_owned())
-}
-
-fn default_webhook_auth_header_name() -> String {
-    "Authorization".to_owned()
-}
-
-fn default_webhook_auth_token_prefix() -> String {
-    "Bearer ".to_owned()
-}
-
-fn default_webhook_payload_text_field() -> String {
-    "text".to_owned()
-}
-
-fn default_teams_webhook_url_env() -> Option<String> {
-    Some(TEAMS_WEBHOOK_URL_ENV.to_owned())
-}
-
-fn default_teams_app_id_env() -> Option<String> {
-    Some(TEAMS_APP_ID_ENV.to_owned())
-}
-
-fn default_teams_app_password_env() -> Option<String> {
-    Some(TEAMS_APP_PASSWORD_ENV.to_owned())
-}
-
-fn default_teams_tenant_id_env() -> Option<String> {
-    Some(TEAMS_TENANT_ID_ENV.to_owned())
-}
-
-fn default_imessage_bridge_url_env() -> Option<String> {
-    Some(IMESSAGE_BRIDGE_URL_ENV.to_owned())
-}
-
-fn default_imessage_bridge_token_env() -> Option<String> {
-    Some(IMESSAGE_BRIDGE_TOKEN_ENV.to_owned())
-}
-
-fn default_slack_api_base_url() -> String {
-    "https://slack.com/api".to_owned()
-}
-
-fn default_slack_bot_token_env() -> Option<String> {
-    Some(SLACK_BOT_TOKEN_ENV.to_owned())
-}
-
-fn default_whatsapp_api_base_url() -> String {
-    "https://graph.facebook.com/v25.0".to_owned()
-}
-
-fn default_whatsapp_access_token_env() -> Option<String> {
-    Some(WHATSAPP_ACCESS_TOKEN_ENV.to_owned())
-}
-
-fn default_whatsapp_phone_number_id_env() -> Option<String> {
-    Some(WHATSAPP_PHONE_NUMBER_ID_ENV.to_owned())
-}
-
-fn default_whatsapp_verify_token_env() -> Option<String> {
-    Some(WHATSAPP_VERIFY_TOKEN_ENV.to_owned())
-}
-
-fn default_whatsapp_app_secret_env() -> Option<String> {
-    Some(WHATSAPP_APP_SECRET_ENV.to_owned())
-}
-
-fn default_system_prompt() -> String {
-    render_default_system_prompt()
-}
-
-fn default_prompt_pack_id() -> Option<String> {
-    Some(DEFAULT_PROMPT_PACK_ID.to_owned())
-}
-
-fn default_prompt_personality() -> Option<PromptPersonality> {
-    Some(PromptPersonality::default())
-}
-
-fn default_exit_commands() -> Vec<String> {
-    vec!["/exit".to_owned(), "/quit".to_owned()]
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedConfiguredAccount {
     id: String,
@@ -6849,841 +6757,6 @@ fn validate_email_secret_ref_env_pointer(
     ) {
         issues.push(*issue);
     }
-}
-
-fn build_email_invalid_value_issue(
-    field_path: &str,
-    invalid_reason: &str,
-    suggested_fix: &str,
-) -> ConfigValidationIssue {
-    let mut extra_message_variables = BTreeMap::new();
-    extra_message_variables.insert("invalid_reason".to_owned(), invalid_reason.to_owned());
-    extra_message_variables.insert("suggested_fix".to_owned(), suggested_fix.to_owned());
-
-    ConfigValidationIssue {
-        severity: ConfigValidationSeverity::Error,
-        code: ConfigValidationCode::InvalidValue,
-        field_path: field_path.to_owned(),
-        inline_field_path: field_path.to_owned(),
-        example_env_name: String::new(),
-        suggested_env_name: None,
-        extra_message_variables,
-    }
-}
-
-fn validate_telegram_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name: TELEGRAM_BOT_TOKEN_ENV,
-            detect_telegram_token_shape: true,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_telegram_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: TELEGRAM_BOT_TOKEN_ENV,
-            detect_telegram_token_shape: true,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_feishu_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("app_id_env") {
-        FEISHU_APP_ID_ENV
-    } else if field_path.ends_with("app_secret_env") {
-        FEISHU_APP_SECRET_ENV
-    } else if field_path.ends_with("verification_token_env") {
-        FEISHU_VERIFICATION_TOKEN_ENV
-    } else {
-        FEISHU_ENCRYPT_KEY_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_feishu_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("app_id") {
-        FEISHU_APP_ID_ENV
-    } else if field_path.ends_with("app_secret") {
-        FEISHU_APP_SECRET_ENV
-    } else if field_path.ends_with("verification_token") {
-        FEISHU_VERIFICATION_TOKEN_ENV
-    } else {
-        FEISHU_ENCRYPT_KEY_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_matrix_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name: MATRIX_ACCESS_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_matrix_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: MATRIX_ACCESS_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_wecom_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("bot_id_env") {
-        WECOM_BOT_ID_ENV
-    } else {
-        WECOM_SECRET_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_wecom_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("bot_id") {
-        WECOM_BOT_ID_ENV
-    } else {
-        WECOM_SECRET_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_discord_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name: DISCORD_BOT_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_line_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("channel_secret_env") {
-        LINE_CHANNEL_SECRET_ENV
-    } else {
-        LINE_CHANNEL_ACCESS_TOKEN_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_line_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("channel_secret") {
-        LINE_CHANNEL_SECRET_ENV
-    } else {
-        LINE_CHANNEL_ACCESS_TOKEN_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_dingtalk_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("secret_env") {
-        DINGTALK_SECRET_ENV
-    } else {
-        DINGTALK_WEBHOOK_URL_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_dingtalk_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("secret") {
-        DINGTALK_SECRET_ENV
-    } else {
-        DINGTALK_WEBHOOK_URL_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_webhook_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("endpoint_url_env") {
-        WEBHOOK_ENDPOINT_URL_ENV
-    } else if field_path.ends_with("signing_secret_env") {
-        WEBHOOK_SIGNING_SECRET_ENV
-    } else {
-        WEBHOOK_AUTH_TOKEN_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_webhook_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("endpoint_url") {
-        WEBHOOK_ENDPOINT_URL_ENV
-    } else if field_path.ends_with("signing_secret") {
-        WEBHOOK_SIGNING_SECRET_ENV
-    } else {
-        WEBHOOK_AUTH_TOKEN_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_discord_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: DISCORD_BOT_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_google_chat_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name: GOOGLE_CHAT_WEBHOOK_URL_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_google_chat_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: GOOGLE_CHAT_WEBHOOK_URL_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_nextcloud_talk_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("shared_secret_env") {
-        NEXTCLOUD_TALK_SHARED_SECRET_ENV
-    } else {
-        NEXTCLOUD_TALK_SERVER_URL_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_nextcloud_talk_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: NEXTCLOUD_TALK_SHARED_SECRET_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_synology_chat_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("incoming_url_env") {
-        SYNOLOGY_CHAT_INCOMING_URL_ENV
-    } else {
-        SYNOLOGY_CHAT_TOKEN_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_synology_chat_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("incoming_url") {
-        SYNOLOGY_CHAT_INCOMING_URL_ENV
-    } else {
-        SYNOLOGY_CHAT_TOKEN_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_teams_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("webhook_url_env") {
-        TEAMS_WEBHOOK_URL_ENV
-    } else if field_path.ends_with("app_password_env") {
-        TEAMS_APP_PASSWORD_ENV
-    } else if field_path.ends_with("tenant_id_env") {
-        TEAMS_TENANT_ID_ENV
-    } else {
-        TEAMS_APP_ID_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_teams_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("webhook_url") {
-        TEAMS_WEBHOOK_URL_ENV
-    } else if field_path.ends_with("app_password") {
-        TEAMS_APP_PASSWORD_ENV
-    } else {
-        TEAMS_APP_ID_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_imessage_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("bridge_url_env") {
-        IMESSAGE_BRIDGE_URL_ENV
-    } else {
-        IMESSAGE_BRIDGE_TOKEN_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_imessage_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: IMESSAGE_BRIDGE_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_signal_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("service_url_env") {
-        SIGNAL_SERVICE_URL_ENV
-    } else {
-        SIGNAL_ACCOUNT_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_mattermost_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("server_url_env") {
-        MATTERMOST_SERVER_URL_ENV
-    } else {
-        MATTERMOST_BOT_TOKEN_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_mattermost_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: MATTERMOST_BOT_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_slack_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name: SLACK_BOT_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_slack_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: SLACK_BOT_TOKEN_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_whatsapp_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("access_token_env") {
-        WHATSAPP_ACCESS_TOKEN_ENV
-    } else if field_path.ends_with("phone_number_id_env") {
-        WHATSAPP_PHONE_NUMBER_ID_ENV
-    } else if field_path.ends_with("verify_token_env") {
-        WHATSAPP_VERIFY_TOKEN_ENV
-    } else {
-        WHATSAPP_APP_SECRET_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_whatsapp_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    let example_env_name = if field_path.ends_with("access_token") {
-        WHATSAPP_ACCESS_TOKEN_ENV
-    } else if field_path.ends_with("verify_token") {
-        WHATSAPP_VERIFY_TOKEN_ENV
-    } else {
-        WHATSAPP_APP_SECRET_ENV
-    };
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_channel_account_integrity<'a, I>(
-    issues: &mut Vec<ConfigValidationIssue>,
-    channel_key: &str,
-    default_account: Option<&str>,
-    keys: I,
-) where
-    I: IntoIterator<Item = &'a String>,
-{
-    let mut normalized_to_labels = BTreeMap::<String, Vec<String>>::new();
-    for raw_key in keys {
-        let label = raw_key.trim();
-        if label.is_empty() {
-            continue;
-        }
-        normalized_to_labels
-            .entry(normalize_channel_account_id(label))
-            .or_default()
-            .push(label.to_owned());
-    }
-
-    for (normalized_account_id, labels) in &normalized_to_labels {
-        if labels.len() < 2 {
-            continue;
-        }
-        let mut extra_message_variables = BTreeMap::new();
-        extra_message_variables.insert(
-            "normalized_account_id".to_owned(),
-            normalized_account_id.clone(),
-        );
-        extra_message_variables.insert("raw_account_labels".to_owned(), labels.join(", "));
-        issues.push(ConfigValidationIssue {
-            severity: super::shared::ConfigValidationSeverity::Error,
-            code: ConfigValidationCode::DuplicateChannelAccountId,
-            field_path: format!("{channel_key}.accounts"),
-            inline_field_path: format!("{channel_key}.accounts.{normalized_account_id}"),
-            example_env_name: String::new(),
-            suggested_env_name: None,
-            extra_message_variables,
-        });
-    }
-
-    if normalized_to_labels.is_empty() {
-        return;
-    }
-
-    let Some(requested_default_account) = default_account
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    let normalized_default_account = normalize_channel_account_id(requested_default_account);
-    if normalized_to_labels.contains_key(&normalized_default_account) {
-        return;
-    }
-
-    let mut extra_message_variables = BTreeMap::new();
-    extra_message_variables.insert(
-        "requested_account_id".to_owned(),
-        normalized_default_account,
-    );
-    extra_message_variables.insert(
-        "configured_account_ids".to_owned(),
-        normalized_to_labels
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    issues.push(ConfigValidationIssue {
-        severity: super::shared::ConfigValidationSeverity::Error,
-        code: ConfigValidationCode::UnknownChannelDefaultAccount,
-        field_path: format!("{channel_key}.default_account"),
-        inline_field_path: format!("{channel_key}.accounts"),
-        example_env_name: String::new(),
-        suggested_env_name: None,
-        extra_message_variables,
-    });
 }
 
 fn configured_account_ids<'a, I>(keys: I) -> Vec<String>
@@ -7968,6 +7041,8 @@ mod tests {
             "bot_token_env": "BASE_TELEGRAM_TOKEN",
             "polling_timeout_s": 25,
             "allowed_chat_ids": [1001],
+            "allowed_sender_ids": [7],
+            "require_mention": true,
             "acp": {
                 "bootstrap_mcp_servers": ["filesystem"],
                 "working_directory": " /workspace/base "
@@ -7978,6 +7053,8 @@ mod tests {
                     "account_id": "Ops-Bot",
                     "bot_token_env": "WORK_TELEGRAM_TOKEN",
                     "allowed_chat_ids": [2002],
+                    "allowed_sender_ids": [8],
+                    "require_mention": false,
                     "acp": {
                         "bootstrap_mcp_servers": ["search"],
                         "working_directory": "/workspace/work-bot"
@@ -8008,6 +7085,8 @@ mod tests {
             Some("WORK_TELEGRAM_TOKEN")
         );
         assert_eq!(resolved.allowed_chat_ids, vec![2002]);
+        assert_eq!(resolved.allowed_sender_ids, vec![8]);
+        assert!(!resolved.require_mention);
         assert_eq!(
             resolved.acp.bootstrap_mcp_servers,
             vec!["search".to_owned()]
@@ -8024,6 +7103,8 @@ mod tests {
         assert_eq!(disabled.configured_account_id, "personal");
         assert!(!disabled.enabled);
         assert_eq!(disabled.allowed_chat_ids, vec![1001]);
+        assert_eq!(disabled.allowed_sender_ids, vec![7]);
+        assert!(disabled.require_mention);
         assert_eq!(
             disabled.acp.bootstrap_mcp_servers,
             vec!["filesystem".to_owned()]
@@ -8304,6 +7385,56 @@ mod tests {
     }
 
     #[test]
+    fn matrix_multi_account_resolution_merges_sender_allowlist_overrides() {
+        let config: MatrixChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "access_token_env": "BASE_MATRIX_ACCESS_TOKEN",
+            "base_url": "https://matrix.example.org",
+            "allowed_room_ids": ["!ops:example.org"],
+            "allowed_sender_ids": ["@alice:example.org"],
+            "require_mention": true,
+            "accounts": {
+                "Ops": {
+                    "account_id": "Ops-Bot",
+                    "access_token": "ops-token",
+                    "allowed_room_ids": ["!ops-room:example.org"],
+                    "allowed_sender_ids": ["@ops-user:example.org"],
+                    "require_mention": false
+                },
+                "Backup": {
+                    "enabled": false,
+                    "access_token": "backup-token"
+                }
+            },
+            "default_account": "Ops"
+        }))
+        .expect("deserialize matrix multi-account config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default matrix account");
+        assert_eq!(
+            resolved.allowed_room_ids,
+            vec!["!ops-room:example.org".to_owned()]
+        );
+        assert_eq!(
+            resolved.allowed_sender_ids,
+            vec!["@ops-user:example.org".to_owned()]
+        );
+        assert!(!resolved.require_mention);
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve backup matrix account");
+        assert_eq!(backup.allowed_room_ids, vec!["!ops:example.org".to_owned()]);
+        assert_eq!(
+            backup.allowed_sender_ids,
+            vec!["@alice:example.org".to_owned()]
+        );
+        assert!(backup.require_mention);
+    }
+
+    #[test]
     fn wecom_account_identity_prefers_explicit_account_id() {
         let config: WecomChannelConfig = serde_json::from_value(json!({
             "account_id": "Ops-Bot",
@@ -8338,6 +7469,7 @@ mod tests {
             "ping_interval_s": 45,
             "reconnect_interval_s": 12,
             "allowed_conversation_ids": ["group_base"],
+            "allowed_sender_ids": ["user_base"],
             "acp": {
                 "bootstrap_mcp_servers": ["filesystem"],
                 "working_directory": " /workspace/base "
@@ -8349,6 +7481,7 @@ mod tests {
                     "bot_id": "bot_work",
                     "secret": "secret-work",
                     "allowed_conversation_ids": ["group_work"],
+                    "allowed_sender_ids": ["user_work"],
                     "acp": {
                         "bootstrap_mcp_servers": ["search"],
                         "working_directory": "/workspace/work-bot"
@@ -8376,6 +7509,7 @@ mod tests {
             resolved.allowed_conversation_ids,
             vec!["group_work".to_owned()]
         );
+        assert_eq!(resolved.allowed_sender_ids, vec!["user_work".to_owned()]);
         assert_eq!(resolved.ping_interval_s, 45);
         assert_eq!(resolved.reconnect_interval_s, 12);
         assert_eq!(
@@ -8400,6 +7534,7 @@ mod tests {
             disabled.allowed_conversation_ids,
             vec!["group_base".to_owned()]
         );
+        assert_eq!(disabled.allowed_sender_ids, vec!["user_base".to_owned()]);
         assert_eq!(
             disabled.acp.bootstrap_mcp_servers,
             vec!["filesystem".to_owned()]

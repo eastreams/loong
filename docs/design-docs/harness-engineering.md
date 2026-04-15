@@ -1,6 +1,6 @@
-# Harness Engineering in LoongClaw
+# Harness Engineering in Loong
 
-> Based on [OpenAI's harness engineering framework](https://openai.com/index/harness-engineering/) (February 2026), mapped to LoongClaw's architecture.
+> Based on [OpenAI's harness engineering framework](https://openai.com/index/harness-engineering/) (February 2026), mapped to Loong's architecture.
 
 ## What is Harness Engineering?
 
@@ -16,7 +16,7 @@ Harness engineering is designing the full environment of scaffolding, constraint
 
 ---
 
-## LoongClaw's Harness Components
+## Loong's Harness Components
 
 ### Stage 1: Intent Capture & Orchestration
 
@@ -105,7 +105,7 @@ Upstream constraints              Downstream constraints
                   Maximum safe autonomy
 ```
 
-LoongClaw's position: **strong upstream** (strict lints, capability tokens, policy engine, type-safe contracts) + **strong downstream** (CI workflows, pre-commit hook, convention engineering, architecture checks).
+Loong's position: **strong upstream** (strict lints, capability tokens, policy engine, type-safe contracts) + **strong downstream** (CI workflows, pre-commit hook, convention engineering, architecture checks).
 
 ---
 
@@ -117,12 +117,13 @@ Progressive disclosure hierarchy:
 |------|-------|---------|
 | Hot | `AGENTS.md` / `CLAUDE.md` | Auto-loaded every session |
 | Specialized | Design docs, domain indices | Loaded when working on that domain |
-| Cold | Roadmap, reliability, product specs, plans | Accessed on demand |
+| Cold | Roadmap, reliability, and knowledge-base specs/plans | Accessed on demand |
 
 ---
 
 ## References
 
+- [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md)
 - [OpenAI: Harness Engineering](https://openai.com/index/harness-engineering/) (February 2026)
 - [Martin Fowler: Harness Engineering](https://martinfowler.com/articles/exploring-gen-ai/harness-engineering.html)
 - [Layered Kernel Design](layered-kernel-design.md)
