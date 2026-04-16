@@ -45,6 +45,16 @@ enum WebhookServeError {
     Internal(String),
 }
 
+impl WebhookServeError {
+    fn validation(message: impl Into<String>) -> Self {
+        Self::Validation(message.into())
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+}
+
 type WebhookHmacSha256 = hmac::Hmac<sha2::Sha256>;
 
 struct WebhookRequestBody {
@@ -61,21 +71,6 @@ struct WebhookServeState {
     signing_secret: String,
     kernel_ctx: Arc<KernelContext>,
     runtime: Arc<ChannelOperationRuntimeTracker>,
-}
-
-enum WebhookServeError {
-    Validation(String),
-    Internal(String),
-}
-
-impl WebhookServeError {
-    fn validation(message: impl Into<String>) -> Self {
-        Self::Validation(message.into())
-    }
-
-    fn internal(message: impl Into<String>) -> Self {
-        Self::Internal(message.into())
-    }
 }
 
 impl WebhookServeState {

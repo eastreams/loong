@@ -405,7 +405,7 @@ pub struct ControlPlaneSessionWorkflowBinding {
     pub worktree: Option<ControlPlaneSessionWorkflowBindingWorktree>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneSessionWorkflow {
     pub workflow_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

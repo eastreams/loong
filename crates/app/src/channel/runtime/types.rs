@@ -209,10 +209,8 @@ pub(in crate::channel) fn parse_known_channel_session_send_target(
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-wecom"
 ))]
 pub fn resolve_known_channel_session_target(
     config: &LoongClawConfig,
@@ -313,8 +311,10 @@ fn resolve_telegram_known_session_target(
             chat_id, thread_id, ..
         } => (chat_id, thread_id),
         KnownChannelSessionSendTarget::Feishu { .. }
+        | KnownChannelSessionSendTarget::Line { .. }
         | KnownChannelSessionSendTarget::Matrix { .. }
-        | KnownChannelSessionSendTarget::Wecom { .. } => {
+        | KnownChannelSessionSendTarget::Wecom { .. }
+        | KnownChannelSessionSendTarget::WhatsApp { .. } => {
             return Err(format!(
                 "sessions_send_channel_unsupported: `{session_id}` resolved to a non-telegram target"
             ));
@@ -467,8 +467,10 @@ fn resolve_feishu_known_session_target(
             ..
         } => (conversation_id, reply_message_id),
         KnownChannelSessionSendTarget::Telegram { .. }
+        | KnownChannelSessionSendTarget::Line { .. }
         | KnownChannelSessionSendTarget::Matrix { .. }
-        | KnownChannelSessionSendTarget::Wecom { .. } => {
+        | KnownChannelSessionSendTarget::Wecom { .. }
+        | KnownChannelSessionSendTarget::WhatsApp { .. } => {
             return Err(format!(
                 "sessions_send_channel_unsupported: `{session_id}` resolved to a non-feishu target"
             ));
@@ -593,7 +595,9 @@ fn resolve_matrix_known_session_target(
         KnownChannelSessionSendTarget::Matrix { room_id, .. } => room_id,
         KnownChannelSessionSendTarget::Telegram { .. }
         | KnownChannelSessionSendTarget::Feishu { .. }
-        | KnownChannelSessionSendTarget::Wecom { .. } => {
+        | KnownChannelSessionSendTarget::Line { .. }
+        | KnownChannelSessionSendTarget::Wecom { .. }
+        | KnownChannelSessionSendTarget::WhatsApp { .. } => {
             return Err(format!(
                 "sessions_send_channel_unsupported: `{session_id}` resolved to a non-matrix target"
             ));
@@ -743,7 +747,9 @@ fn resolve_wecom_known_session_target(
         } => (conversation_id, chat_type),
         KnownChannelSessionSendTarget::Telegram { .. }
         | KnownChannelSessionSendTarget::Feishu { .. }
-        | KnownChannelSessionSendTarget::Matrix { .. } => {
+        | KnownChannelSessionSendTarget::Line { .. }
+        | KnownChannelSessionSendTarget::Matrix { .. }
+        | KnownChannelSessionSendTarget::WhatsApp { .. } => {
             return Err(format!(
                 "sessions_send_channel_unsupported: `{session_id}` resolved to a non-wecom target"
             ));

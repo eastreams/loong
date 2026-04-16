@@ -8226,11 +8226,11 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
     assert_eq!(summary.channel_surface_summary.total_surface_count, 28);
     assert_eq!(
         summary.channel_surface_summary.runtime_backed_surface_count,
-        5
+        7
     );
     assert_eq!(
         summary.channel_surface_summary.config_backed_surface_count,
-        17
+        15
     );
     assert_eq!(
         summary.channel_surface_summary.plugin_backed_surface_count,
@@ -8243,7 +8243,7 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
     assert!(
         lines.iter().any(|line| {
             line
-                == "- channel surfaces: 28 total (5 runtime-backed, 17 config-backed, 3 plugin-backed, 3 catalog-only)"
+                == "- channel surfaces: 28 total (7 runtime-backed, 15 config-backed, 3 plugin-backed, 3 catalog-only)"
         }),
         "success summary should surface the public channel inventory distribution so operators can see the real maturity mix after onboarding: {lines:#?}"
     );

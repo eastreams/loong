@@ -67,21 +67,6 @@ struct LineServeState {
     runtime: Arc<ChannelOperationRuntimeTracker>,
 }
 
-enum LineServeError {
-    Validation(String),
-    Internal(String),
-}
-
-impl LineServeError {
-    fn validation(message: impl Into<String>) -> Self {
-        Self::Validation(message.into())
-    }
-
-    fn internal(message: impl Into<String>) -> Self {
-        Self::Internal(message.into())
-    }
-}
-
 impl LineServeState {
     fn new(
         config: &LoongClawConfig,

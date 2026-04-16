@@ -188,7 +188,9 @@ mod tests {
     }
 
     fn expected_service_channel_ids() -> Vec<&'static str> {
-        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+        vec![
+            "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook",
+        ]
     }
 
     fn expected_plugin_backed_channel_ids() -> Vec<&'static str> {
@@ -199,10 +201,8 @@ mod tests {
         vec![
             "discord",
             "slack",
-            "line",
             "dingtalk",
             "email",
-            "webhook",
             "google-chat",
             "signal",
             "twitch",
@@ -289,7 +289,7 @@ mod tests {
         let line = channel_descriptor("line").expect("line descriptor");
         assert_eq!(line.id, "line");
         assert_eq!(line.surface_label, "line channel");
-        assert_eq!(line.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(line.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(line.serve_subcommand, Some("line-serve"));
 
         let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
@@ -313,7 +313,7 @@ mod tests {
         let webhook = channel_descriptor("webhook").expect("webhook descriptor");
         assert_eq!(webhook.id, "webhook");
         assert_eq!(webhook.surface_label, "webhook channel");
-        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(webhook.serve_subcommand, Some("webhook-serve"));
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");

@@ -2199,7 +2199,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .get("schema")
             .and_then(|schema| schema.get("version"))
             .and_then(serde_json::Value::as_u64),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         encoded

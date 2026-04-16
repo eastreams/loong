@@ -124,11 +124,8 @@ pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
-    feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp",
-    feature = "channel-webhook"
+    feature = "channel-wecom"
 ))]
 pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
 pub use sdk::{
@@ -1831,7 +1828,10 @@ mod tests {
         assert_eq!(resolved.channel_id, "telegram");
         assert_eq!(resolved.account_id.as_deref(), Some("ops-bot"));
         assert_eq!(resolved.session_shape, "telegram_thread");
-        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::Conversation);
+        assert_eq!(
+            resolved.target_kind,
+            ChannelOutboundTargetKind::Conversation
+        );
         assert_eq!(resolved.target_id, "123:42");
         assert_eq!(resolved.conversation_id.as_deref(), Some("123"));
         assert_eq!(resolved.thread_id.as_deref(), Some("42"));

@@ -292,7 +292,7 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
     let payload =
         build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
 
-    assert_eq!(payload["schema"]["version"], 1);
+    assert_eq!(payload["schema"]["version"], 2);
     assert_eq!(payload["provider"]["active_profile_id"], "deepseek-lab");
     assert!(array_contains_string(
         &payload["provider"]["saved_profile_ids"],
@@ -589,7 +589,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("outbound_only_enabled=-"));
     assert!(
         rendered.contains(
-            "surfaces=28 runtime_backed=5 config_backed=17 plugin_backed=3 catalog_only=3"
+            "surfaces=28 runtime_backed=7 config_backed=15 plugin_backed=3 catalog_only=3"
         )
     );
     assert!(rendered.contains("acp_mcp docs status=pending"));

@@ -956,7 +956,9 @@ mod tests {
 
         assert_eq!(
             ids,
-            vec!["telegram", "feishu", "matrix", "wecom", "whatsapp",]
+            vec![
+                "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook",
+            ]
         );
     }
 
