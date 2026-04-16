@@ -30,6 +30,8 @@ pub(super) struct SearchableToolEntry {
     pub(super) required_field_groups: Vec<Vec<String>>,
     pub(super) schema_preview: Value,
     pub(super) tags: Vec<String>,
+    pub(super) capability_family: Option<String>,
+    pub(super) usage_guidance: Option<String>,
     search_document: SearchDocument,
 }
 
@@ -157,18 +159,34 @@ fn tool_search_result_entry_json(
     payload: &serde_json::Map<String, Value>,
 ) -> Result<Value, String> {
     let lease = issue_tool_lease(entry.canonical_name.as_str(), payload)?;
-    Ok(json!({
-        "tool_id": entry.canonical_name,
-        "summary": entry.summary,
-        "search_hint": entry.search_hint,
-        "argument_hint": entry.argument_hint,
-        "required_fields": entry.required_fields,
-        "required_field_groups": entry.required_field_groups,
-        "schema_preview": entry.schema_preview,
-        "tags": entry.tags,
-        "why": why,
-        "lease": lease,
-    }))
+    let mut result = serde_json::Map::from_iter([
+        ("tool_id".to_owned(), json!(entry.canonical_name)),
+        ("summary".to_owned(), json!(entry.summary)),
+        ("search_hint".to_owned(), json!(entry.search_hint)),
+        ("argument_hint".to_owned(), json!(entry.argument_hint)),
+        ("required_fields".to_owned(), json!(entry.required_fields)),
+        (
+            "required_field_groups".to_owned(),
+            json!(entry.required_field_groups),
+        ),
+        ("schema_preview".to_owned(), json!(entry.schema_preview)),
+        ("tags".to_owned(), json!(entry.tags)),
+        ("why".to_owned(), json!(why)),
+        ("lease".to_owned(), json!(lease)),
+    ]);
+    if let Some(capability_family) = entry.capability_family.as_deref() {
+        result.insert(
+            "capability_family".to_owned(),
+            Value::String(capability_family.to_owned()),
+        );
+    }
+    if let Some(usage_guidance) = entry.usage_guidance.as_deref() {
+        result.insert(
+            "usage_guidance".to_owned(),
+            Value::String(usage_guidance.to_owned()),
+        );
+    }
+    Ok(Value::Object(result))
 }
 
 fn tool_search_diagnostics_json(
@@ -1335,6 +1353,8 @@ pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> S
         .map(|tag| (*tag).to_owned())
         .collect::<Vec<_>>();
     let search_hint = descriptor.search_hint().to_owned();
+    let capability_family = descriptor.capability_family().map(str::to_owned);
+    let usage_guidance = descriptor.usage_guidance().map(str::to_owned);
 
     searchable_entry_from_provider_definition(
         descriptor.name,
@@ -1345,6 +1365,8 @@ pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> S
         parameters,
         descriptor.parameter_types(),
         tags,
+        capability_family,
+        usage_guidance,
     )
 }
 
@@ -1357,6 +1379,8 @@ pub(super) fn searchable_entry_from_provider_definition(
     parameters: &Value,
     preferred_parameter_order: &[(&str, &str)],
     tags: Vec<String>,
+    capability_family: Option<String>,
+    usage_guidance: Option<String>,
 ) -> SearchableToolEntry {
     let required_fields = schema_required_fields(parameters);
     let required_field_groups = schema_required_field_groups(parameters);
@@ -1388,6 +1412,9 @@ pub(super) fn searchable_entry_from_provider_definition(
         tag_fragments,
     );
 
+    let (capability_family, usage_guidance) =
+        enrich_discovery_prompt_metadata(canonical_name, capability_family, usage_guidance);
+
     SearchableToolEntry {
         canonical_name: canonical_name.to_owned(),
         summary,
@@ -1397,8 +1424,31 @@ pub(super) fn searchable_entry_from_provider_definition(
         required_field_groups,
         schema_preview,
         tags,
+        capability_family,
+        usage_guidance,
         search_document,
     }
+}
+
+fn enrich_discovery_prompt_metadata(
+    canonical_name: &str,
+    capability_family: Option<String>,
+    usage_guidance: Option<String>,
+) -> (Option<String>, Option<String>) {
+    (
+        capability_family.or_else(|| discovery_prompt_family_id(canonical_name)),
+        usage_guidance.or_else(|| discovery_usage_guidance(canonical_name)),
+    )
+}
+
+fn discovery_prompt_family_id(canonical_name: &str) -> Option<String> {
+    super::tool_prompt::discoverable_tool_prompt_family_for_name(canonical_name)
+        .map(|family| family.id.to_owned())
+}
+
+fn discovery_usage_guidance(canonical_name: &str) -> Option<String> {
+    super::tool_prompt::discoverable_tool_prompt_family_for_name(canonical_name)
+        .map(|family| family.prompt_guidance.to_owned())
 }
 
 fn build_schema_preview(
@@ -1491,6 +1541,8 @@ pub(super) fn searchable_entry_from_manual_definition(
         required_field_groups,
         schema_preview,
         tags,
+        capability_family: discovery_prompt_family_id(canonical_name),
+        usage_guidance: discovery_usage_guidance(canonical_name),
         search_document,
     }
 }

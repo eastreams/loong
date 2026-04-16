@@ -813,6 +813,7 @@ fn percent_encode_path_segment(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::provider::sse::{SseLine, SseStreamEvent, parse_sse_line};
+    #[cfg(feature = "provider-bedrock")]
     use crate::test_support::ScopedEnv;
     use std::collections::BTreeMap;
 

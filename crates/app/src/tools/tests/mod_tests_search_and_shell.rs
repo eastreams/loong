@@ -685,6 +685,12 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
 
     assert_eq!(outcome.payload["returned"], 1);
     assert_eq!(first["tool_id"], "file.read");
+    assert_eq!(first["capability_family"], "local_files");
+    assert!(
+        first["usage_guidance"]
+            .as_str()
+            .is_some_and(|value| value.contains("Prefer this family before shell"))
+    );
     assert!(first["lease"].as_str().is_some());
 
     std::fs::remove_dir_all(&root).ok();

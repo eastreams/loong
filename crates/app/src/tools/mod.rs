@@ -10,6 +10,7 @@ use std::{
 };
 
 use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(test)]
 use tool_search::searchable_entry_from_provider_definition;
@@ -65,6 +66,7 @@ pub mod shell_policy_ext;
 mod shell_request_prep;
 mod tool_lease;
 mod tool_lease_authority;
+mod tool_prompt;
 mod tool_search;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
@@ -126,6 +128,7 @@ pub use bundled_skills::{
     bundled_preinstall_targets, bundled_skill_pack, bundled_skill_pack_memberships,
     bundled_skill_packs,
 };
+pub use tool_prompt::DiscoverableCapabilityFamilyState;
 
 const BROWSER_COMPANION_TOOL_PREFIX: &str = "browser.companion.";
 const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
@@ -1116,6 +1119,15 @@ pub struct ToolRegistryEntry {
     pub description: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoverableToolSurfaceSummary {
+    pub visible_tool_count: usize,
+    #[serde(default)]
+    pub capability_tags: Vec<String>,
+    #[serde(default)]
+    pub capability_families: Vec<DiscoverableCapabilityFamilyState>,
+}
+
 /// Returns a sorted list of all registered tools, gated by feature flags.
 pub fn tool_registry() -> Vec<ToolRegistryEntry> {
     tool_registry_with_config(Some(runtime_config::get_tool_runtime_config()))
@@ -1173,9 +1185,21 @@ pub(crate) fn capability_snapshot_for_view_with_config(
         "Non-core tools are intentionally hidden until discovered with tool.search.".to_owned();
     lines.push(hidden_tools_line);
 
-    if let Some(capability_tag_line) = discoverable_capability_tag_line(view, config) {
+    let discoverable_summary =
+        runtime_discoverable_tool_surface_summary_with_config(config, Some(view));
+
+    if let Some(capability_tag_line) =
+        discoverable_capability_tag_line(discoverable_summary.capability_tags.as_slice())
+    {
         lines.push(capability_tag_line);
     }
+
+    lines.extend(tool_prompt::render_active_discoverable_tool_family_lines(
+        discoverable_summary
+            .capability_families
+            .iter()
+            .flat_map(|family| family.tool_ids.iter().map(String::as_str)),
+    ));
 
     let discovery_workflow_lines = [
         "Discovery workflow: if a task may need a hidden capability, call tool.search before concluding the capability is unavailable.".to_owned(),
@@ -1190,12 +1214,29 @@ pub(crate) fn capability_snapshot_for_view_with_config(
     lines.join("\n")
 }
 
-fn discoverable_capability_tag_line(
-    view: &ToolView,
+pub fn runtime_discoverable_tool_surface_summary_with_config(
     config: &runtime_config::ToolRuntimeConfig,
-) -> Option<String> {
-    let discoverable_entries = runtime_discoverable_tool_entries(config, Some(view));
-    let discoverable_tags = summarize_discoverable_capability_tags(&discoverable_entries);
+    visible_tool_view: Option<&ToolView>,
+) -> DiscoverableToolSurfaceSummary {
+    let discoverable_entries = runtime_discoverable_tool_entries(config, visible_tool_view);
+    summarize_discoverable_tool_surface(discoverable_entries.as_slice())
+}
+
+fn summarize_discoverable_tool_surface(
+    discoverable_entries: &[SearchableToolEntry],
+) -> DiscoverableToolSurfaceSummary {
+    DiscoverableToolSurfaceSummary {
+        visible_tool_count: discoverable_entries.len(),
+        capability_tags: summarize_discoverable_capability_tags(discoverable_entries),
+        capability_families: tool_prompt::active_discoverable_capability_family_states(
+            discoverable_entries
+                .iter()
+                .map(|entry| entry.canonical_name.as_str()),
+        ),
+    }
+}
+
+fn discoverable_capability_tag_line(discoverable_tags: &[String]) -> Option<String> {
     if discoverable_tags.is_empty() {
         return None;
     }
@@ -1305,6 +1346,8 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 &parameters,
                 preferred_parameter_order,
                 tags,
+                None,
+                None,
             ))
         })
         .collect()
@@ -1618,6 +1661,9 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("Discoverable capability families currently active:"));
+        assert!(snapshot.contains("- local_files:"));
+        assert!(snapshot.contains("- web_research:"));
         assert!(snapshot.contains("Discovery workflow:"));
         assert!(snapshot.contains("let the discovery workflow surface the next valid tool"));
         assert!(!snapshot.contains("shell.exec"));
@@ -1693,6 +1739,9 @@ mod tests {
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Non-core tools are intentionally hidden"));
         assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("Discoverable capability families currently active:"));
+        assert!(snapshot.contains("- local_files:"));
+        assert!(snapshot.contains("- shell_runtime:"));
         assert!(snapshot.contains("Discovery workflow:"));
         assert!(snapshot.contains("let the discovery workflow surface the next valid tool"));
         assert!(!snapshot.contains("claw.migrate"));
@@ -1701,7 +1750,7 @@ mod tests {
         assert!(!snapshot.contains("shell.exec"));
 
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 8);
+        assert!(lines.len() >= 8);
         assert!(lines[0].starts_with("- tool.invoke"));
         assert!(lines[1].starts_with("- tool.search"));
     }
@@ -3026,6 +3075,39 @@ mod tests {
             discoverable_tag_line.contains("file"),
             "expected the summary to surface runtime file capabilities: {discoverable_tag_line}"
         );
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn runtime_discoverable_tool_surface_summary_groups_tags_and_families() {
+        let root = unique_tool_temp_dir("loongclaw-tool-surface-summary");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let summary = runtime_discoverable_tool_surface_summary_with_config(
+            &config,
+            Some(&runtime_tool_view_for_runtime_config(&config)),
+        );
+
+        assert!(summary.visible_tool_count > 0);
+        assert!(summary.capability_tags.contains(&"file".to_owned()));
+
+        let local_files = summary
+            .capability_families
+            .iter()
+            .find(|family| family.family_id == "local_files")
+            .expect("local_files family");
+        assert!(local_files.tool_ids.contains(&"file.read".to_owned()));
+        assert!(local_files.tool_ids.contains(&"file.write".to_owned()));
+
+        let shell_runtime = summary
+            .capability_families
+            .iter()
+            .find(|family| family.family_id == "shell_runtime")
+            .expect("shell_runtime family");
+        assert!(shell_runtime.tool_ids.contains(&"shell.exec".to_owned()));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[cfg(feature = "tool-file")]

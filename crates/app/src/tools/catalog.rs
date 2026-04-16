@@ -283,6 +283,16 @@ impl ToolDescriptor {
         tool_tags(self.name)
     }
 
+    pub fn capability_family(&self) -> Option<&'static str> {
+        super::tool_prompt::discoverable_tool_prompt_family_for_name(self.name)
+            .map(|family| family.id)
+    }
+
+    pub fn usage_guidance(&self) -> Option<&'static str> {
+        super::tool_prompt::discoverable_tool_prompt_family_for_name(self.name)
+            .map(|family| family.prompt_guidance)
+    }
+
     pub fn is_provider_core(&self) -> bool {
         self.exposure == ToolExposureClass::ProviderCore
     }
@@ -329,6 +339,8 @@ pub struct ToolCatalogEntry {
     pub parameter_types: &'static [(&'static str, &'static str)],
     pub required_fields: &'static [&'static str],
     pub tags: &'static [&'static str],
+    pub capability_family: Option<&'static str>,
+    pub usage_guidance: Option<&'static str>,
     pub exposure: ToolExposureClass,
     pub execution_kind: ToolExecutionKind,
     pub availability: ToolAvailability,
@@ -2009,6 +2021,8 @@ fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
         parameter_types: descriptor.parameter_types(),
         required_fields: descriptor.required_fields(),
         tags: descriptor.tags(),
+        capability_family: descriptor.capability_family(),
+        usage_guidance: descriptor.usage_guidance(),
         exposure: descriptor.exposure,
         execution_kind: descriptor.execution_kind,
         availability: descriptor.availability,
@@ -5302,10 +5316,17 @@ mod tests {
         let file_write = find_tool_catalog_entry("file.write").expect("file.write catalog entry");
         assert_eq!(file_write.scheduling_class, ToolSchedulingClass::SerialOnly);
         assert_eq!(file_write.concurrency_class, ToolConcurrencyClass::Mutating);
+        assert_eq!(file_write.capability_family, Some("local_files"));
+        assert!(
+            file_write
+                .usage_guidance
+                .is_some_and(|guidance| guidance.contains("Prefer this family before shell"))
+        );
 
         let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
         assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
         assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
+        assert_eq!(bash_exec.capability_family, Some("shell_runtime"));
     }
 
     #[test]
