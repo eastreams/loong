@@ -85,6 +85,7 @@ jobs:
           bash -n scripts/architecture_budget_lib.sh
           bash -n scripts/check_architecture_boundaries.sh
           bash -n scripts/check_architecture_drift_freshness.sh
+          bash -n scripts/check_public_repo_hygiene.sh
           bash -n scripts/generate_architecture_drift_report.sh
           bash -n scripts/test_architecture_budget_scripts.sh
           bash -n scripts/test_check_architecture_drift_freshness.sh
@@ -121,6 +122,7 @@ jobs:
           bash scripts/test_release_artifact_lib.sh
           bash scripts/test_release_workflow_hardening.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
+          bash scripts/check_public_repo_hygiene.sh
           bash scripts/test_ci_workflow_change_routing.sh
           bash scripts/test_promotion_guard_workflows.sh
           bash scripts/test_workflow_change_router.sh

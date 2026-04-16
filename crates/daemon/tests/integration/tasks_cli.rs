@@ -206,6 +206,7 @@ fn seed_background_task_record(
 ) {
     ensure_root_session(repo, root_session_id);
     let task_label = "Release Check";
+    let workspace_root = format!("/tmp/loongclaw/tasks-cli/{task_id}");
     repo.create_session(mvp::session::repository::NewSessionRecord {
         session_id: task_id.to_owned(),
         kind: mvp::session::repository::SessionKind::DelegateChild,
@@ -222,6 +223,19 @@ fn seed_background_task_record(
             "task": "check release readiness",
             "label": task_label,
             "timeout_seconds": 60,
+            "execution": {
+                "mode": "async",
+                "depth": 1,
+                "max_depth": 3,
+                "active_children": 0,
+                "max_active_children": 2,
+                "timeout_seconds": 60,
+                "allow_shell_in_child": false,
+                "child_tool_allowlist": ["file.read"],
+                "workspace_root": workspace_root,
+                "kernel_bound": false,
+                "runtime_narrowing": {}
+            }
         }),
     })
     .expect("append delegate_queued event");
@@ -508,6 +522,18 @@ async fn execute_tasks_command_list_returns_visible_background_tasks() {
     assert_eq!(execution.payload["returned_count"], 1);
     assert_eq!(execution.payload["tasks"][0]["task_id"], "delegate:task-1");
     assert_eq!(execution.payload["tasks"][0]["phase"], "queued");
+    assert_eq!(
+        execution.payload["tasks"][0]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(
+        execution.payload["tasks"][0]["workflow"]["phase"],
+        "execute"
+    );
+    assert_eq!(
+        execution.payload["tasks"][0]["workflow"]["binding"]["mode"],
+        "advisory_only"
+    );
 }
 
 #[tokio::test]
@@ -534,6 +560,23 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert_eq!(execution.payload["task"]["task_id"], "delegate:task-1");
     assert_eq!(execution.payload["task"]["approval"]["matched_count"], 1);
     assert_eq!(
+        execution.payload["task"]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(execution.payload["task"]["workflow"]["phase"], "execute");
+    assert_eq!(
+        execution.payload["task"]["workflow"]["operation_kind"],
+        "task"
+    );
+    assert_eq!(
+        execution.payload["task"]["workflow"]["binding"]["execution_surface"],
+        "delegate.async"
+    );
+    assert_eq!(
+        execution.payload["task"]["workflow"]["binding"]["worktree"]["worktree_id"],
+        "delegate:task-1"
+    );
+    assert_eq!(
         execution.payload["task"]["tool_policy"]["effective_tool_ids"][0],
         "file.read"
     );
@@ -543,6 +586,18 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert!(
         rendered.contains("approval_requests: 1"),
         "status render should surface approval count: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_phase: execute"),
+        "status render should surface workflow phase: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_binding_mode: advisory_only"),
+        "status render should surface workflow binding mode: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_worktree_id: delegate:task-1"),
+        "status render should surface workflow worktree id: {rendered}"
     );
     assert!(
         rendered.contains("effective_tool_ids: file.read"),

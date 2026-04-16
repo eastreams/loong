@@ -35,6 +35,39 @@ pub(crate) fn delegate_cancelled_error(reason: &str) -> String {
     )
 }
 
+pub(crate) fn parse_delegate_cancelled_reason(error: &str) -> Option<String> {
+    let trimmed_error = error.trim();
+    let cancelled_prefix = DELEGATE_CANCELLED_ERROR_PREFIX;
+    let raw_reason = trimmed_error.strip_prefix(cancelled_prefix)?;
+    let trimmed_reason = raw_reason.trim();
+    if trimmed_reason.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_reason.to_owned())
+}
+
+#[cfg(test)]
+mod delegate_cancelled_reason_tests {
+    use super::delegate_cancelled_error;
+    use super::parse_delegate_cancelled_reason;
+
+    #[test]
+    fn parse_delegate_cancelled_reason_extracts_trimmed_reason() {
+        let error = delegate_cancelled_error("operator_requested");
+        let parsed_reason = parse_delegate_cancelled_reason(&error);
+
+        assert_eq!(parsed_reason.as_deref(), Some("operator_requested"));
+    }
+
+    #[test]
+    fn parse_delegate_cancelled_reason_rejects_non_cancelled_errors() {
+        let parsed_reason = parse_delegate_cancelled_reason("delegate_timeout");
+
+        assert_eq!(parsed_reason, None);
+    }
+}
+
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_cli_session_selector_tests {

@@ -858,6 +858,11 @@ fn render_session_brief_line(session: &Value) -> CliResult<String> {
         .and_then(|value| value.get("task"))
         .and_then(Value::as_str)
         .unwrap_or("-");
+    let workflow_phase = session
+        .get("workflow")
+        .and_then(|value| value.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
     let lineage_depth = session
         .get("workflow")
         .and_then(|value| value.get("lineage_depth"))
@@ -865,7 +870,7 @@ fn render_session_brief_line(session: &Value) -> CliResult<String> {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_owned());
     let line = format!(
-        "{} state={state} kind={kind} label={} task={} depth={lineage_depth}",
+        "{} state={state} kind={kind} workflow_phase={workflow_phase} label={} task={} depth={lineage_depth}",
         sanitize_terminal_text(session_id.as_str()),
         sanitize_terminal_text(label),
         sanitize_terminal_text(task),
@@ -906,6 +911,45 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         .unwrap_or("-");
     let workflow = detail.get("workflow").cloned().unwrap_or(Value::Null);
     let task = workflow.get("task").and_then(Value::as_str).unwrap_or("-");
+    let workflow_id = workflow
+        .get("workflow_id")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_phase = workflow.get("phase").and_then(Value::as_str).unwrap_or("-");
+    let workflow_operation_kind = workflow
+        .get("operation_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_operation_scope = workflow
+        .get("operation_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_task_session_id = workflow
+        .get("task_session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_binding_mode = workflow
+        .get("binding")
+        .and_then(|value| value.get("mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_execution_surface = workflow
+        .get("binding")
+        .and_then(|value| value.get("execution_surface"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_worktree_id = workflow
+        .get("binding")
+        .and_then(|value| value.get("worktree"))
+        .and_then(|value| value.get("worktree_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_workspace_root = workflow
+        .get("binding")
+        .and_then(|value| value.get("worktree"))
+        .and_then(|value| value.get("workspace_root"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
     let lineage_root_session_id = workflow
         .get("lineage_root_session_id")
         .and_then(Value::as_str)
@@ -956,6 +1000,12 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     let sanitized_parent_session_id = sanitize_terminal_text(parent_session_id);
     let sanitized_label = sanitize_terminal_text(label);
     let sanitized_task = sanitize_terminal_text(task);
+    let sanitized_workflow_id = sanitize_terminal_text(workflow_id);
+    let sanitized_workflow_task_session_id = sanitize_terminal_text(workflow_task_session_id);
+    let sanitized_workflow_binding_mode = sanitize_terminal_text(workflow_binding_mode);
+    let sanitized_workflow_execution_surface = sanitize_terminal_text(workflow_execution_surface);
+    let sanitized_workflow_worktree_id = sanitize_terminal_text(workflow_worktree_id);
+    let sanitized_workflow_workspace_root = sanitize_terminal_text(workflow_workspace_root);
     let sanitized_lineage_root_session_id = sanitize_terminal_text(lineage_root_session_id);
     let sanitized_last_error = sanitize_terminal_text(last_error);
 
@@ -963,6 +1013,29 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("session_id: {sanitized_session_id}"));
     lines.push(format!("kind: {kind}"));
     lines.push(format!("state: {state}"));
+    lines.push(format!("workflow_id: {sanitized_workflow_id}"));
+    lines.push(format!("workflow_phase: {workflow_phase}"));
+    lines.push(format!(
+        "workflow_operation_kind: {workflow_operation_kind}"
+    ));
+    lines.push(format!(
+        "workflow_operation_scope: {workflow_operation_scope}"
+    ));
+    lines.push(format!(
+        "workflow_task_session_id: {sanitized_workflow_task_session_id}"
+    ));
+    lines.push(format!(
+        "workflow_binding_mode: {sanitized_workflow_binding_mode}"
+    ));
+    lines.push(format!(
+        "workflow_execution_surface: {sanitized_workflow_execution_surface}"
+    ));
+    lines.push(format!(
+        "workflow_worktree_id: {sanitized_workflow_worktree_id}"
+    ));
+    lines.push(format!(
+        "workflow_workspace_root: {sanitized_workflow_workspace_root}"
+    ));
     lines.push(format!("parent_session_id: {sanitized_parent_session_id}"));
     lines.push(format!("label: {sanitized_label}"));
     lines.push(format!("task: {sanitized_task}"));

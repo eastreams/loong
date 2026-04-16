@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+echo "[pre-commit] public repo hygiene"
+bash scripts/check_public_repo_hygiene.sh
 export LOONG_CARGO="${LOONG_CARGO:-./scripts/cargo-local-toolchain.sh}"
 
 echo "[pre-commit] cargo fmt --check"

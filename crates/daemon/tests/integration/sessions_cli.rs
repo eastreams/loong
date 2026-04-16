@@ -138,6 +138,7 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
                 "timeout_seconds": 60,
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["file.read"],
+                "workspace_root": "/tmp/loongclaw/sessions-cli/delegate-session-1",
                 "kernel_bound": false,
                 "runtime_narrowing": {}
             }
@@ -171,12 +172,28 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
         execution.payload["sessions"][0]["workflow"]["task"],
         "research release readiness"
     );
+    assert_eq!(
+        execution.payload["sessions"][0]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(
+        execution.payload["sessions"][0]["workflow"]["phase"],
+        "execute"
+    );
+    assert_eq!(
+        execution.payload["sessions"][0]["workflow"]["binding"]["mode"],
+        "advisory_only"
+    );
 
     let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions list");
     assert!(
         rendered.contains("task=research release readiness"),
         "list render should surface workflow task: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_phase=execute"),
+        "list render should surface workflow phase: {rendered}"
     );
 }
 
@@ -211,6 +228,7 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
                 "timeout_seconds": 90,
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["file.read"],
+                "workspace_root": "/tmp/loongclaw/sessions-cli/delegate-session-1",
                 "kernel_bound": false,
                 "runtime_narrowing": {}
             },
@@ -271,8 +289,21 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "research continuity"
     );
     assert_eq!(
+        execution.payload["detail"]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(execution.payload["detail"]["workflow"]["phase"], "execute");
+    assert_eq!(
         execution.payload["detail"]["workflow"]["lineage_root_session_id"],
         "ops-root"
+    );
+    assert_eq!(
+        execution.payload["detail"]["workflow"]["binding"]["execution_surface"],
+        "delegate.async"
+    );
+    assert_eq!(
+        execution.payload["detail"]["workflow"]["binding"]["worktree"]["worktree_id"],
+        "delegate:session-1"
     );
     assert_eq!(execution.payload["detail"]["session"]["turn_count"], 2);
     let recipes = execution.payload["recipes"]
@@ -310,12 +341,28 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
     let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions status");
     assert!(
+        rendered.contains("workflow_id: ops-root"),
+        "status render should surface workflow id: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_phase: execute"),
+        "status render should surface workflow phase: {rendered}"
+    );
+    assert!(
         rendered.contains("task: research continuity"),
         "status render should surface workflow task: {rendered}"
     );
     assert!(
         rendered.contains("lineage_root_session_id: ops-root"),
         "status render should surface lineage root: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_binding_mode: advisory_only"),
+        "status render should surface workflow binding mode: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_worktree_id: delegate:session-1"),
+        "status render should surface workflow worktree id: {rendered}"
     );
     assert!(
         rendered.contains("runtime_self_continuity: present"),

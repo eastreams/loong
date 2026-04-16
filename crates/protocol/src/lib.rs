@@ -32,10 +32,13 @@ pub use control_plane::{
     ControlPlaneRecentEventsResponse, ControlPlaneRole, ControlPlaneScope,
     ControlPlaneSessionEvent, ControlPlaneSessionKind, ControlPlaneSessionListResponse,
     ControlPlaneSessionObservation, ControlPlaneSessionReadResponse, ControlPlaneSessionState,
-    ControlPlaneSessionSummary, ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot,
-    ControlPlaneSnapshotResponse, ControlPlaneStateVersion, ControlPlaneTurnEventEnvelope,
-    ControlPlaneTurnResultResponse, ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest,
-    ControlPlaneTurnSubmitResponse, ControlPlaneTurnSummary,
+    ControlPlaneSessionSummary, ControlPlaneSessionTerminalOutcome, ControlPlaneSessionWorkflow,
+    ControlPlaneSessionWorkflowBinding, ControlPlaneSessionWorkflowBindingWorktree,
+    ControlPlaneSessionWorkflowContinuity, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
+    ControlPlaneStateVersion, ControlPlaneTaskListResponse, ControlPlaneTaskReadResponse,
+    ControlPlaneTaskSummary, ControlPlaneTurnEventEnvelope, ControlPlaneTurnResultResponse,
+    ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest, ControlPlaneTurnSubmitResponse,
+    ControlPlaneTurnSummary,
 };
 
 fn default_frame_version() -> u32 {
@@ -80,6 +83,8 @@ pub enum ProtocolRoute {
     HealthRead,
     SessionList,
     SessionRead,
+    TaskList,
+    TaskRead,
     TurnSubmit,
     TurnResult,
     TurnStream,
@@ -106,6 +111,8 @@ impl ProtocolRoute {
             "health/read" => Self::HealthRead,
             "session/list" => Self::SessionList,
             "session/read" => Self::SessionRead,
+            "task/list" => Self::TaskList,
+            "task/read" => Self::TaskRead,
             "turn/submit" => Self::TurnSubmit,
             "turn/result" => Self::TurnResult,
             "turn/stream" => Self::TurnStream,
@@ -132,6 +139,8 @@ impl ProtocolRoute {
             Self::HealthRead => "health/read",
             Self::SessionList => "session/list",
             Self::SessionRead => "session/read",
+            Self::TaskList => "task/list",
+            Self::TaskRead => "task/read",
             Self::TurnSubmit => "turn/submit",
             Self::TurnResult => "turn/result",
             Self::TurnStream => "turn/stream",
@@ -159,6 +168,8 @@ impl ProtocolRoute {
                 | Self::HealthRead
                 | Self::SessionList
                 | Self::SessionRead
+                | Self::TaskList
+                | Self::TaskRead
                 | Self::TurnSubmit
                 | Self::TurnResult
                 | Self::TurnStream
@@ -265,6 +276,8 @@ impl ProtocolRouter {
             | ProtocolRoute::HealthRead
             | ProtocolRoute::SessionList
             | ProtocolRoute::SessionRead
+            | ProtocolRoute::TaskList
+            | ProtocolRoute::TaskRead
             | ProtocolRoute::TurnResult
             | ProtocolRoute::TurnStream => Ok(ResolvedRoute {
                 route,
