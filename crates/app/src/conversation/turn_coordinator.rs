@@ -1130,26 +1130,6 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn load_turn_checkpoint_diagnostics_with_limit(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointDiagnostics> {
-        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
-        let runtime = prepared.0;
-        let effective_binding = prepared.1;
-        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config,
-            session_id,
-            limit,
-            &runtime,
-            effective_binding,
-        )
-        .await
-    }
-
     pub(crate) async fn load_production_turn_checkpoint_diagnostics_with_limit(
         &self,
         config: &LoongConfig,

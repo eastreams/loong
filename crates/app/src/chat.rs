@@ -70,7 +70,8 @@ use self::operator_surfaces::render_cli_chat_status_lines_with_width;
 #[cfg(test)]
 use self::operator_surfaces::render_manual_compaction_lines_with_width;
 use self::operator_surfaces::should_run_missing_config_onboard;
-use self::render_support::*;
+#[cfg(test)]
+use crate::conversation::DefaultConversationRuntime;
 
 use super::config::{self, ConversationConfig, LoongConfig};
 #[cfg(test)]
@@ -2085,9 +2086,17 @@ async fn load_turn_checkpoint_summary_output(
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<String> {
-    let diagnostics = turn_coordinator
-        .load_turn_checkpoint_diagnostics_with_limit(config, session_id, limit, binding)
-        .await?;
+    let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+    let runtime_ref = &runtime;
+    let diagnostics_future = turn_coordinator
+        .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
+            config,
+            session_id,
+            limit,
+            runtime_ref,
+            binding,
+        );
+    let diagnostics = diagnostics_future.await?;
 
     Ok(format_turn_checkpoint_summary_output(
         session_id,
