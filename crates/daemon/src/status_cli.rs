@@ -301,6 +301,12 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let active_provider_label_option = runtime.active_provider_label.as_deref();
     let active_provider_label = active_provider_label_option.unwrap_or("-");
     let capability_snapshot_sha256 = runtime.capability_snapshot_sha256.as_str();
+    let discoverable_capability_families = if runtime.discoverable_capability_family_ids.is_empty()
+    {
+        "-".to_owned()
+    } else {
+        runtime.discoverable_capability_family_ids.join(",")
+    };
     let tool_calling = &runtime.tool_calling;
     let mut lines = Vec::new();
     lines.push(format!("config={}", status.config));
@@ -340,10 +346,11 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         channels.ready_service_channel_count,
     ));
     lines.push(format!(
-        "runtime provider_profile={} provider_label={} visible_tool_count={} capability_snapshot_sha256={}",
+        "runtime provider_profile={} provider_label={} visible_tool_count={} discoverable_families={} capability_snapshot_sha256={}",
         active_provider_profile_id,
         active_provider_label,
         runtime.visible_tool_count,
+        discoverable_capability_families,
         capability_snapshot_sha256,
     ));
     lines.push(format!(
@@ -512,6 +519,10 @@ mod tests {
                 enabled_plugin_backed_channel_ids: Vec::new(),
                 enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
+                discoverable_capability_family_ids: vec![
+                    "local_files".to_owned(),
+                    "shell_runtime".to_owned(),
+                ],
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
@@ -564,6 +575,9 @@ mod tests {
         assert!(rendered.contains("gateway phase=running"));
         assert!(rendered.contains(
             "channels catalog=1 configured_channels=1 configured_accounts=1 enabled_accounts=1 misconfigured_accounts=0 runtime_backed=1 config_backed=0 plugin_backed=0 catalog_only=0 enabled_runtime_backed_channels=1 enabled_service_channels=1 enabled_plugin_backed_channels=0 enabled_outbound_only_channels=0 ready_service_channels=1"
+        ));
+        assert!(rendered.contains(
+            "runtime provider_profile=demo provider_label=Demo visible_tool_count=4 discoverable_families=local_files,shell_runtime capability_snapshot_sha256=abc123"
         ));
         assert!(rendered.contains(
             "runtime_channels enabled=telegram runtime_backed=telegram service=telegram plugin_backed=- outbound_only=-"

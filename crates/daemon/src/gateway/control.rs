@@ -127,6 +127,9 @@ impl GatewayControlAppState {
             tools: GatewayRuntimeSnapshotToolsReadModel {
                 visible_tool_count: 0,
                 visible_tool_names: vec![],
+                discoverable_tool_count: 0,
+                discoverable_capability_tags: vec![],
+                discoverable_capability_families: vec![],
                 capability_snapshot_sha256: String::new(),
                 capability_snapshot: String::new(),
                 tool_calling: super::read_models::GatewayToolCallingReadModel {

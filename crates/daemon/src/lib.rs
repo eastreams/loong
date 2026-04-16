@@ -2494,6 +2494,7 @@ pub struct RuntimeSnapshotCliState {
     pub channels: mvp::channel::ChannelInventory,
     pub tool_runtime: mvp::tools::runtime_config::ToolRuntimeConfig,
     pub visible_tool_names: Vec<String>,
+    pub discoverable_tool_summary: mvp::tools::DiscoverableToolSurfaceSummary,
     pub capability_snapshot: String,
     pub capability_snapshot_sha256: String,
     pub tool_calling: RuntimeSnapshotToolCallingState,
@@ -2754,6 +2755,11 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         .tool_names()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    let discoverable_tool_summary =
+        mvp::tools::runtime_discoverable_tool_surface_summary_with_config(
+            &snapshot_tool_runtime,
+            Some(&tool_view),
+        );
     let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
         runtime_snapshot_tool_digest(&visible_tools, &capability_snapshot)?;
@@ -2774,6 +2780,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         channels,
         tool_runtime: snapshot_tool_runtime,
         visible_tool_names: visible_tools,
+        discoverable_tool_summary,
         capability_snapshot,
         capability_snapshot_sha256,
         tool_calling,

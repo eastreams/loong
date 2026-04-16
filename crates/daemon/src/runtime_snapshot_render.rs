@@ -267,10 +267,27 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         render_string_list(snapshot.tool_runtime.web_fetch.blocked_domains.iter().map(String::as_str))
     ));
     lines.push(format!(
-        "tools visible_count={} capability_snapshot_sha256={} visible_names={}",
+        "tools visible_count={} discoverable_count={} capability_snapshot_sha256={} visible_names={}",
         snapshot.visible_tool_names.len(),
+        snapshot.discoverable_tool_summary.visible_tool_count,
         snapshot.capability_snapshot_sha256,
         render_string_list(snapshot.visible_tool_names.iter().map(String::as_str))
+    ));
+    lines.push(format!(
+        "tools discoverable_tags={} discoverable_families={}",
+        render_string_list(
+            snapshot
+                .discoverable_tool_summary
+                .capability_tags
+                .iter()
+                .map(String::as_str)
+        ),
+        render_tool_family_summary(
+            snapshot
+                .discoverable_tool_summary
+                .capability_families
+                .as_slice()
+        )
     ));
     lines.extend(render_runtime_plugins_lines(&snapshot.runtime_plugins));
     lines.push(format!(
@@ -324,6 +341,20 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         ])
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn render_tool_family_summary(
+    families: &[crate::mvp::tools::DiscoverableCapabilityFamilyState],
+) -> String {
+    if families.is_empty() {
+        return "-".to_owned();
+    }
+
+    families
+        .iter()
+        .map(|family| format!("{}:{}", family.family_id, family.tool_count()))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -> Vec<String> {
