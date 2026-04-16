@@ -59,6 +59,17 @@ pub(crate) fn bootstrap_test_kernel_context(
     )
 }
 
+/// Bootstrap a governed kernel context for production-facing runtime entrypoints.
+///
+/// This installs the audit sink selected by `config.audit`, registers the MVP
+/// pack plus the core tool/memory adapters and policy extensions, and issues a
+/// long-lived capability token for `agent_id`.
+///
+/// The helper intentionally stays below higher-level runtime initialization: it
+/// does not export `LOONGCLAW_*` environment variables, resolve chat session
+/// ids, or prepare channel/conversation state. Callers that need those side
+/// effects should compose it with `runtime_env::initialize_runtime_environment`
+/// or a surface-specific bootstrap such as `chat::initialize_cli_turn_runtime`.
 pub fn bootstrap_kernel_context_with_config(
     agent_id: &str,
     ttl_s: u64,
@@ -135,7 +146,10 @@ fn bootstrap_kernel_context_with_audit_sink(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config = crate::memory::runtime_config::get_memory_runtime_config().clone();
+        let mem_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
+                &config.memory,
+            );
         kernel
             .register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(mem_config));
         kernel
@@ -233,9 +247,11 @@ mod tests {
 
     #[test]
     fn bootstrap_kernel_context_with_config_grants_network_egress() {
-        let context =
-            bootstrap_kernel_context_with_config("test-agent", 60, &LoongClawConfig::default())
-                .expect("bootstrap with default config should succeed");
+        let mut config = LoongClawConfig::default();
+        config.audit.mode = AuditMode::InMemory;
+
+        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+            .expect("bootstrap with default config should succeed");
 
         let allowed_capabilities = &context.token.allowed_capabilities;
 

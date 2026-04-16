@@ -8,7 +8,7 @@ use std::{
     time::Instant,
 };
 
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(not(test))]
 use crate::config::ProviderProfileStateBackendKind;
 
@@ -130,7 +130,7 @@ impl FileProviderProfileStateBackend {
 
 impl Default for FileProviderProfileStateBackend {
     fn default() -> Self {
-        Self::with_path(crate::config::default_loongclaw_home().join("provider-profile-state.json"))
+        Self::with_path(crate::config::default_loong_home().join("provider-profile-state.json"))
     }
 }
 
@@ -430,7 +430,7 @@ fn default_provider_profile_state_backend() -> Arc<dyn ProviderProfileStateBacke
 
 #[cfg(not(test))]
 fn configured_provider_profile_state_backend(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Arc<dyn ProviderProfileStateBackend> {
     match config.provider.resolved_profile_state_backend() {
         ProviderProfileStateBackendKind::File => {
@@ -443,7 +443,7 @@ fn configured_provider_profile_state_backend(
                     .provider
                     .resolved_profile_state_sqlite_path_with_default();
                 let legacy_json =
-                    crate::config::default_loongclaw_home().join("provider-profile-state.json");
+                    crate::config::default_loong_home().join("provider-profile-state.json");
                 Arc::new(SqliteProviderProfileStateBackend::with_legacy_fallback(
                     state_path,
                     Some(legacy_json),
@@ -458,7 +458,7 @@ fn configured_provider_profile_state_backend(
 }
 
 #[cfg(not(test))]
-pub(super) fn ensure_provider_profile_state_backend(config: &LoongClawConfig) {
+pub(super) fn ensure_provider_profile_state_backend(config: &LoongConfig) {
     if PROVIDER_PROFILE_STATE_BACKEND.get().is_some() {
         return;
     }
@@ -467,7 +467,7 @@ pub(super) fn ensure_provider_profile_state_backend(config: &LoongClawConfig) {
 }
 
 #[cfg(test)]
-pub(super) fn ensure_provider_profile_state_backend(_config: &LoongClawConfig) {}
+pub(super) fn ensure_provider_profile_state_backend(_config: &LoongConfig) {}
 
 pub(super) fn with_provider_profile_states<R>(
     run: impl FnOnce(&mut ProviderProfileStateStore) -> R,
@@ -502,3 +502,18 @@ static PROVIDER_PROFILE_STATE_PERSISTENCE_METRICS: OnceLock<
 > = OnceLock::new();
 static PROVIDER_PROFILE_STATE_BACKEND: OnceLock<Arc<dyn ProviderProfileStateBackend>> =
     OnceLock::new();
+
+#[cfg(test)]
+mod tests {
+    use super::FileProviderProfileStateBackend;
+
+    #[test]
+    fn file_profile_state_backend_defaults_to_loong_home() {
+        let backend = FileProviderProfileStateBackend::default();
+
+        assert_eq!(
+            backend.state_path(),
+            crate::config::default_loong_home().join("provider-profile-state.json")
+        );
+    }
+}

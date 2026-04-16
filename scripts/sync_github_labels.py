@@ -1026,6 +1026,11 @@ GitHub automation. Normal contributors should usually start with
 
 - `CI`, `CodeQL`, and `Security` validate pull requests and pushes for `dev`, `main`, `release`,
   and `release/*`.
+- Those required workflows also validate `merge_group` events so merge queues and rulesets can
+  receive the same checks as ordinary pull requests.
+- Expensive jobs inside those workflows may self-skip on irrelevant path sets. The workflows still
+  publish stable required checks, which avoids the pending-status trap of workflow-level path
+  filters on required workflows.
 - `perf-lint` uses the same branch set but stays path-scoped to workflow and benchmark-sensitive
   files.
 - `enforce-dev-to-main` closes promotion pull requests into `main` when the source is not the

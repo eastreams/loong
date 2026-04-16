@@ -116,7 +116,8 @@ pub(crate) use tool_lease::{
 ))]
 pub use web_http::build_ssrf_safe_client;
 
-pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loongclaw_browser_scope";
+pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loong_browser_scope";
+pub(crate) const LEGACY_BROWSER_SESSION_SCOPE_FIELD: &str = "__loongclaw_browser_scope";
 pub const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str =
     bundled_skills::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_COMMAND;
@@ -135,11 +136,22 @@ const HTTP_REQUEST_TOOL_NAME: &str = "http.request";
 const WEB_FETCH_TOOL_NAME: &str = "web.fetch";
 const WEB_SEARCH_TOOL_NAME: &str = "web.search";
 
+pub(crate) const LOONG_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loong";
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
 pub(crate) const LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
 pub(crate) const LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY: &str = "workspace_root";
+#[allow(dead_code)]
+pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_KEY: &str = LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY;
+#[allow(dead_code)]
+pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str =
+    LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY;
+#[allow(dead_code)]
+pub(crate) const LOONG_INTERNAL_RUNTIME_NARROWING_KEY: &str =
+    LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY;
+#[allow(dead_code)]
+pub(crate) const LOONG_INTERNAL_WORKSPACE_ROOT_KEY: &str = LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY;
 
 pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
     external_skills::normalize_domain_rule(raw)
@@ -210,6 +222,11 @@ pub(crate) async fn with_trusted_internal_tool_payload_async<T>(
     TRUSTED_INTERNAL_TOOL_PAYLOAD_TASK.scope(true, future).await
 }
 
+#[cfg(test)]
+pub(crate) fn reset_runtime_home_state_for_tests() {
+    tool_lease_authority::clear_tool_lease_secret_cache_for_tests();
+}
+
 fn trusted_internal_tool_payload_enabled() -> bool {
     #[cfg(test)]
     let test_enabled = TRUSTED_INTERNAL_TOOL_PAYLOAD_DEPTH.with(|depth| depth.get() > 0);
@@ -223,9 +240,50 @@ fn trusted_internal_tool_payload_enabled() -> bool {
 }
 
 pub(crate) fn payload_uses_reserved_internal_tool_context(payload: &Value) -> bool {
+    reserved_internal_tool_context_key_in_payload(payload).is_some()
+}
+
+fn reserved_internal_tool_context_key_in_payload(payload: &Value) -> Option<&'static str> {
     payload
         .as_object()
-        .is_some_and(|body| body.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY))
+        .and_then(reserved_internal_tool_context_key_in_map)
+}
+
+fn reserved_internal_tool_context_key_in_map(
+    body: &serde_json::Map<String, Value>,
+) -> Option<&'static str> {
+    if body.contains_key(LOONG_INTERNAL_TOOL_CONTEXT_KEY) {
+        Some(LOONG_INTERNAL_TOOL_CONTEXT_KEY)
+    } else if body.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
+        Some(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn trusted_internal_tool_context_from_payload(
+    payload: &Value,
+) -> Option<&serde_json::Map<String, Value>> {
+    let body = payload.as_object()?;
+    let key = reserved_internal_tool_context_key_in_map(body)?;
+    body.get(key)?.as_object()
+}
+
+pub(crate) fn take_trusted_internal_tool_context(
+    body: &mut serde_json::Map<String, Value>,
+) -> serde_json::Map<String, Value> {
+    for key in [
+        LOONG_INTERNAL_TOOL_CONTEXT_KEY,
+        LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY,
+    ] {
+        let Some(value) = body.remove(key) else {
+            continue;
+        };
+        if let Some(object) = value.as_object() {
+            return object.clone();
+        }
+    }
+    serde_json::Map::new()
 }
 
 fn ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
@@ -236,12 +294,12 @@ fn ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
     if trusted_internal_tool_payload_enabled() {
         return Ok(());
     }
-    if !payload_uses_reserved_internal_tool_context(payload) {
+    let Some(offending_key) = reserved_internal_tool_context_key_in_payload(payload) else {
         return Ok(());
-    }
+    };
 
     Err(format!(
-        "tool `{tool_name}` {payload_path}.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field"
+        "tool `{tool_name}` {payload_path}.{offending_key} is reserved for trusted internal tool context; retry without that field"
     ))
 }
 /// Execute a tool request, routing through the kernel for
@@ -627,11 +685,15 @@ pub fn is_provider_exposed_tool_name(raw: &str) -> bool {
         .is_some_and(|entry| entry.is_provider_core())
 }
 
+pub fn runtime_tool_view_from_loong_config(config: &crate::config::LoongConfig) -> ToolView {
+    let runtime_config = runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    runtime_tool_view_with_runtime_config(&config.tools, &runtime_config)
+}
+
 pub fn runtime_tool_view_from_loongclaw_config(
     config: &crate::config::LoongClawConfig,
 ) -> ToolView {
-    let runtime_config = runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
-    runtime_tool_view_with_runtime_config(&config.tools, &runtime_config)
+    runtime_tool_view_from_loong_config(config)
 }
 
 pub(crate) fn runtime_tool_view_with_runtime_config(
@@ -714,7 +776,7 @@ pub fn execute_tool_core_with_config(
     }
     let inner_tool_name = resolved_inner_tool_name_for_logs(canonical_name, &payload);
     let started_at = std::time::Instant::now();
-    let result = (|| {
+    let execute_request = || {
         ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
             requested_tool_name.as_str(),
             &payload,
@@ -734,7 +796,8 @@ pub fn execute_tool_core_with_config(
             "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
             _ => execute_discoverable_tool_core_with_config(request, config),
         }
-    })();
+    };
+    let result = execute_request();
     let duration_ms = started_at.elapsed().as_millis();
     match &result {
         Ok(outcome) => {
@@ -801,7 +864,7 @@ fn is_expected_tool_request_error(error: &str) -> bool {
     if error.starts_with("invalid_internal_runtime_narrowing:") {
         return true;
     }
-    error.contains("payload._loongclaw is reserved for trusted internal tool context")
+    error.contains("reserved for trusted internal tool context")
 }
 
 fn trusted_runtime_narrowing_from_payload(
@@ -811,8 +874,7 @@ fn trusted_runtime_narrowing_from_payload(
         return Ok(None);
     }
 
-    let Some(value) = payload
-        .get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+    let Some(value) = trusted_internal_tool_context_from_payload(payload)
         .and_then(|body| body.get(LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY))
         .cloned()
     else {
@@ -829,8 +891,7 @@ fn trusted_workspace_root_from_payload(payload: &Value) -> Result<Option<PathBuf
         return Ok(None);
     }
 
-    let Some(value) = payload
-        .get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+    let Some(value) = trusted_internal_tool_context_from_payload(payload)
         .and_then(|body| body.get(LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY))
         .cloned()
     else {
@@ -861,18 +922,15 @@ pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
     internal_context: &Value,
 ) -> Result<(), String> {
     let trusted_context = internal_context.as_object().cloned().ok_or_else(|| {
-        format!("tool.invoke payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} must be an object")
+        format!("tool.invoke payload.{LOONG_INTERNAL_TOOL_CONTEXT_KEY} must be an object")
     })?;
-    if arguments.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
+    if let Some(offending_key) = reserved_internal_tool_context_key_in_map(arguments) {
         return Err(format!(
-            "tool.invoke payload.arguments.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context"
+            "tool.invoke payload.arguments.{offending_key} is reserved for trusted internal tool context"
         ));
     }
     let merged_context = Value::Object(trusted_context);
-    arguments.insert(
-        LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
-        merged_context,
-    );
+    arguments.insert(LOONG_INTERNAL_TOOL_CONTEXT_KEY.to_owned(), merged_context);
     Ok(())
 }
 
@@ -1305,14 +1363,41 @@ fn tool_function_name(tool: &Value) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, unique_temp_dir};
+    use crate::test_support::{ScopedEnv, ScopedLoongClawHome, unique_temp_dir};
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use std::ops::{Deref, DerefMut};
     use std::path::{Path, PathBuf};
     use std::sync::{MutexGuard, OnceLock};
 
-    fn test_tool_runtime_config(root: impl AsRef<Path>) -> runtime_config::ToolRuntimeConfig {
-        runtime_config::ToolRuntimeConfig {
+    struct ToolTestRuntimeConfig {
+        config: runtime_config::ToolRuntimeConfig,
+        _runtime_home: ScopedLoongClawHome,
+    }
+
+    impl Deref for ToolTestRuntimeConfig {
+        type Target = runtime_config::ToolRuntimeConfig;
+
+        fn deref(&self) -> &Self::Target {
+            &self.config
+        }
+    }
+
+    impl DerefMut for ToolTestRuntimeConfig {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.config
+        }
+    }
+
+    impl ToolTestRuntimeConfig {
+        fn into_inner(self) -> runtime_config::ToolRuntimeConfig {
+            self.config
+        }
+    }
+
+    fn test_tool_runtime_config(root: impl AsRef<Path>) -> ToolTestRuntimeConfig {
+        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-home");
+        let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
             file_root: Some(root.as_ref().to_path_buf()),
             messages_enabled: true,
@@ -1325,6 +1410,10 @@ mod tests {
                 auto_expose_installed: false,
             },
             ..Default::default()
+        };
+        ToolTestRuntimeConfig {
+            config,
+            _runtime_home: runtime_home,
         }
     }
 
@@ -1445,7 +1534,7 @@ mod tests {
         root: &Path,
         command: String,
     ) -> runtime_config::ToolRuntimeConfig {
-        let mut config = test_tool_runtime_config(root);
+        let mut config = test_tool_runtime_config(root).into_inner();
         config.browser_companion.enabled = true;
         config.browser_companion.ready = true;
         config.browser_companion.command = Some(command);
@@ -1571,7 +1660,7 @@ mod tests {
             "# Demo Skill\n\nUse this skill for explicit verification.\n",
         );
 
-        let config = test_tool_runtime_config(root.clone());
+        let config = test_tool_runtime_config(&root);
         execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "external_skills.install".to_owned(),
@@ -4130,6 +4219,32 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
+    #[test]
+    fn tool_search_creates_tool_lease_secret_under_scoped_runtime_home() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-home-override");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+
+        let config = test_tool_runtime_config(root);
+        let expected_home = config._runtime_home.path().to_path_buf();
+        let expected_secret = expected_home.join("tool-lease-secret.hex");
+        let payload = json!({
+            "query": "编辑文件",
+            "limit": 8
+        });
+        let request = ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload,
+        };
+        let outcome =
+            execute_tool_core_with_config(request, &config).expect("tool search should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert!(expected_secret.exists());
+    }
+
     #[cfg(feature = "feishu-integration")]
     #[test]
     fn feishu_shape_examples_reference_only_known_feishu_tools() {
@@ -5457,6 +5572,8 @@ mod tests {
         .expect_err("feishu doc create should reject readonly grant");
 
         assert!(error.contains("feishu.doc.create requires Feishu scopes [docx:document]"));
+        assert!(error.contains("update Feishu config if needed"));
+        assert!(error.contains("loong feishu auth start --account <account>"));
     }
 
     #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
@@ -6840,6 +6957,8 @@ mod tests {
         .expect_err("feishu doc append should reject readonly grant");
 
         assert!(error.contains("feishu.doc.append requires Feishu scopes [docx:document]"));
+        assert!(error.contains("update Feishu config if needed"));
+        assert!(error.contains("loong feishu auth start --account <account>"));
     }
 
     #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]

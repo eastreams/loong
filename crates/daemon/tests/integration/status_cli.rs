@@ -75,7 +75,7 @@ fn run_status_cli_process(
         .to_str()
         .expect("config path should be valid utf-8");
 
-    Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    Command::new(env!("CARGO_BIN_EXE_loong"))
         .arg("status")
         .arg("--config")
         .arg(config_path_text)

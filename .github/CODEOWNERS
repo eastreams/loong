@@ -2,98 +2,103 @@
 /.github/CODEOWNERS @chumyin @gh-xj @primaryphd
 
 # Documentation and contributor-facing Markdown
-/*.md @loongclaw-ai/doc-ops
-/**/*.md @loongclaw-ai/doc-ops
-/docs/** @loongclaw-ai/doc-ops
-/site/** @loongclaw-ai/doc-ops
-/.github/ISSUE_TEMPLATE/** @loongclaw-ai/doc-ops
-/.github/PULL_REQUEST_TEMPLATE.md @loongclaw-ai/doc-ops
-/docs/product-specs/** @loongclaw-ai/doc-ops @loongclaw-ai/ux
+/*.md @eastreams/doc-ops
+/**/*.md @eastreams/doc-ops
+/docs/** @eastreams/doc-ops
+/site/** @eastreams/doc-ops
+/.github/ISSUE_TEMPLATE/** @eastreams/doc-ops
+/.github/PULL_REQUEST_TEMPLATE.md @eastreams/doc-ops
+/docs/product-specs/** @eastreams/doc-ops @eastreams/ux
 
 # Harness engineering: automation, CI/CD, audit, and verification
-/.convention-engineering.json @loongclaw-ai/harness
-/.github/dependabot.yml @loongclaw-ai/harness
-/.github/labeler.yml @loongclaw-ai/harness
-/.github/label_taxonomy.json @loongclaw-ai/harness
-/.github/workflows/** @loongclaw-ai/harness
-/Taskfile.yml @loongclaw-ai/harness
-/crates/contracts/src/audit_types.rs @loongclaw-ai/harness @loongclaw-ai/sec-ops
-/crates/daemon/src/audit_cli.rs @loongclaw-ai/harness @loongclaw-ai/sec-ops
-/crates/kernel/src/audit.rs @loongclaw-ai/harness @loongclaw-ai/sec-ops
-/crates/kernel/src/harness.rs @loongclaw-ai/harness
-/scripts/architecture_budget_lib.sh @loongclaw-ai/harness
-/scripts/check*.sh @loongclaw-ai/harness
-/scripts/generate_architecture_drift_report.sh @loongclaw-ai/harness
-/scripts/pre-commit @loongclaw-ai/harness
-/scripts/stress_daemon_tests.sh @loongclaw-ai/harness
-/scripts/sync_github_labels.py @loongclaw-ai/harness
-/scripts/test_*.sh @loongclaw-ai/harness
-/skills/update-harness.skill @loongclaw-ai/harness
-/docs/design-docs/harness-engineering.md @loongclaw-ai/doc-ops @loongclaw-ai/harness
+/.convention-engineering.json @eastreams/harness
+/.github/dependabot.yml @eastreams/harness
+/.github/labeler.yml @eastreams/harness
+/.github/label_taxonomy.json @eastreams/harness
+/.github/workflows/** @eastreams/harness
+/Taskfile.yml @eastreams/harness
+/crates/contracts/src/audit_types.rs @eastreams/harness @eastreams/sec-ops
+/crates/daemon/src/audit_cli.rs @eastreams/harness @eastreams/sec-ops
+/crates/kernel/src/audit.rs @eastreams/harness @eastreams/sec-ops
+/crates/kernel/src/harness.rs @eastreams/harness
+/scripts/architecture_budget_lib.sh @eastreams/harness
+/scripts/check*.sh @eastreams/harness
+/scripts/generate_architecture_drift_report.sh @eastreams/harness
+/scripts/pre-commit @eastreams/harness
+/scripts/stress_daemon_tests.sh @eastreams/harness
+/scripts/sync_github_labels.py @eastreams/harness
+/scripts/test_*.sh @eastreams/harness
+/scripts/test_workflow_change_router.mjs @eastreams/harness
+/scripts/test_workflow_change_router.sh @eastreams/harness @eastreams/sec-ops
+/scripts/workflow_change_router.mjs @eastreams/harness @eastreams/sec-ops
+/skills/update-harness.skill @eastreams/harness
+/docs/design-docs/harness-engineering.md @eastreams/doc-ops @eastreams/harness
 
 # Efficiency engineering: memory, budget, and benchmark surfaces
-/.github/workflows/perf-benchmark.yml @loongclaw-ai/harness @loongclaw-ai/efficiency-engineering
-/.github/workflows/perf-lint.yml @loongclaw-ai/harness @loongclaw-ai/efficiency-engineering
-/crates/bench/** @loongclaw-ai/efficiency-engineering
-/crates/app/src/config/memory.rs @loongclaw-ai/efficiency-engineering
-/crates/app/src/conversation/compaction.rs @loongclaw-ai/efficiency-engineering
-/crates/app/src/conversation/turn_budget.rs @loongclaw-ai/efficiency-engineering
-/crates/app/src/memory/** @loongclaw-ai/efficiency-engineering
-/crates/app/src/runtime_self_continuity.rs @loongclaw-ai/efficiency-engineering
-/crates/app/src/tools/memory_tools.rs @loongclaw-ai/efficiency-engineering
-/crates/contracts/src/memory_types.rs @loongclaw-ai/efficiency-engineering
-/crates/kernel/src/memory.rs @loongclaw-ai/efficiency-engineering
-/crates/daemon/src/memory_context_benchmark.rs @loongclaw-ai/efficiency-engineering
-/crates/daemon/tests/integration/memory_context_benchmark_cli.rs @loongclaw-ai/efficiency-engineering
-/examples/benchmarks/** @loongclaw-ai/efficiency-engineering
-/scripts/benchmark_*.sh @loongclaw-ai/efficiency-engineering
-/scripts/lint_programmatic_pressure_baseline.sh @loongclaw-ai/efficiency-engineering
-/scripts/update_programmatic_pressure_schema_baseline.sh @loongclaw-ai/efficiency-engineering
-/docs/product-specs/memory-profiles.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/efficiency-engineering
+/.github/workflows/perf-benchmark.yml @eastreams/harness @eastreams/efficiency-engineering
+/.github/workflows/perf-lint.yml @eastreams/harness @eastreams/efficiency-engineering
+/crates/bench/** @eastreams/efficiency-engineering
+/crates/app/src/config/memory.rs @eastreams/efficiency-engineering
+/crates/app/src/conversation/compaction.rs @eastreams/efficiency-engineering
+/crates/app/src/conversation/turn_budget.rs @eastreams/efficiency-engineering
+/crates/app/src/memory/** @eastreams/efficiency-engineering
+/crates/app/src/runtime_self_continuity.rs @eastreams/efficiency-engineering
+/crates/app/src/tools/memory_tools.rs @eastreams/efficiency-engineering
+/crates/contracts/src/memory_types.rs @eastreams/efficiency-engineering
+/crates/kernel/src/memory.rs @eastreams/efficiency-engineering
+/crates/daemon/src/memory_context_benchmark.rs @eastreams/efficiency-engineering
+/crates/daemon/tests/integration/memory_context_benchmark_cli.rs @eastreams/efficiency-engineering
+/examples/benchmarks/** @eastreams/efficiency-engineering
+/scripts/benchmark_*.sh @eastreams/efficiency-engineering
+/scripts/lint_programmatic_pressure_baseline.sh @eastreams/efficiency-engineering
+/scripts/update_programmatic_pressure_schema_baseline.sh @eastreams/efficiency-engineering
+/docs/product-specs/memory-profiles.md @eastreams/doc-ops @eastreams/ux @eastreams/efficiency-engineering
 
 # Release management: release pipeline, artifacts, and install surfaces
-/.github/workflows/enforce-main-to-release.yml @loongclaw-ai/harness @loongclaw-ai/release-managers
-/.github/workflows/release.yml @loongclaw-ai/harness @loongclaw-ai/release-managers
-/CHANGELOG.md @loongclaw-ai/doc-ops @loongclaw-ai/release-managers
-/scripts/bootstrap_release_local_artifacts.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
-/scripts/install.ps1 @loongclaw-ai/release-managers @loongclaw-ai/ux
-/scripts/install.sh @loongclaw-ai/release-managers @loongclaw-ai/ux
-/scripts/release_artifact_lib.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
-/scripts/test_bootstrap_release_local_artifacts.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
-/scripts/test_install_sh.sh @loongclaw-ai/release-managers @loongclaw-ai/ux
-/scripts/test_release_artifact_lib.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
-/scripts/test_release_workflow_hardening.sh @loongclaw-ai/harness @loongclaw-ai/release-managers
-/docs/releases/** @loongclaw-ai/doc-ops @loongclaw-ai/release-managers
-/docs/product-specs/installation.md @loongclaw-ai/doc-ops @loongclaw-ai/ux @loongclaw-ai/release-managers
+/.github/workflows/enforce-main-to-release.yml @eastreams/harness @eastreams/release-managers
+/.github/workflows/release.yml @eastreams/harness @eastreams/release-managers
+/CHANGELOG.md @eastreams/doc-ops @eastreams/release-managers
+/scripts/bootstrap_release_local_artifacts.sh @eastreams/harness @eastreams/release-managers
+/scripts/install.ps1 @eastreams/release-managers @eastreams/ux
+/scripts/install.sh @eastreams/release-managers @eastreams/ux
+/scripts/release_artifact_lib.sh @eastreams/harness @eastreams/release-managers
+/scripts/test_bootstrap_release_local_artifacts.sh @eastreams/harness @eastreams/release-managers
+/scripts/test_ci_workflow_change_routing.sh @eastreams/harness
+/scripts/test_install_sh.sh @eastreams/release-managers @eastreams/ux
+/scripts/test_release_artifact_lib.sh @eastreams/harness @eastreams/release-managers
+/scripts/test_release_workflow_hardening.sh @eastreams/harness @eastreams/release-managers
+/scripts/test_scan_workflow_hardening.sh @eastreams/harness @eastreams/sec-ops
+/docs/releases/** @eastreams/doc-ops @eastreams/release-managers
+/docs/product-specs/installation.md @eastreams/doc-ops @eastreams/ux @eastreams/release-managers
 
 # Security operations: policy, credentials, and security scans
-/.github/workflows/codeql.yml @loongclaw-ai/harness @loongclaw-ai/sec-ops
-/.github/workflows/security.yml @loongclaw-ai/harness @loongclaw-ai/sec-ops
-/SECURITY.md @loongclaw-ai/doc-ops @loongclaw-ai/sec-ops
-/crates/contracts/src/execution_security_types.rs @loongclaw-ai/sec-ops
-/crates/contracts/src/policy_types.rs @loongclaw-ai/sec-ops
-/crates/contracts/src/secret_*.rs @loongclaw-ai/sec-ops
-/crates/daemon/src/provider_credential_policy.rs @loongclaw-ai/sec-ops
-/crates/kernel/src/policy.rs @loongclaw-ai/sec-ops
-/crates/kernel/src/policy_ext.rs @loongclaw-ai/sec-ops
-/crates/spec/config/security-scan-medium-balanced.json @loongclaw-ai/sec-ops
-/crates/spec/src/spec_execution/security_scan_*.rs @loongclaw-ai/sec-ops
-/examples/policy/** @loongclaw-ai/sec-ops
-/examples/spec/plugin-wasm-security-scan.json @loongclaw-ai/sec-ops
-/docs/SECURITY.md @loongclaw-ai/doc-ops @loongclaw-ai/sec-ops
+/.github/workflows/codeql.yml @eastreams/harness @eastreams/sec-ops
+/.github/workflows/security.yml @eastreams/harness @eastreams/sec-ops
+/SECURITY.md @eastreams/doc-ops @eastreams/sec-ops
+/crates/contracts/src/execution_security_types.rs @eastreams/sec-ops
+/crates/contracts/src/policy_types.rs @eastreams/sec-ops
+/crates/contracts/src/secret_*.rs @eastreams/sec-ops
+/crates/daemon/src/provider_credential_policy.rs @eastreams/sec-ops
+/crates/kernel/src/policy.rs @eastreams/sec-ops
+/crates/kernel/src/policy_ext.rs @eastreams/sec-ops
+/crates/spec/config/security-scan-medium-balanced.json @eastreams/sec-ops
+/crates/spec/src/spec_execution/security_scan_*.rs @eastreams/sec-ops
+/examples/policy/** @eastreams/sec-ops
+/examples/spec/plugin-wasm-security-scan.json @eastreams/sec-ops
+/docs/SECURITY.md @eastreams/doc-ops @eastreams/sec-ops
 
 # UI and UX: presentation, first-run, and user-facing product surfaces
-/assets/** @loongclaw-ai/ui
-/crates/app/src/tui_surface.rs @loongclaw-ai/ui @loongclaw-ai/ux
-/crates/daemon/src/browser_companion_diagnostics.rs @loongclaw-ai/ux
-/crates/daemon/src/browser_preview.rs @loongclaw-ai/ui @loongclaw-ai/ux
-/crates/daemon/src/cli_handoff.rs @loongclaw-ai/ux
-/crates/daemon/src/completions_cli.rs @loongclaw-ai/ux
-/crates/daemon/src/doctor_cli.rs @loongclaw-ai/ux
-/crates/daemon/src/next_actions.rs @loongclaw-ai/ux
-/crates/daemon/src/onboard*.rs @loongclaw-ai/ux
-/crates/daemon/src/onboarding_*.rs @loongclaw-ai/ux
-/crates/daemon/src/provider_presentation.rs @loongclaw-ai/ux
-/crates/daemon/src/source_presentation.rs @loongclaw-ai/ux
-/crates/daemon/tests/integration/doctor_feishu.rs @loongclaw-ai/ux
-/crates/daemon/tests/integration/onboard_cli.rs @loongclaw-ai/ux
+/assets/** @eastreams/ui
+/crates/app/src/tui_surface.rs @eastreams/ui @eastreams/ux
+/crates/daemon/src/browser_companion_diagnostics.rs @eastreams/ux
+/crates/daemon/src/browser_preview.rs @eastreams/ui @eastreams/ux
+/crates/daemon/src/cli_handoff.rs @eastreams/ux
+/crates/daemon/src/completions_cli.rs @eastreams/ux
+/crates/daemon/src/doctor_cli.rs @eastreams/ux
+/crates/daemon/src/next_actions.rs @eastreams/ux
+/crates/daemon/src/onboard*.rs @eastreams/ux
+/crates/daemon/src/onboarding_*.rs @eastreams/ux
+/crates/daemon/src/provider_presentation.rs @eastreams/ux
+/crates/daemon/src/source_presentation.rs @eastreams/ux
+/crates/daemon/tests/integration/doctor_feishu.rs @eastreams/ux
+/crates/daemon/tests/integration/onboard_cli.rs @eastreams/ux

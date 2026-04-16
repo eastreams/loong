@@ -20,7 +20,8 @@ use crate::channel::{
     ChannelDelivery, ChannelInboundMessage, ChannelOutboundTarget, ChannelOutboundTargetKind,
     ChannelPlatform, ChannelSession, ChannelTurnFeedbackPolicy,
     http::{
-        build_outbound_http_client, outbound_http_policy_from_config, validate_outbound_http_target,
+        build_outbound_http_client, outbound_http_policy_from_config,
+        validate_outbound_http_base_url, validate_outbound_http_target,
     },
     process_inbound_with_provider,
     runtime::state::ChannelOperationRuntimeTracker,
@@ -493,9 +494,14 @@ async fn send_whatsapp_text_reply(
     text: &str,
 ) -> CliResult<()> {
     let policy = outbound_http_policy_from_config(&state.config);
+    let api_base_url = validate_outbound_http_base_url(
+        "whatsapp api_base_url",
+        state.api_base_url.as_str(),
+        policy,
+    )?;
     let raw_url = format!(
         "{}/{}/messages",
-        state.api_base_url.trim_end_matches('/'),
+        api_base_url.as_str().trim_end_matches('/'),
         state.phone_number_id.trim()
     );
     let url = validate_outbound_http_target("whatsapp api_base_url", &raw_url, policy)?;

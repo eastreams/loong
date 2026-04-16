@@ -11,12 +11,14 @@ WARNINGS=0
 PUBLIC_GITHUB_REPO="${LOONG_PUBLIC_REPO:-eastreams/loong}"
 PUBLIC_GITHUB_BASE="https://github.com/${PUBLIC_GITHUB_REPO}"
 
-if [ -n "${LOONGCLAW_RELEASE_DOCS_STRICT:-}" ]; then
-    case "${LOONGCLAW_RELEASE_DOCS_STRICT}" in
+RELEASE_DOCS_STRICT="${LOONG_RELEASE_DOCS_STRICT:-${LOONGCLAW_RELEASE_DOCS_STRICT:-}}"
+
+if [ -n "${RELEASE_DOCS_STRICT:-}" ]; then
+    case "${RELEASE_DOCS_STRICT}" in
         1|true|TRUE|yes|YES) STRICT_RELEASE_DOCS=1 ;;
         0|false|FALSE|no|NO) STRICT_RELEASE_DOCS=0 ;;
         *)
-            echo "FAIL: invalid LOONGCLAW_RELEASE_DOCS_STRICT value '${LOONGCLAW_RELEASE_DOCS_STRICT}' (expected 0/1)"
+            echo "FAIL: invalid LOONG_RELEASE_DOCS_STRICT/LOONGCLAW_RELEASE_DOCS_STRICT value '${RELEASE_DOCS_STRICT}' (expected 0/1)"
             exit 1
             ;;
     esac

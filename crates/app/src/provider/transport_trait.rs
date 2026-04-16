@@ -11,6 +11,7 @@ use crate::config::ProviderAuthScheme;
 
 use super::auth_profile_runtime::ProviderAuthProfile;
 use super::failover::{ProviderFailoverReason, ProviderFailoverStage};
+use super::rate_limit::RateLimitObservation;
 
 pub(super) type TransportEventStream =
     Pin<Box<dyn Stream<Item = Result<Value, TransportError>> + Send>>;
@@ -43,11 +44,12 @@ pub(super) struct TransportResponse {
     pub(super) status: reqwest::StatusCode,
     pub(super) headers: HeaderMap,
     pub(super) body: Value,
+    pub(super) rate_limit: Option<RateLimitObservation>,
 }
 
 pub(super) enum TransportStream {
     Events { events: TransportEventStream },
-    Response(TransportResponse),
+    Response(Box<TransportResponse>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

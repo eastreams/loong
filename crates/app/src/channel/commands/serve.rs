@@ -52,6 +52,13 @@ pub(in crate::channel) struct ChannelServeCommandSpec {
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
+/// Shared bootstrap for long-running channel `serve` commands.
+///
+/// Account resolution happens before this helper runs. It owns the common
+/// runtime setup that most channel entrypoints share: channel-specific
+/// validation, optional runtime-environment exports, kernel bootstrap, runtime
+/// tracker registration, and stop-handle plumbing before handing control to the
+/// channel-specific serve loop.
 pub(in crate::channel) async fn run_channel_serve_command_with_stop<R, V, F>(
     context: ChannelCommandContext<R>,
     spec: ChannelServeCommandSpec,

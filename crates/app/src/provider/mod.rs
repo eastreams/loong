@@ -9,7 +9,7 @@ use tokio::time::sleep;
 
 use crate::CliResult;
 
-use super::config::LoongClawConfig;
+use super::config::LoongConfig;
 #[cfg(test)]
 use super::config::{ProviderKind, ProviderProfileHealthModeConfig};
 
@@ -34,6 +34,7 @@ mod profile_state_backend;
 mod profile_state_store;
 mod provider_keyspace;
 mod provider_validation_runtime;
+mod rate_limit;
 mod request_dispatch_runtime;
 mod request_executor;
 mod request_failover_runtime;
@@ -49,7 +50,8 @@ mod transport_profile_runtime;
 mod transport_trait;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
-pub(crate) use failover::parse_provider_failover_snapshot_payload;
+pub use failover::parse_provider_failover_snapshot_payload;
+pub use rate_limit::RateLimitObservation;
 pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::{
@@ -64,7 +66,7 @@ pub struct ProviderToolSchemaReadiness {
     pub effective_tool_schema_mode: String,
 }
 
-pub fn provider_tool_schema_readiness(config: &LoongClawConfig) -> ProviderToolSchemaReadiness {
+pub fn provider_tool_schema_readiness(config: &LoongConfig) -> ProviderToolSchemaReadiness {
     let provider = &config.provider;
     let runtime_contract = provider_runtime_contract(provider);
     let capability_profile = capability_profile_runtime::ProviderCapabilityProfile::from_provider(
@@ -128,6 +130,8 @@ use failover::ProviderFailoverReason;
 #[cfg(test)]
 use failover::ProviderFailoverSnapshot;
 #[cfg(test)]
+use failover::build_model_request_error_with_rate_limit;
+#[cfg(test)]
 use failover::{ProviderFailoverStage, build_model_request_error};
 #[cfg(test)]
 use failover_telemetry_runtime::{
@@ -140,6 +144,7 @@ use model_candidate_cooldown_runtime::prioritize_model_candidates_by_cooldown;
 #[cfg(test)]
 use model_candidate_cooldown_runtime::{
     ModelCandidateCooldownPolicy, register_model_candidate_cooldown,
+    resolve_model_candidate_cooldown_duration,
 };
 #[cfg(test)]
 use model_candidate_resolver_runtime::rank_model_candidates;
@@ -190,10 +195,7 @@ const MODEL_CATALOG_CACHE_MAX_ENTRIES: usize = 32;
 #[cfg(test)]
 const MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES: usize = 64;
 
-pub fn build_system_message(
-    config: &LoongClawConfig,
-    include_system_prompt: bool,
-) -> Option<Value> {
+pub fn build_system_message(config: &LoongConfig, include_system_prompt: bool) -> Option<Value> {
     request_message_runtime::build_system_message(config, include_system_prompt)
 }
 
@@ -201,7 +203,7 @@ pub(crate) use request_message_runtime::build_projected_context_for_session_with
 pub(crate) use request_message_runtime::project_hydrated_memory_context_for_view_with_binding;
 
 pub fn build_messages_for_session(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     include_system_prompt: bool,
 ) -> CliResult<Vec<Value>> {
@@ -209,7 +211,7 @@ pub fn build_messages_for_session(
 }
 
 pub async fn request_completion(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<String> {
@@ -239,7 +241,7 @@ pub async fn request_completion(
 }
 
 pub async fn request_turn(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     turn_id: &str,
     messages: &[Value],
@@ -257,7 +259,7 @@ pub async fn request_turn(
 }
 
 pub async fn request_turn_in_view(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     turn_id: &str,
     messages: &[Value],
@@ -266,7 +268,7 @@ pub async fn request_turn_in_view(
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let runtime_tool_view =
         crate::tools::runtime_tool_view_with_runtime_config(&config.tools, &tool_runtime_config);
     let tool_definitions = if tool_view == &runtime_tool_view {
@@ -302,7 +304,7 @@ pub async fn request_turn_in_view(
 }
 
 pub async fn request_turn_streaming(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     turn_id: &str,
     messages: &[Value],
@@ -321,13 +323,13 @@ pub async fn request_turn_streaming(
     .await
 }
 
-pub(crate) fn supports_turn_streaming_events(config: &LoongClawConfig) -> bool {
+pub fn supports_turn_streaming_events(config: &LoongConfig) -> bool {
     let runtime_contract = provider_runtime_contract(&config.provider);
     runtime_contract.supports_turn_streaming_events()
 }
 
 pub async fn request_turn_streaming_in_view(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     turn_id: &str,
     messages: &[Value],
@@ -341,7 +343,7 @@ pub async fn request_turn_streaming_in_view(
 
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let runtime_tool_view =
         crate::tools::runtime_tool_view_with_runtime_config(&config.tools, &tool_runtime_config);
     let tool_definitions = if tool_view == &runtime_tool_view {
@@ -377,11 +379,11 @@ pub async fn request_turn_streaming_in_view(
     .await
 }
 
-pub async fn fetch_available_models(config: &LoongClawConfig) -> CliResult<Vec<String>> {
+pub async fn fetch_available_models(config: &LoongConfig) -> CliResult<Vec<String>> {
     fetch_available_models_with_profiles(config).await
 }
 
-pub async fn provider_auth_ready(config: &LoongClawConfig) -> bool {
+pub async fn provider_auth_ready(config: &LoongConfig) -> bool {
     if config.provider.resolved_auth_secret().is_some() {
         return true;
     }

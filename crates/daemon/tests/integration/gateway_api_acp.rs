@@ -8,13 +8,13 @@ use tower::ServiceExt;
 
 use super::*;
 
-fn gateway_acp_test_config(label: &str, enabled: bool) -> (mvp::config::LoongClawConfig, PathBuf) {
+fn gateway_acp_test_config(label: &str, enabled: bool) -> (mvp::config::LoongConfig, PathBuf) {
     let root_dir = unique_temp_dir(label);
     std::fs::create_dir_all(root_dir.as_path()).expect("create gateway ACP test dir");
 
     let sqlite_path = root_dir.join("memory.sqlite3");
     let sqlite_path_text = sqlite_path.display().to_string();
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.acp.enabled = enabled;
     config.memory.sqlite_path = sqlite_path_text;
 

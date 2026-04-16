@@ -34,6 +34,7 @@ use super::api_events::handle_events;
 use super::api_health::handle_health;
 use super::api_turn::handle_turn;
 use super::event_bus::GatewayEventBus;
+use super::openai_compat::{handle_chat_completions, handle_models};
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
     GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
@@ -90,10 +91,18 @@ impl GatewayControlAppState {
                 catalog_view: "channel_catalog",
                 legacy_channel_views: &[],
             },
+            summary: GatewayChannelInventorySummaryReadModel {
+                total_surface_count: 0,
+                runtime_backed_surface_count: 0,
+                config_backed_surface_count: 0,
+                plugin_backed_surface_count: 0,
+                catalog_only_surface_count: 0,
+            },
             channels: vec![],
             catalog_only_channels: vec![],
             channel_catalog: vec![],
             channel_surfaces: vec![],
+            channel_access_policies: vec![],
         };
         let runtime_snapshot = GatewayRuntimeSnapshotReadModel {
             config: String::new(),
@@ -108,7 +117,10 @@ impl GatewayControlAppState {
             acp: json!({}),
             channels: GatewayRuntimeSnapshotChannelsReadModel {
                 enabled_channel_ids: vec![],
+                enabled_runtime_backed_channel_ids: vec![],
                 enabled_service_channel_ids: vec![],
+                enabled_plugin_backed_channel_ids: vec![],
+                enabled_outbound_only_channel_ids: vec![],
                 inventory: channel_inventory.clone(),
             },
             tool_runtime: json!({}),
@@ -332,6 +344,8 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
         .route("/v1/events", get(handle_events))
         .route("/v1/turn", post(handle_turn))
+        .route("/v1/models", get(handle_models))
+        .route("/v1/chat/completions", post(handle_chat_completions))
         .route("/health", get(handle_health))
         .with_state(app_state)
 }

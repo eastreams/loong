@@ -802,6 +802,7 @@ mod tests {
                     }
                 }]
             }),
+            rate_limit: None,
         })]);
 
         let result = request_completion_with_provider_transport(

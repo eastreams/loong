@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use super::contracts::ProviderApiError;
+use super::rate_limit::RateLimitObservation;
 
 const PROVIDER_FAILOVER_MARKER: &str = "provider_failover=";
 
@@ -112,6 +113,7 @@ pub(super) struct ModelRequestError {
     pub(super) reason: ProviderFailoverReason,
     pub(super) snapshot: ProviderFailoverSnapshot,
     pub(super) api_error: Option<ProviderApiError>,
+    pub(super) rate_limit: Option<RateLimitObservation>,
 }
 
 pub(super) fn build_model_request_error(
@@ -124,6 +126,32 @@ pub(super) fn build_model_request_error(
     max_attempts: usize,
     status_code: Option<u16>,
     api_error: Option<ProviderApiError>,
+) -> ModelRequestError {
+    build_model_request_error_with_rate_limit(
+        message,
+        try_next_model,
+        reason,
+        stage,
+        model,
+        attempt,
+        max_attempts,
+        status_code,
+        api_error,
+        None,
+    )
+}
+
+pub(super) fn build_model_request_error_with_rate_limit(
+    message: String,
+    try_next_model: bool,
+    reason: ProviderFailoverReason,
+    stage: ProviderFailoverStage,
+    model: &str,
+    attempt: usize,
+    max_attempts: usize,
+    status_code: Option<u16>,
+    api_error: Option<ProviderApiError>,
+    rate_limit: Option<RateLimitObservation>,
 ) -> ModelRequestError {
     let snapshot = ProviderFailoverSnapshot {
         reason,
@@ -140,10 +168,11 @@ pub(super) fn build_model_request_error(
         reason,
         snapshot,
         api_error,
+        rate_limit,
     }
 }
 
-pub(crate) fn parse_provider_failover_snapshot_payload(error: &str) -> Option<Value> {
+pub fn parse_provider_failover_snapshot_payload(error: &str) -> Option<Value> {
     let (_prefix, payload_raw) = error.rsplit_once(PROVIDER_FAILOVER_MARKER)?;
     let payload: Value = serde_json::from_str(payload_raw).ok()?;
     validate_provider_failover_snapshot_payload(payload)

@@ -20,7 +20,7 @@ pub(super) fn render_onboarding_risk_screen_lines_with_style(
                 tone: TuiCalloutTone::Warning,
                 title: Some("what onboarding can do".to_owned()),
                 lines: vec![
-                    "LoongClaw can invoke tools and read local files when enabled.".to_owned(),
+                    "Loong can invoke tools and read local files when enabled.".to_owned(),
                     "Keep credentials in environment variables, not in prompts.".to_owned(),
                     "Prefer allowlist-style tool policy for shared environments.".to_owned(),
                 ],
@@ -57,7 +57,7 @@ pub(super) fn render_onboarding_risk_screen_lines_with_style(
 
 pub(super) fn build_onboard_shortcut_screen_spec(
     shortcut_kind: OnboardShortcutKind,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     include_choices: bool,
 ) -> TuiScreenSpec {

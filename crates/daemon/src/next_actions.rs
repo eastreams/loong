@@ -50,6 +50,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
         crate::migration::channels::collect_channel_next_actions(config, config_path);
     let unresolved_plugin_bridge_surfaces =
         collect_unresolved_plugin_bridge_surface_ids(config, &channel_actions);
+    let blocked_outbound_surfaces = collect_blocked_outbound_surface_ids(config);
     let browser_preview =
         crate::browser_preview::inspect_browser_preview_state_with_path_env(config, path_env);
     if config.cli.enabled {
@@ -88,6 +89,13 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             build_managed_bridge_doctor_action(config_path, &unresolved_plugin_bridge_surfaces);
         actions.push(doctor_action);
     }
+    if !blocked_outbound_surfaces.is_empty() {
+        let doctor_action =
+            build_outbound_channel_doctor_action(config_path, &blocked_outbound_surfaces);
+        actions.push(doctor_action);
+    }
+    let channel_actions =
+        normalize_channel_actions_for_outbound_doctor(channel_actions, &blocked_outbound_surfaces);
     let channel_setup_actions = channel_actions
         .into_iter()
         .map(channel_next_action_to_setup_action);
@@ -146,29 +154,9 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
 
 fn collect_unresolved_plugin_bridge_surface_ids(
     config: &mvp::config::LoongClawConfig,
-    channel_actions: &[crate::migration::channels::ChannelNextAction],
+    _channel_actions: &[crate::migration::channels::ChannelNextAction],
 ) -> Vec<&'static str> {
-    let has_catalog_only_channel_handoff = channel_actions_are_catalog_only(channel_actions);
-
-    if !has_catalog_only_channel_handoff {
-        return Vec::new();
-    }
-
     unresolved_plugin_bridge_surface_ids(config)
-}
-
-fn channel_actions_are_catalog_only(
-    channel_actions: &[crate::migration::channels::ChannelNextAction],
-) -> bool {
-    if channel_actions.len() != 1 {
-        return false;
-    }
-
-    let Some(action) = channel_actions.first() else {
-        return false;
-    };
-
-    action.id == crate::migration::channels::CHANNEL_CATALOG_ACTION_ID
 }
 
 fn unresolved_plugin_bridge_surface_ids(
@@ -189,6 +177,38 @@ fn unresolved_plugin_bridge_surface_ids(
         .filter(|surface| {
             let surface_name = plugin_bridge_surface_name(surface.catalog.id);
             unresolved_surface_names.contains(surface_name)
+        })
+        .map(|surface| surface.catalog.id)
+        .collect()
+}
+
+fn collect_blocked_outbound_surface_ids(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<&'static str> {
+    let inventory = mvp::channel::channel_inventory(config);
+
+    inventory
+        .channel_surfaces
+        .into_iter()
+        .filter(crate::migration::channels::surface_is_outbound_only)
+        .filter(|surface| {
+            surface
+                .configured_accounts
+                .iter()
+                .any(|snapshot| snapshot.enabled)
+        })
+        .filter(|surface| {
+            surface
+                .configured_accounts
+                .iter()
+                .filter(|snapshot| snapshot.enabled)
+                .any(|snapshot| {
+                    !snapshot
+                        .operation(mvp::channel::CHANNEL_OPERATION_SEND_ID)
+                        .is_some_and(|operation| {
+                            operation.health == mvp::channel::ChannelOperationHealth::Ready
+                        })
+                })
         })
         .map(|surface| surface.catalog.id)
         .collect()
@@ -232,6 +252,22 @@ fn build_managed_bridge_doctor_action(
     }
 }
 
+fn build_outbound_channel_doctor_action(
+    config_path: &str,
+    blocked_surface_ids: &[&'static str],
+) -> SetupNextAction {
+    let command = crate::cli_handoff::format_subcommand_with_config("doctor", config_path);
+    let label = outbound_channel_doctor_action_label(blocked_surface_ids);
+
+    SetupNextAction {
+        kind: SetupNextActionKind::Doctor,
+        channel_action_id: None,
+        browser_preview_phase: None,
+        label,
+        command,
+    }
+}
+
 fn managed_bridge_doctor_action_label(unresolved_surface_ids: &[&'static str]) -> String {
     if unresolved_surface_ids.len() == 1 {
         let surface_id = unresolved_surface_ids
@@ -249,6 +285,25 @@ fn managed_bridge_doctor_action_label(unresolved_surface_ids: &[&'static str]) -
     let label = format!("verify managed bridges: {rendered_surface_ids}");
 
     label
+}
+
+fn outbound_channel_doctor_action_label(blocked_surface_ids: &[&'static str]) -> String {
+    if blocked_surface_ids.len() == 1 {
+        let surface_id = blocked_surface_ids
+            .first()
+            .copied()
+            .unwrap_or("configured outbound channel");
+        let label = mvp::config::channel_descriptor(surface_id)
+            .map(|descriptor| descriptor.label)
+            .unwrap_or(surface_id);
+        return format!("verify {label} setup");
+    }
+
+    if blocked_surface_ids.is_empty() {
+        return "verify configured outbound channels".to_owned();
+    }
+
+    "verify configured outbound channels".to_owned()
 }
 
 pub(crate) fn is_managed_bridge_doctor_action(action: &SetupNextAction) -> bool {
@@ -269,6 +324,67 @@ fn channel_next_action_to_setup_action(
         label: action.label.to_owned(),
         command: action.command,
     }
+}
+
+fn normalize_channel_actions_for_outbound_doctor(
+    channel_actions: Vec<crate::migration::channels::ChannelNextAction>,
+    blocked_outbound_surface_ids: &[&'static str],
+) -> Vec<crate::migration::channels::ChannelNextAction> {
+    channel_actions
+        .into_iter()
+        .map(|action| {
+            normalize_channel_action_for_outbound_doctor(action, blocked_outbound_surface_ids)
+        })
+        .collect()
+}
+
+fn normalize_channel_action_for_outbound_doctor(
+    mut action: crate::migration::channels::ChannelNextAction,
+    blocked_outbound_surface_ids: &[&'static str],
+) -> crate::migration::channels::ChannelNextAction {
+    let is_configured_channels_action =
+        action.id == crate::migration::channels::CONFIGURED_CHANNELS_ACTION_ID;
+
+    if !is_configured_channels_action {
+        return action;
+    }
+
+    let Some(normalized_label) =
+        normalized_outbound_follow_up_label(action.label, blocked_outbound_surface_ids)
+    else {
+        return action;
+    };
+
+    action.label = Box::leak(normalized_label.into_boxed_str());
+
+    action
+}
+
+fn normalized_outbound_follow_up_label(
+    current_label: &str,
+    blocked_outbound_surface_ids: &[&'static str],
+) -> Option<String> {
+    if blocked_outbound_surface_ids.is_empty() {
+        return None;
+    }
+
+    if current_label == "review configured outbound channels" {
+        return Some("inspect configured outbound channels".to_owned());
+    }
+
+    if blocked_outbound_surface_ids.len() == 1 {
+        let channel_id = blocked_outbound_surface_ids.first().copied()?;
+        let descriptor = mvp::config::channel_descriptor(channel_id)?;
+        let review_label = format!("review {} setup", descriptor.label);
+
+        if current_label == review_label {
+            return Some(format!("inspect {}", descriptor.label));
+        }
+
+        return None;
+    }
+
+    None
 }
 
 fn should_suggest_personalization(config: &mvp::config::LoongClawConfig) -> bool {
@@ -653,6 +769,73 @@ mod tests {
         assert_eq!(
             doctor_action.command,
             "loong doctor --config '/tmp/loongclaw.toml'"
+        );
+    }
+
+    #[test]
+    fn collect_setup_next_actions_keeps_outbound_follow_up_as_inspection_after_doctor_for_single_surface()
+     {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.discord.enabled = true;
+        config.discord.bot_token = None;
+        config.discord.bot_token_env = None;
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+        let labels = actions
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.contains(&"verify Discord setup"),
+            "blocked outbound-only surfaces should still expose a doctor-first handoff: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"inspect Discord"),
+            "the secondary outbound-only handoff should be inspection rather than a duplicate review label: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"review Discord setup"),
+            "outbound-only follow-up actions should not duplicate the doctor wording: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn collect_setup_next_actions_keeps_outbound_group_follow_up_as_inspection_after_doctor() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.discord.enabled = true;
+        config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "discord-token".to_owned(),
+        ));
+        config.slack.enabled = true;
+        config.slack.bot_token = None;
+        config.slack.bot_token_env = None;
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+        let labels = actions
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.contains(&"verify Slack setup"),
+            "blocked outbound groups should still lead with the concrete doctor handoff: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"inspect configured outbound channels"),
+            "blocked outbound groups should keep channels as an inspection handoff: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"review configured outbound channels"),
+            "grouped outbound follow-up should not repeat review wording once doctor already owns repair guidance: {labels:?}"
         );
     }
 

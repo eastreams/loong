@@ -47,6 +47,8 @@ where
     let mut last_error_snapshot = None;
     for (model_index, model) in model_candidates.iter().enumerate() {
         let mut model_switch_reason = None;
+        let mut model_cooldown_reason = None;
+        let mut model_cooldown_rate_limit = None;
         for (profile_index, profile) in ordered_profiles.iter().enumerate() {
             match request_with_model(model.clone(), auto_model_mode, profile.clone()).await {
                 Ok(value) => {
@@ -73,6 +75,7 @@ where
                         try_next_model,
                         reason,
                         snapshot,
+                        rate_limit,
                         ..
                     } = model_error;
                     let exhausted = profile_index + 1 >= ordered_profiles.len()
@@ -112,6 +115,21 @@ where
                     );
                     last_error = Some(message);
                     last_error_snapshot = Some(snapshot);
+                    if matches!(
+                        reason,
+                        super::failover::ProviderFailoverReason::ModelMismatch
+                            | super::failover::ProviderFailoverReason::PayloadIncompatible
+                            | super::failover::ProviderFailoverReason::RateLimited
+                            | super::failover::ProviderFailoverReason::ProviderOverloaded
+                    ) && should_replace_model_cooldown_reason(
+                        model_cooldown_reason,
+                        model_cooldown_rate_limit.as_ref(),
+                        reason,
+                        rate_limit.as_ref(),
+                    ) {
+                        model_cooldown_reason = Some(reason);
+                        model_cooldown_rate_limit = rate_limit;
+                    }
 
                     if try_next_model {
                         model_switch_reason = Some(reason);
@@ -121,13 +139,18 @@ where
             }
         }
 
-        if let Some(reason) = model_switch_reason {
-            if let Some(policy) = model_candidate_cooldown_policy {
-                register_model_candidate_cooldown(policy, model.as_str(), reason);
-            }
-            if model_index + 1 < model_candidates.len() {
-                continue;
-            }
+        if let Some(reason) = model_cooldown_reason
+            && let Some(policy) = model_candidate_cooldown_policy
+        {
+            register_model_candidate_cooldown(
+                policy,
+                model.as_str(),
+                reason,
+                model_cooldown_rate_limit.as_ref(),
+            );
+        }
+        if model_switch_reason.is_some() && model_index + 1 < model_candidates.len() {
+            continue;
         }
     }
 
@@ -141,4 +164,36 @@ where
         }
         "provider request failed for every model candidate".to_owned()
     }))
+}
+
+fn should_replace_model_cooldown_reason(
+    current_reason: Option<super::failover::ProviderFailoverReason>,
+    current_rate_limit: Option<&super::rate_limit::RateLimitObservation>,
+    next_reason: super::failover::ProviderFailoverReason,
+    next_rate_limit: Option<&super::rate_limit::RateLimitObservation>,
+) -> bool {
+    let Some(current_reason) = current_reason else {
+        return true;
+    };
+
+    let current_hint =
+        current_rate_limit.and_then(super::rate_limit::RateLimitObservation::cooldown_hint);
+    let next_hint =
+        next_rate_limit.and_then(super::rate_limit::RateLimitObservation::cooldown_hint);
+
+    if next_hint.is_some() && current_hint.is_none() {
+        return true;
+    }
+    if let (Some(current_hint), Some(next_hint)) = (current_hint, next_hint)
+        && next_hint > current_hint
+    {
+        return true;
+    }
+    if current_reason != super::failover::ProviderFailoverReason::RateLimited
+        && next_reason == super::failover::ProviderFailoverReason::RateLimited
+    {
+        return true;
+    }
+
+    false
 }

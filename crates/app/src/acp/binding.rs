@@ -10,6 +10,7 @@ pub const ACP_BINDING_ROUTE_SESSION_ID_METADATA: &str = "route_session_id";
 pub const ACP_BINDING_CHANNEL_ID_METADATA: &str = "channel";
 pub const ACP_BINDING_ACCOUNT_ID_METADATA: &str = "channel_account_id";
 pub const ACP_BINDING_CONVERSATION_ID_METADATA: &str = "channel_conversation_id";
+pub const ACP_BINDING_PARTICIPANT_ID_METADATA: &str = "channel_participant_id";
 pub const ACP_BINDING_THREAD_ID_METADATA: &str = "channel_thread_id";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +19,7 @@ pub struct AcpSessionBindingScope {
     pub channel_id: Option<String>,
     pub account_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub participant_id: Option<String>,
     pub thread_id: Option<String>,
 }
 
@@ -43,6 +45,9 @@ impl AcpSessionBindingScope {
                 .and_then(|value| normalize_dispatch_account_id(value)),
             conversation_id: metadata
                 .get(ACP_BINDING_CONVERSATION_ID_METADATA)
+                .and_then(|value| trimmed_non_empty(Some(value.as_str()))),
+            participant_id: metadata
+                .get(ACP_BINDING_PARTICIPANT_ID_METADATA)
                 .and_then(|value| trimmed_non_empty(Some(value.as_str()))),
             thread_id: metadata
                 .get(ACP_BINDING_THREAD_ID_METADATA)
@@ -76,6 +81,10 @@ mod tests {
             ("channel".to_owned(), " Feishu ".to_owned()),
             ("channel_account_id".to_owned(), "LARK PROD".to_owned()),
             ("channel_conversation_id".to_owned(), " oc_123 ".to_owned()),
+            (
+                "channel_participant_id".to_owned(),
+                " ou_sender_1 ".to_owned(),
+            ),
             ("channel_thread_id".to_owned(), " om_thread_1 ".to_owned()),
         ]))
         .expect("binding scope should parse");
@@ -87,6 +96,7 @@ mod tests {
         assert_eq!(scope.channel_id.as_deref(), Some("feishu"));
         assert_eq!(scope.account_id.as_deref(), Some("lark-prod"));
         assert_eq!(scope.conversation_id.as_deref(), Some("oc_123"));
+        assert_eq!(scope.participant_id.as_deref(), Some("ou_sender_1"));
         assert_eq!(scope.thread_id.as_deref(), Some("om_thread_1"));
     }
 
@@ -100,6 +110,7 @@ mod tests {
                 channel_id: Some("feishu".to_owned()),
                 account_id: Some("lark-prod".to_owned()),
                 conversation_id: Some("oc_123".to_owned()),
+                participant_id: Some("ou_sender_1".to_owned()),
                 thread_id: Some("om_thread_1".to_owned()),
             }),
             working_directory: None,

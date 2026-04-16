@@ -4,6 +4,7 @@
     clippy::expect_used,
     private_interfaces
 )] // CLI daemon binary
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -88,7 +89,9 @@ pub mod acp_cli;
 pub mod audit_cli;
 mod browser_companion_diagnostics;
 pub mod browser_preview;
+mod channel_access_policy_render;
 mod channel_bridge_render;
+mod channel_resolution;
 #[cfg(test)]
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
@@ -157,6 +160,9 @@ pub use self::acp_cli::{
     run_acp_doctor_cli, run_acp_event_summary_cli, run_acp_observability_cli, run_acp_status_cli,
     run_list_acp_backends_cli, run_list_acp_sessions_cli,
 };
+use channel_access_policy_render::{
+    channel_access_policy_by_account, render_channel_access_policy_line,
+};
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
     push_channel_surface_plugin_bridge_contract,
@@ -207,7 +213,6 @@ pub mod test_support;
 
 pub const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
 pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
-pub const LEGACY_CLI_COMMAND_NAME: &str = mvp::config::LEGACY_CLI_COMMAND_NAME;
 
 pub fn active_cli_command_name() -> &'static str {
     mvp::config::active_cli_command_name()
@@ -257,7 +262,7 @@ pub(crate) fn render_operator_shell_surface_from_body(
 
 fn render_welcome_long_about(command_name: &str) -> String {
     format!(
-        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONG_CONFIG_PATH first."
     )
 }
 
@@ -402,7 +407,7 @@ impl std::str::FromStr for MultiChannelServeChannelAccount {
 #[derive(Parser, Debug)]
 #[command(
     name = CLI_COMMAND_NAME,
-    about = "LoongClaw low-level runtime daemon",
+    about = "Loong low-level runtime daemon",
     version
 )]
 pub struct Cli {
@@ -420,7 +425,7 @@ pub enum InitSpecPreset {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
-        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONG_CONFIG_PATH first."
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
@@ -787,6 +792,8 @@ pub enum Commands {
     Channels {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long)]
+        resolve: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -928,6 +935,8 @@ pub enum Commands {
         conversation_id: Option<String>,
         #[arg(long)]
         account_id: Option<String>,
+        #[arg(long)]
+        participant_id: Option<String>,
         #[arg(long)]
         thread_id: Option<String>,
         #[arg(long, default_value_t = false)]
@@ -1624,7 +1633,8 @@ mod multi_channel_serve_tests {
 }
 
 fn resolved_default_entry_config_path() -> PathBuf {
-    std::env::var_os("LOONGCLAW_CONFIG_PATH")
+    std::env::var_os("LOONG_CONFIG_PATH")
+        .or_else(|| std::env::var_os("LOONGCLAW_CONFIG_PATH"))
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(mvp::config::default_config_path)
@@ -1648,12 +1658,46 @@ fn default_onboard_command() -> Commands {
     }
 }
 
+fn default_import_preview_command() -> Commands {
+    Commands::Import {
+        output: None,
+        force: false,
+        preview: true,
+        apply: false,
+        json: false,
+        from: None,
+        source_path: None,
+        provider: None,
+        include: Vec::new(),
+        exclude: Vec::new(),
+    }
+}
+
+fn detected_legacy_home_for_default_entry() -> Option<PathBuf> {
+    if std::env::var_os("LOONG_HOME")
+        .as_deref()
+        .is_some_and(|value| !value.is_empty())
+    {
+        return None;
+    }
+
+    let user_home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)?;
+
+    mvp::config::detect_legacy_home(user_home.as_path())
+}
+
 pub fn resolve_default_entry_command() -> Commands {
     if resolved_default_entry_config_path().is_file() {
-        Commands::Welcome
-    } else {
-        default_onboard_command()
+        return Commands::Welcome;
     }
+
+    if detected_legacy_home_for_default_entry().is_some() {
+        return default_import_preview_command();
+    }
+
+    default_onboard_command()
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {
@@ -1666,7 +1710,7 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
         Ok(config_path)
     } else {
         Err(format!(
-            "Config file not found at {}. Run `{} onboard` to set up LoongClaw.",
+            "Config file not found at {}. Run `{} onboard` to set up Loong.",
             config_path.display(),
             active_cli_command_name(),
         ))
@@ -1741,7 +1785,7 @@ fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongClawConf
         subtitle: Some("configured install".to_owned()),
         title: Some("welcome back".to_owned()),
         progress_line: None,
-        intro_lines: vec!["LoongClaw is configured and ready.".to_owned()],
+        intro_lines: vec!["Loong is configured and ready.".to_owned()],
         sections,
         choices: Vec::new(),
         footer_lines: vec![format!(
@@ -1792,6 +1836,7 @@ mod first_run_entry_tests {
         fs::create_dir_all(&home).expect("create isolated home");
         env.set("HOME", &home);
         env.remove("LOONG_HOME");
+        env.remove("LOONG_CONFIG_PATH");
         env.remove("LOONGCLAW_CONFIG_PATH");
         (env, home)
     }
@@ -1803,6 +1848,25 @@ mod first_run_entry_tests {
         assert!(
             matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
             "missing config should route to onboard"
+        );
+    }
+
+    #[test]
+    fn resolve_default_entry_command_routes_to_import_preview_when_legacy_home_exists() {
+        let (_env, home) = isolated_home("loongclaw-default-entry-legacy-home");
+        let legacy_home = home.join(".loongclaw");
+        fs::create_dir_all(&legacy_home).expect("create legacy home");
+
+        assert!(
+            matches!(
+                resolve_default_entry_command(),
+                Commands::Import {
+                    preview: true,
+                    apply: false,
+                    ..
+                }
+            ),
+            "legacy home should route to import preview"
         );
     }
 
@@ -1841,6 +1905,27 @@ mod first_run_entry_tests {
         assert!(
             matches!(resolve_default_entry_command(), Commands::Welcome),
             "env override config should route to welcome"
+        );
+    }
+
+    #[test]
+    fn resolve_default_entry_command_honors_loong_config_path_override() {
+        let mut env = ScopedEnv::new();
+        let config_path = unique_temp_dir("loong-default-entry-env").join("custom-config.toml");
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config parent");
+        }
+        mvp::config::write(
+            Some(config_path.to_str().expect("utf8 config path")),
+            &mvp::config::LoongClawConfig::default(),
+            true,
+        )
+        .expect("write explicit config");
+        env.set("LOONG_CONFIG_PATH", &config_path);
+
+        assert!(
+            matches!(resolve_default_entry_command(), Commands::Welcome),
+            "new env override config should route to welcome"
         );
     }
 
@@ -1907,6 +1992,27 @@ mod first_run_entry_tests {
             error.contains("Config file not found"),
             "welcome should reject directory config paths as missing config files: {error}"
         );
+    }
+
+    #[test]
+    fn resolve_welcome_config_path_honors_loong_config_path_override() {
+        let mut env = ScopedEnv::new();
+        let config_path = unique_temp_dir("loong-welcome-present").join("welcome-config.toml");
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config parent");
+        }
+        mvp::config::write(
+            Some(config_path.to_str().expect("utf8 config path")),
+            &mvp::config::LoongClawConfig::default(),
+            true,
+        )
+        .expect("write explicit config");
+        env.set("LOONG_CONFIG_PATH", &config_path);
+
+        let resolved_path =
+            resolve_welcome_config_path().expect("new config path env should resolve correctly");
+
+        assert_eq!(resolved_path, config_path);
     }
 
     #[test]
@@ -2456,7 +2562,7 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
     Ok(())
 }
 
-pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
@@ -2466,7 +2572,10 @@ pub struct RuntimeSnapshotCliState {
     pub memory_system: mvp::memory::MemorySystemRuntimeSnapshot,
     pub acp: mvp::acp::AcpRuntimeSnapshot,
     pub enabled_channel_ids: Vec<String>,
+    pub enabled_runtime_backed_channel_ids: Vec<String>,
     pub enabled_service_channel_ids: Vec<String>,
+    pub enabled_plugin_backed_channel_ids: Vec<String>,
+    pub enabled_outbound_only_channel_ids: Vec<String>,
     pub channels: mvp::channel::ChannelInventory,
     pub tool_runtime: mvp::tools::runtime_config::ToolRuntimeConfig,
     pub visible_tool_names: Vec<String>,
@@ -2714,7 +2823,10 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(config)?;
     let acp = mvp::acp::collect_acp_runtime_snapshot(config)?;
     let enabled_channel_ids = config.enabled_channel_ids();
+    let enabled_runtime_backed_channel_ids = config.enabled_runtime_backed_channel_ids();
     let enabled_service_channel_ids = config.enabled_service_channel_ids();
+    let enabled_plugin_backed_channel_ids = config.enabled_plugin_backed_channel_ids();
+    let enabled_outbound_only_channel_ids = config.enabled_outbound_only_channel_ids();
     let channels = mvp::channel::channel_inventory(config);
     let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
         config,
@@ -2740,7 +2852,10 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         memory_system,
         acp,
         enabled_channel_ids,
+        enabled_runtime_backed_channel_ids,
         enabled_service_channel_ids,
+        enabled_plugin_backed_channel_ids,
+        enabled_outbound_only_channel_ids,
         channels,
         tool_runtime: snapshot_tool_runtime,
         visible_tool_names: visible_tools,
@@ -4078,10 +4193,34 @@ fn render_runtime_snapshot_artifact_text(
     ]
     .join("\n")
 }
-pub fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
+pub fn run_channels_cli(
+    config_path: Option<&str>,
+    resolve: Option<&str>,
+    as_json: bool,
+) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
     let inventory = mvp::channel::channel_inventory(&config);
     let resolved_path_display = resolved_path.display().to_string();
+
+    if let Some(resolve) = resolve {
+        let resolution = channel_resolution::build_channel_resolution(
+            resolved_path_display.as_str(),
+            &config,
+            &inventory,
+            resolve,
+        )?;
+        if as_json {
+            let pretty = serde_json::to_string_pretty(&resolution)
+                .map_err(|error| format!("serialize channel resolution output failed: {error}"))?;
+            println!("{pretty}");
+            return Ok(());
+        }
+        println!(
+            "{}",
+            channel_resolution::render_channel_resolution_text(&resolution)
+        );
+        return Ok(());
+    }
 
     if as_json {
         let payload = build_channels_cli_json_payload(&resolved_path_display, &inventory);
@@ -4098,7 +4237,7 @@ pub fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<(
     Ok(())
 }
 
-pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 pub const CHANNELS_CLI_JSON_LEGACY_VIEWS: &[&str] = &["channels", "catalog_only_channels"];
 
 pub fn build_channels_cli_json_payload(
@@ -4148,115 +4287,197 @@ fn build_channel_surfaces_body_lines(
     inventory: &mvp::channel::ChannelInventory,
 ) -> Vec<String> {
     let mut lines = vec![format!("config={config_path}")];
-    let mut catalog_only_surfaces = Vec::new();
+    lines.push(render_channel_surface_summary_line(
+        &inventory.channel_surfaces,
+    ));
+    let channel_access_policies = channel_access_policy_by_account(inventory);
 
-    for surface in &inventory.channel_surfaces {
-        if surface.catalog.implementation_status
-            == mvp::channel::ChannelCatalogImplementationStatus::Stub
-        {
-            catalog_only_surfaces.push(surface);
+    let grouped_surfaces = [
+        (
+            "runtime-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked,
+        ),
+        (
+            "config-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked,
+        ),
+        (
+            "plugin-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::PluginBacked,
+        ),
+        (
+            "catalog-only channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::Stub,
+        ),
+    ];
+
+    for (section_title, implementation_status) in grouped_surfaces {
+        let grouped = inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| surface.catalog.implementation_status == implementation_status)
+            .collect::<Vec<_>>();
+        if grouped.is_empty() {
             continue;
         }
 
-        push_channel_surface_header(&mut lines, surface);
-        lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
-        push_channel_surface_plugin_bridge_contract(&mut lines, surface);
-        push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
-        for snapshot in &surface.configured_accounts {
-            let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
-            lines.push(format!(
-                "  account configured_account={} configured_account_label={} default_account={} default_source={} compiled={} enabled={} api_base_url={}",
-                snapshot.configured_account_id,
-                snapshot.configured_account_label,
-                snapshot.is_default_account,
-                snapshot.default_account_source.as_str(),
-                snapshot.compiled,
-                snapshot.enabled,
-                api_base_url
-            ));
-            for note in &snapshot.notes {
-                lines.push(format!("    note: {note}"));
-            }
-            for operation in &snapshot.operations {
-                let catalog_operation = surface.catalog.operation(operation.id);
-                let requirement_ids = catalog_operation
-                    .map(|catalog_operation| {
-                        render_channel_operation_requirement_ids(catalog_operation.requirements)
-                    })
-                    .unwrap_or_else(|| "-".to_owned());
-                lines.push(format!(
-                    "    op {} ({}) {}: {} target_kinds={} requirements={}",
-                    operation.id,
-                    operation.command,
-                    operation.health.as_str(),
-                    operation.detail,
-                    render_channel_target_kind_ids(
-                        catalog_operation
-                            .map(|catalog_operation| catalog_operation.supported_target_kinds)
-                            .unwrap_or(&[])
-                    ),
-                    requirement_ids,
-                ));
-                if let Some(runtime) = &operation.runtime {
-                    lines.push(format!(
-                        "      runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
-                        runtime
-                            .account_label
-                            .as_deref()
-                            .unwrap_or("-"),
-                        runtime
-                            .account_id
-                            .as_deref()
-                            .unwrap_or("-"),
-                        runtime.running,
-                        runtime.stale,
-                        runtime.busy,
-                        runtime.active_runs,
-                        runtime.instance_count,
-                        runtime.running_instances,
-                        runtime.stale_instances,
-                        runtime
-                            .last_run_activity_at
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned()),
-                        runtime
-                            .last_heartbeat_at
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned()),
-                        runtime
-                            .pid
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned())
-                    ));
-                }
-                for issue in &operation.issues {
-                    lines.push(format!("      issue: {issue}"));
-                }
-            }
-        }
-    }
-
-    if !catalog_only_surfaces.is_empty() {
-        lines.push("catalog-only channels:".to_owned());
-        for surface in catalog_only_surfaces {
-            push_channel_surface_header(&mut lines, surface);
-            lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
-            push_channel_surface_plugin_bridge_contract(&mut lines, surface);
-            push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
-            for operation in &surface.catalog.operations {
-                lines.push(format!(
-                    "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
-                    operation.id,
-                    operation.command,
-                    operation.availability.as_str(),
-                    operation.tracks_runtime,
-                    render_channel_target_kind_ids(operation.supported_target_kinds),
-                    render_channel_operation_requirement_ids(operation.requirements)
-                ));
-            }
+        lines.push(section_title.to_owned());
+        for surface in grouped {
+            push_channel_surface_block(&mut lines, surface, &channel_access_policies);
         }
     }
     lines
+}
+
+fn render_channel_surface_summary_line(surfaces: &[mvp::channel::ChannelSurface]) -> String {
+    let runtime_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
+
+    format!(
+        "summary total_surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
+        surfaces.len(),
+        runtime_backed,
+        config_backed,
+        plugin_backed,
+        catalog_only
+    )
+}
+
+fn push_channel_surface_block(
+    lines: &mut Vec<String>,
+    surface: &mvp::channel::ChannelSurface,
+    channel_access_policies: &std::collections::BTreeMap<
+        (String, String),
+        mvp::channel::ChannelConfiguredAccountAccessPolicy,
+    >,
+) {
+    push_channel_surface_header(lines, surface);
+    lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
+    push_channel_surface_plugin_bridge_contract(lines, surface);
+    push_channel_surface_managed_plugin_bridge_discovery(lines, surface);
+
+    if surface.catalog.implementation_status
+        == mvp::channel::ChannelCatalogImplementationStatus::Stub
+    {
+        for operation in &surface.catalog.operations {
+            lines.push(format!(
+                "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
+                operation.id,
+                operation.command,
+                operation.availability.as_str(),
+                operation.tracks_runtime,
+                render_channel_target_kind_ids(operation.supported_target_kinds),
+                render_channel_operation_requirement_ids(operation.requirements)
+            ));
+        }
+        return;
+    }
+
+    for snapshot in &surface.configured_accounts {
+        let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
+        lines.push(format!(
+            "  account configured_account={} configured_account_label={} default_account={} default_source={} compiled={} enabled={} api_base_url={}",
+            snapshot.configured_account_id,
+            snapshot.configured_account_label,
+            snapshot.is_default_account,
+            snapshot.default_account_source.as_str(),
+            snapshot.compiled,
+            snapshot.enabled,
+            api_base_url
+        ));
+        for note in &snapshot.notes {
+            lines.push(format!("    note: {note}"));
+        }
+        let access_policy_key = (
+            surface.catalog.id.to_owned(),
+            snapshot.configured_account_id.clone(),
+        );
+        if let Some(access_policy) = channel_access_policies.get(&access_policy_key) {
+            lines.push(render_channel_access_policy_line(access_policy));
+        }
+        for operation in &snapshot.operations {
+            let catalog_operation = surface.catalog.operation(operation.id);
+            let requirement_ids = catalog_operation
+                .map(|catalog_operation| {
+                    render_channel_operation_requirement_ids(catalog_operation.requirements)
+                })
+                .unwrap_or_else(|| "-".to_owned());
+            lines.push(format!(
+                "    op {} ({}) {}: {} target_kinds={} requirements={}",
+                operation.id,
+                operation.command,
+                operation.health.as_str(),
+                operation.detail,
+                render_channel_target_kind_ids(
+                    catalog_operation
+                        .map(|catalog_operation| catalog_operation.supported_target_kinds)
+                        .unwrap_or(&[])
+                ),
+                requirement_ids,
+            ));
+            if let Some(runtime) = &operation.runtime {
+                lines.push(format!(
+                    "      runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
+                    runtime
+                        .account_label
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime
+                        .account_id
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime.running,
+                    runtime.stale,
+                    runtime.busy,
+                    runtime.active_runs,
+                    runtime.instance_count,
+                    runtime.running_instances,
+                    runtime.stale_instances,
+                    runtime
+                        .last_run_activity_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .last_heartbeat_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .pid
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned())
+                ));
+            }
+            for issue in &operation.issues {
+                lines.push(format!("      issue: {issue}"));
+            }
+        }
+    }
 }
 
 pub fn render_channel_onboarding_line(
@@ -4821,7 +5042,7 @@ pub fn run_wecom_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
 pub fn run_discord_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = args.target.unwrap_or_default();
+        let target = require_channel_send_target("discord-send", args.target)?;
         mvp::channel::run_discord_send(
             args.config_path,
             args.account,

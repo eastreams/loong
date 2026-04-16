@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::shared::{default_loongclaw_home, expand_path};
+use super::shared::{default_loong_home, expand_path};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuditConfig {
@@ -54,7 +54,7 @@ impl AuditMode {
 }
 
 fn default_audit_path() -> String {
-    default_loongclaw_home()
+    default_loong_home()
         .join("audit")
         .join("events.jsonl")
         .display()
@@ -68,16 +68,15 @@ const fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn audit_config_defaults_to_fanout_under_loongclaw_home() {
+    fn audit_config_defaults_to_fanout_under_loong_home() {
         let config = AuditConfig::default();
 
         assert_eq!(config.mode, AuditMode::Fanout);
         assert!(config.retain_in_memory);
         assert_eq!(
             PathBuf::from(&config.path),
-            default_loongclaw_home().join("audit").join("events.jsonl")
+            default_loong_home().join("audit").join("events.jsonl")
         );
     }
 
@@ -97,7 +96,7 @@ mod tests {
 
         assert_eq!(
             config.resolved_path(),
-            default_loongclaw_home().join("audit").join("events.jsonl")
+            default_loong_home().join("audit").join("events.jsonl")
         );
     }
 }

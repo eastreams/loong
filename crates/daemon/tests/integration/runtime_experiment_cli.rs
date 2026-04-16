@@ -146,6 +146,31 @@ fn rewrite_runtime_experiment_compare_config(config_path: &Path) {
     .expect("rewrite config fixture");
 }
 
+fn rewrite_runtime_experiment_channel_compare_config(config_path: &Path) {
+    let (_, mut config) = mvp::config::load(Some(
+        config_path
+            .to_str()
+            .expect("config path should be valid utf-8"),
+    ))
+    .expect("load config fixture");
+    config.telegram.enabled = false;
+    config.whatsapp.enabled = true;
+    config.weixin.enabled = false;
+    config.qqbot.enabled = true;
+    config.discord.enabled = false;
+    config.slack.enabled = true;
+    mvp::config::write(
+        Some(
+            config_path
+                .to_str()
+                .expect("config path should be valid utf-8"),
+        ),
+        &config,
+        true,
+    )
+    .expect("rewrite channel compare config fixture");
+}
+
 fn start_runtime_experiment(
     root: &Path,
     snapshot_path: &Path,
@@ -916,6 +941,143 @@ fn runtime_experiment_compare_with_recorded_snapshots_reports_changed_runtime_su
     assert!(rendered.contains("compare_mode=snapshot_delta"));
 
     fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
+    let root = unique_temp_dir("loongclaw-runtime-experiment-channel-taxonomy");
+    let config_path = write_runtime_experiment_config(&root);
+    let (_, mut config) = mvp::config::load(Some(
+        config_path
+            .to_str()
+            .expect("config path should be valid utf-8"),
+    ))
+    .expect("load config fixture");
+    config.telegram.enabled = true;
+    config.weixin.enabled = true;
+    config.discord.enabled = true;
+    mvp::config::write(
+        Some(
+            config_path
+                .to_str()
+                .expect("config path should be valid utf-8"),
+        ),
+        &config,
+        true,
+    )
+    .expect("write baseline channel compare config");
+
+    let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
+        &root,
+        &config_path,
+        "artifacts/runtime-snapshot-channel-baseline.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-16T12:00:00Z".to_owned(),
+            label: Some("baseline".to_owned()),
+            experiment_id: Some("exp-channel-taxonomy".to_owned()),
+            parent_snapshot_id: Some("snapshot-parent".to_owned()),
+        },
+    );
+    let (run_path, _) =
+        start_runtime_experiment(&root, &baseline_snapshot_path, Some("exp-channel-taxonomy"));
+
+    rewrite_runtime_experiment_channel_compare_config(&config_path);
+
+    let baseline_snapshot_id = snapshot_id_from_payload(&baseline_snapshot_payload);
+    let (result_snapshot_path, _) = write_snapshot_artifact(
+        &root,
+        &config_path,
+        "artifacts/runtime-snapshot-channel-result.json",
+        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+            created_at: "2026-03-16T12:30:00Z".to_owned(),
+            label: Some("candidate".to_owned()),
+            experiment_id: Some("exp-channel-taxonomy".to_owned()),
+            parent_snapshot_id: Some(baseline_snapshot_id),
+        },
+    );
+
+    let finished =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+                run: run_path.display().to_string(),
+                result_snapshot: result_snapshot_path.display().to_string(),
+                evaluation_summary: "channel taxonomy shifted".to_owned(),
+                metric: vec!["task_success=1".to_owned()],
+                warning: Vec::new(),
+                decision:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+                status:
+                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+                json: false,
+            },
+        )
+        .expect("runtime experiment finish should succeed");
+
+    let report =
+        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+                run: run_path.display().to_string(),
+                baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
+                result_snapshot: Some(result_snapshot_path.display().to_string()),
+                recorded_snapshots: false,
+                json: true,
+            },
+        )
+        .expect("snapshot-delta compare should succeed");
+
+    let snapshot_delta = report
+        .snapshot_delta
+        .as_ref()
+        .expect("compare should include snapshot delta");
+    assert!(
+        snapshot_delta
+            .enabled_runtime_backed_channel_ids
+            .removed
+            .contains(&"telegram".to_owned())
+    );
+    assert!(
+        snapshot_delta
+            .enabled_runtime_backed_channel_ids
+            .added
+            .contains(&"whatsapp".to_owned())
+    );
+    assert!(
+        snapshot_delta
+            .enabled_plugin_backed_channel_ids
+            .removed
+            .contains(&"weixin".to_owned())
+    );
+    assert!(
+        snapshot_delta
+            .enabled_plugin_backed_channel_ids
+            .added
+            .contains(&"qqbot".to_owned())
+    );
+    assert!(
+        snapshot_delta
+            .enabled_outbound_only_channel_ids
+            .removed
+            .contains(&"discord".to_owned())
+    );
+    assert!(
+        snapshot_delta
+            .enabled_outbound_only_channel_ids
+            .added
+            .contains(&"slack".to_owned())
+    );
+    assert!(
+        snapshot_delta.changed_surface_count >= 3,
+        "channel taxonomy changes should count toward snapshot surface changes"
+    );
+
+    let rendered =
+        loongclaw_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+    assert!(rendered.contains("enabled_runtime_backed_channel_ids"));
+    assert!(rendered.contains("enabled_plugin_backed_channel_ids"));
+    assert!(rendered.contains("enabled_outbound_only_channel_ids"));
+
+    fs::remove_dir_all(&root).ok();
+    drop(finished);
 }
 
 #[test]

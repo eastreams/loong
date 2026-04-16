@@ -203,6 +203,9 @@ impl ChannelSession {
         if let Some(account_id) = self.account_id.as_deref() {
             address = address.with_account_id(account_id);
         }
+        if let Some(participant_id) = self.participant_id.as_deref() {
+            address = address.with_participant_id(participant_id);
+        }
         if let Some(thread_id) = self.thread_id.as_deref() {
             address = address.with_thread_id(thread_id);
         }

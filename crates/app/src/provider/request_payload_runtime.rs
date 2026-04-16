@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::config::{LoongClawConfig, ReasoningEffort};
+use crate::config::{LoongConfig, ReasoningEffort};
 
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
@@ -13,7 +13,7 @@ const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4_096;
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_completion_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -33,7 +33,7 @@ pub(super) fn build_completion_request_body(
 }
 
 pub(super) fn build_completion_request_body_with_capability(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -67,7 +67,7 @@ pub(super) fn build_completion_request_body_with_capability(
 }
 
 fn build_chat_completions_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -86,7 +86,7 @@ fn build_chat_completions_request_body(
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn build_turn_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -111,7 +111,7 @@ pub(super) fn build_turn_request_body(
 }
 
 pub(super) fn build_turn_request_body_with_capability(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -176,7 +176,7 @@ pub(super) fn build_turn_request_body_with_capability(
 }
 
 fn build_openai_compatible_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -187,13 +187,29 @@ fn build_openai_compatible_request_body(
     body.insert("model".to_owned(), json!(model));
     body.insert("messages".to_owned(), Value::Array(messages.to_vec()));
     body.insert("stream".to_owned(), Value::Bool(streaming));
+    if let Some(first_stop) = config.provider.stop.first() {
+        let stop = if config.provider.stop.len() == 1 {
+            Value::String(first_stop.clone())
+        } else {
+            Value::Array(
+                config
+                    .provider
+                    .stop
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            )
+        };
+        body.insert("stop".to_owned(), stop);
+    }
     apply_common_payload_fields(&mut body, config, payload_mode, capability);
 
     Value::Object(body)
 }
 
 fn build_anthropic_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -232,7 +248,7 @@ fn build_anthropic_request_body(
 }
 
 fn build_bedrock_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     payload_mode: CompletionPayloadMode,
     include_tool_schema: bool,
@@ -280,7 +296,7 @@ fn build_bedrock_request_body(
 }
 
 fn build_google_generate_content_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     payload_mode: CompletionPayloadMode,
     include_tool_schema: bool,
@@ -994,7 +1010,7 @@ fn openai_tool_definition_to_google(tool_definition: &Value) -> Option<Value> {
 }
 
 fn build_responses_request_body(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     model: &str,
     payload_mode: CompletionPayloadMode,
@@ -1125,7 +1141,7 @@ fn extract_request_message_text(content: Option<&Value>) -> Option<String> {
 
 fn apply_common_payload_fields(
     body: &mut serde_json::Map<String, Value>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     payload_mode: CompletionPayloadMode,
     capability: ProviderCapabilityContract,
 ) {
@@ -1152,7 +1168,7 @@ fn apply_common_payload_fields(
 
 fn apply_common_reasoning_and_temperature_fields(
     body: &mut serde_json::Map<String, Value>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     payload_mode: CompletionPayloadMode,
 ) {
     if payload_mode.temperature_field == TemperatureField::Include {

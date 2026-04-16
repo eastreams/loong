@@ -145,7 +145,7 @@ fn tool_invoke_preserves_combined_trusted_internal_context_for_inner_execution()
     let (_, effective_request) =
         resolve_tool_invoke_request(&request).expect("tool.invoke should preserve trusted context");
 
-    let internal_context = effective_request.payload[LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+    let internal_context = effective_request.payload[LOONG_INTERNAL_TOOL_CONTEXT_KEY]
         .as_object()
         .expect("inner arguments should keep trusted internal context");
     assert_eq!(

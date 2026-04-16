@@ -5,6 +5,7 @@ pub mod api_turn;
 pub mod client;
 pub mod control;
 pub mod event_bus;
+pub mod openai_compat;
 pub mod read_models;
 pub mod service;
 pub mod state;

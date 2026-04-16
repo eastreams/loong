@@ -1,19 +1,22 @@
 [package]
-name = "loongclaw-bench"
+name = "loong-bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Internal support crate for LoongClaw: benchmark harness and gates"
+description = "Internal support crate for Loong: benchmark harness and gates"
 repository.workspace = true
 homepage.workspace = true
+
+[lib]
+name = "loongclaw_bench"
 
 [features]
 test-support = []
 
 [dependencies]
-loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec" }
-kernel = { package = "loongclaw-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec" }
+kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

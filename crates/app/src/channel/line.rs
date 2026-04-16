@@ -4,7 +4,10 @@ use crate::{CliResult, config::ResolvedLineChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_base_url,
+        validate_outbound_http_target,
+    },
 };
 
 pub(super) async fn run_line_send(
@@ -29,8 +32,10 @@ pub(super) async fn run_line_send(
         return Err("line outbound target id is empty".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
-    let trimmed_api_base_url = api_base_url.trim_end_matches('/');
+    let raw_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url =
+        validate_outbound_http_base_url("line api_base_url", raw_api_base_url.as_str(), policy)?;
+    let trimmed_api_base_url = api_base_url.as_str().trim_end_matches('/');
     let request_url = format!("{trimmed_api_base_url}/message/push");
     let request_url =
         validate_outbound_http_target("line api_base_url", request_url.as_str(), policy)?;

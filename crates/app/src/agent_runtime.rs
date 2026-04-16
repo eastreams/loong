@@ -29,12 +29,17 @@ pub enum AgentTurnMode {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+/// Transport-neutral request envelope for a single agent turn.
+///
+/// CLI entrypoints, control-plane requests, and channel bridges all normalize
+/// into this shape before they borrow the shared chat/runtime pipeline.
 pub struct AgentTurnRequest {
     pub message: String,
     pub turn_mode: AgentTurnMode,
     pub channel_id: Option<String>,
     pub account_id: Option<String>,
     pub conversation_id: Option<String>,
+    pub participant_id: Option<String>,
     pub thread_id: Option<String>,
     pub metadata: BTreeMap<String, String>,
     pub acp: bool,
@@ -232,6 +237,10 @@ impl AgentRuntime {
             || matches!(request.turn_mode, AgentTurnMode::Acp);
 
         if explicit_acp_request {
+            // ACP turns reuse the same runtime shell/session identity but swap
+            // the execution lane entirely: they reload provider-facing config,
+            // resolve ACP routing metadata, and bypass the normal provider
+            // coordinator path below.
             let turn_config = load_runtime_turn_config(runtime)?;
             let acp_manager = match acp_manager {
                 Some(manager) => manager,
@@ -278,31 +287,32 @@ impl AgentRuntime {
         }
 
         let (effective_ingress, effective_provenance) = effective_turn_context(ingress, provenance);
-        let output_text = crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode(
-            runtime,
-            &turn_address,
-            message,
-            event_sink,
-            request.live_surface_enabled,
-            Some(&request.metadata),
-            effective_ingress,
-            effective_provenance,
-            provider_error_mode,
-            observer,
-        )
-        .await?;
+        let turn_outcome =
+            crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+                runtime,
+                &turn_address,
+                message,
+                event_sink,
+                request.live_surface_enabled,
+                Some(&request.metadata),
+                effective_ingress,
+                effective_provenance,
+                provider_error_mode,
+                observer,
+            )
+            .await?;
         let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
         let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 
         Ok(AgentTurnResult {
             session_id: runtime.session_id.clone(),
-            output_text,
+            output_text: turn_outcome.reply,
             turn_mode: request.turn_mode,
             governed_session_mode: ConversationRuntimeBinding::kernel(&runtime.kernel_ctx)
                 .session_mode(),
             state: None,
             stop_reason: None,
-            usage: None,
+            usage: turn_outcome.usage,
             event_count: 0,
             prompt_assembly,
             prompt_cache,
@@ -318,6 +328,12 @@ impl AgentRuntime {
         self.run_turn(config_path, session_hint, request).await
     }
 
+    /// Execute a turn when the caller already resolved config from disk.
+    ///
+    /// This keeps the high-level `AgentRuntime` flow intact while avoiding a
+    /// second config load. It still bootstraps a fresh CLI turn runtime, so it
+    /// is the right entrypoint when ACP/session managers do not need to be
+    /// shared with an outer host.
     pub async fn run_turn_with_loaded_config(
         &self,
         resolved_path: PathBuf,
@@ -338,13 +354,56 @@ impl AgentRuntime {
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
             crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            true,
+            false,
         )?;
 
         self.run_turn_with_runtime(&runtime, request, event_sink)
             .await
     }
 
+    pub async fn run_turn_with_loaded_config_and_observer_and_error_mode(
+        &self,
+        resolved_path: PathBuf,
+        config: crate::config::LoongClawConfig,
+        session_hint: Option<&str>,
+        request: &AgentTurnRequest,
+        event_sink: Option<&dyn AcpTurnEventSink>,
+        observer: Option<crate::conversation::ConversationTurnObserverHandle>,
+        provider_error_mode: crate::conversation::ProviderErrorMode,
+    ) -> CliResult<AgentTurnResult> {
+        if request.message.trim().is_empty() {
+            return Err("agent runtime message must not be empty".to_owned());
+        }
+
+        let options = cli_chat_options_for_turn_request(request);
+        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+            resolved_path,
+            config,
+            session_hint,
+            &options,
+            kernel_scope_for_turn_mode(request.turn_mode),
+            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            false,
+        )?;
+
+        self.run_turn_with_runtime_and_observer_and_context_and_error_mode(
+            &runtime,
+            request,
+            event_sink,
+            observer,
+            None,
+            AcpTurnProvenance::default(),
+            provider_error_mode,
+        )
+        .await
+    }
+
+    /// Execute a turn with a preloaded config while reusing an existing ACP
+    /// session manager.
+    ///
+    /// Control-plane and gateway surfaces use this when multiple turns should
+    /// share ACP session ownership and streamed runtime events instead of each
+    /// turn silently constructing its own manager.
     pub async fn run_turn_with_loaded_config_and_acp_manager(
         &self,
         resolved_path: PathBuf,
@@ -366,7 +425,7 @@ impl AgentRuntime {
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
             crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            true,
+            false,
         )?;
 
         self.run_turn_with_runtime_and_context_and_manager(
@@ -463,6 +522,11 @@ impl AgentRuntime {
     }
 }
 
+/// Project the subset of an `AgentTurnRequest` that affects CLI/chat runtime
+/// bootstrap.
+///
+/// The rest of the request remains turn-local and is passed later to the
+/// coordinator/provider pipeline.
 fn cli_chat_options_for_turn_request(request: &AgentTurnRequest) -> CliChatOptions {
     CliChatOptions {
         acp_requested: request.acp || matches!(request.turn_mode, AgentTurnMode::Acp),
@@ -480,6 +544,12 @@ fn normalized_turn_working_directory(value: Option<&str>) -> Option<std::path::P
     Some(std::path::PathBuf::from(value))
 }
 
+/// Enrich the resolved root session id with any channel/account/thread scope
+/// that the caller supplied for this turn.
+///
+/// The underlying persisted session remains keyed by `runtime.session_id`; this
+/// helper only projects the structured conversation address used by dispatch
+/// and ACP routing.
 fn resolved_session_address(
     runtime: &crate::chat::CliTurnRuntime,
     request: &AgentTurnRequest,
@@ -493,6 +563,9 @@ fn resolved_session_address(
     }
     if let Some(account_id) = request.account_id.as_deref() {
         address = address.with_account_id(account_id);
+    }
+    if let Some(participant_id) = request.participant_id.as_deref() {
+        address = address.with_participant_id(participant_id);
     }
     if let Some(thread_id) = request.thread_id.as_deref() {
         address = address.with_thread_id(thread_id);
@@ -583,6 +656,13 @@ async fn load_runtime_prompt_frame_summary(
     }
 }
 
+/// Refresh provider-facing runtime state from disk when a concrete config path
+/// is still available for this runtime.
+///
+/// Long-lived channel/control-plane surfaces use this to pick up provider
+/// credential/profile changes between turns without rebuilding the surrounding
+/// runtime. If the runtime was created from an in-memory config snapshot only,
+/// the existing config is reused as-is.
 fn load_runtime_turn_config(
     runtime: &crate::chat::CliTurnRuntime,
 ) -> CliResult<crate::config::LoongClawConfig> {

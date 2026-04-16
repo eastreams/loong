@@ -13,7 +13,7 @@ use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owne
 use crate::mvp;
 use crate::supervisor::LoadedSupervisorConfig;
 
-const STATUS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+const STATUS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusCliJsonSchema {
@@ -155,7 +155,7 @@ fn select_gateway_owner_status_for_config(
 
 async fn collect_status_cli_acp_read_model(
     config_path: &str,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> StatusCliAcpReadModel {
     let enabled = config.acp.enabled;
     let persisted_session_count = load_persisted_acp_session_count(config);
@@ -212,7 +212,7 @@ fn build_unavailable_acp_read_model(
 }
 
 fn collect_status_cli_work_unit_read_model(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> StatusCliWorkUnitReadModel {
     #[cfg(not(feature = "memory-sqlite"))]
     {
@@ -260,7 +260,7 @@ fn collect_status_cli_work_unit_read_model(
     }
 }
 
-fn load_persisted_acp_session_count(config: &mvp::config::LoongClawConfig) -> Option<usize> {
+fn load_persisted_acp_session_count(config: &mvp::config::LoongConfig) -> Option<usize> {
     #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
     {
         let _ = config;
@@ -472,20 +472,72 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                 value: channels.configured_account_count.to_string(),
             },
             loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "configured channels".to_owned(),
+                value: channels.configured_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled accounts".to_owned(),
                 value: channels.enabled_account_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "misconfigured accounts".to_owned(),
+                value: channels.misconfigured_account_count.to_string(),
             },
             loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "runtime-backed channels".to_owned(),
                 value: channels.runtime_backed_channel_count.to_string(),
             },
             loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "config-backed channels".to_owned(),
+                value: channels.config_backed_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "plugin-backed channels".to_owned(),
+                value: channels.plugin_backed_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "catalog-only channels".to_owned(),
+                value: channels.catalog_only_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "enabled runtime-backed".to_owned(),
+                value: channels.enabled_runtime_backed_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled service channels".to_owned(),
                 value: channels.enabled_service_channel_count.to_string(),
             },
             loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "enabled plugin-backed".to_owned(),
+                value: channels.enabled_plugin_backed_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "enabled outbound-only".to_owned(),
+                value: channels.enabled_outbound_only_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "ready service channels".to_owned(),
                 value: channels.ready_service_channel_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "enabled channels".to_owned(),
+                value: render_status_channel_ids(&runtime.enabled_channel_ids),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "runtime-backed enabled ids".to_owned(),
+                value: render_status_channel_ids(&runtime.enabled_runtime_backed_channel_ids),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "service enabled ids".to_owned(),
+                value: render_status_channel_ids(&runtime.enabled_service_channel_ids),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "plugin-backed enabled ids".to_owned(),
+                value: render_status_channel_ids(&runtime.enabled_plugin_backed_channel_ids),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "outbound-only enabled ids".to_owned(),
+                value: render_status_channel_ids(&runtime.enabled_outbound_only_channel_ids),
             },
             loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "shutdown reason".to_owned(),
@@ -554,6 +606,14 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         false,
     )
     .join("\n")
+}
+
+fn render_status_channel_ids(channel_ids: &[String]) -> String {
+    if channel_ids.is_empty() {
+        return "-".to_owned();
+    }
+
+    channel_ids.join(",")
 }
 
 fn render_status_cli_acp_text(acp: &StatusCliAcpReadModel) -> String {
@@ -668,13 +728,22 @@ mod tests {
                 enabled_account_count: 1,
                 misconfigured_account_count: 0,
                 runtime_backed_channel_count: 1,
+                config_backed_channel_count: 0,
+                plugin_backed_channel_count: 0,
+                catalog_only_channel_count: 0,
+                enabled_runtime_backed_channel_count: 1,
+                enabled_plugin_backed_channel_count: 0,
+                enabled_outbound_only_channel_count: 0,
                 enabled_service_channel_count: 1,
                 ready_service_channel_count: 1,
                 surfaces: Vec::new(),
             },
             runtime: GatewayOperatorRuntimeSummaryReadModel {
                 enabled_channel_ids: vec!["telegram".to_owned()],
+                enabled_runtime_backed_channel_ids: vec!["telegram".to_owned()],
                 enabled_service_channel_ids: vec!["telegram".to_owned()],
+                enabled_plugin_backed_channel_ids: Vec::new(),
+                enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
@@ -740,6 +809,9 @@ mod tests {
         );
         assert!(rendered.contains("runtime posture"));
         assert!(rendered.contains("[OK] tool calling"));
+        assert!(rendered.contains("configured channels"));
+        assert!(rendered.contains("enabled channels"));
+        assert!(rendered.contains("service enabled ids"));
         assert!(rendered.contains("saved runtime"));
         assert!(rendered.contains("deep dives"));
         assert!(rendered.contains("- recipe: loong gateway status"));

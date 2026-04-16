@@ -5,16 +5,18 @@
 
 set -euo pipefail
 
+export LOONG_CARGO="${LOONG_CARGO:-./scripts/cargo-local-toolchain.sh}"
+
 echo "[pre-commit] cargo fmt --check"
-cargo fmt --all -- --check
+"$LOONG_CARGO" fmt --all -- --check
 
 echo "[pre-commit] cargo clippy"
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+"$LOONG_CARGO" clippy --workspace --all-targets --all-features -- -D warnings
 
 echo "[pre-commit] cargo test --workspace"
-cargo test --workspace
+"$LOONG_CARGO" test --workspace
 
 echo "[pre-commit] cargo test --workspace --all-features"
-cargo test --workspace --all-features
+"$LOONG_CARGO" test --workspace --all-features
 
 echo "[pre-commit] all checks passed"

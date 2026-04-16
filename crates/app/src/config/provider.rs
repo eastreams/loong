@@ -832,6 +832,8 @@ pub struct ProviderConfig {
     pub temperature: f64,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub stop: Vec<String>,
     #[serde(default = "default_provider_timeout_ms")]
     pub request_timeout_ms: u64,
     #[serde(default = "default_provider_retry_max_attempts")]
@@ -921,6 +923,7 @@ impl Default for ProviderConfig {
             headers: BTreeMap::new(),
             temperature: default_temperature(),
             max_tokens: None,
+            stop: Vec::new(),
             request_timeout_ms: default_provider_timeout_ms(),
             retry_max_attempts: default_provider_retry_max_attempts(),
             retry_initial_backoff_ms: default_provider_retry_initial_backoff_ms(),
@@ -987,6 +990,8 @@ impl<'de> Deserialize<'de> for ProviderConfig {
             temperature: f64,
             #[serde(default)]
             max_tokens: Option<u32>,
+            #[serde(default)]
+            stop: Vec<String>,
             #[serde(default = "default_provider_timeout_ms")]
             request_timeout_ms: u64,
             #[serde(default = "default_provider_retry_max_attempts")]
@@ -1076,6 +1081,7 @@ impl<'de> Deserialize<'de> for ProviderConfig {
             headers: raw.headers,
             temperature: raw.temperature,
             max_tokens: raw.max_tokens,
+            stop: raw.stop,
             request_timeout_ms: raw.request_timeout_ms,
             retry_max_attempts: raw.retry_max_attempts,
             retry_initial_backoff_ms: raw.retry_initial_backoff_ms,

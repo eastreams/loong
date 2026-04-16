@@ -45,7 +45,10 @@ fn runtime_snapshot_fixture(
         acp: serde_json::json!({}),
         channels: loongclaw_daemon::gateway::read_models::GatewayRuntimeSnapshotChannelsReadModel {
             enabled_channel_ids: vec!["weixin".to_owned()],
+            enabled_runtime_backed_channel_ids: Vec::new(),
             enabled_service_channel_ids: Vec::new(),
+            enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
+            enabled_outbound_only_channel_ids: Vec::new(),
             inventory: inventory.clone(),
         },
         tool_runtime: serde_json::json!({}),
@@ -134,7 +137,7 @@ fn managed_bridge_parity_keeps_doctor_json_and_channels_json_account_summary_in_
     )
     .expect("write config");
 
-    let doctor_output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let doctor_output = Command::new(env!("CARGO_BIN_EXE_loong"))
         .arg("doctor")
         .arg("--config")
         .arg(&config_path)
@@ -156,7 +159,7 @@ fn managed_bridge_parity_keeps_doctor_json_and_channels_json_account_summary_in_
         .find(|value| value["name"].as_str() == Some("weixin managed bridge discovery"))
         .expect("weixin doctor check");
 
-    let channels_output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let channels_output = Command::new(env!("CARGO_BIN_EXE_loong"))
         .arg("channels")
         .arg("--config")
         .arg(&config_path)

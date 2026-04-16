@@ -33,6 +33,7 @@ design backlog artifacts are intentionally out of the public docs flow.
 | --- | --- |
 | [Core Beliefs](core-beliefs.md) | you need the engineering principles that should survive refactors |
 | [Layered Kernel Design](layered-kernel-design.md) | you need the crate and layer boundary model before changing runtime shape |
+| [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) | you need the shortest source-facing map of how CLI, channel, gateway, control-plane, and daemon task turns enter the shared runtime |
 | [Harness Engineering](harness-engineering.md) | you are working on the agent-driven development environment itself |
 
 ## Boundary Rules
@@ -49,5 +50,7 @@ design backlog artifacts are intentionally out of the public docs flow.
    architectural taste and invariants.
 2. Continue to [Layered Kernel Design](layered-kernel-design.md) if the change
    touches boundaries, ownership, or layering.
-3. Read [Harness Engineering](harness-engineering.md) only when the work is
+3. Read [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) when
+   the problem is “which runtime/bootstrap surface actually owns this turn?”
+4. Read [Harness Engineering](harness-engineering.md) only when the work is
    really about the development environment or agent workflow itself.

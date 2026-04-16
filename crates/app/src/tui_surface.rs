@@ -840,10 +840,8 @@ mod tests {
         let lines = render_tui_screen_spec(&spec, 80, false);
 
         assert!(
-            lines
-                .first()
-                .is_some_and(|line| line.starts_with("LOONGCLAW")),
-            "compact header should keep the LOONGCLAW wordmark: {lines:#?}"
+            lines.first().is_some_and(|line| line.starts_with("LOONG")),
+            "compact header should keep the LOONG wordmark: {lines:#?}"
         );
         assert!(
             lines
@@ -912,7 +910,7 @@ mod tests {
         assert!(rendered.contains(" preflight "), "{rendered}");
         assert!(rendered.contains(" choices "), "{rendered}");
         assert!(rendered.contains(" next "), "{rendered}");
-        assert!(rendered.contains("LOONGCLAW"), "{rendered}");
+        assert!(rendered.contains("LOONG"), "{rendered}");
         assert!(
             rendered.contains("loong ask --message 'hello'"),
             "{rendered}"
@@ -943,7 +941,7 @@ mod tests {
 
         let rendered = render_onboard_screen_spec(&spec, 80, true).join("\n");
 
-        assert!(rendered.contains("LOONGCLAW"), "{rendered}");
+        assert!(rendered.contains("LOONG"), "{rendered}");
         assert!(
             rendered.contains("attention: what onboarding can do"),
             "{rendered}"

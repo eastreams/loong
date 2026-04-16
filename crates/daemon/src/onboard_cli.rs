@@ -70,9 +70,9 @@ mod screen_spec_support;
 
 use self::screen_spec_support::*;
 pub use crate::onboard_finalize::{
-    OnboardingAction, OnboardingActionKind, OnboardingDomainOutcome, OnboardingSuccessSummary,
-    backup_existing_config, build_onboarding_success_summary,
-    render_onboarding_success_summary_with_width,
+    OnboardingAction, OnboardingActionKind, OnboardingChannelSurfaceSummary,
+    OnboardingDomainOutcome, OnboardingSuccessSummary, backup_existing_config,
+    build_onboarding_success_summary, render_onboarding_success_summary_with_width,
 };
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
 const ONBOARD_CUSTOM_MODEL_OPTION_SLUG: &str = "__custom_model__";
@@ -5231,18 +5231,54 @@ fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongClawConf
         ));
     }
 
-    let enabled_channels = enabled_channel_ids(config)
-        .into_iter()
-        .filter(|channel| channel != "cli")
-        .collect::<Vec<_>>();
-    if !enabled_channels.is_empty() {
+    push_onboard_review_enabled_channel_lines(&mut lines, config);
+
+    lines
+}
+
+fn push_onboard_review_enabled_channel_lines(
+    lines: &mut Vec<String>,
+    config: &mvp::config::LoongClawConfig,
+) {
+    let runtime_backed_channels = config.enabled_runtime_backed_channel_ids();
+    if !runtime_backed_channels.is_empty() {
         lines.push(onboard_display_line(
-            "- channels: ",
-            &enabled_channels.join(", "),
+            "- runtime-backed channels: ",
+            &runtime_backed_channels.join(", "),
         ));
     }
 
-    lines
+    let plugin_backed_channels = config.enabled_plugin_backed_channel_ids();
+    if !plugin_backed_channels.is_empty() {
+        lines.push(onboard_display_line(
+            "- plugin-backed channels: ",
+            &plugin_backed_channels.join(", "),
+        ));
+    }
+
+    let outbound_only_channels = config.enabled_outbound_only_channel_ids();
+    if !outbound_only_channels.is_empty() {
+        lines.push(onboard_display_line(
+            "- outbound-only channels: ",
+            &outbound_only_channels.join(", "),
+        ));
+    }
+
+    let remaining_channels = enabled_channel_ids(config)
+        .into_iter()
+        .filter(|channel| channel != "cli")
+        .filter(|channel| {
+            !runtime_backed_channels.contains(channel)
+                && !plugin_backed_channels.contains(channel)
+                && !outbound_only_channels.contains(channel)
+        })
+        .collect::<Vec<_>>();
+    if !remaining_channels.is_empty() {
+        lines.push(onboard_display_line(
+            "- channels: ",
+            &remaining_channels.join(", "),
+        ));
+    }
 }
 
 fn render_onboard_review_credential_line(provider: &mvp::config::ProviderConfig) -> Option<String> {

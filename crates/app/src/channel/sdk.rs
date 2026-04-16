@@ -28,7 +28,10 @@ use super::registry::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelRuntimeKind {
     Interactive,
-    Service,
+    RuntimeBacked,
+    PluginBacked,
+    OutboundOnly,
+    CatalogOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -410,7 +413,22 @@ fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
         return ChannelRuntimeKind::Interactive;
     }
 
-    ChannelRuntimeKind::Service
+    let implementation_status = resolve_channel_catalog_entry(channel_id)
+        .map(|entry| entry.implementation_status)
+        .unwrap_or(crate::channel::ChannelCatalogImplementationStatus::ConfigBacked);
+
+    match implementation_status {
+        crate::channel::ChannelCatalogImplementationStatus::RuntimeBacked => {
+            ChannelRuntimeKind::RuntimeBacked
+        }
+        crate::channel::ChannelCatalogImplementationStatus::PluginBacked => {
+            ChannelRuntimeKind::PluginBacked
+        }
+        crate::channel::ChannelCatalogImplementationStatus::ConfigBacked => {
+            ChannelRuntimeKind::OutboundOnly
+        }
+        crate::channel::ChannelCatalogImplementationStatus::Stub => ChannelRuntimeKind::CatalogOnly,
+    }
 }
 
 fn channel_serve_subcommand(
@@ -453,7 +471,10 @@ fn channel_integration_order_key(
     let runtime_kind = channel_runtime_kind(channel_id);
     let runtime_group = match runtime_kind {
         ChannelRuntimeKind::Interactive => 0_u8,
-        ChannelRuntimeKind::Service => 1_u8,
+        ChannelRuntimeKind::RuntimeBacked => 1_u8,
+        ChannelRuntimeKind::PluginBacked => 2_u8,
+        ChannelRuntimeKind::OutboundOnly => 3_u8,
+        ChannelRuntimeKind::CatalogOnly => 4_u8,
     };
     let selection_order = if channel_id == "cli" {
         u16::MAX
@@ -469,11 +490,57 @@ fn channel_integration_order_key(
 }
 
 pub fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    runtime_backed_channel_descriptors()
+}
+
+pub fn runtime_backed_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
     ordered_channel_integrations()
         .into_iter()
         .filter_map(|integration| channel_descriptor(integration.channel_id))
-        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::Service)
+        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::RuntimeBacked)
         .collect()
+}
+
+pub fn plugin_backed_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::PluginBacked)
+        .collect()
+}
+
+pub fn outbound_only_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::OutboundOnly)
+        .collect()
+}
+
+pub fn catalog_only_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    super::registry::list_channel_catalog()
+        .into_iter()
+        .filter(|entry| {
+            entry.implementation_status == super::ChannelCatalogImplementationStatus::Stub
+        })
+        .map(|entry| {
+            let id = leak_channel_string(entry.id.to_owned());
+            let label = leak_channel_string(entry.label.to_owned());
+            let surface_label = leak_channel_string(channel_surface_label_text(entry.id));
+            ChannelDescriptor {
+                id,
+                label,
+                surface_label,
+                runtime_kind: ChannelRuntimeKind::CatalogOnly,
+                serve_subcommand: None,
+            }
+        })
+        .map(leak_channel_descriptor)
+        .collect()
+}
+
+fn leak_channel_descriptor(descriptor: ChannelDescriptor) -> &'static ChannelDescriptor {
+    Box::leak(Box::new(descriptor))
 }
 
 pub(crate) fn enabled_channel_ids(
@@ -878,7 +945,7 @@ mod tests {
             let Some(descriptor) = channel_descriptor(catalog_entry.id) else {
                 continue;
             };
-            if descriptor.runtime_kind != ChannelRuntimeKind::Service {
+            if descriptor.runtime_kind != ChannelRuntimeKind::RuntimeBacked {
                 continue;
             }
             channel_ids.push(descriptor.id);
@@ -897,33 +964,7 @@ mod tests {
 
         assert_eq!(
             ids,
-            vec![
-                "telegram",
-                "feishu",
-                "matrix",
-                "wecom",
-                "weixin",
-                "qqbot",
-                "onebot",
-                "discord",
-                "slack",
-                "line",
-                "dingtalk",
-                "whatsapp",
-                "email",
-                "webhook",
-                "google-chat",
-                "signal",
-                "twitch",
-                "teams",
-                "mattermost",
-                "nextcloud-talk",
-                "synology-chat",
-                "irc",
-                "imessage",
-                "nostr",
-                "tlon",
-            ]
+            vec!["telegram", "feishu", "matrix", "wecom", "whatsapp",]
         );
     }
 
@@ -963,18 +1004,21 @@ mod tests {
         assert_eq!(weixin.id, "weixin");
         assert_eq!(weixin.label, "Weixin");
         assert_eq!(weixin.surface_label, "weixin channel");
+        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::PluginBacked);
         assert_eq!(weixin.serve_subcommand, None);
 
         let qqbot = channel_descriptor("qq").expect("qq alias should resolve");
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.label, "QQ Bot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
         assert_eq!(qqbot.serve_subcommand, None);
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
         assert_eq!(onebot.id, "onebot");
         assert_eq!(onebot.label, "OneBot");
         assert_eq!(onebot.surface_label, "onebot channel");
+        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::PluginBacked);
         assert_eq!(onebot.serve_subcommand, None);
     }
 

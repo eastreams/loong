@@ -125,7 +125,8 @@ pub use turn_checkpoint::{
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use turn_coordinator::run_started_delegate_child_turn_with_runtime;
 pub use turn_coordinator::{
-    ContextCompactionReport, ConversationTurnCoordinator, spawn_background_delegate_with_runtime,
+    ContextCompactionReport, ConversationTurnCoordinator, ConversationTurnOutcome,
+    spawn_background_delegate_with_runtime,
 };
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,

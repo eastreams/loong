@@ -1,6 +1,7 @@
 #[cfg(test)]
 use crate::config::LoongClawConfig;
 
+pub(crate) mod access_policy;
 mod catalog;
 mod commands;
 mod core;
@@ -74,37 +75,38 @@ pub use registry::{
     ChannelCatalogCommandFamilyDescriptor, ChannelCatalogEntry, ChannelCatalogImplementationStatus,
     ChannelCatalogOperation, ChannelCatalogOperationAvailability,
     ChannelCatalogOperationRequirement, ChannelCommandFamilyDescriptor,
-    ChannelDiscoveredPluginBridge, ChannelDiscoveredPluginBridgeStatus, ChannelDoctorCheckSpec,
-    ChannelDoctorCheckTrigger, ChannelDoctorOperationSpec, ChannelInventory,
-    ChannelOnboardingDescriptor, ChannelOnboardingStrategy, ChannelOperationDescriptor,
-    ChannelOperationHealth, ChannelOperationStatus, ChannelPluginBridgeContract,
-    ChannelPluginBridgeDiscovery, ChannelPluginBridgeDiscoveryAmbiguityStatus,
-    ChannelPluginBridgeDiscoveryStatus, ChannelPluginBridgeManifestStatus,
-    ChannelPluginBridgeManifestValidation, ChannelPluginBridgeSelectionStatus,
-    ChannelPluginBridgeStableTarget, ChannelRuntimeCommandDescriptor, ChannelStatusSnapshot,
-    ChannelSurface, DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR, EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_COMMAND_FAMILY_DESCRIPTOR,
-    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    MATRIX_COMMAND_FAMILY_DESCRIPTOR, MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
-    MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
-    TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_COMMAND_FAMILY_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
-    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
-    WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
-    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
-    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
-    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
-    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
-    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
-    resolve_channel_runtime_command_descriptor, validate_plugin_channel_bridge_manifest,
+    ChannelConfiguredAccountAccessPolicy, ChannelDiscoveredPluginBridge,
+    ChannelDiscoveredPluginBridgeStatus, ChannelDoctorCheckSpec, ChannelDoctorCheckTrigger,
+    ChannelDoctorOperationSpec, ChannelInventory, ChannelOnboardingDescriptor,
+    ChannelOnboardingStrategy, ChannelOperationDescriptor, ChannelOperationHealth,
+    ChannelOperationStatus, ChannelPluginBridgeContract, ChannelPluginBridgeDiscovery,
+    ChannelPluginBridgeDiscoveryAmbiguityStatus, ChannelPluginBridgeDiscoveryStatus,
+    ChannelPluginBridgeManifestStatus, ChannelPluginBridgeManifestValidation,
+    ChannelPluginBridgeSelectionStatus, ChannelPluginBridgeStableTarget,
+    ChannelRuntimeCommandDescriptor, ChannelStatusSnapshot, ChannelSurface,
+    DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    FEISHU_COMMAND_FAMILY_DESCRIPTOR, FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
+    GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR, LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WHATSAPP_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
+    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
+    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
+    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
+    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
+    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+    validate_plugin_channel_bridge_manifest,
 };
 pub use runtime::state::ChannelOperationRuntime;
 #[cfg(any(
@@ -115,14 +117,24 @@ pub use runtime::state::ChannelOperationRuntime;
     feature = "channel-whatsapp"
 ))]
 pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
 pub use sdk::{
     ChannelDescriptor, ChannelRuntimeKind, background_channel_runtime_descriptors,
-    channel_descriptor, is_background_channel_surface_enabled, service_channel_descriptors,
+    catalog_only_channel_descriptors, channel_descriptor, is_background_channel_surface_enabled,
+    outbound_only_channel_descriptors, plugin_backed_channel_descriptors,
+    runtime_backed_channel_descriptors, service_channel_descriptors,
 };
 pub(crate) use sdk::{collect_channel_validation_issues, enabled_channel_ids};
 pub use tlon_command::run_tlon_send;
 
 mod types;
+pub use access_policy::{ChannelAccessRestrictionMode, ChannelInboundAccessPolicySummary};
 pub use types::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
 pub use types::{
     ChannelAdapter, ChannelDelivery, ChannelDeliveryFeishuCallback, ChannelDeliveryResource,
@@ -866,6 +878,27 @@ mod tests {
             session.session_key(),
             "feishu:lark_cli_a1b2c3:oc_123:ou_sender_1:om_root_1"
         );
+    }
+
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix"
+    ))]
+    #[test]
+    fn channel_session_conversation_address_preserves_participant_scope() {
+        let session =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_participant_id("ou_sender_1")
+                .with_thread_id("om_root_1");
+
+        let address = session.conversation_address();
+
+        assert_eq!(address.channel_id.as_deref(), Some("feishu"));
+        assert_eq!(address.account_id.as_deref(), Some("lark_cli_a1b2c3"));
+        assert_eq!(address.conversation_id.as_deref(), Some("oc_123"));
+        assert_eq!(address.participant_id.as_deref(), Some("ou_sender_1"));
+        assert_eq!(address.thread_id.as_deref(), Some("om_root_1"));
     }
 
     #[cfg(any(
@@ -1764,6 +1797,175 @@ mod tests {
                 thread_id: None,
             }
         );
+    }
+
+    #[cfg(feature = "channel-telegram")]
+    #[test]
+    fn resolve_known_channel_session_target_describes_telegram_thread_shape() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "telegram": {
+                "enabled": true,
+                "accounts": {
+                    "ops": {
+                        "account_id": "Ops-Bot",
+                        "bot_token": "123456:telegram-test-token",
+                        "allowed_chat_ids": [123]
+                    }
+                }
+            }
+        }))
+        .expect("deserialize telegram config");
+
+        let resolved = resolve_known_channel_session_target(&config, "telegram:Ops-Bot:123:42")
+            .expect("resolve telegram known session");
+
+        assert_eq!(resolved.channel_id, "telegram");
+        assert_eq!(resolved.account_id.as_deref(), Some("ops-bot"));
+        assert_eq!(resolved.session_shape, "telegram_thread");
+        assert_eq!(
+            resolved.target_kind,
+            ChannelOutboundTargetKind::Conversation
+        );
+        assert_eq!(resolved.target_id, "123:42");
+        assert_eq!(resolved.conversation_id.as_deref(), Some("123"));
+        assert_eq!(resolved.thread_id.as_deref(), Some("42"));
+        assert!(resolved.participant_id.is_none());
+    }
+
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn parse_known_channel_session_send_target_keeps_feishu_participant_and_thread_as_context() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "accounts": {
+                    "work": {
+                        "account_id": "lark_cli_a1b2c3",
+                        "app_id": "cli_app",
+                        "app_secret": "cli_secret",
+                        "allowed_chat_ids": ["oc_123"]
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let session_id =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_participant_id("ou_sender_1")
+                .with_thread_id("om_root_1")
+                .session_key();
+
+        let parsed = parse_known_channel_session_send_target(&config, session_id.as_str())
+            .expect("parse feishu session send target");
+
+        assert_eq!(
+            parsed,
+            KnownChannelSessionSendTarget::Feishu {
+                account_id: Some("lark_cli_a1b2c3".to_owned()),
+                conversation_id: "oc_123".to_owned(),
+                reply_message_id: None,
+            }
+        );
+    }
+
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn parse_known_channel_session_send_target_keeps_feishu_thread_as_context() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "accounts": {
+                    "work": {
+                        "account_id": "lark_cli_a1b2c3",
+                        "app_id": "cli_app",
+                        "app_secret": "cli_secret",
+                        "allowed_chat_ids": ["oc_123"]
+                    }
+                }
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let session_id = ChannelSession::with_account_and_thread(
+            ChannelPlatform::Feishu,
+            "lark_cli_a1b2c3",
+            "oc_123",
+            "om_root_1",
+        )
+        .session_key();
+
+        let parsed = parse_known_channel_session_send_target(&config, session_id.as_str())
+            .expect("parse feishu session send target");
+
+        assert_eq!(
+            parsed,
+            KnownChannelSessionSendTarget::Feishu {
+                account_id: Some("lark_cli_a1b2c3".to_owned()),
+                conversation_id: "oc_123".to_owned(),
+                reply_message_id: None,
+            }
+        );
+    }
+
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn resolve_known_channel_session_target_describes_feishu_participant_scope() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "app_id": "cli_a1b2c3",
+                "app_secret": "secret",
+                "allowed_chat_ids": ["oc_123"]
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let resolved = resolve_known_channel_session_target(
+            &config,
+            "feishu:feishu_cli_a1b2c3:oc_123:ou_sender_1:om_thread_1",
+        )
+        .expect("resolve feishu known session");
+
+        assert_eq!(resolved.channel_id, "feishu");
+        assert_eq!(resolved.session_shape, "feishu_chat");
+        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::ReceiveId);
+        assert_eq!(resolved.target_id, "oc_123");
+        assert_eq!(resolved.account_id.as_deref(), Some("feishu_cli_a1b2c3"));
+        assert_eq!(resolved.conversation_id.as_deref(), Some("oc_123"));
+        assert_eq!(resolved.participant_id.as_deref(), Some("ou_sender_1"));
+        assert_eq!(resolved.thread_id.as_deref(), Some("om_thread_1"));
+        assert!(resolved.reply_message_id.is_none());
+    }
+
+    #[cfg(feature = "channel-feishu")]
+    #[test]
+    fn resolve_known_channel_session_target_describes_feishu_thread_scope_without_reply_target() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "feishu": {
+                "enabled": true,
+                "app_id": "cli_a1b2c3",
+                "app_secret": "secret",
+                "allowed_chat_ids": ["oc_123"]
+            }
+        }))
+        .expect("deserialize feishu config");
+
+        let resolved = resolve_known_channel_session_target(
+            &config,
+            "feishu:feishu_cli_a1b2c3:oc_123:om_thread_1",
+        )
+        .expect("resolve feishu known session");
+
+        assert_eq!(resolved.channel_id, "feishu");
+        assert_eq!(resolved.session_shape, "feishu_chat");
+        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::ReceiveId);
+        assert_eq!(resolved.target_id, "oc_123");
+        assert_eq!(resolved.account_id.as_deref(), Some("feishu_cli_a1b2c3"));
+        assert_eq!(resolved.conversation_id.as_deref(), Some("oc_123"));
+        assert!(resolved.participant_id.is_none());
+        assert_eq!(resolved.thread_id.as_deref(), Some("om_thread_1"));
+        assert!(resolved.reply_message_id.is_none());
     }
 
     #[cfg(feature = "channel-matrix")]

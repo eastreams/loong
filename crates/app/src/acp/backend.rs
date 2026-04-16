@@ -738,6 +738,7 @@ mod tests {
                 channel_id: Some("feishu".to_owned()),
                 account_id: Some("lark-prod".to_owned()),
                 conversation_id: Some("oc_123".to_owned()),
+                participant_id: None,
                 thread_id: Some("om_thread_1".to_owned()),
             }),
         };
@@ -774,6 +775,7 @@ mod tests {
                 channel_id: Some("feishu".to_owned()),
                 account_id: Some("lark-prod".to_owned()),
                 conversation_id: Some("oc_123".to_owned()),
+                participant_id: None,
                 thread_id: Some("om_thread_1".to_owned()),
             }),
             activation_origin: Some(AcpRoutingOrigin::AutomaticDispatch),

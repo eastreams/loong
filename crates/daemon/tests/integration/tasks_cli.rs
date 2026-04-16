@@ -180,6 +180,7 @@ pub(super) fn write_tasks_config_with(
     let config_path = root.join("loongclaw.toml");
     let mut config = mvp::config::LoongClawConfig::default();
     config.memory.sqlite_path = root.join("memory.sqlite3").display().to_string();
+    config.audit.mode = mvp::config::AuditMode::InMemory;
     config.tools.file_root = Some(root.display().to_string());
     config.tools.sessions.allow_mutation = true;
     configure(&mut config);

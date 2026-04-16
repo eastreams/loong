@@ -18,7 +18,7 @@ Companion documents:
 - `docs/design-docs/capability-promotion-contract.md`
 - `docs/design-docs/sdk-stability-policy.md`
 - `docs/design-docs/sdk-validator-contract.md`
-- `docs/plans/2026-03-28-sdk-strategy-implementation-roadmap.md`
+- `eastreams/knowledge-base/loongclaw/implementation-plans`
 
 ## Current Direction
 

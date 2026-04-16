@@ -65,6 +65,12 @@ impl SseStreamEvent {
         if combined.is_empty() {
             return Ok(None);
         }
+        if combined == "[DONE]" {
+            return Ok(Some(SseStreamEvent::Message {
+                data: serde_json::json!({"type":"message_stop"}),
+                event_type,
+            }));
+        }
         let parsed: Value = serde_json::from_str(&combined)?;
         Ok(Some(SseStreamEvent::Message {
             data: parsed,

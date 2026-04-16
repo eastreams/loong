@@ -19,6 +19,12 @@ pub struct DaemonTaskExecution {
     pub error: Option<String>,
 }
 
+/// Execute a daemon task intent through the task supervisor while preserving
+/// route/outcome/state evidence for operator-facing callers.
+///
+/// This helper intentionally returns a structured execution record even when
+/// dispatch fails so CLI/API surfaces can report the supervisor's terminal
+/// state instead of collapsing everything into a plain transport error.
 pub(crate) async fn execute_daemon_task_with_supervisor<P: PolicyEngine>(
     kernel: &LoongClawKernel<P>,
     pack_id: &str,
@@ -89,6 +95,7 @@ impl HarnessAdapter for EmbeddedAgentHarness {
                     channel_id: None,
                     account_id: None,
                     conversation_id: None,
+                    participant_id: None,
                     thread_id: None,
                     metadata: payload.metadata,
                     acp: payload.acp,
@@ -113,6 +120,11 @@ impl HarnessAdapter for EmbeddedAgentHarness {
     }
 }
 
+/// Build the daemon-side kernel used for generic task/turn execution.
+///
+/// This starts from the spec/kernel bootstrap defaults and then registers the
+/// embedded agent harness so daemon task intents can route back into the shared
+/// `AgentRuntime` pipeline without spawning an external process.
 fn build_daemon_runtime_kernel() -> LoongClawKernel<StaticPolicyEngine> {
     let mut kernel = kernel_bootstrap::BootstrapBuilder::default().into_builder();
     kernel.register_harness_adapter(EmbeddedAgentHarness);
@@ -202,6 +214,12 @@ pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
     Ok(())
 }
 
+/// Run a single daemon-managed turn through the task supervisor/harness path.
+///
+/// Unlike `chat`/`ask`, this exercises the same kernel-supervised dispatch lane
+/// that daemon tasks use in production: the CLI request is wrapped as a
+/// `TaskIntent`, routed through `EmbeddedAgentHarness`, and then decoded back
+/// into an `AgentTurnResult` for presentation.
 pub(crate) async fn run_turn_cli(
     config_path: Option<&str>,
     session_hint: Option<&str>,

@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::sync::Mutex;
@@ -13,15 +11,17 @@ use super::context_engine::{
 
 pub const DEFAULT_CONTEXT_ENGINE_ID: &str = "default";
 pub const LEGACY_CONTEXT_ENGINE_ID: &str = "legacy";
-pub const CONTEXT_ENGINE_ENV: &str = "LOONGCLAW_CONTEXT_ENGINE";
+pub const CONTEXT_ENGINE_ENV: &str = "LOONG_CONTEXT_ENGINE";
+pub const LEGACY_CONTEXT_ENGINE_ENV: &str = "LOONGCLAW_CONTEXT_ENGINE";
 
 type ContextEngineFactory = Arc<dyn Fn() -> Box<dyn ConversationContextEngine> + Send + Sync>;
 
 static CONTEXT_ENGINE_REGISTRY: OnceLock<RwLock<BTreeMap<String, ContextEngineFactory>>> =
     OnceLock::new();
 #[cfg(test)]
-std::thread_local! {
-    static CONTEXT_ENGINE_ENV_OVERRIDE: RefCell<Option<Option<String>>> = const { RefCell::new(None) };
+fn context_engine_env_override() -> &'static Mutex<Option<Option<String>>> {
+    static OVERRIDE: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+    OVERRIDE.get_or_init(|| Mutex::new(None))
 }
 
 fn registry() -> &'static RwLock<BTreeMap<String, ContextEngineFactory>> {
@@ -45,7 +45,10 @@ fn normalize_engine_id(raw: &str) -> String {
 
 #[cfg(test)]
 fn env_override() -> Option<Option<String>> {
-    CONTEXT_ENGINE_ENV_OVERRIDE.with(|override_cell| override_cell.borrow().clone())
+    let guard = context_engine_env_override()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.clone()
 }
 
 #[cfg(test)]
@@ -121,6 +124,7 @@ pub fn context_engine_id_from_env() -> Option<String> {
 
     std::env::var(CONTEXT_ENGINE_ENV)
         .ok()
+        .or_else(|| std::env::var(LEGACY_CONTEXT_ENGINE_ENV).ok())
         .map(|value| normalize_engine_id(value.as_str()))
         .filter(|value| !value.is_empty())
 }
@@ -130,16 +134,42 @@ pub(crate) fn set_context_engine_env_override(value: Option<&str>) {
     let normalized = value
         .map(normalize_engine_id)
         .filter(|entry| !entry.is_empty());
-    CONTEXT_ENGINE_ENV_OVERRIDE.with(|override_cell| {
-        *override_cell.borrow_mut() = Some(normalized);
-    });
+    let mut guard = context_engine_env_override()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(normalized);
 }
 
 #[cfg(test)]
 pub(crate) fn clear_context_engine_env_override() {
-    CONTEXT_ENGINE_ENV_OVERRIDE.with(|override_cell| {
-        *override_cell.borrow_mut() = None;
-    });
+    let mut guard = context_engine_env_override()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = None;
+}
+
+#[cfg(test)]
+struct ScopedContextEngineEnvOverride {
+    previous: Option<Option<String>>,
+}
+
+#[cfg(test)]
+impl ScopedContextEngineEnvOverride {
+    fn set(value: Option<&str>) -> Self {
+        let previous = env_override();
+        set_context_engine_env_override(value);
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScopedContextEngineEnvOverride {
+    fn drop(&mut self) {
+        let mut guard = context_engine_env_override()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = self.previous.clone();
+    }
 }
 
 #[cfg(test)]
@@ -232,5 +262,42 @@ mod tests {
     fn describe_context_engine_uses_default_when_id_absent() {
         let metadata = describe_context_engine(None).expect("describe default engine");
         assert_eq!(metadata.id, DEFAULT_CONTEXT_ENGINE_ID);
+    }
+
+    #[test]
+    fn context_engine_env_override_is_visible_across_threads() {
+        let _env_lock = conversation_selector_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _scoped_env = ScopedContextEngineEnvOverride::set(Some("registry-custom"));
+
+        let observed = std::thread::spawn(context_engine_id_from_env)
+            .join()
+            .expect("join thread");
+
+        assert_eq!(observed.as_deref(), Some("registry-custom"));
+    }
+
+    #[test]
+    fn scoped_context_engine_env_override_clears_on_panic() {
+        let _env_lock = conversation_selector_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let result = std::panic::catch_unwind(|| {
+            let _scoped_env = ScopedContextEngineEnvOverride::set(Some("registry-custom"));
+            assert_eq!(
+                context_engine_id_from_env().as_deref(),
+                Some("registry-custom")
+            );
+            panic!("boom");
+        });
+
+        assert!(result.is_err(), "panic path should be captured");
+        assert_eq!(
+            context_engine_id_from_env(),
+            None,
+            "panic cleanup should restore the previous override state"
+        );
     }
 }

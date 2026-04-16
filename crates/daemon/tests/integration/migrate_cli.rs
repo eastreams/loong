@@ -402,7 +402,7 @@ fn migrate_cli_ux_discover_mode_reports_flag_level_input_requirement() {
 
 #[test]
 fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args(["migrate", "--help"])
         .output()
         .expect("run loongclaw migrate --help");
@@ -421,7 +421,7 @@ fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
 
 #[test]
 fn root_help_lists_migrate_with_config_import_wording() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .arg("--help")
         .output()
         .expect("run loongclaw --help");

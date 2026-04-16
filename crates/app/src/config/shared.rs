@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::{Cell, RefCell};
 use std::{
     collections::BTreeMap,
     env,
@@ -14,10 +16,11 @@ pub const CLI_COMMAND_NAME: &str = "loong";
 pub const LEGACY_CLI_COMMAND_NAME: &str = "loongclaw";
 pub const HOME_DIR_NAME: &str = ".loong";
 pub const LEGACY_HOME_DIR_NAME: &str = ".loongclaw";
-pub const PRODUCT_DISPLAY_NAME: &str = "LoongClaw";
+pub const PRODUCT_DISPLAY_NAME: &str = "Loong";
 static ACTIVE_CLI_COMMAND_NAME: OnceLock<&'static str> = OnceLock::new();
 pub(super) const DEFAULT_FEISHU_SQLITE_FILE: &str = "feishu.sqlite3";
-pub(crate) const LOONGCLAW_HOME_ENV: &str = "LOONG_HOME";
+pub(crate) const LOONG_HOME_ENV: &str = "LOONG_HOME";
+pub(crate) const LOONGCLAW_HOME_ENV: &str = LOONG_HOME_ENV;
 
 fn normalize_cli_command_name(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case(LEGACY_CLI_COMMAND_NAME) {
@@ -537,8 +540,84 @@ pub fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static DEFAULT_LOONGCLAW_HOME_OVERRIDE: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    static DEFAULT_LOONGCLAW_HOME_ENV_OVERRIDE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn default_loongclaw_home_override_for_tests() -> Option<PathBuf> {
+    DEFAULT_LOONGCLAW_HOME_OVERRIDE.with(|stack| stack.borrow().last().cloned())
+}
+
+#[cfg(test)]
+fn default_loongclaw_home_uses_explicit_env_override_for_tests() -> bool {
+    DEFAULT_LOONGCLAW_HOME_ENV_OVERRIDE_DEPTH.with(|depth| depth.get() > 0)
+}
+
+#[cfg(test)]
+fn stable_default_loongclaw_home_for_tests() -> PathBuf {
+    static FALLBACK: OnceLock<PathBuf> = OnceLock::new();
+
+    FALLBACK
+        .get_or_init(|| {
+            let path = env::temp_dir().join(format!(
+                "loongclaw-default-test-home-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create stable loongclaw test home");
+            path
+        })
+        .clone()
+}
+
+#[cfg(test)]
+pub(crate) fn push_default_loongclaw_home_override_for_tests(path: PathBuf) {
+    DEFAULT_LOONGCLAW_HOME_OVERRIDE.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        stack.push(path);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn pop_default_loongclaw_home_override_for_tests() {
+    DEFAULT_LOONGCLAW_HOME_OVERRIDE.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        stack.pop();
+    });
+}
+
+pub(crate) fn push_default_loongclaw_home_env_override_for_tests() {
+    #[cfg(test)]
+    DEFAULT_LOONGCLAW_HOME_ENV_OVERRIDE_DEPTH.with(|depth| {
+        depth.set(depth.get().saturating_add(1));
+    });
+}
+
+pub(crate) fn pop_default_loongclaw_home_env_override_for_tests() {
+    #[cfg(test)]
+    DEFAULT_LOONGCLAW_HOME_ENV_OVERRIDE_DEPTH.with(|depth| {
+        depth.set(depth.get().saturating_sub(1));
+    });
+}
+
 pub(super) fn default_loongclaw_home() -> PathBuf {
+    #[cfg(test)]
+    if let Some(override_path) = default_loongclaw_home_override_for_tests() {
+        return override_path;
+    }
+
+    #[cfg(test)]
+    if !default_loongclaw_home_uses_explicit_env_override_for_tests() {
+        return stable_default_loongclaw_home_for_tests();
+    }
+
     get_loongclaw_home()
+}
+
+pub(super) fn default_loong_home() -> PathBuf {
+    default_loongclaw_home()
 }
 
 pub fn expand_path(raw: &str) -> PathBuf {

@@ -193,8 +193,8 @@ pub(crate) fn shell_exec_matches_trusted_internal_approval(
     payload: &serde_json::Map<String, serde_json::Value>,
     approval_key: &str,
 ) -> bool {
-    let trusted_context = payload.get(super::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY);
-    let trusted_context = trusted_context.and_then(serde_json::Value::as_object);
+    let payload_value = serde_json::Value::Object(payload.clone());
+    let trusted_context = super::trusted_internal_tool_context_from_payload(&payload_value);
     let trusted_context =
         trusted_context.and_then(|value| value.get(SHELL_INTERNAL_APPROVAL_CONTEXT_KEY));
     let trusted_context = trusted_context.and_then(serde_json::Value::as_object);

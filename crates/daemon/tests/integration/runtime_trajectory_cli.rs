@@ -117,7 +117,7 @@ fn runtime_trajectory_export_writes_bounded_artifact_with_lineage_and_canonical_
     seed_runtime_trajectory_session(config_path.as_path(), "root-session");
 
     let artifact_path = root.join("artifacts").join("root-session.json");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
             "runtime-trajectory",
             "export",
@@ -167,7 +167,7 @@ fn runtime_trajectory_show_round_trips_persisted_artifact_in_text_mode() {
     seed_runtime_trajectory_session(config_path.as_path(), "root-session");
 
     let artifact_path = root.join("artifacts").join("root-session.json");
-    let export_status = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let export_status = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
             "runtime-trajectory",
             "export",
@@ -185,7 +185,7 @@ fn runtime_trajectory_show_round_trips_persisted_artifact_in_text_mode() {
 
     assert!(export_status.success(), "export should succeed");
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
             "runtime-trajectory",
             "show",
@@ -223,7 +223,7 @@ fn runtime_trajectory_export_accepts_bare_output_file_in_current_directory() {
     let config_path = write_runtime_trajectory_config(root.as_path());
     seed_runtime_trajectory_session(config_path.as_path(), "root-session");
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .current_dir(root.as_path())
         .args([
             "runtime-trajectory",

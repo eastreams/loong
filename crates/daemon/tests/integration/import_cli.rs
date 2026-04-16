@@ -23,10 +23,8 @@ fn normalized_path_text(value: &str) -> String {
 
 fn assert_compact_loongclaw_header(lines: &[String], context: &str) {
     assert!(
-        lines
-            .first()
-            .is_some_and(|line| line.starts_with("LOONGCLAW")),
-        "{context} should start with the compact LOONGCLAW header: {lines:#?}"
+        lines.first().is_some_and(|line| line.starts_with("LOONG")),
+        "{context} should start with the compact LOONG header: {lines:#?}"
     );
     assert!(
         lines

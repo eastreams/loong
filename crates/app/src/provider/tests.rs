@@ -1,6 +1,7 @@
 use super::*;
 use crate::KernelContext;
 use crate::config::{LoongClawConfig, ProviderConfig, ReasoningEffort};
+use crate::provider::rate_limit::RateLimitObservation;
 use crate::test_support::ScopedEnv;
 use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind, SecretRef};
 use loongclaw_kernel::{
@@ -1384,6 +1385,25 @@ fn anthropic_completion_body_uses_native_messages_shape() {
 }
 
 #[test]
+fn openai_completion_body_includes_stop_sequences() {
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        stop: vec!["END".to_owned(), "HALT".to_owned()],
+        ..ProviderConfig::default()
+    });
+    let messages = vec![json!({"role": "user", "content": "hello"})];
+
+    let body = build_completion_request_body(
+        &config,
+        &messages,
+        "gpt-5",
+        CompletionPayloadMode::default_for(&config.provider),
+    );
+
+    assert_eq!(body["stop"], json!(["END", "HALT"]));
+}
+
+#[test]
 fn bedrock_completion_body_uses_converse_shape() {
     let config = LoongClawConfig {
         provider: ProviderConfig {
@@ -2351,7 +2371,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         openai_contract.transport_mode,
         ProviderTransportMode::OpenAiChatCompletions
     );
-    assert!(!openai_contract.supports_turn_streaming_events());
+    assert!(openai_contract.supports_turn_streaming_events());
     assert_eq!(
         openai_contract.profile_health_mode,
         ProviderProfileHealthMode::EnforceUnusableWindows
@@ -2491,7 +2511,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         kimi_coding_contract.transport_mode,
         ProviderTransportMode::KimiApi
     );
-    assert!(!kimi_coding_contract.supports_turn_streaming_events());
+    assert!(kimi_coding_contract.supports_turn_streaming_events());
     assert!(!kimi_coding_contract.validation.forbid_kimi_coding_endpoint);
     assert!(
         kimi_coding_contract
@@ -2570,7 +2590,7 @@ fn provider_runtime_contract_defaults_are_stable() {
 #[tokio::test(flavor = "current_thread")]
 async fn request_turn_streaming_rejects_unsupported_transport_modes() {
     let config = test_config(ProviderConfig {
-        kind: ProviderKind::Openai,
+        kind: ProviderKind::Bedrock,
         ..ProviderConfig::default()
     });
 
@@ -2594,6 +2614,16 @@ async fn request_turn_streaming_rejects_unsupported_transport_modes() {
         error.contains("does not support live turn streaming events"),
         "the provider error should explain the unsupported transport: {error}"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_turn_streaming_supports_openai_chat_completions_transports() {
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        ..ProviderConfig::default()
+    });
+
+    assert!(supports_turn_streaming_events(&config));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2622,6 +2652,7 @@ async fn sibling_provider_tests_can_inject_mock_transport_into_dispatch_layer() 
                     }
                 }]
             }),
+            rate_limit: None,
         },
     )]);
 
@@ -3798,7 +3829,12 @@ fn model_candidate_cooldown_reorders_candidates_with_active_cooldown() {
         max_cooldown: Duration::from_secs(600),
         max_entries: MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES,
     };
-    register_model_candidate_cooldown(&policy, "model-a", ProviderFailoverReason::ModelMismatch);
+    register_model_candidate_cooldown(
+        &policy,
+        "model-a",
+        ProviderFailoverReason::ModelMismatch,
+        None,
+    );
 
     let ordered = prioritize_model_candidates_by_cooldown(
         vec![
@@ -3819,13 +3855,316 @@ fn model_candidate_cooldown_ignores_non_model_replacement_failures() {
         max_cooldown: Duration::from_secs(600),
         max_entries: MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES,
     };
-    register_model_candidate_cooldown(&policy, "model-a", ProviderFailoverReason::RequestRejected);
+    register_model_candidate_cooldown(
+        &policy,
+        "model-a",
+        ProviderFailoverReason::RequestRejected,
+        None,
+    );
 
     let ordered = prioritize_model_candidates_by_cooldown(
         vec!["model-a".to_owned(), "model-b".to_owned()],
         Some(&policy),
     );
     assert_eq!(ordered, vec!["model-a", "model-b"]);
+}
+
+#[test]
+fn model_candidate_cooldown_prefers_observed_rate_limit_window() {
+    let policy = ModelCandidateCooldownPolicy {
+        namespace: next_model_cooldown_test_namespace(),
+        cooldown: Duration::from_secs(60),
+        max_cooldown: Duration::from_secs(600),
+        max_entries: MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES,
+    };
+    let observation = RateLimitObservation {
+        requests_limit: None,
+        requests_remaining: None,
+        requests_reset: Some(Duration::from_secs(90)),
+        tokens_limit: None,
+        tokens_remaining: None,
+        tokens_reset: Some(Duration::from_secs(120)),
+        retry_after: Some(Duration::from_secs(30)),
+        provider_family: crate::provider::rate_limit::ProviderHeaderFamily::OpenAi,
+    };
+
+    let effective = resolve_model_candidate_cooldown_duration(&policy, Some(&observation));
+
+    assert_eq!(effective, Duration::from_secs(120));
+}
+
+#[test]
+fn model_candidate_cooldown_prefers_provider_hint_even_when_shorter_than_policy_floor() {
+    let policy = ModelCandidateCooldownPolicy {
+        namespace: next_model_cooldown_test_namespace(),
+        cooldown: Duration::from_secs(60),
+        max_cooldown: Duration::from_secs(600),
+        max_entries: MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES,
+    };
+    let observation = RateLimitObservation {
+        requests_limit: None,
+        requests_remaining: None,
+        requests_reset: None,
+        tokens_limit: None,
+        tokens_remaining: None,
+        tokens_reset: None,
+        retry_after: Some(Duration::from_secs(5)),
+        provider_family: crate::provider::rate_limit::ProviderHeaderFamily::OpenAi,
+    };
+
+    let effective = resolve_model_candidate_cooldown_duration(&policy, Some(&observation));
+
+    assert_eq!(effective, Duration::from_secs(5));
+}
+
+#[test]
+fn model_request_error_preserves_rate_limit_observation() {
+    let observation = RateLimitObservation {
+        requests_limit: Some(100),
+        requests_remaining: Some(1),
+        requests_reset: Some(Duration::from_secs(45)),
+        tokens_limit: None,
+        tokens_remaining: None,
+        tokens_reset: None,
+        retry_after: Some(Duration::from_secs(15)),
+        provider_family: crate::provider::rate_limit::ProviderHeaderFamily::OpenAi,
+    };
+    let error = build_model_request_error_with_rate_limit(
+        "provider returned status 429 for model `model-z`".to_owned(),
+        false,
+        ProviderFailoverReason::RateLimited,
+        ProviderFailoverStage::StatusFailure,
+        "model-z",
+        2,
+        3,
+        Some(429),
+        None,
+        Some(observation.clone()),
+    );
+
+    assert_eq!(error.rate_limit, Some(observation));
+}
+
+#[test]
+fn request_across_model_candidates_preserves_first_cooldown_trigger_across_auth_profiles() {
+    let provider = ProviderConfig::default();
+    let policy = ModelCandidateCooldownPolicy {
+        namespace: next_model_cooldown_test_namespace(),
+        cooldown: Duration::from_secs(60),
+        max_cooldown: Duration::from_secs(600),
+        max_entries: MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES,
+    };
+    let auth_profiles = vec![
+        ProviderAuthProfile {
+            id: "profile-a".to_owned(),
+            authorization_secret: Some("secret-a".to_owned()),
+            api_key_secret: None,
+            auth_cache_key: Some("bearer:secret-a".to_owned()),
+        },
+        ProviderAuthProfile {
+            id: "profile-b".to_owned(),
+            authorization_secret: Some("secret-b".to_owned()),
+            api_key_secret: None,
+            auth_cache_key: Some("bearer:secret-b".to_owned()),
+        },
+    ];
+    let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let rate_limit = RateLimitObservation {
+        requests_limit: None,
+        requests_remaining: None,
+        requests_reset: Some(Duration::from_secs(120)),
+        tokens_limit: None,
+        tokens_remaining: None,
+        tokens_reset: None,
+        retry_after: Some(Duration::from_secs(30)),
+        provider_family: crate::provider::rate_limit::ProviderHeaderFamily::OpenAi,
+    };
+
+    let result: Result<String, String> = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            request_failover_runtime::request_across_model_candidates(
+                &provider,
+                ProviderRuntimeBinding::direct(),
+                &auth_profiles,
+                None,
+                &["model-a".to_owned(), "model-b".to_owned()],
+                true,
+                Some(&policy),
+                |model, _auto_model_mode, auth_profile| {
+                    let attempts = attempts.clone();
+                    let rate_limit = rate_limit.clone();
+                    async move {
+                        attempts
+                            .lock()
+                            .expect("attempts lock")
+                            .push(format!("{model}:{}", auth_profile.id));
+                        if model == "model-a" && auth_profile.id == "profile-a" {
+                            return Err(build_model_request_error_with_rate_limit(
+                                "rate limited".to_owned(),
+                                false,
+                                ProviderFailoverReason::RateLimited,
+                                ProviderFailoverStage::StatusFailure,
+                                model.as_str(),
+                                1,
+                                3,
+                                Some(429),
+                                None,
+                                Some(rate_limit),
+                            ));
+                        }
+                        if model == "model-a" {
+                            return Err(build_model_request_error(
+                                "auth rejected".to_owned(),
+                                false,
+                                ProviderFailoverReason::AuthRejected,
+                                ProviderFailoverStage::StatusFailure,
+                                model.as_str(),
+                                1,
+                                3,
+                                Some(401),
+                                None,
+                            ));
+                        }
+                        Err(build_model_request_error(
+                            "request rejected".to_owned(),
+                            false,
+                            ProviderFailoverReason::RequestRejected,
+                            ProviderFailoverStage::StatusFailure,
+                            model.as_str(),
+                            1,
+                            3,
+                            Some(400),
+                            None,
+                        ))
+                    }
+                },
+            )
+            .await
+        });
+
+    assert!(result.is_err());
+    let attempts = attempts.lock().expect("attempts lock").clone();
+    assert_eq!(
+        attempts[..2],
+        [
+            "model-a:profile-a".to_owned(),
+            "model-a:profile-b".to_owned()
+        ]
+    );
+    assert_eq!(
+        prioritize_model_candidates_by_cooldown(
+            vec!["model-a".to_owned(), "model-b".to_owned()],
+            Some(&policy)
+        ),
+        vec!["model-b".to_owned(), "model-a".to_owned()]
+    );
+}
+
+#[test]
+fn request_across_model_candidates_upgrades_to_later_rate_limit_hint() {
+    let provider = ProviderConfig::default();
+    let policy = ModelCandidateCooldownPolicy {
+        namespace: next_model_cooldown_test_namespace(),
+        cooldown: Duration::ZERO,
+        max_cooldown: Duration::from_secs(600),
+        max_entries: MODEL_CANDIDATE_COOLDOWN_CACHE_MAX_ENTRIES,
+    };
+    let auth_profiles = vec![
+        ProviderAuthProfile {
+            id: "profile-a".to_owned(),
+            authorization_secret: Some("secret-a".to_owned()),
+            api_key_secret: None,
+            auth_cache_key: Some("bearer:secret-a".to_owned()),
+        },
+        ProviderAuthProfile {
+            id: "profile-b".to_owned(),
+            authorization_secret: Some("secret-b".to_owned()),
+            api_key_secret: None,
+            auth_cache_key: Some("bearer:secret-b".to_owned()),
+        },
+    ];
+    let rate_limit = RateLimitObservation {
+        requests_limit: None,
+        requests_remaining: None,
+        requests_reset: Some(Duration::from_secs(120)),
+        tokens_limit: None,
+        tokens_remaining: None,
+        tokens_reset: None,
+        retry_after: Some(Duration::from_secs(30)),
+        provider_family: crate::provider::rate_limit::ProviderHeaderFamily::OpenAi,
+    };
+
+    let result: Result<String, String> = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            request_failover_runtime::request_across_model_candidates(
+                &provider,
+                ProviderRuntimeBinding::direct(),
+                &auth_profiles,
+                None,
+                &["model-a".to_owned(), "model-b".to_owned()],
+                true,
+                Some(&policy),
+                |model, _auto_model_mode, auth_profile| {
+                    let rate_limit = rate_limit.clone();
+                    async move {
+                        if model == "model-a" && auth_profile.id == "profile-a" {
+                            return Err(build_model_request_error(
+                                "model mismatch".to_owned(),
+                                false,
+                                ProviderFailoverReason::ModelMismatch,
+                                ProviderFailoverStage::ModelCandidateRejected,
+                                model.as_str(),
+                                1,
+                                3,
+                                Some(404),
+                                None,
+                            ));
+                        }
+                        if model == "model-a" {
+                            return Err(build_model_request_error_with_rate_limit(
+                                "rate limited".to_owned(),
+                                false,
+                                ProviderFailoverReason::RateLimited,
+                                ProviderFailoverStage::StatusFailure,
+                                model.as_str(),
+                                1,
+                                3,
+                                Some(429),
+                                None,
+                                Some(rate_limit),
+                            ));
+                        }
+                        Err(build_model_request_error(
+                            "request rejected".to_owned(),
+                            false,
+                            ProviderFailoverReason::RequestRejected,
+                            ProviderFailoverStage::StatusFailure,
+                            model.as_str(),
+                            1,
+                            3,
+                            Some(400),
+                            None,
+                        ))
+                    }
+                },
+            )
+            .await
+        });
+
+    assert!(result.is_err());
+    assert_eq!(
+        prioritize_model_candidates_by_cooldown(
+            vec!["model-a".to_owned(), "model-b".to_owned()],
+            Some(&policy)
+        ),
+        vec!["model-b".to_owned(), "model-a".to_owned()]
+    );
 }
 
 #[test]

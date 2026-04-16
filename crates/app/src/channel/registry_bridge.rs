@@ -125,7 +125,7 @@ const WEIXIN_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const WEIXIN_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
     setup_hint: "plugin-bridge weixin surface; connect a compatible WeChat ClawBot or iLink bridge under weixin or weixin.accounts.<account> and let that bridge own the upstream login flow until a native LoongClaw adapter exists",
-    status_command: "loongclaw doctor",
+    status_command: "loong doctor",
     repair_command: None,
 };
 
@@ -233,7 +233,7 @@ const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
     setup_hint: "plugin-bridge qqbot surface; connect an official QQ Bot gateway or compatible plugin bridge under qqbot or qqbot.accounts.<account> and keep target routing stable across c2c, group, and guild-style conversations",
-    status_command: "loongclaw doctor",
+    status_command: "loong doctor",
     repair_command: None,
 };
 
@@ -347,7 +347,7 @@ const ONEBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const ONEBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
     setup_hint: "plugin-bridge OneBot surface; connect a OneBot-compatible bridge such as NapCat or LLOneBot under onebot or onebot.accounts.<account> and use this surface as the stable protocol contract until a native adapter exists",
-    status_command: "loongclaw doctor",
+    status_command: "loong doctor",
     repair_command: None,
 };
 
@@ -724,6 +724,7 @@ fn build_weixin_snapshot_for_account(
             .and(bridge_url.as_deref())
             .and_then(http::redact_endpoint_status_url),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -837,6 +838,7 @@ fn build_qqbot_snapshot_for_account(
         enabled: resolved.enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -952,6 +954,7 @@ fn build_onebot_snapshot_for_account(
             .as_deref()
             .and_then(http::redact_endpoint_status_url),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1063,6 +1066,7 @@ fn build_invalid_weixin_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1120,6 +1124,7 @@ fn build_invalid_qqbot_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1177,6 +1182,7 @@ fn build_invalid_onebot_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }

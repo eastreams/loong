@@ -64,7 +64,11 @@ pub(super) fn next_backoff_ms(current: u64, max_backoff_ms: u64) -> u64 {
     current.saturating_mul(2).min(max_backoff_ms)
 }
 
-fn parse_retry_after_ms(response_headers: &HeaderMap) -> Option<u64> {
+pub(super) fn parse_retry_after_duration(response_headers: &HeaderMap) -> Option<Duration> {
+    parse_retry_after_ms(response_headers).map(Duration::from_millis)
+}
+
+pub(super) fn parse_retry_after_ms(response_headers: &HeaderMap) -> Option<u64> {
     parse_retry_after_ms_at(response_headers, SystemTime::now())
 }
 

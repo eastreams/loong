@@ -1213,9 +1213,14 @@ fn canonicalize_onebot_channel_for_encoding(config: &mut OnebotChannelConfig) {
 
 fn canonicalize_discord_channel_for_encoding(config: &mut DiscordChannelConfig) {
     canonicalize_env_secret_reference(&mut config.bot_token, &mut config.bot_token_env);
+    canonicalize_env_string_reference(&mut config.application_id, &mut config.application_id_env);
 
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.bot_token, &mut account.bot_token_env);
+        canonicalize_env_string_reference(
+            &mut account.application_id,
+            &mut account.application_id_env,
+        );
     }
 }
 
@@ -1626,8 +1631,36 @@ impl LoongClawConfig {
         crate::channel::enabled_channel_ids(self, None)
     }
 
+    pub fn enabled_runtime_backed_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::RuntimeBacked),
+        )
+    }
+
     pub fn enabled_service_channel_ids(&self) -> Vec<String> {
-        crate::channel::enabled_channel_ids(self, Some(crate::channel::ChannelRuntimeKind::Service))
+        self.enabled_runtime_backed_channel_ids()
+    }
+
+    pub fn enabled_plugin_backed_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::PluginBacked),
+        )
+    }
+
+    pub fn enabled_outbound_only_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::OutboundOnly),
+        )
+    }
+
+    pub fn enabled_catalog_only_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::CatalogOnly),
+        )
     }
 
     pub fn active_provider_id(&self) -> Option<&str> {
@@ -2145,6 +2178,10 @@ pub fn render(config: &LoongClawConfig) -> CliResult<String> {
 
 pub fn default_config_path() -> PathBuf {
     default_loongclaw_home().join(DEFAULT_CONFIG_FILE)
+}
+
+pub fn default_loong_home() -> PathBuf {
+    default_loongclaw_home()
 }
 
 pub fn default_loongclaw_home() -> PathBuf {

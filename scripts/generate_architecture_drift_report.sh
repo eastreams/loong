@@ -5,11 +5,42 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 . "$REPO_ROOT/scripts/architecture_budget_lib.sh"
 
-REPORT_MONTH="${LOONGCLAW_ARCH_REPORT_MONTH:-$(date +%Y-%m)}"
+REPORT_MONTH="${LOONG_ARCH_REPORT_MONTH:-${LOONGCLAW_ARCH_REPORT_MONTH:-$(date +%Y-%m)}}"
 OUTPUT_PATH="${1:-docs/releases/support/architecture-drift-${REPORT_MONTH}.md}"
-EXPLICIT_BASELINE="${LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT:-}"
-EXPLICIT_BASELINE_DIR="${LOONGCLAW_ARCH_DRIFT_BASELINE_DIR:-}"
+EXPLICIT_BASELINE="${LOONG_ARCH_DRIFT_BASELINE_REPORT:-${LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT:-}}"
+EXPLICIT_BASELINE_DIR="${LOONG_ARCH_DRIFT_BASELINE_DIR:-${LOONGCLAW_ARCH_DRIFT_BASELINE_DIR:-}}"
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+derive_link_reference_path() {
+  python3 - "$OUTPUT_PATH" <<'PY'
+import sys
+from pathlib import PurePosixPath
+
+output_path = sys.argv[1].replace("\\", "/")
+marker = "docs/releases/"
+index = output_path.find(marker)
+if index >= 0:
+    print(output_path[index:])
+else:
+    print(PurePosixPath(output_path).as_posix())
+PY
+}
+
+LINK_REFERENCE_PATH="${LOONG_ARCH_REPORT_LINK_PATH:-$(derive_link_reference_path)}"
+LINK_REFERENCE_DIR="$(dirname "$LINK_REFERENCE_PATH")"
+
+relative_link_from_output_dir() {
+  local target_path="${1:?target_path is required}"
+  python3 - "$LINK_REFERENCE_DIR" "$target_path" <<'PY'
+import os
+import sys
+
+output_dir = sys.argv[1].replace("\\", "/")
+target_path = sys.argv[2].replace("\\", "/")
+
+print(os.path.relpath(target_path, start=output_dir).replace("\\", "/"))
+PY
+}
 
 derive_previous_month() {
   local label="$1"
@@ -212,6 +243,10 @@ else
 fi
 
 {
+  release_template_link="$(relative_link_from_output_dir "docs/releases/support/TEMPLATE.md")"
+  architecture_gate_link="$(relative_link_from_output_dir "scripts/check_architecture_boundaries.sh")"
+  ci_workflow_link="$(relative_link_from_output_dir ".github/workflows/ci.yml")"
+
   echo "# Architecture Drift Report ${REPORT_MONTH}"
   echo
   echo "This report is a repository maintenance artifact for architecture-governance and"
@@ -290,9 +325,9 @@ fi
   echo "- Rule: each release must name at least one hotspot metric paid down or explicitly state why no paydown happened."
   echo
   echo "## Detail Links"
-  echo "- [Architecture gate](../../../scripts/check_architecture_boundaries.sh)"
-  echo "- [Release template](TEMPLATE.md)"
-  echo "- [CI workflow](../../../.github/workflows/ci.yml)"
+  echo "- [Architecture gate](${architecture_gate_link})"
+  echo "- [Release template](${release_template_link})"
+  echo "- [CI workflow](${ci_workflow_link})"
   echo
   echo "## Do Not Use This File For"
   echo

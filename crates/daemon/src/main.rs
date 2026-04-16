@@ -395,7 +395,11 @@ async fn main() {
         Commands::Plugins { json, command } => {
             plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
         }
-        Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
+        Commands::Channels {
+            config,
+            resolve,
+            json,
+        } => run_channels_cli(config.as_deref(), resolve.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::RuntimeSnapshot {
             config,
@@ -481,6 +485,7 @@ async fn main() {
             channel,
             conversation_id,
             account_id,
+            participant_id,
             thread_id,
             json,
         } => run_acp_dispatch_cli(
@@ -489,6 +494,7 @@ async fn main() {
             channel.as_deref(),
             conversation_id.as_deref(),
             account_id.as_deref(),
+            participant_id.as_deref(),
             thread_id.as_deref(),
             json,
         ),

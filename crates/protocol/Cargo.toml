@@ -1,12 +1,15 @@
 [package]
-name = "loongclaw-protocol"
+name = "loong-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Internal support crate for LoongClaw: protocol and transport types"
+description = "Internal support crate for Loong: protocol and transport types"
 repository.workspace = true
 homepage.workspace = true
+
+[lib]
+name = "loongclaw_protocol"
 
 [features]
 test-support = []
