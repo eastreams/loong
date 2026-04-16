@@ -218,49 +218,72 @@ pub async fn run_process_stdio_json_line_exchange(
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
     let send_timeout =
-        remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport send")?;
+        match remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport send") {
+            Ok(send_timeout) => send_timeout,
+            Err(error) => {
+                cleanup_process_stdio_child(&mut child, stderr_task).await;
+                return Err(error);
+            }
+        };
     let send_result = timeout(send_timeout, transport.send(frame)).await;
-    let send_result = send_result
-        .map_err(|_err| format!("process_stdio transport send timed out after {timeout_ms}ms"))?;
+    let send_result = match send_result {
+        Ok(send_result) => send_result,
+        Err(_error) => {
+            cleanup_process_stdio_child(&mut child, stderr_task).await;
+            return Err(format!(
+                "process_stdio transport send timed out after {timeout_ms}ms",
+            ));
+        }
+    };
     if let Err(error) = send_result {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
+        cleanup_process_stdio_child(&mut child, stderr_task).await;
         return Err(format!("process_stdio transport send failed: {error}"));
     }
 
     let close_timeout =
-        remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport close")?;
+        match remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport close") {
+            Ok(close_timeout) => close_timeout,
+            Err(error) => {
+                cleanup_process_stdio_child(&mut child, stderr_task).await;
+                return Err(error);
+            }
+        };
     let close_result = timeout(close_timeout, transport.close()).await;
-    let close_result = close_result
-        .map_err(|_err| format!("process_stdio transport close timed out after {timeout_ms}ms"))?;
+    let close_result = match close_result {
+        Ok(close_result) => close_result,
+        Err(_error) => {
+            cleanup_process_stdio_child(&mut child, stderr_task).await;
+            return Err(format!(
+                "process_stdio transport close timed out after {timeout_ms}ms",
+            ));
+        }
+    };
     if let Err(error) = close_result {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
+        cleanup_process_stdio_child(&mut child, stderr_task).await;
         return Err(format!("process_stdio transport close failed: {error}"));
     }
 
     let recv_timeout =
-        remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport recv")?;
+        match remaining_phase_timeout(deadline, timeout_ms, "process_stdio transport recv") {
+            Ok(recv_timeout) => recv_timeout,
+            Err(error) => {
+                cleanup_process_stdio_child(&mut child, stderr_task).await;
+                return Err(error);
+            }
+        };
     let response = match timeout(recv_timeout, transport.recv()).await {
         Ok(Ok(Some(frame))) => frame,
         Ok(Ok(None)) => {
             drop(transport);
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
+            cleanup_process_stdio_child(&mut child, stderr_task).await;
             return Err("process_stdio transport closed before response frame".to_owned());
         }
         Ok(Err(error)) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
+            cleanup_process_stdio_child(&mut child, stderr_task).await;
             return Err(format!("process_stdio transport recv failed: {error}"));
         }
         Err(_) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
+            cleanup_process_stdio_child(&mut child, stderr_task).await;
             return Err(format!(
                 "process_stdio transport recv timed out after {timeout_ms}ms",
             ));
@@ -269,9 +292,7 @@ pub async fn run_process_stdio_json_line_exchange(
 
     let response_method_matches = response.method == expected_method;
     if !response_method_matches {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
+        cleanup_process_stdio_child(&mut child, stderr_task).await;
         return Err(format!(
             "process_stdio response method mismatch: expected `{expected_method}`, got `{}`",
             response.method,
@@ -280,9 +301,7 @@ pub async fn run_process_stdio_json_line_exchange(
 
     let response_id_matches = response.id == expected_id;
     if !response_id_matches {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        let _ = stderr_task.await;
+        cleanup_process_stdio_child(&mut child, stderr_task).await;
         return Err(format!(
             "process_stdio response id mismatch: expected `{:?}`, got `{:?}`",
             expected_id, response.id,
@@ -290,7 +309,13 @@ pub async fn run_process_stdio_json_line_exchange(
     }
 
     drop(transport);
-    let wait_timeout = remaining_phase_timeout(deadline, timeout_ms, "process command")?;
+    let wait_timeout = match remaining_phase_timeout(deadline, timeout_ms, "process command") {
+        Ok(wait_timeout) => wait_timeout,
+        Err(error) => {
+            cleanup_process_stdio_child(&mut child, stderr_task).await;
+            return Err(error);
+        }
+    };
     let status = timeout(wait_timeout, child.wait()).await;
     let status = match status {
         Ok(Ok(status)) => status,
@@ -299,9 +324,7 @@ pub async fn run_process_stdio_json_line_exchange(
             return Err(format!("failed to wait process output: {error}"));
         }
         Err(_) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            let _ = stderr_task.await;
+            cleanup_process_stdio_child(&mut child, stderr_task).await;
             return Err(format!(
                 "process command timed out after {timeout_ms}ms waiting for exit",
             ));
@@ -324,6 +347,15 @@ pub async fn run_process_stdio_json_line_exchange(
         response_method: response.method,
         response_id: response.id,
     })
+}
+
+async fn cleanup_process_stdio_child(
+    child: &mut tokio::process::Child,
+    stderr_task: tokio::task::JoinHandle<Vec<u8>>,
+) {
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    let _ = stderr_task.await;
 }
 
 fn resolved_process_stdio_program(provider: &kernel::ProviderConfig) -> Option<String> {

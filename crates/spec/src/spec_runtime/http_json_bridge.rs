@@ -3,13 +3,13 @@ use loongclaw_bridge_runtime::{BridgeExecutionFailure, execute_http_json_bridge_
 use serde_json::Value;
 
 #[allow(clippy::indexing_slicing)]
-pub fn execute_http_json_bridge(
+pub async fn execute_http_json_bridge(
     mut execution: Value,
     provider: &kernel::ProviderConfig,
     channel: &kernel::ChannelConfig,
     command: &ConnectorCommand,
 ) -> Value {
-    let execution_result = execute_http_json_bridge_call(provider, channel, command);
+    let execution_result = execute_http_json_bridge_call(provider, channel, command).await;
 
     match execution_result {
         Ok(success) => {

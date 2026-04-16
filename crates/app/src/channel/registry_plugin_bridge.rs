@@ -836,8 +836,12 @@ fn discovered_plugin_bridge_status_from_validation(
                 Some(channel_bridge) => channel_bridge.readiness.ready,
                 None => true,
             };
+            let runtime_is_ready = match channel_bridge {
+                Some(channel_bridge) => managed_bridge_runtime_is_ready(channel_bridge),
+                None => true,
+            };
 
-            if contract_is_ready {
+            if contract_is_ready && runtime_is_ready {
                 return ChannelDiscoveredPluginBridgeStatus::CompatibleReady;
             }
 
@@ -851,6 +855,23 @@ fn discovered_plugin_bridge_status_from_validation(
             ChannelDiscoveredPluginBridgeStatus::UnsupportedChannelSurface
         }
     }
+}
+
+fn managed_bridge_runtime_is_ready(
+    channel_bridge: &loongclaw_kernel::PluginChannelBridgeContract,
+) -> bool {
+    let runtime_contract = channel_bridge.runtime_contract.as_deref();
+    let runtime_contract = runtime_contract.map(str::trim);
+    let runtime_contract = runtime_contract.filter(|value| !value.is_empty());
+    let runtime_contract_is_ready = runtime_contract.is_some();
+    if !runtime_contract_is_ready {
+        return false;
+    }
+
+    channel_bridge
+        .runtime_operations
+        .iter()
+        .any(|operation| !operation.trim().is_empty())
 }
 
 fn plugin_ir_channel_bridge(

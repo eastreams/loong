@@ -1628,7 +1628,7 @@ pub async fn maybe_execute_bridge(
     runtime_policy: &BridgeRuntimePolicy,
 ) -> Value {
     if runtime_policy.execute_http_json && matches!(bridge_kind, PluginBridgeKind::HttpJson) {
-        return execute_http_json_bridge(execution, provider, channel, command);
+        return execute_http_json_bridge(execution, provider, channel, command).await;
     }
 
     if runtime_policy.execute_process_stdio && matches!(bridge_kind, PluginBridgeKind::ProcessStdio)

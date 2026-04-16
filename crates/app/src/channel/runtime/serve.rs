@@ -210,6 +210,14 @@ where
 }
 
 #[cfg(test)]
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 pub(in crate::channel) async fn with_channel_serve_runtime_with_stop_in_dir<F, Fut>(
     runtime_dir: &std::path::Path,
     process_id: u32,
@@ -228,6 +236,14 @@ where
 }
 
 #[cfg(test)]
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 pub(in crate::channel) async fn with_channel_serve_runtime_in_dir<T, F, Fut>(
     runtime_dir: &std::path::Path,
     process_id: u32,

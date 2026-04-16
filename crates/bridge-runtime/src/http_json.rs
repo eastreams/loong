@@ -22,7 +22,7 @@ pub struct BridgeExecutionFailure {
     pub runtime_evidence: Value,
 }
 
-pub fn execute_http_json_bridge_call(
+pub async fn execute_http_json_bridge_call(
     provider: &kernel::ProviderConfig,
     channel: &kernel::ChannelConfig,
     command: &kernel::ConnectorCommand,
@@ -68,6 +68,8 @@ pub fn execute_http_json_bridge_call(
     }
 
     let request_payload = json!({
+        "method": protocol_context.request_method,
+        "id": protocol_context.request_id,
         "provider_id": provider.provider_id,
         "channel_id": channel.channel_id,
         "operation": command.operation,
@@ -80,7 +82,7 @@ pub fn execute_http_json_bridge_call(
     let request_id_for_worker = protocol_context.request_id.clone();
 
     type WorkerResult = Result<(u16, bool, String, Value, Option<String>, Option<String>), String>;
-    let run = std::thread::spawn(move || -> WorkerResult {
+    let run = tokio::task::spawn_blocking(move || -> WorkerResult {
         let client_builder = reqwest::blocking::Client::builder();
         let client_builder = client_builder.timeout(Duration::from_millis(timeout_ms));
         let client = client_builder
@@ -139,7 +141,7 @@ pub fn execute_http_json_bridge_call(
             response_id,
         ))
     })
-    .join();
+    .await;
 
     match run {
         Ok(Ok((status_code, success, body, body_json, response_method, response_id))) => {
@@ -190,7 +192,7 @@ pub fn execute_http_json_bridge_call(
                 runtime_evidence,
             })
         }
-        Err(_) => {
+        Err(error) => {
             let runtime_evidence = http_json_runtime_evidence(
                 &protocol_context,
                 &method_label,
@@ -203,7 +205,7 @@ pub fn execute_http_json_bridge_call(
             );
             Err(BridgeExecutionFailure {
                 blocked: false,
-                reason: "http_json bridge worker thread panicked".to_owned(),
+                reason: format!("http_json bridge worker task failed: {error}"),
                 runtime_evidence,
             })
         }

@@ -81,6 +81,7 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
         .map_err(|error| format!("resolve runtime plugin bridge matrix failed: {error}"))?;
     let activation = translator.plan_activation(&translation, &bridge_matrix, &readiness_context);
 
+    let resolved_account = resolve_runtime_account(config, channel_id, requested_account_id)?;
     let runtime_candidates = collect_runtime_candidates(
         channel_id,
         &translation,
@@ -88,12 +89,13 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
         requested_account_id,
         config,
     );
+    let runnable_candidates =
+        filter_runnable_runtime_candidates(config, &resolved_account, &runtime_candidates);
     let selected_candidate = select_runtime_candidate(
         channel_id,
-        &runtime_candidates,
+        &runnable_candidates,
         configured_plugin_id(config, channel_id),
     )?;
-    let resolved_account = resolve_runtime_account(config, channel_id, requested_account_id)?;
     let endpoint = resolved_runtime_endpoint(selected_candidate.plugin, &resolved_account)?;
     let runtime_operations = normalized_runtime_operations(selected_candidate.plugin);
     let runtime_contract = resolved_runtime_contract(selected_candidate.plugin)?;
@@ -193,6 +195,10 @@ fn collect_config_paths(value: &Value, prefix: Option<&str>, out: &mut BTreeSet<
                     None => key.clone(),
                 };
 
+                if child.is_null() {
+                    continue;
+                }
+
                 out.insert(next_prefix.clone());
                 collect_config_paths(child, Some(next_prefix.as_str()), out);
             }
@@ -251,6 +257,38 @@ fn collect_runtime_candidates<'a>(
     }
 
     candidates
+}
+
+fn filter_runnable_runtime_candidates<'a>(
+    config: &LoongClawConfig,
+    resolved_account: &ManagedPluginBridgeResolvedAccount,
+    candidates: &'a [ManagedPluginBridgeRuntimeCandidate<'a>],
+) -> Vec<ManagedPluginBridgeRuntimeCandidate<'a>> {
+    let mut runnable_candidates = Vec::new();
+
+    for candidate in candidates {
+        let endpoint_result = resolved_runtime_endpoint(candidate.plugin, resolved_account);
+        let endpoint_is_ready = endpoint_result.is_ok();
+        if !endpoint_is_ready {
+            continue;
+        }
+
+        let runtime_contract_result = resolved_runtime_contract(candidate.plugin);
+        let runtime_contract_is_ready = runtime_contract_result.is_ok();
+        if !runtime_contract_is_ready {
+            continue;
+        }
+
+        let requirements_result = validate_binding_execution_requirements(config, candidate.plugin);
+        let requirements_are_ready = requirements_result.is_ok();
+        if !requirements_are_ready {
+            continue;
+        }
+
+        runnable_candidates.push(candidate.clone());
+    }
+
+    runnable_candidates
 }
 
 fn select_runtime_candidate<'a>(

@@ -5,6 +5,7 @@ use crate::KernelContext;
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -15,6 +16,7 @@ use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 ))]
 use super::super::registry::ChannelCommandFamilyDescriptor;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -27,6 +29,7 @@ use super::super::runtime::serve::{
     ChannelServeRuntimeSpec, ChannelServeStopHandle, with_channel_serve_runtime_with_stop,
 };
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -40,6 +43,7 @@ use super::super::types::ChannelCommandFuture;
 use super::context::{ChannelCommandContext, ChannelResolvedRuntimeAccount};
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -54,6 +58,7 @@ pub(in crate::channel) struct ChannelServeCommandSpec {
 }
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",

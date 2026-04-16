@@ -209,11 +209,29 @@ use super::registry::{
     CHANNEL_OPERATION_SERVE_ID, FEISHU_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_COMMAND_FAMILY_DESCRIPTOR,
 };
+#[cfg(not(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+)))]
+use super::runtime::serve::ChannelServeStopHandle;
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 use super::runtime::serve::{
     ChannelServeRuntimeSpec, ChannelServeStopHandle, with_channel_serve_runtime_with_stop,
 };
 use super::runtime::state;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -225,6 +243,7 @@ use super::runtime::state;
 ))]
 use super::runtime::turn_feedback::ChannelTurnFeedbackCapture;
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -254,12 +273,30 @@ use super::wecom;
 use super::whatsapp;
 
 use super::runtime::state::ChannelOperationRuntime;
+use super::types::FeishuChannelSendRequest;
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 use super::types::{
     ChannelAdapter, ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage,
     ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt, ChannelSession,
-    FeishuChannelSendRequest,
 };
+#[cfg(not(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+)))]
+use super::types::{ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt};
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -268,10 +305,14 @@ use super::types::{
     feature = "channel-whatsapp",
     feature = "channel-webhook",
 ))]
-use super::types::{
-    ChannelResolvedAcpTurnHints, KnownChannelSessionSendTarget,
-    parse_known_channel_session_send_target, process_channel_batch,
-};
+use super::types::{ChannelResolvedAcpTurnHints, process_channel_batch};
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+))]
+use super::types::{KnownChannelSessionSendTarget, parse_known_channel_session_send_target};
 
 #[cfg(any(
     feature = "channel-dingtalk",

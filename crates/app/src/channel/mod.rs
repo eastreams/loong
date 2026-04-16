@@ -51,14 +51,6 @@ mod tlon;
 mod tlon_command;
 /// Channel API traits for platform-agnostic abstraction
 pub mod traits;
-#[cfg(any(
-    feature = "channel-plugin-bridge",
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 #[cfg(feature = "channel-twitch")]
 mod twitch;
 #[cfg(feature = "channel-twitch")]
@@ -144,19 +136,46 @@ pub use tlon_command::run_tlon_send;
 
 mod types;
 pub use types::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 pub use types::{
-    ChannelAdapter, ChannelDelivery, ChannelDeliveryFeishuCallback, ChannelDeliveryResource,
-    ChannelInboundMessage, ChannelOutboundDeliveryOptions, ChannelOutboundMessage,
-    ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform, ChannelSession,
-    ChannelStreamingMode, FeishuChannelSendRequest, process_channel_batch,
+    ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelStreamingMode,
+    process_channel_batch,
+};
+pub use types::{
+    ChannelDelivery, ChannelDeliveryFeishuCallback, ChannelDeliveryResource,
+    ChannelOutboundDeliveryOptions, ChannelOutboundTarget, ChannelOutboundTargetKind,
+    ChannelPlatform, ChannelSession, FeishuChannelSendRequest,
 };
 
+pub use runtime::serve::ChannelServeStopHandle;
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 pub use runtime::serve::{
-    ChannelServeRuntimeSpec, ChannelServeStopHandle,
-    ensure_channel_operation_runtime_slot_available_in_dir, with_channel_serve_runtime,
-    with_channel_serve_runtime_with_stop,
+    ChannelServeRuntimeSpec, ensure_channel_operation_runtime_slot_available_in_dir,
+    with_channel_serve_runtime, with_channel_serve_runtime_with_stop,
 };
 #[cfg(test)]
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 use runtime::serve::{
     with_channel_serve_runtime_in_dir, with_channel_serve_runtime_with_stop_in_dir,
 };
@@ -199,11 +218,26 @@ pub use dispatch::run_wecom_channel_with_stop;
 pub use dispatch::run_whatsapp_channel_with_stop;
 pub(crate) use dispatch::send_text_to_known_session;
 #[cfg(test)]
+#[cfg(feature = "channel-matrix")]
+use dispatch::validate_matrix_security_config;
+#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
+use dispatch::{build_feishu_command_context, validate_feishu_security_config};
+#[cfg(test)]
+#[cfg(feature = "channel-telegram")]
+use dispatch::{build_telegram_command_context, validate_telegram_security_config};
+#[cfg(test)]
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 use dispatch::{
-    build_feishu_command_context, build_telegram_command_context, channel_message_ingress_context,
-    process_inbound_with_runtime_and_feedback, reload_channel_turn_config,
-    validate_feishu_security_config, validate_matrix_security_config,
-    validate_telegram_security_config,
+    channel_message_ingress_context, process_inbound_with_runtime_and_feedback,
+    reload_channel_turn_config,
 };
 pub use dispatch::{
     load_channel_operation_runtime_for_account_from_dir_for_test, run_background_channel_with_stop,
@@ -215,6 +249,12 @@ pub use dispatch::{
     run_wecom_channel, run_wecom_send, run_whatsapp_channel, run_whatsapp_send,
 };
 #[cfg(test)]
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
 use types::{KnownChannelSessionSendTarget, parse_known_channel_session_send_target};
 
 #[cfg(test)]

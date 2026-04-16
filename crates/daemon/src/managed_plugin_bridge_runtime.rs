@@ -237,7 +237,8 @@ async fn invoke_managed_bridge_operation(
 
     match bridge_kind {
         kernel::PluginBridgeKind::HttpJson => {
-            let execution_result = execute_http_json_bridge_call(&provider, &channel, &command);
+            let execution_result =
+                execute_http_json_bridge_call(&provider, &channel, &command).await;
             let execution_result = execution_result.map_err(|failure| failure.reason)?;
             Ok(ManagedBridgeInvocationSuccess {
                 response_payload: execution_result.response_payload,
@@ -283,6 +284,9 @@ fn provider_config_from_binding(
         "entrypoint".to_owned(),
         binding.plugin.runtime.entrypoint_hint.clone(),
     );
+    let command = binding.plugin.metadata.get("command").cloned();
+    let command = command.unwrap_or_else(|| binding.plugin.runtime.entrypoint_hint.clone());
+    metadata.insert("command".to_owned(), command);
     metadata.insert(
         "channel_runtime_contract".to_owned(),
         binding.runtime_contract.clone(),
@@ -441,7 +445,10 @@ async fn run_managed_plugin_bridge_loop(
             return Ok(());
         }
 
-        let batch = adapter.receive_batch().await?;
+        let batch = tokio::select! {
+            _ = stop.wait() => return Ok(()),
+            batch = adapter.receive_batch() => batch?,
+        };
         let had_messages = mvp::channel::process_channel_batch(
             adapter,
             batch,
