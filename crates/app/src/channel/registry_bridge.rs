@@ -724,6 +724,7 @@ fn build_weixin_snapshot_for_account(
             .and(bridge_url.as_deref())
             .and_then(http::redact_endpoint_status_url),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -837,6 +838,7 @@ fn build_qqbot_snapshot_for_account(
         enabled: resolved.enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -952,6 +954,7 @@ fn build_onebot_snapshot_for_account(
             .as_deref()
             .and_then(http::redact_endpoint_status_url),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1063,6 +1066,7 @@ fn build_invalid_weixin_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1120,6 +1124,7 @@ fn build_invalid_qqbot_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1177,6 +1182,7 @@ fn build_invalid_onebot_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }

@@ -2451,7 +2451,7 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
     Ok(())
 }
 
-pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
@@ -2461,7 +2461,10 @@ pub struct RuntimeSnapshotCliState {
     pub memory_system: mvp::memory::MemorySystemRuntimeSnapshot,
     pub acp: mvp::acp::AcpRuntimeSnapshot,
     pub enabled_channel_ids: Vec<String>,
+    pub enabled_runtime_backed_channel_ids: Vec<String>,
     pub enabled_service_channel_ids: Vec<String>,
+    pub enabled_plugin_backed_channel_ids: Vec<String>,
+    pub enabled_outbound_only_channel_ids: Vec<String>,
     pub channels: mvp::channel::ChannelInventory,
     pub tool_runtime: mvp::tools::runtime_config::ToolRuntimeConfig,
     pub visible_tool_names: Vec<String>,
@@ -2709,7 +2712,10 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(config)?;
     let acp = mvp::acp::collect_acp_runtime_snapshot(config)?;
     let enabled_channel_ids = config.enabled_channel_ids();
+    let enabled_runtime_backed_channel_ids = config.enabled_runtime_backed_channel_ids();
     let enabled_service_channel_ids = config.enabled_service_channel_ids();
+    let enabled_plugin_backed_channel_ids = config.enabled_plugin_backed_channel_ids();
+    let enabled_outbound_only_channel_ids = config.enabled_outbound_only_channel_ids();
     let channels = mvp::channel::channel_inventory(config);
     let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
         config,
@@ -2735,7 +2741,10 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         memory_system,
         acp,
         enabled_channel_ids,
+        enabled_runtime_backed_channel_ids,
         enabled_service_channel_ids,
+        enabled_plugin_backed_channel_ids,
+        enabled_outbound_only_channel_ids,
         channels,
         tool_runtime: snapshot_tool_runtime,
         visible_tool_names: visible_tools,
@@ -4117,7 +4126,7 @@ pub fn run_channels_cli(
     Ok(())
 }
 
-pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 pub const CHANNELS_CLI_JSON_LEGACY_VIEWS: &[&str] = &["channels", "catalog_only_channels"];
 
 pub fn build_channels_cli_json_payload(
@@ -4132,123 +4141,197 @@ pub fn render_channel_surfaces_text(
     inventory: &mvp::channel::ChannelInventory,
 ) -> String {
     let mut lines = vec![format!("config={config_path}")];
-    let mut catalog_only_surfaces = Vec::new();
+    lines.push(render_channel_surface_summary_line(
+        &inventory.channel_surfaces,
+    ));
     let channel_access_policies = channel_access_policy_by_account(inventory);
 
-    for surface in &inventory.channel_surfaces {
-        if surface.catalog.implementation_status
-            == mvp::channel::ChannelCatalogImplementationStatus::Stub
-        {
-            catalog_only_surfaces.push(surface);
+    let grouped_surfaces = [
+        (
+            "runtime-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked,
+        ),
+        (
+            "config-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked,
+        ),
+        (
+            "plugin-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::PluginBacked,
+        ),
+        (
+            "catalog-only channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::Stub,
+        ),
+    ];
+
+    for (section_title, implementation_status) in grouped_surfaces {
+        let grouped = inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| surface.catalog.implementation_status == implementation_status)
+            .collect::<Vec<_>>();
+        if grouped.is_empty() {
             continue;
         }
 
-        push_channel_surface_header(&mut lines, surface);
-        lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
-        push_channel_surface_plugin_bridge_contract(&mut lines, surface);
-        push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
-        for snapshot in &surface.configured_accounts {
-            let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
-            lines.push(format!(
-                "  account configured_account={} configured_account_label={} default_account={} default_source={} compiled={} enabled={} api_base_url={}",
-                snapshot.configured_account_id,
-                snapshot.configured_account_label,
-                snapshot.is_default_account,
-                snapshot.default_account_source.as_str(),
-                snapshot.compiled,
-                snapshot.enabled,
-                api_base_url
-            ));
-            for note in &snapshot.notes {
-                lines.push(format!("    note: {note}"));
-            }
-            let access_policy_key = (
-                surface.catalog.id.to_owned(),
-                snapshot.configured_account_id.clone(),
-            );
-            if let Some(access_policy) = channel_access_policies.get(&access_policy_key) {
-                lines.push(render_channel_access_policy_line(access_policy));
-            }
-            for operation in &snapshot.operations {
-                let catalog_operation = surface.catalog.operation(operation.id);
-                let requirement_ids = catalog_operation
-                    .map(|catalog_operation| {
-                        render_channel_operation_requirement_ids(catalog_operation.requirements)
-                    })
-                    .unwrap_or_else(|| "-".to_owned());
-                lines.push(format!(
-                    "    op {} ({}) {}: {} target_kinds={} requirements={}",
-                    operation.id,
-                    operation.command,
-                    operation.health.as_str(),
-                    operation.detail,
-                    render_channel_target_kind_ids(
-                        catalog_operation
-                            .map(|catalog_operation| catalog_operation.supported_target_kinds)
-                            .unwrap_or(&[])
-                    ),
-                    requirement_ids,
-                ));
-                if let Some(runtime) = &operation.runtime {
-                    lines.push(format!(
-                        "      runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
-                        runtime
-                            .account_label
-                            .as_deref()
-                            .unwrap_or("-"),
-                        runtime
-                            .account_id
-                            .as_deref()
-                            .unwrap_or("-"),
-                        runtime.running,
-                        runtime.stale,
-                        runtime.busy,
-                        runtime.active_runs,
-                        runtime.instance_count,
-                        runtime.running_instances,
-                        runtime.stale_instances,
-                        runtime
-                            .last_run_activity_at
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned()),
-                        runtime
-                            .last_heartbeat_at
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned()),
-                        runtime
-                            .pid
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned())
-                    ));
-                }
-                for issue in &operation.issues {
-                    lines.push(format!("      issue: {issue}"));
-                }
-            }
-        }
-    }
-
-    if !catalog_only_surfaces.is_empty() {
-        lines.push("catalog-only channels:".to_owned());
-        for surface in catalog_only_surfaces {
-            push_channel_surface_header(&mut lines, surface);
-            lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
-            push_channel_surface_plugin_bridge_contract(&mut lines, surface);
-            push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
-            for operation in &surface.catalog.operations {
-                lines.push(format!(
-                    "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
-                    operation.id,
-                    operation.command,
-                    operation.availability.as_str(),
-                    operation.tracks_runtime,
-                    render_channel_target_kind_ids(operation.supported_target_kinds),
-                    render_channel_operation_requirement_ids(operation.requirements)
-                ));
-            }
+        lines.push(section_title.to_owned());
+        for surface in grouped {
+            push_channel_surface_block(&mut lines, surface, &channel_access_policies);
         }
     }
     lines.join("\n")
+}
+
+fn render_channel_surface_summary_line(surfaces: &[mvp::channel::ChannelSurface]) -> String {
+    let runtime_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
+
+    format!(
+        "summary total_surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
+        surfaces.len(),
+        runtime_backed,
+        config_backed,
+        plugin_backed,
+        catalog_only
+    )
+}
+
+fn push_channel_surface_block(
+    lines: &mut Vec<String>,
+    surface: &mvp::channel::ChannelSurface,
+    channel_access_policies: &std::collections::BTreeMap<
+        (String, String),
+        mvp::channel::ChannelConfiguredAccountAccessPolicy,
+    >,
+) {
+    push_channel_surface_header(lines, surface);
+    lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
+    push_channel_surface_plugin_bridge_contract(lines, surface);
+    push_channel_surface_managed_plugin_bridge_discovery(lines, surface);
+
+    if surface.catalog.implementation_status
+        == mvp::channel::ChannelCatalogImplementationStatus::Stub
+    {
+        for operation in &surface.catalog.operations {
+            lines.push(format!(
+                "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
+                operation.id,
+                operation.command,
+                operation.availability.as_str(),
+                operation.tracks_runtime,
+                render_channel_target_kind_ids(operation.supported_target_kinds),
+                render_channel_operation_requirement_ids(operation.requirements)
+            ));
+        }
+        return;
+    }
+
+    for snapshot in &surface.configured_accounts {
+        let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
+        lines.push(format!(
+            "  account configured_account={} configured_account_label={} default_account={} default_source={} compiled={} enabled={} api_base_url={}",
+            snapshot.configured_account_id,
+            snapshot.configured_account_label,
+            snapshot.is_default_account,
+            snapshot.default_account_source.as_str(),
+            snapshot.compiled,
+            snapshot.enabled,
+            api_base_url
+        ));
+        for note in &snapshot.notes {
+            lines.push(format!("    note: {note}"));
+        }
+        let access_policy_key = (
+            surface.catalog.id.to_owned(),
+            snapshot.configured_account_id.clone(),
+        );
+        if let Some(access_policy) = channel_access_policies.get(&access_policy_key) {
+            lines.push(render_channel_access_policy_line(access_policy));
+        }
+        for operation in &snapshot.operations {
+            let catalog_operation = surface.catalog.operation(operation.id);
+            let requirement_ids = catalog_operation
+                .map(|catalog_operation| {
+                    render_channel_operation_requirement_ids(catalog_operation.requirements)
+                })
+                .unwrap_or_else(|| "-".to_owned());
+            lines.push(format!(
+                "    op {} ({}) {}: {} target_kinds={} requirements={}",
+                operation.id,
+                operation.command,
+                operation.health.as_str(),
+                operation.detail,
+                render_channel_target_kind_ids(
+                    catalog_operation
+                        .map(|catalog_operation| catalog_operation.supported_target_kinds)
+                        .unwrap_or(&[])
+                ),
+                requirement_ids,
+            ));
+            if let Some(runtime) = &operation.runtime {
+                lines.push(format!(
+                    "      runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
+                    runtime
+                        .account_label
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime
+                        .account_id
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime.running,
+                    runtime.stale,
+                    runtime.busy,
+                    runtime.active_runs,
+                    runtime.instance_count,
+                    runtime.running_instances,
+                    runtime.stale_instances,
+                    runtime
+                        .last_run_activity_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .last_heartbeat_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .pid
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned())
+                ));
+            }
+            for issue in &operation.issues {
+                lines.push(format!("      issue: {issue}"));
+            }
+        }
+    }
 }
 
 pub fn render_channel_onboarding_line(
@@ -4813,7 +4896,7 @@ pub fn run_wecom_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
 pub fn run_discord_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = args.target.unwrap_or_default();
+        let target = require_channel_send_target("discord-send", args.target)?;
         mvp::channel::run_discord_send(
             args.config_path,
             args.account,

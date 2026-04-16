@@ -13,7 +13,7 @@ use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owne
 use crate::mvp;
 use crate::supervisor::LoadedSupervisorConfig;
 
-const STATUS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+const STATUS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusCliJsonSchema {
@@ -302,7 +302,6 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let active_provider_label = active_provider_label_option.unwrap_or("-");
     let capability_snapshot_sha256 = runtime.capability_snapshot_sha256.as_str();
     let tool_calling = &runtime.tool_calling;
-
     let mut lines = Vec::new();
     lines.push(format!("config={}", status.config));
     lines.push(format!(
@@ -324,13 +323,20 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         owner_shutdown_reason, owner_error,
     ));
     lines.push(format!(
-        "channels catalog={} configured={} enabled_accounts={} misconfigured_accounts={} runtime_backed={} enabled_service_channels={} ready_service_channels={}",
+        "channels catalog={} configured_channels={} configured_accounts={} enabled_accounts={} misconfigured_accounts={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={} enabled_runtime_backed_channels={} enabled_service_channels={} enabled_plugin_backed_channels={} enabled_outbound_only_channels={} ready_service_channels={}",
         channels.catalog_channel_count,
+        channels.configured_channel_count,
         channels.configured_account_count,
         channels.enabled_account_count,
         channels.misconfigured_account_count,
         channels.runtime_backed_channel_count,
+        channels.config_backed_channel_count,
+        channels.plugin_backed_channel_count,
+        channels.catalog_only_channel_count,
+        channels.enabled_runtime_backed_channel_count,
         channels.enabled_service_channel_count,
+        channels.enabled_plugin_backed_channel_count,
+        channels.enabled_outbound_only_channel_count,
         channels.ready_service_channel_count,
     ));
     lines.push(format!(
@@ -339,6 +345,14 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         active_provider_label,
         runtime.visible_tool_count,
         capability_snapshot_sha256,
+    ));
+    lines.push(format!(
+        "runtime_channels enabled={} runtime_backed={} service={} plugin_backed={} outbound_only={}",
+        render_status_channel_ids(&runtime.enabled_channel_ids),
+        render_status_channel_ids(&runtime.enabled_runtime_backed_channel_ids),
+        render_status_channel_ids(&runtime.enabled_service_channel_ids),
+        render_status_channel_ids(&runtime.enabled_plugin_backed_channel_ids),
+        render_status_channel_ids(&runtime.enabled_outbound_only_channel_ids),
     ));
     lines.push(format!(
         "tool_calling availability={} structured_tool_schema_enabled={} mode={} active_model={} reason={}",
@@ -359,6 +373,14 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     }
 
     lines.join("\n")
+}
+
+fn render_status_channel_ids(channel_ids: &[String]) -> String {
+    if channel_ids.is_empty() {
+        return "-".to_owned();
+    }
+
+    channel_ids.join(",")
 }
 
 fn render_status_cli_acp_text(acp: &StatusCliAcpReadModel) -> String {
@@ -473,13 +495,22 @@ mod tests {
                 enabled_account_count: 1,
                 misconfigured_account_count: 0,
                 runtime_backed_channel_count: 1,
+                config_backed_channel_count: 0,
+                plugin_backed_channel_count: 0,
+                catalog_only_channel_count: 0,
+                enabled_runtime_backed_channel_count: 1,
+                enabled_plugin_backed_channel_count: 0,
+                enabled_outbound_only_channel_count: 0,
                 enabled_service_channel_count: 1,
                 ready_service_channel_count: 1,
                 surfaces: Vec::new(),
             },
             runtime: GatewayOperatorRuntimeSummaryReadModel {
                 enabled_channel_ids: vec!["telegram".to_owned()],
+                enabled_runtime_backed_channel_ids: vec!["telegram".to_owned()],
                 enabled_service_channel_ids: vec!["telegram".to_owned()],
+                enabled_plugin_backed_channel_ids: Vec::new(),
+                enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
@@ -531,6 +562,12 @@ mod tests {
         let rendered = render_status_cli_text(&status);
 
         assert!(rendered.contains("gateway phase=running"));
+        assert!(rendered.contains(
+            "channels catalog=1 configured_channels=1 configured_accounts=1 enabled_accounts=1 misconfigured_accounts=0 runtime_backed=1 config_backed=0 plugin_backed=0 catalog_only=0 enabled_runtime_backed_channels=1 enabled_service_channels=1 enabled_plugin_backed_channels=0 enabled_outbound_only_channels=0 ready_service_channels=1"
+        ));
+        assert!(rendered.contains(
+            "runtime_channels enabled=telegram runtime_backed=telegram service=telegram plugin_backed=- outbound_only=-"
+        ));
         assert!(rendered.contains("tool_calling availability=ready"));
         assert!(rendered.contains("acp enabled=false availability=disabled"));
         assert!(rendered.contains("work_units availability=available total_count=0"));

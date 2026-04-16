@@ -282,6 +282,7 @@ fn build_nostr_snapshot_for_account(
         enabled: resolved.enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -339,6 +340,7 @@ fn build_invalid_nostr_snapshot(
         enabled: false,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }

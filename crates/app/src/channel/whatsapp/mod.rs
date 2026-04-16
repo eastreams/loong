@@ -14,7 +14,10 @@ use super::dispatch::{
 use super::runtime::serve::ChannelServeStopHandle;
 use super::{ChannelOutboundTargetKind, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR};
 use super::{
-    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_base_url,
+        validate_outbound_http_target,
+    },
     runtime::state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{ChannelDefaultAccountSelectionSource, LoongClawConfig};
@@ -46,10 +49,15 @@ pub(super) async fn run_whatsapp_send(
         return Err("whatsapp outbound target id is empty".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
+    let raw_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url = validate_outbound_http_base_url(
+        "whatsapp api_base_url",
+        raw_api_base_url.as_str(),
+        policy,
+    )?;
     let request_url = format!(
         "{}/{}/messages",
-        api_base_url.trim_end_matches('/'),
+        api_base_url.as_str().trim_end_matches('/'),
         phone_number_id.trim()
     );
     let request_url =

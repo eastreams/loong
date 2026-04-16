@@ -29,6 +29,40 @@ fn legacy_channel_inventory_json(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
 ) -> Value {
+    let total_surface_count = inventory.channel_surfaces.len();
+    let runtime_backed_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
+
     serde_json::json!({
         "config": config_path,
         "schema": {
@@ -36,6 +70,13 @@ fn legacy_channel_inventory_json(
             "primary_channel_view": "channel_surfaces",
             "catalog_view": "channel_catalog",
             "legacy_channel_views": CHANNELS_CLI_JSON_LEGACY_VIEWS,
+        },
+        "summary": {
+            "total_surface_count": total_surface_count,
+            "runtime_backed_surface_count": runtime_backed_surface_count,
+            "config_backed_surface_count": config_backed_surface_count,
+            "plugin_backed_surface_count": plugin_backed_surface_count,
+            "catalog_only_surface_count": catalog_only_surface_count,
         },
         "channels": inventory.channels,
         "catalog_only_channels": inventory.catalog_only_channels,
@@ -127,6 +168,21 @@ fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
     assert_eq!(
         payload.schema.legacy_channel_views,
         CHANNELS_CLI_JSON_LEGACY_VIEWS
+    );
+    assert_eq!(
+        payload.summary.total_surface_count,
+        inventory.channel_surfaces.len()
+    );
+    assert_eq!(
+        payload.summary.runtime_backed_surface_count,
+        inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| {
+                surface.catalog.implementation_status
+                    == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+            })
+            .count()
     );
     assert_eq!(encoded, legacy);
     assert_eq!(
@@ -409,6 +465,18 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
         payload.tools.visible_tool_names.len()
     );
     assert_eq!(
+        payload.channels.enabled_runtime_backed_channel_ids,
+        snapshot.enabled_runtime_backed_channel_ids
+    );
+    assert_eq!(
+        payload.channels.enabled_plugin_backed_channel_ids,
+        snapshot.enabled_plugin_backed_channel_ids
+    );
+    assert_eq!(
+        payload.channels.enabled_outbound_only_channel_ids,
+        snapshot.enabled_outbound_only_channel_ids
+    );
+    assert_eq!(
         encoded["channels"]["inventory"]["schema"]["catalog_view"],
         "channel_catalog"
     );
@@ -482,6 +550,17 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         inventory.channel_catalog.len()
     );
     assert_eq!(
+        summary.channels.plugin_backed_channel_count,
+        inventory
+            .channel_catalog
+            .iter()
+            .filter(|channel| {
+                channel.implementation_status
+                    == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+            })
+            .count()
+    );
+    assert_eq!(
         summary.channels.configured_account_count,
         inventory.channels.len()
     );
@@ -490,12 +569,45 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         runtime_snapshot.channels.enabled_service_channel_ids.len()
     );
     assert_eq!(
+        summary.channels.enabled_runtime_backed_channel_count,
+        runtime_snapshot
+            .channels
+            .enabled_runtime_backed_channel_ids
+            .len()
+    );
+    assert_eq!(
+        summary.channels.enabled_plugin_backed_channel_count,
+        runtime_snapshot
+            .channels
+            .enabled_plugin_backed_channel_ids
+            .len()
+    );
+    assert_eq!(
+        summary.channels.enabled_outbound_only_channel_count,
+        runtime_snapshot
+            .channels
+            .enabled_outbound_only_channel_ids
+            .len()
+    );
+    assert_eq!(
         summary.channels.surfaces.len(),
         inventory.channel_surfaces.len()
     );
     assert_eq!(
         summary.runtime.visible_tool_count,
         runtime_snapshot.tools.visible_tool_count
+    );
+    assert_eq!(
+        summary.runtime.enabled_runtime_backed_channel_ids,
+        runtime_snapshot.channels.enabled_runtime_backed_channel_ids
+    );
+    assert_eq!(
+        summary.runtime.enabled_plugin_backed_channel_ids,
+        runtime_snapshot.channels.enabled_plugin_backed_channel_ids
+    );
+    assert_eq!(
+        summary.runtime.enabled_outbound_only_channel_ids,
+        runtime_snapshot.channels.enabled_outbound_only_channel_ids
     );
     assert_eq!(
         summary.runtime.active_provider_profile_id.as_deref(),

@@ -100,7 +100,12 @@ fn render_wide_domain_line(domain: &super::DomainPreview) -> String {
 }
 
 fn render_stacked_channel_lines(channel: &super::ChannelCandidate, width: usize) -> Vec<String> {
-    let mut lines = vec![format!("- {} [{}]", channel.label, channel.status.label())];
+    let mut lines = vec![format!(
+        "- {} [{} · {}]",
+        channel.label,
+        channel.status.label(),
+        channel_maturity_label(channel.id)
+    )];
     lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
         "  source: ",
         &channel.source,
@@ -116,9 +121,13 @@ fn render_stacked_channel_lines(channel: &super::ChannelCandidate, width: usize)
 
 fn render_wide_channel_line(channel: &super::ChannelCandidate) -> String {
     format!(
-        "- {:18} {:14} {:28} {}",
+        "- {:18} {:30} {:28} {}",
         channel.label,
-        channel.status.label(),
+        format!(
+            "{} · {}",
+            channel.status.label(),
+            channel_maturity_label(channel.id)
+        ),
         channel.source,
         channel.summary
     )
@@ -295,13 +304,31 @@ pub fn candidate_preview_display_lines(candidate: &ImportCandidate) -> Vec<Strin
     if !candidate.channel_candidates.is_empty() {
         lines.push("channels:".to_owned());
         for channel in &candidate.channel_candidates {
-            lines.push(format!("- {} [{}]", channel.label, channel.status.label()));
+            lines.push(format!(
+                "- {} [{} · {}]",
+                channel.label,
+                channel.status.label(),
+                channel_maturity_label(channel.id)
+            ));
             lines.push(display_line("  source: ", &channel.source));
             lines.push(display_line("  summary: ", &channel.summary));
         }
     }
 
     lines
+}
+
+fn channel_maturity_label(channel_id: &'static str) -> &'static str {
+    let descriptor = crate::mvp::config::channel_descriptor(channel_id);
+
+    match descriptor.map(|descriptor| descriptor.runtime_kind) {
+        Some(crate::mvp::config::ChannelRuntimeKind::RuntimeBacked) => "runtime-backed",
+        Some(crate::mvp::config::ChannelRuntimeKind::PluginBacked) => "plugin-backed",
+        Some(crate::mvp::config::ChannelRuntimeKind::OutboundOnly) => "outbound-only",
+        Some(crate::mvp::config::ChannelRuntimeKind::CatalogOnly) => "catalog-only",
+        Some(crate::mvp::config::ChannelRuntimeKind::Interactive) => "interactive",
+        None => "channel",
+    }
 }
 
 pub fn render_provider_selection_lines(plan: &ProviderSelectionPlan, width: usize) -> Vec<String> {

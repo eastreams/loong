@@ -13,7 +13,11 @@ mod tools;
 #[allow(unused_imports)]
 pub use crate::channel::{ChannelDescriptor, ChannelRuntimeKind};
 #[allow(unused_imports)]
-pub use crate::channel::{channel_descriptor, service_channel_descriptors};
+pub use crate::channel::{
+    catalog_only_channel_descriptors, channel_descriptor, outbound_only_channel_descriptors,
+    plugin_backed_channel_descriptors, runtime_backed_channel_descriptors,
+    service_channel_descriptors,
+};
 pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
@@ -184,19 +188,19 @@ mod tests {
     }
 
     fn expected_service_channel_ids() -> Vec<&'static str> {
+        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+    }
+
+    fn expected_plugin_backed_channel_ids() -> Vec<&'static str> {
+        vec!["weixin", "qqbot", "onebot"]
+    }
+
+    fn expected_outbound_channel_ids() -> Vec<&'static str> {
         vec![
-            "telegram",
-            "feishu",
-            "matrix",
-            "wecom",
-            "weixin",
-            "qqbot",
-            "onebot",
             "discord",
             "slack",
             "line",
             "dingtalk",
-            "whatsapp",
             "email",
             "webhook",
             "google-chat",
@@ -237,134 +241,137 @@ mod tests {
         let telegram = channel_descriptor("telegram").expect("telegram descriptor");
         assert_eq!(telegram.id, "telegram");
         assert_eq!(telegram.surface_label, "telegram channel");
-        assert_eq!(telegram.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(telegram.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(telegram.serve_subcommand, Some("telegram-serve"));
 
         let feishu = channel_descriptor("feishu").expect("feishu descriptor");
         assert_eq!(feishu.id, "feishu");
         assert_eq!(feishu.surface_label, "feishu channel");
-        assert_eq!(feishu.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(feishu.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(feishu.serve_subcommand, Some("feishu-serve"));
 
         let wecom = channel_descriptor("wecom").expect("wecom descriptor");
         assert_eq!(wecom.id, "wecom");
         assert_eq!(wecom.surface_label, "wecom channel");
-        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
 
         let weixin = channel_descriptor("wechat").expect("weixin descriptor");
         assert_eq!(weixin.id, "weixin");
         assert_eq!(weixin.surface_label, "weixin channel");
-        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::PluginBacked);
         assert_eq!(weixin.serve_subcommand, None);
 
         let qqbot = channel_descriptor("qq").expect("qqbot descriptor");
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
-        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
         assert_eq!(qqbot.serve_subcommand, None);
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
         assert_eq!(onebot.id, "onebot");
         assert_eq!(onebot.surface_label, "onebot channel");
-        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::PluginBacked);
         assert_eq!(onebot.serve_subcommand, None);
 
         let discord = channel_descriptor("discord").expect("discord descriptor");
         assert_eq!(discord.id, "discord");
         assert_eq!(discord.surface_label, "discord channel");
-        assert_eq!(discord.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(discord.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(discord.serve_subcommand, None);
 
         let slack = channel_descriptor("slack").expect("slack descriptor");
         assert_eq!(slack.id, "slack");
         assert_eq!(slack.surface_label, "slack channel");
-        assert_eq!(slack.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(slack.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(slack.serve_subcommand, None);
 
         let line = channel_descriptor("line").expect("line descriptor");
         assert_eq!(line.id, "line");
         assert_eq!(line.surface_label, "line channel");
-        assert_eq!(line.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(line.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(line.serve_subcommand, None);
 
         let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
         assert_eq!(dingtalk.id, "dingtalk");
         assert_eq!(dingtalk.surface_label, "dingtalk channel");
-        assert_eq!(dingtalk.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(dingtalk.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(dingtalk.serve_subcommand, None);
 
         let whatsapp = channel_descriptor("whatsapp").expect("whatsapp descriptor");
         assert_eq!(whatsapp.id, "whatsapp");
         assert_eq!(whatsapp.surface_label, "whatsapp channel");
-        assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(whatsapp.serve_subcommand, Some("whatsapp-serve"));
 
         let email = channel_descriptor("email").expect("email descriptor");
         assert_eq!(email.id, "email");
         assert_eq!(email.surface_label, "email channel");
-        assert_eq!(email.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(email.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(email.serve_subcommand, None);
 
         let webhook = channel_descriptor("webhook").expect("webhook descriptor");
         assert_eq!(webhook.id, "webhook");
         assert_eq!(webhook.surface_label, "webhook channel");
-        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(webhook.serve_subcommand, None);
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.id, "google-chat");
         assert_eq!(google_chat.surface_label, "google chat channel");
-        assert_eq!(google_chat.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(google_chat.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(google_chat.serve_subcommand, None);
 
         let signal = channel_descriptor("signal").expect("signal descriptor");
         assert_eq!(signal.id, "signal");
         assert_eq!(signal.surface_label, "signal channel");
-        assert_eq!(signal.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(signal.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(signal.serve_subcommand, None);
 
         let irc = channel_descriptor("irc").expect("irc descriptor");
         assert_eq!(irc.id, "irc");
         assert_eq!(irc.surface_label, "irc channel");
-        assert_eq!(irc.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(irc.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(irc.serve_subcommand, None);
 
         let twitch = channel_descriptor("twitch").expect("twitch descriptor");
         assert_eq!(twitch.id, "twitch");
         assert_eq!(twitch.surface_label, "twitch channel");
-        assert_eq!(twitch.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(twitch.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(twitch.serve_subcommand, None);
 
         let teams = channel_descriptor("teams").expect("teams descriptor");
         assert_eq!(teams.id, "teams");
         assert_eq!(teams.surface_label, "teams channel");
-        assert_eq!(teams.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(teams.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(teams.serve_subcommand, None);
 
         let mattermost = channel_descriptor("mattermost").expect("mattermost descriptor");
         assert_eq!(mattermost.id, "mattermost");
         assert_eq!(mattermost.surface_label, "mattermost channel");
-        assert_eq!(mattermost.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(mattermost.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(mattermost.serve_subcommand, None);
 
         let nextcloud_talk =
             channel_descriptor("nextcloud-talk").expect("nextcloud talk descriptor");
         assert_eq!(nextcloud_talk.id, "nextcloud-talk");
         assert_eq!(nextcloud_talk.surface_label, "nextcloud talk channel");
-        assert_eq!(nextcloud_talk.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(
+            nextcloud_talk.runtime_kind,
+            ChannelRuntimeKind::OutboundOnly
+        );
         assert_eq!(nextcloud_talk.serve_subcommand, None);
 
         let synology_chat = channel_descriptor("synology-chat").expect("synology chat descriptor");
         assert_eq!(synology_chat.id, "synology-chat");
         assert_eq!(synology_chat.surface_label, "synology chat channel");
-        assert_eq!(synology_chat.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(synology_chat.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(synology_chat.serve_subcommand, None);
 
         let imessage = channel_descriptor("imessage").expect("imessage descriptor");
         assert_eq!(imessage.id, "imessage");
         assert_eq!(imessage.surface_label, "imessage channel");
-        assert_eq!(imessage.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(imessage.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(imessage.serve_subcommand, None);
 
         assert!(channel_descriptor("unknown").is_none());
@@ -377,12 +384,24 @@ mod tests {
         assert!(default_config.enabled_service_channel_ids().is_empty());
         let mut config = LoongClawConfig::default();
         let expected_service_ids = expected_service_channel_ids();
+        let expected_plugin_backed_ids = expected_plugin_backed_channel_ids();
+        let expected_outbound_ids = expected_outbound_channel_ids();
         let expected_enabled_service_ids = expected_service_ids
             .iter()
             .map(|channel_id| (*channel_id).to_owned())
             .collect::<Vec<_>>();
         let mut expected_enabled_channel_ids = vec!["cli".to_owned()];
         expected_enabled_channel_ids.extend(expected_enabled_service_ids.iter().cloned());
+        expected_enabled_channel_ids.extend(
+            expected_plugin_backed_ids
+                .iter()
+                .map(|channel_id| (*channel_id).to_owned()),
+        );
+        expected_enabled_channel_ids.extend(
+            expected_outbound_ids
+                .iter()
+                .map(|channel_id| (*channel_id).to_owned()),
+        );
 
         config.telegram.enabled = true;
         config.feishu.enabled = true;
@@ -428,7 +447,7 @@ mod tests {
         let matrix = channel_descriptor("matrix").expect("matrix descriptor");
         assert_eq!(matrix.id, "matrix");
         assert_eq!(matrix.surface_label, "matrix channel");
-        assert_eq!(matrix.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(matrix.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(matrix.serve_subcommand, Some("matrix-serve"));
     }
 
@@ -439,6 +458,57 @@ mod tests {
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
         assert_eq!(service_ids, expected_service_channel_ids());
+    }
+
+    #[test]
+    fn channel_descriptor_helper_groups_follow_runtime_taxonomy() {
+        let runtime_backed_ids = runtime_backed_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let plugin_backed_ids = plugin_backed_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let outbound_only_ids = outbound_only_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let catalog_only_ids = catalog_only_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(runtime_backed_ids, expected_service_channel_ids());
+        assert_eq!(plugin_backed_ids, expected_plugin_backed_channel_ids());
+        assert_eq!(outbound_only_ids, expected_outbound_channel_ids());
+        assert_eq!(catalog_only_ids, vec!["zalo", "zalo-personal", "webchat"]);
+    }
+
+    #[test]
+    fn enabled_channel_runtime_groups_follow_runtime_taxonomy() {
+        let mut config = LoongClawConfig::default();
+        config.telegram.enabled = true;
+        config.weixin.enabled = true;
+        config.discord.enabled = true;
+
+        assert_eq!(
+            config.enabled_runtime_backed_channel_ids(),
+            vec!["telegram".to_owned()]
+        );
+        assert_eq!(
+            config.enabled_service_channel_ids(),
+            vec!["telegram".to_owned()]
+        );
+        assert_eq!(
+            config.enabled_plugin_backed_channel_ids(),
+            vec!["weixin".to_owned()]
+        );
+        assert_eq!(
+            config.enabled_outbound_only_channel_ids(),
+            vec!["discord".to_owned()]
+        );
+        assert!(config.enabled_catalog_only_channel_ids().is_empty());
     }
 
     #[test]

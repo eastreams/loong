@@ -4,7 +4,9 @@ use crate::{CliResult, config::ResolvedImessageChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_base_url,
+    },
 };
 
 #[derive(Debug, Serialize)]
@@ -73,7 +75,8 @@ fn build_imessage_request_url(
         return Err("imessage bridge_token is empty".to_owned());
     }
 
-    let mut request_url = validate_outbound_http_target("imessage bridge_url", bridge_url, policy)?;
+    let mut request_url =
+        validate_outbound_http_base_url("imessage bridge_url", bridge_url, policy)?;
     let mut path_segments = request_url.path_segments_mut().map_err(|_path_error| {
         "imessage bridge_url cannot be used as a hierarchical base url".to_owned()
     })?;

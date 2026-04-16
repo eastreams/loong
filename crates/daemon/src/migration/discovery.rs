@@ -337,7 +337,14 @@ fn collect_domain_previews(
         };
         let summary = channel_candidates
             .iter()
-            .map(|channel| format!("{} {}", channel.label, channel.status.label()))
+            .map(|channel| {
+                format!(
+                    "{} {} ({})",
+                    channel.label,
+                    channel.status.label(),
+                    channel_candidate_maturity_label(channel.id)
+                )
+            })
             .collect::<Vec<_>>()
             .join(" · ");
         domains.push(DomainPreview {
@@ -413,6 +420,19 @@ fn collect_domain_previews(
     }
 
     domains
+}
+
+fn channel_candidate_maturity_label(channel_id: &'static str) -> &'static str {
+    let descriptor = mvp::config::channel_descriptor(channel_id);
+
+    match descriptor.map(|descriptor| descriptor.runtime_kind) {
+        Some(mvp::config::ChannelRuntimeKind::RuntimeBacked) => "runtime-backed",
+        Some(mvp::config::ChannelRuntimeKind::PluginBacked) => "plugin-backed",
+        Some(mvp::config::ChannelRuntimeKind::OutboundOnly) => "outbound-only",
+        Some(mvp::config::ChannelRuntimeKind::CatalogOnly) => "catalog-only",
+        Some(mvp::config::ChannelRuntimeKind::Interactive) => "interactive",
+        None => "channel",
+    }
 }
 
 fn memory_sqlite_path_looks_default(

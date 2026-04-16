@@ -179,6 +179,7 @@ fn build_tlon_snapshot_for_account(
         enabled: resolved.enabled,
         api_base_url,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -236,6 +237,7 @@ fn build_invalid_tlon_snapshot(
         enabled: false,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }

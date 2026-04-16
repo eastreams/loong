@@ -327,6 +327,73 @@ fn migration_channel_registry_includes_wecom_when_enabled() {
 }
 
 #[test]
+fn migration_channel_registry_includes_discord_when_enabled() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_doctor_checks(&config);
+    let names = checks.iter().map(|check| check.name).collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["discord channel"]);
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "discord channel"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Pass
+                && check.detail.contains("outbound-only")
+                && check.detail.contains("direct send ready")
+        }),
+        "doctor checks should treat configured outbound-only channels as first-class surfaces: {checks:#?}"
+    );
+}
+
+#[test]
+fn migration_channel_registry_includes_weixin_bridge_when_enabled() {
+    let install_root = unique_temp_dir("managed-bridge-doctor-ready");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_doctor_checks(&config);
+    let names = checks.iter().map(|check| check.name).collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["weixin channel"]);
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Pass
+                && check.detail.contains("plugin-backed")
+                && check.detail.contains("weixin-managed-bridge")
+        }),
+        "doctor checks should treat ready plugin-backed channels as first-class surfaces: {checks:#?}"
+    );
+}
+
+#[test]
 fn migration_channel_env_binding_applies_matrix_and_wecom_defaults() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.matrix.access_token_env = None;
@@ -520,6 +587,111 @@ fn migration_domain_previews_preserve_source_attribution() {
                 && domain.summary.contains("AGENTS.md")
         }),
         "workspace guidance preview should be present when repo guidance exists: {candidate:#?}"
+    );
+}
+
+#[test]
+fn migration_channel_domain_summary_includes_channel_maturity_labels() {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "telegram": {
+            "enabled": true,
+            "bot_token": "123456:test-token",
+            "allowed_chat_ids": [42]
+        },
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        },
+        "discord": {
+            "enabled": true,
+            "bot_token": "discord-token"
+        }
+    }))
+    .expect("deserialize mixed channel config");
+
+    let candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        config,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("candidate should be generated");
+
+    let channels_domain = candidate
+        .domains
+        .iter()
+        .find(|domain| domain.kind == loongclaw_daemon::migration::types::SetupDomainKind::Channels)
+        .expect("channels domain");
+
+    assert!(
+        channels_domain
+            .summary
+            .contains("Telegram Ready (runtime-backed)"),
+        "channels domain summary should keep runtime-backed channel maturity visible: {channels_domain:#?}"
+    );
+    assert!(
+        channels_domain
+            .summary
+            .contains("Weixin Needs review (plugin-backed)"),
+        "channels domain summary should keep plugin-backed channel maturity visible: {channels_domain:#?}"
+    );
+    assert!(
+        channels_domain
+            .summary
+            .contains("Discord Ready (outbound-only)"),
+        "channels domain summary should keep outbound-only channel maturity visible: {channels_domain:#?}"
+    );
+}
+
+#[test]
+fn migration_render_preview_channel_rows_include_channel_maturity_labels() {
+    let candidate = loongclaw_daemon::migration::types::ImportCandidate {
+        source_kind: loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        source: "your current environment".to_owned(),
+        config: mvp::config::LoongClawConfig::default(),
+        surfaces: Vec::new(),
+        domains: vec![loongclaw_daemon::migration::types::DomainPreview {
+            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
+            status: loongclaw_daemon::migration::types::PreviewStatus::NeedsReview,
+            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::UseDetected),
+            source: "your current environment".to_owned(),
+            summary: "Telegram Ready (runtime-backed) · Discord Ready (outbound-only)".to_owned(),
+        }],
+        channel_candidates: vec![
+            loongclaw_daemon::migration::types::ChannelCandidate {
+                id: "telegram",
+                label: "telegram",
+                status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+                source: "your current environment".to_owned(),
+                summary: "runtime-backed · token resolved".to_owned(),
+            },
+            loongclaw_daemon::migration::types::ChannelCandidate {
+                id: "discord",
+                label: "discord",
+                status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+                source: "your current environment".to_owned(),
+                summary: "outbound-only · direct send ready on 1 account(s)".to_owned(),
+            },
+        ],
+        workspace_guidance: Vec::new(),
+    };
+
+    let lines = loongclaw_daemon::migration::render::render_candidate_preview_lines(&candidate, 96);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("telegram [Ready · runtime-backed]")),
+        "rendered preview should show runtime-backed channel maturity inline: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("discord [Ready · outbound-only]")),
+        "rendered preview should show outbound-only channel maturity inline: {lines:#?}"
     );
 }
 
@@ -1112,6 +1284,29 @@ fn migration_classify_current_setup_treats_enabled_managed_bridge_without_ready_
         loongclaw_daemon::migration::discovery::classify_current_setup(&path),
         loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
         "enabled managed bridge channels without a discovered compatible plugin should keep the current setup in the repairable bucket"
+    );
+}
+
+#[test]
+fn migration_classify_current_setup_treats_blocked_outbound_only_channel_as_repairable() {
+    let path = unique_temp_dir("outbound-only-repairable").join("config.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+
+    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "provider-secret".to_owned(),
+    ));
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+    config.discord.enabled = true;
+    config.discord.bot_token = None;
+    config.discord.bot_token_env = None;
+
+    mvp::config::write(Some(path.to_string_lossy().as_ref()), &config, true)
+        .expect("write outbound-only repairable config");
+
+    assert_eq!(
+        loongclaw_daemon::migration::discovery::classify_current_setup(&path),
+        loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
+        "blocked outbound-only channels should keep the current setup in the repairable bucket instead of producing a false healthy result"
     );
 }
 
@@ -1788,6 +1983,155 @@ fn channel_registry_collects_catalog_action_when_no_service_channels_are_enabled
 }
 
 #[test]
+fn channel_registry_collects_contextual_inspection_action_for_enabled_discord_surface() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id, "configured_channels");
+    assert_eq!(actions[0].label, "inspect Discord");
+    assert_eq!(
+        actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
+fn channel_registry_collects_contextual_review_action_for_blocked_discord_surface() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token = None;
+    config.discord.bot_token_env = None;
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id, "configured_channels");
+    assert_eq!(actions[0].label, "review Discord setup");
+    assert_eq!(
+        actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
+fn channel_registry_collects_outbound_inspection_action_for_multiple_enabled_outbound_surfaces() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+    config.slack.enabled = true;
+    config.slack.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "xoxb-test-token".to_owned(),
+    ));
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id, "configured_channels");
+    assert_eq!(actions[0].label, "inspect configured outbound channels");
+    assert_eq!(
+        actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
+fn channel_registry_keeps_non_runtime_inspection_action_when_runtime_channel_is_enabled() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 2);
+    assert_eq!(actions[0].label, "Telegram");
+    assert_eq!(
+        actions[0].command,
+        "loong telegram-serve --config '/tmp/loongclaw-config.toml'"
+    );
+    assert_eq!(actions[1].id, "configured_channels");
+    assert_eq!(actions[1].label, "inspect Discord");
+    assert_eq!(
+        actions[1].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
+fn channel_registry_collects_outbound_review_action_when_multiple_outbound_surfaces_need_attention()
+{
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.discord.enabled = true;
+    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "discord-token".to_owned(),
+    ));
+    config.slack.enabled = true;
+    config.slack.bot_token = None;
+    config.slack.bot_token_env = None;
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id, "configured_channels");
+    assert_eq!(actions[0].label, "review configured outbound channels");
+    assert_eq!(
+        actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
+fn channel_registry_collects_contextual_inspection_action_for_enabled_weixin_bridge_surface() {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id, "configured_channels");
+    assert_eq!(actions[0].label, "review Weixin bridge");
+    assert_eq!(
+        actions[0].command,
+        "loong channels --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
 fn migration_render_preview_compacts_for_narrow_width() {
     let candidate = loongclaw_daemon::migration::types::ImportCandidate {
         source_kind: loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
@@ -1887,7 +2231,9 @@ fn migration_render_preview_wraps_long_domain_and_channel_details_for_narrow_wid
         "narrow preview should continue wrapped domain summaries on a readable continuation line: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "- telegram [Ready]"),
+        lines
+            .iter()
+            .any(|line| line == "- telegram [Ready · runtime-backed]"),
         "narrow preview should keep channel rows compact before detail lines: {lines:#?}"
     );
     assert!(
@@ -2058,7 +2404,9 @@ fn migration_render_preview_falls_back_to_stacked_channel_rows_when_wide_line_wo
         "channel fallback should keep the channel section heading visible: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "- telegram [Ready]"),
+        lines
+            .iter()
+            .any(|line| line == "- telegram [Ready · runtime-backed]"),
         "medium-width preview should fall back to stacked channel rows when the wide row would overflow: {lines:#?}"
     );
     assert!(

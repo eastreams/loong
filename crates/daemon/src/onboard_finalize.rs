@@ -49,10 +49,36 @@ pub struct OnboardingSuccessSummary {
     pub web_search_provider: String,
     pub web_search_credential: Option<OnboardingCredentialSummary>,
     pub memory_path: Option<String>,
+    pub channel_surface_summary: OnboardingChannelSurfaceSummary,
     pub channels: Vec<String>,
+    pub runtime_backed_channels: Vec<String>,
+    pub plugin_backed_channels: Vec<String>,
+    pub outbound_only_channels: Vec<String>,
     pub suggested_channels: Vec<String>,
     pub domain_outcomes: Vec<OnboardingDomainOutcome>,
     pub next_actions: Vec<OnboardingAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardingChannelSurfaceSummary {
+    pub total_surface_count: usize,
+    pub runtime_backed_surface_count: usize,
+    pub config_backed_surface_count: usize,
+    pub plugin_backed_surface_count: usize,
+    pub catalog_only_surface_count: usize,
+}
+
+impl OnboardingChannelSurfaceSummary {
+    pub fn render_compact(&self) -> String {
+        format!(
+            "{} total ({} runtime-backed, {} config-backed, {} plugin-backed, {} catalog-only)",
+            self.total_surface_count,
+            self.runtime_backed_surface_count,
+            self.config_backed_surface_count,
+            self.plugin_backed_surface_count,
+            self.catalog_only_surface_count,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,7 +162,11 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
         config.tools.web_search.default_provider.as_str(),
     );
     let domain_outcomes = collect_onboarding_domain_outcomes(review_candidate);
+    let channel_surface_summary = collect_onboarding_channel_surface_summary(config);
     let channels = config.enabled_channel_ids();
+    let runtime_backed_channels = config.enabled_runtime_backed_channel_ids();
+    let plugin_backed_channels = config.enabled_plugin_backed_channel_ids();
+    let outbound_only_channels = config.enabled_outbound_only_channel_ids();
     let suggested_channels = collect_onboarding_suggested_channels(config);
 
     OnboardingSuccessSummary {
@@ -156,7 +186,11 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
         web_search_provider,
         web_search_credential,
         memory_path: memory_path.map(str::to_owned),
+        channel_surface_summary,
         channels,
+        runtime_backed_channels,
+        plugin_backed_channels,
+        outbound_only_channels,
         suggested_channels,
         domain_outcomes,
         next_actions,
@@ -326,6 +360,14 @@ fn collect_onboarding_domain_outcomes(
 }
 
 fn collect_onboarding_suggested_channels(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+    let has_enabled_non_cli_channels = config
+        .enabled_channel_ids()
+        .into_iter()
+        .any(|channel_id| channel_id != CLI_CHANNEL_ID);
+    if has_enabled_non_cli_channels {
+        return Vec::new();
+    }
+
     let enabled_service_channel_ids = config.enabled_service_channel_ids();
     if !enabled_service_channel_ids.is_empty() {
         return Vec::new();
@@ -357,6 +399,54 @@ fn collect_onboarding_suggested_channels(config: &mvp::config::LoongClawConfig) 
         })
         .take(MAX_SUGGESTED_RUNTIME_CHANNELS)
         .collect()
+}
+
+fn collect_onboarding_channel_surface_summary(
+    config: &mvp::config::LoongClawConfig,
+) -> OnboardingChannelSurfaceSummary {
+    let inventory = mvp::channel::channel_inventory(config);
+
+    let total_surface_count = inventory.channel_surfaces.len();
+    let runtime_backed_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only_surface_count = inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
+
+    OnboardingChannelSurfaceSummary {
+        total_surface_count,
+        runtime_backed_surface_count,
+        config_backed_surface_count,
+        plugin_backed_surface_count,
+        catalog_only_surface_count,
+    }
 }
 
 fn build_onboarding_domain_outcome_items(
@@ -558,18 +648,12 @@ fn build_onboarding_saved_setup_items(summary: &OnboardingSuccessSummary) -> Vec
         });
     }
 
-    let channels = summary
-        .channels
-        .iter()
-        .filter(|channel| channel.as_str() != CLI_CHANNEL_ID)
-        .cloned()
-        .collect::<Vec<_>>();
-    if !channels.is_empty() {
-        items.push(TuiKeyValueSpec::Csv {
-            key: "channels".to_owned(),
-            values: channels,
-        });
-    }
+    items.push(TuiKeyValueSpec::Plain {
+        key: "channel surfaces".to_owned(),
+        value: summary.channel_surface_summary.render_compact(),
+    });
+
+    push_onboarding_enabled_channel_group_items(&mut items, summary);
 
     if !summary.suggested_channels.is_empty() {
         items.push(TuiKeyValueSpec::Csv {
@@ -579,6 +663,50 @@ fn build_onboarding_saved_setup_items(summary: &OnboardingSuccessSummary) -> Vec
     }
 
     items
+}
+
+fn push_onboarding_enabled_channel_group_items(
+    items: &mut Vec<TuiKeyValueSpec>,
+    summary: &OnboardingSuccessSummary,
+) {
+    if !summary.runtime_backed_channels.is_empty() {
+        items.push(TuiKeyValueSpec::Csv {
+            key: "runtime-backed channels".to_owned(),
+            values: summary.runtime_backed_channels.clone(),
+        });
+    }
+
+    if !summary.plugin_backed_channels.is_empty() {
+        items.push(TuiKeyValueSpec::Csv {
+            key: "plugin-backed channels".to_owned(),
+            values: summary.plugin_backed_channels.clone(),
+        });
+    }
+
+    if !summary.outbound_only_channels.is_empty() {
+        items.push(TuiKeyValueSpec::Csv {
+            key: "outbound-only channels".to_owned(),
+            values: summary.outbound_only_channels.clone(),
+        });
+    }
+
+    let remaining_channels = summary
+        .channels
+        .iter()
+        .filter(|channel| channel.as_str() != CLI_CHANNEL_ID)
+        .filter(|channel| {
+            !summary.runtime_backed_channels.contains(channel)
+                && !summary.plugin_backed_channels.contains(channel)
+                && !summary.outbound_only_channels.contains(channel)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !remaining_channels.is_empty() {
+        items.push(TuiKeyValueSpec::Csv {
+            key: "channels".to_owned(),
+            values: remaining_channels,
+        });
+    }
 }
 
 pub(crate) fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {

@@ -230,6 +230,7 @@ fn build_twitch_snapshot_for_account(
             .as_ref()
             .and_then(|_| http::redact_endpoint_status_url(resolved_api_base_url.as_str())),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -306,6 +307,7 @@ fn build_invalid_twitch_snapshot(
         enabled: false,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }

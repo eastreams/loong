@@ -1085,7 +1085,47 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
     let config = mvp::config::LoongClawConfig::default();
     let inventory = mvp::channel::channel_inventory(&config);
     let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+    let expected_summary = format!(
+        "summary total_surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
+        inventory.channel_surfaces.len(),
+        inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| {
+                surface.catalog.implementation_status
+                    == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+            })
+            .count(),
+        inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| {
+                surface.catalog.implementation_status
+                    == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+            })
+            .count(),
+        inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| {
+                surface.catalog.implementation_status
+                    == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+            })
+            .count(),
+        inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| {
+                surface.catalog.implementation_status
+                    == mvp::channel::ChannelCatalogImplementationStatus::Stub
+            })
+            .count()
+    );
 
+    assert!(rendered.contains(expected_summary.as_str()));
+    assert!(rendered.contains("runtime-backed channels:"));
+    assert!(rendered.contains("config-backed channels:"));
+    assert!(rendered.contains("plugin-backed channels:"));
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
         "Discord [discord] implementation_status=config_backed selection_order=40 selection_label=\"community server bot\" capabilities=multi_account,send aliases=discord-bot transport=discord_http_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
@@ -1204,6 +1244,35 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
     assert!(rendered.contains(
         "setup_hint=\"configure discord bot credentials in loongclaw.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned\""
     ));
+}
+
+#[test]
+fn render_channel_surfaces_text_groups_plugin_backed_channels_into_their_own_section() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+
+    let plugin_section = rendered
+        .split("plugin-backed channels:")
+        .nth(1)
+        .expect("plugin-backed channels section should exist");
+    let plugin_section = plugin_section
+        .split("catalog-only channels:")
+        .next()
+        .expect("plugin-backed section should precede catalog-only section");
+
+    assert!(
+        plugin_section.contains("Weixin [weixin]"),
+        "plugin-backed section should include weixin: {plugin_section}"
+    );
+    assert!(
+        plugin_section.contains("QQ Bot [qqbot]"),
+        "plugin-backed section should include qqbot: {plugin_section}"
+    );
+    assert!(
+        plugin_section.contains("OneBot [onebot]"),
+        "plugin-backed section should include onebot: {plugin_section}"
+    );
 }
 
 #[test]
@@ -2158,6 +2227,29 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     .collect::<Vec<_>>()
             }),
         Some(vec!["channels", "catalog_only_channels"])
+    );
+    assert_eq!(
+        encoded
+            .get("summary")
+            .and_then(|summary| summary.get("total_surface_count"))
+            .and_then(serde_json::Value::as_u64),
+        Some(inventory.channel_surfaces.len() as u64)
+    );
+    assert_eq!(
+        encoded
+            .get("summary")
+            .and_then(|summary| summary.get("plugin_backed_surface_count"))
+            .and_then(serde_json::Value::as_u64),
+        Some(
+            inventory
+                .channel_surfaces
+                .iter()
+                .filter(|surface| {
+                    surface.catalog.implementation_status
+                        == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+                })
+                .count() as u64
+        )
     );
     assert_eq!(
         encoded

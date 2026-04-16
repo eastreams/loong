@@ -23,7 +23,6 @@ concurrency:
 
 env:
   BIN_NAME: loong
-  LEGACY_BIN_NAME: loongclaw
   ANDROID_NDK_VERSION: "27.3.13750724"
   ANDROID_NDK_REVISION: "r27d"
   ANDROID_NDK_LINUX_SHA256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9"
@@ -336,7 +335,7 @@ jobs:
           export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
           export AR_aarch64_linux_android="${toolchain}/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
-          cargo build --release --locked -p loong --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target aarch64-linux-android
+          cargo build --release --locked -p loong --bin "${BIN_NAME}" --target aarch64-linux-android
 
   docs-build:
     needs: changes

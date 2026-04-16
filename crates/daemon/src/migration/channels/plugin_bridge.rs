@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use loongclaw_app as mvp;
 
-use super::{ChannelCheckLevel, ChannelPreflightCheck, ChannelPreview, build_channel_preview};
+use super::{
+    ChannelCheckLevel, ChannelDoctorCheck, ChannelPreflightCheck, ChannelPreview,
+    build_channel_preview,
+};
 use crate::migration::ImportSurfaceLevel;
 use crate::plugin_bridge_account_summary::{
     plugin_bridge_account_summary, plugin_bridge_snapshot_blocker_reason,
@@ -28,6 +31,26 @@ pub(super) fn collect_preflight_checks(
     surfaces
         .into_iter()
         .filter_map(build_preflight_check)
+        .collect()
+}
+
+pub(super) fn collect_doctor_checks(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<ChannelDoctorCheck> {
+    configured_plugin_bridge_surfaces(config)
+        .into_iter()
+        .filter_map(|surface| {
+            let discovery = surface.plugin_bridge_discovery.as_ref()?;
+            Some(ChannelDoctorCheck {
+                name: channel_surface_name(surface.catalog.id),
+                level: if surface_passes_preflight(&surface, discovery) {
+                    ChannelCheckLevel::Pass
+                } else {
+                    ChannelCheckLevel::Fail
+                },
+                detail: format!("plugin-backed · {}", surface_detail(&surface, discovery)),
+            })
+        })
         .collect()
 }
 

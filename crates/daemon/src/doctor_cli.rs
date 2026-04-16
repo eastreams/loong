@@ -3313,6 +3313,7 @@ mod tests {
             enabled: false,
             api_base_url: Some("https://api.telegram.org".to_owned()),
             notes: Vec::new(),
+            reserved_runtime_fields: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "event listener",
@@ -3779,6 +3780,7 @@ mod tests {
             enabled: true,
             api_base_url: None,
             notes: vec!["bridge_runtime_owner=external_plugin".to_owned()],
+            reserved_runtime_fields: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "send",
                 label: "bridge send",
@@ -4613,6 +4615,7 @@ mod tests {
             enabled: true,
             api_base_url: Some("https://api.telegram.org".to_owned()),
             notes: Vec::new(),
+            reserved_runtime_fields: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
@@ -4666,6 +4669,7 @@ mod tests {
             enabled: true,
             api_base_url: Some("https://open.feishu.cn".to_owned()),
             notes: Vec::new(),
+            reserved_runtime_fields: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
@@ -4720,6 +4724,7 @@ mod tests {
             enabled: true,
             api_base_url: Some("https://api.telegram.org".to_owned()),
             notes: Vec::new(),
+            reserved_runtime_fields: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
@@ -4781,6 +4786,7 @@ mod tests {
                 "webhook_callback_event_types=card.action.trigger".to_owned(),
                 "webhook_callback_response_mode=noop_json".to_owned(),
             ],
+            reserved_runtime_fields: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
@@ -4851,6 +4857,7 @@ mod tests {
                 "webhook_callback_event_types=card.action.trigger,card.action.trigger_v1".to_owned(),
                 "webhook_callback_response_mode=noop_json".to_owned(),
             ],
+            reserved_runtime_fields: Vec::new(),
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
@@ -4902,6 +4909,7 @@ mod tests {
                 enabled: true,
                 api_base_url: Some("https://api.telegram.org".to_owned()),
                 notes: vec!["configured_account_id=ops".to_owned()],
+                reserved_runtime_fields: Vec::new(),
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
@@ -4939,6 +4947,7 @@ mod tests {
                 enabled: true,
                 api_base_url: Some("https://api.telegram.org".to_owned()),
                 notes: vec!["configured_account_id=personal".to_owned()],
+                reserved_runtime_fields: Vec::new(),
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
@@ -4994,6 +5003,7 @@ mod tests {
                 enabled: true,
                 api_base_url: Some("https://api.telegram.org".to_owned()),
                 notes: vec!["default_account_source=fallback".to_owned()],
+                reserved_runtime_fields: Vec::new(),
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
@@ -5017,6 +5027,7 @@ mod tests {
                 enabled: true,
                 api_base_url: Some("https://api.telegram.org".to_owned()),
                 notes: vec!["default_account_source=fallback".to_owned()],
+                reserved_runtime_fields: Vec::new(),
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
