@@ -523,7 +523,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Ensure managed labels exist
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
 {indent(script_sync, " " * 12)}
@@ -548,7 +548,7 @@ jobs:
           sync-labels: true
 
       - name: Apply size label
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const issueNumber = context.payload.pull_request.number;
@@ -604,7 +604,7 @@ jobs:
       issues: write
     steps:
       - name: Sync issue surface label from form
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
 {indent(script_issue, " " * 12)}
