@@ -22,6 +22,7 @@ use crate::config::{
 
 use super::adapter::FeishuAdapter;
 use super::webhook::{FeishuParsedActionResponse, FeishuWebhookState, handle_feishu_parsed_action};
+use tokio::task::JoinSet;
 
 const HEADER_BIZ_RT: &str = "biz_rt";
 const HEADER_MESSAGE_ID: &str = "message_id";
@@ -186,14 +187,14 @@ pub(super) async fn run_feishu_websocket_channel(
 ) -> CliResult<()> {
     let mut adapter = FeishuAdapter::new(resolved)?;
     adapter.refresh_tenant_token().await?;
-    let state = FeishuWebhookState::new_with_resolved_path(
+    let state = Arc::new(FeishuWebhookState::new_with_resolved_path(
         config.clone(),
         resolved_path.to_path_buf(),
         resolved,
         adapter,
         kernel_ctx,
         runtime,
-    );
+    ));
     let client = FeishuClient::from_configs(resolved, &config.feishu_integration)?;
 
     #[allow(clippy::print_stdout)]
@@ -251,7 +252,7 @@ pub(super) async fn run_feishu_websocket_channel(
 }
 
 async fn run_feishu_websocket_session(
-    state: &FeishuWebhookState,
+    state: &Arc<FeishuWebhookState>,
     url: &str,
     ws_config: &FeishuWsEndpointClientConfig,
     stop: ChannelServeStopHandle,
@@ -277,15 +278,35 @@ async fn run_feishu_websocket_session(
         _ = stop.wait() => return Ok(()),
         result = connect_async(parsed_url.as_str()) => result,
     };
-    let (mut stream, _) =
-        connect_result.map_err(|error| format!("connect Feishu websocket failed: {error}"))?;
+    let (mut writer, mut reader) = connect_result
+        .map_err(|error| format!("connect Feishu websocket failed: {error}"))?
+        .0
+        .split();
+
     let mut ping_interval = tokio::time::interval(Duration::from_secs(ping_interval_s));
     ping_interval.tick().await;
+
     let mut fragments = FeishuWsFragments::default();
+    let mut tasks: JoinSet<Result<Vec<u8>, String>> = JoinSet::new();
 
     loop {
         tokio::select! {
             _ = stop.wait() => return Ok(()),
+            task = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(result) = task {
+                    match result {
+                        Ok(Ok(response_bytes)) => {
+                            writer.send(Message::Binary(response_bytes.into()))
+                                .await
+                                .map_err(|error| format!("send Feishu websocket response failed: {error}"))?;
+                        }
+                        Ok(Err(error)) => return Err(error),
+                        Err(error) => {
+                            return Err(format!("Feishu websocket background task failed: {error}"));
+                        }
+                    }
+                }
+            }
             _ = ping_interval.tick() => {
                 let ping_frame = FeishuWsFrame {
                     seq_id: 0,
@@ -305,12 +326,13 @@ async fn run_feishu_websocket_session(
                 ping_frame
                     .encode(&mut bytes)
                     .map_err(|error| format!("encode Feishu websocket ping frame failed: {error}"))?;
-                stream
+                writer
                     .send(Message::Binary(bytes.into()))
                     .await
                     .map_err(|error| format!("send Feishu websocket ping failed: {error}"))?;
             }
-            maybe_message = stream.next() => {
+
+            maybe_message = reader.next() => {
                 let message = match maybe_message {
                     Some(Ok(message)) => message,
                     Some(Err(error)) => {
@@ -321,7 +343,7 @@ async fn run_feishu_websocket_session(
 
                 match message {
                     Message::Binary(bytes) => {
-                        let mut frame = FeishuWsFrame::decode(bytes.as_ref())
+                        let frame = FeishuWsFrame::decode(bytes.as_ref())
                             .map_err(|error| format!("decode Feishu websocket frame failed: {error}"))?;
                         if frame.method == FRAME_TYPE_CONTROL {
                             if frame.header_value(HEADER_TYPE) == Some(MESSAGE_TYPE_PONG)
@@ -346,31 +368,49 @@ async fn run_feishu_websocket_session(
                             continue;
                         };
 
-                        let started_at = Instant::now();
-                        let payload = serde_json::from_slice::<Value>(&payload_bytes).map_err(|error| {
-                            format!("decode Feishu websocket event payload failed: {error}")
-                        })?;
-                        let response: FeishuWsOutboundResponse = match state.parse_websocket_payload(&payload) {
-                            Ok(parsed) => match handle_feishu_parsed_action(state, parsed).await {
-                                Ok(response) => build_ws_success_response(response, started_at.elapsed()),
-                                Err((status, message)) => build_ws_error_response(status, started_at.elapsed(), message),
-                            },
-                            Err(error) => build_ws_error_response(map_parse_error_status(&error), started_at.elapsed(), error),
-                        };
-                        let response_bytes = encode_ws_response_frame(&mut frame, &response)?;
-                        let deferred_updates = response.deferred_updates;
-                        stream
-                            .send(Message::Binary(response_bytes.into()))
-                            .await
-                            .map_err(|error| format!("send Feishu websocket response failed: {error}"))?;
-                        state.dispatch_deferred_updates(deferred_updates);
+                        let state = state.clone();
+                        tasks.spawn(handle_ws_data_frame(state, payload_bytes, frame));
                     }
                     Message::Close(_) => return Err("Feishu websocket closed by remote peer".to_owned()),
                     Message::Ping(_) | Message::Pong(_) | Message::Text(_) | Message::Frame(_) => {}
                 }
             }
+
         }
     }
+}
+
+/// Process a single Feishu websocket data frame in a background task.
+///
+/// This is extracted as a standalone `async fn` to keep the future size
+/// manageable when spawned onto `JoinSet`.  An inline `async move { … }` block
+/// would let the compiler inline the entire `handle_feishu_parsed_action` call
+/// tree into a single, enormous future that easily overflows the default tokio
+/// worker-thread stack.
+async fn handle_ws_data_frame(
+    state: Arc<FeishuWebhookState>,
+    payload_bytes: Vec<u8>,
+    mut frame: FeishuWsFrame,
+) -> Result<Vec<u8>, String> {
+    let started_at = Instant::now();
+    let payload = serde_json::from_slice::<Value>(&payload_bytes)
+        .map_err(|error| format!("decode Feishu websocket event payload failed: {error}"))?;
+
+    let response: FeishuWsOutboundResponse = match state.parse_websocket_payload(&payload) {
+        Ok(parsed) => match handle_feishu_parsed_action(&state, parsed).await {
+            Ok(response) => build_ws_success_response(response, started_at.elapsed()),
+            Err((status, message)) => {
+                build_ws_error_response(status, started_at.elapsed(), message)
+            }
+        },
+        Err(error) => {
+            build_ws_error_response(map_parse_error_status(&error), started_at.elapsed(), error)
+        }
+    };
+
+    let response_bytes = encode_ws_response_frame(&mut frame, &response)?;
+    state.dispatch_deferred_updates(response.deferred_updates);
+    Ok(response_bytes)
 }
 
 fn build_ws_success_response(
@@ -938,7 +978,9 @@ data: [DONE]\n\n",
             .await
             .expect("start runtime tracker"),
         );
-        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
+        let state = Arc::new(FeishuWebhookState::new(
+            config, &resolved, adapter, kernel_ctx, runtime,
+        ));
 
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1022,7 +1064,9 @@ data: [DONE]\n\n",
             .await
             .expect("start runtime tracker"),
         );
-        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
+        let state = Arc::new(FeishuWebhookState::new(
+            config, &resolved, adapter, kernel_ctx, runtime,
+        ));
 
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1117,7 +1161,9 @@ data: [DONE]\n\n",
             .await
             .expect("start runtime tracker"),
         );
-        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
+        let state = Arc::new(FeishuWebhookState::new(
+            config, &resolved, adapter, kernel_ctx, runtime,
+        ));
 
         let payload = json!({
             "header": {

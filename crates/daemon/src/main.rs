@@ -2,6 +2,8 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
 use loongclaw_daemon::*;
 
+const DAEMON_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
 /// Discard any unread input from the terminal's tty input queue.
 ///
 /// When a user pastes multi-line text at an interactive prompt, `read_line()`
@@ -81,8 +83,20 @@ fn check_legacy_home_migration() {
     }
 }
 
-#[tokio::main]
-async fn main() {
+// We use a manual runtime builder to set a larger thread stack size (16MB).
+// This avoids `STATUS_STACK_OVERFLOW` on Windows in debug builds, where
+// the default tokio worker stack size is often insufficient for deep
+// async future chains (e.g., Feishu websocket processing).
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(DAEMON_STACK_SIZE_BYTES)
+        .build()
+        .expect("build daemon tokio runtime");
+    runtime.block_on(async_main());
+}
+
+async fn async_main() {
     let _stdin_guard = StdinGuard;
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
