@@ -64,13 +64,13 @@ axum = { workspace = true, features = ["query"] }
 clap.workspace = true
 clap_complete = "4.5"
 dialoguer.workspace = true
-kernel = { package = "loongclaw-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
-loongclaw-bench = { version = "0.1.0-alpha.3", path = "../bench" }
-loongclaw-app = { version = "0.1.0-alpha.3", path = "../app", default-features = false }
+kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loongclaw-bench = { package = "loong-bench", version = "0.1.0-alpha.3", path = "../bench" }
+loongclaw-app = { package = "loong-app", version = "0.1.0-alpha.3", path = "../app", default-features = false }
 loongclaw-bridge-runtime = { version = "0.1.0-alpha.3", path = "../bridge-runtime" }
-loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-protocol = { version = "0.1.0-alpha.3", path = "../protocol" }
-loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec" }
+loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
+loongclaw-protocol = { package = "loong-protocol", version = "0.1.0-alpha.3", path = "../protocol" }
+loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
 futures-util.workspace = true
@@ -94,7 +94,7 @@ wait-timeout = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
-loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec", features = ["test-hooks"] }
+loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec", features = ["test-hooks"] }
 syn = { version = "2", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
 wat = "1"

@@ -9,9 +9,9 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-kernel = { version = "0.1.0-alpha.3", path = "../kernel" }
-loongclaw-protocol = { version = "0.1.0-alpha.3", path = "../protocol" }
+loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
+loongclaw-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loongclaw-protocol = { package = "loong-protocol", version = "0.1.0-alpha.3", path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true

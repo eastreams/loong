@@ -41,10 +41,10 @@ use send::send_channel_message_via_message_send_api;
 #[cfg(feature = "channel-feishu")]
 use webhook::{FeishuWebhookState, feishu_webhook_handler};
 
-#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
 const FEISHU_ALLOWLIST_ALL_SENTINEL: &str = "*";
 
-#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
 pub(in crate::channel) fn feishu_allowlist_allows_all<'a, I>(allowed_chat_ids: I) -> bool
 where
     I: IntoIterator<Item = &'a String>,
@@ -54,7 +54,7 @@ where
         .any(|chat_id| chat_id.trim() == FEISHU_ALLOWLIST_ALL_SENTINEL)
 }
 
-#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
 pub(in crate::channel) fn feishu_allowlist_allows_chat<'a, I>(
     allowed_chat_ids: I,
     chat_id: &str,

@@ -1,6 +1,7 @@
 #[cfg(test)]
 use crate::config::LoongClawConfig;
 
+pub(crate) mod access_policy;
 mod catalog;
 mod commands;
 mod core;
@@ -117,6 +118,13 @@ pub use registry::{
 };
 pub use runtime::state::{ChannelOperationRuntime, ChannelOperationRuntimeTracker};
 #[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
+#[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -129,12 +137,15 @@ pub use runtime::state::{ChannelOperationRuntime, ChannelOperationRuntimeTracker
 pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
 pub use sdk::{
     ChannelDescriptor, ChannelRuntimeKind, background_channel_runtime_descriptors,
-    channel_descriptor, is_background_channel_surface_enabled, service_channel_descriptors,
+    catalog_only_channel_descriptors, channel_descriptor, is_background_channel_surface_enabled,
+    outbound_only_channel_descriptors, plugin_backed_channel_descriptors,
+    runtime_backed_channel_descriptors, service_channel_descriptors,
 };
 pub(crate) use sdk::{collect_channel_validation_issues, enabled_channel_ids};
 pub use tlon_command::run_tlon_send;
 
 mod types;
+pub use access_policy::{ChannelAccessRestrictionMode, ChannelInboundAccessPolicySummary};
 pub use types::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
 #[cfg(any(
     feature = "channel-plugin-bridge",
