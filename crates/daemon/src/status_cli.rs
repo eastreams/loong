@@ -322,6 +322,16 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let active_provider_label_option = runtime.active_provider_label.as_deref();
     let active_provider_label = active_provider_label_option.unwrap_or("-");
     let capability_snapshot_sha256 = runtime.capability_snapshot_sha256.as_str();
+    let visible_direct_tools = if runtime.visible_direct_tool_names.is_empty() {
+        "-".to_owned()
+    } else {
+        runtime.visible_direct_tool_names.join(",")
+    };
+    let hidden_tool_surfaces = if runtime.hidden_tool_surface_ids.is_empty() {
+        "-".to_owned()
+    } else {
+        runtime.hidden_tool_surface_ids.join(",")
+    };
     let tool_calling = &runtime.tool_calling;
     let mut sections = Vec::new();
 
@@ -441,6 +451,14 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "visible tools".to_owned(),
                 value: runtime.visible_tool_count.to_string(),
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "direct tools".to_owned(),
+                value: visible_direct_tools,
+            },
+            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "hidden surfaces".to_owned(),
+                value: hidden_tool_surfaces,
             },
         ],
     });
@@ -745,6 +763,8 @@ mod tests {
                 enabled_plugin_backed_channel_ids: Vec::new(),
                 enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["session".to_owned(), "web".to_owned()],
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
@@ -809,10 +829,16 @@ mod tests {
         );
         assert!(rendered.contains("runtime posture"));
         assert!(rendered.contains("[OK] tool calling"));
-        assert!(rendered.contains("configured channels"));
-        assert!(rendered.contains("enabled channels"));
-        assert!(rendered.contains("service enabled ids"));
         assert!(rendered.contains("saved runtime"));
+        assert!(rendered.contains("gateway summary"));
+        assert!(rendered.contains("visible tools: 4"));
+        assert!(rendered.contains("direct tools: read,exec"));
+        assert!(rendered.contains("hidden surfaces: session,web"));
+        assert!(rendered.contains("channel and recovery detail"));
+        assert!(rendered.contains("enabled channels: telegram"));
+        assert!(rendered.contains("service enabled ids: telegram"));
+        assert!(rendered.contains("capability snapshot: abc123"));
+        assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
         assert!(rendered.contains("deep dives"));
         assert!(rendered.contains("- recipe: loong gateway status"));
     }
