@@ -20,7 +20,7 @@ release review. It is not part of the primary public release trail.
   repository's current architecture boundaries
 
 ## Summary
-- Generated at: 2026-04-17T06:03:03Z
+- Generated at: 2026-04-17T06:12:36Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/support/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -42,13 +42,13 @@ release review. It is not part of the primary public release trail.
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6725 | 7300 | 575 | 95 | 160 | 65 | 92.1% | WATCH | 6936 | -3.0% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 2113 | 6400 | 4287 | 0 | 110 | 110 | 33.0% | HEALTHY | 1779 | 18.8% | BREACH | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 9977 | 11200 | 1223 | 61 | 120 | 59 | 89.1% | WATCH | 10831 | -7.9% | PASS | 98 |
-| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14323 | 15000 | 677 | 45 | 70 | 25 | 95.5% | TIGHT | 14472 | -1.0% | PASS | 54 |
+| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14430 | 15000 | 570 | 45 | 70 | 25 | 96.2% | TIGHT | 14472 | -0.3% | PASS | 54 |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5972 | 6500 | 528 | 178 | 210 | 32 | 91.9% | WATCH | 6324 | -5.6% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9238 | 9800 | 562 | 206 | 250 | 44 | 94.3% | WATCH | 9519 | -3.0% | PASS | 228 |
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.6%), memory_mod (100.0%), channel_registry (96.4%), tools_mod (95.5%)
+- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.6%), memory_mod (100.0%), channel_registry (96.4%), tools_mod (96.2%)
 - WATCH hotspots (>=85% and <95% of any tracked budget): acp_manager (86.0%), channel_config (91.0%), chat_runtime (92.1%), turn_coordinator (89.1%), daemon_lib (91.9%), onboard_cli (94.3%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
@@ -96,7 +96,7 @@ release review. It is not part of the primary public release trail.
 <!-- arch-hotspot key=chat_runtime lines=6725 functions=95 -->
 <!-- arch-hotspot key=channel_mod lines=2113 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=9977 functions=61 -->
-<!-- arch-hotspot key=tools_mod lines=14323 functions=45 -->
+<!-- arch-hotspot key=tools_mod lines=14430 functions=45 -->
 <!-- arch-hotspot key=daemon_lib lines=5972 functions=178 -->
 <!-- arch-hotspot key=onboard_cli lines=9238 functions=206 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
