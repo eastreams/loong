@@ -1007,6 +1007,15 @@ pub struct ControlPlanePairingRequestRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneApprovedDeviceSummary {
+    pub device_id: String,
+    pub public_key: String,
+    pub role: String,
+    pub approved_scopes: BTreeSet<String>,
+    pub issued_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlPlanePairingConnectDecision {
     Authorized,
     PairingRequired {
@@ -1208,6 +1217,30 @@ impl ControlPlanePairingRegistry {
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .len()
+    }
+
+    pub fn list_approved_devices(&self, limit: usize) -> Vec<ControlPlaneApprovedDeviceSummary> {
+        let mut approved_devices = self
+            .approved_devices
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        approved_devices.sort_by(|left, right| {
+            right
+                .approved_at_ms
+                .cmp(&left.approved_at_ms)
+                .then_with(|| left.device_id.cmp(&right.device_id))
+        });
+        approved_devices.truncate(limit.max(1));
+
+        let mut summaries = Vec::with_capacity(approved_devices.len());
+        for approved_device in approved_devices {
+            let summary = approved_device_summary_from_record(&approved_device);
+            summaries.push(summary);
+        }
+        summaries
     }
 
     pub fn last_activity_ms(&self) -> Option<u64> {
@@ -1505,6 +1538,18 @@ fn approved_device_requires_pairing(
     }
     let scopes_within_approved = requested_scopes.is_subset(&approved.approved_scopes);
     !scopes_within_approved
+}
+
+fn approved_device_summary_from_record(
+    approved_device: &ControlPlaneApprovedDeviceRecord,
+) -> ControlPlaneApprovedDeviceSummary {
+    ControlPlaneApprovedDeviceSummary {
+        device_id: approved_device.device_id.clone(),
+        public_key: approved_device.public_key.clone(),
+        role: approved_device.role.clone(),
+        approved_scopes: approved_device.approved_scopes.clone(),
+        issued_at_ms: approved_device.approved_at_ms,
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2583,6 +2628,63 @@ mod tests {
         assert_eq!(
             approved_last_activity,
             approved
+                .resolved_at_ms
+                .expect("approved request should resolve")
+        );
+    }
+
+    #[test]
+    fn pairing_registry_lists_approved_devices_in_reverse_chronological_order() {
+        let registry = ControlPlanePairingRegistry::new();
+        let first_scopes = BTreeSet::from(["operator.read".to_owned()]);
+        let second_scopes = BTreeSet::from(["operator.write".to_owned()]);
+
+        let first_request = registry
+            .evaluate_connect(
+                "device-a",
+                "cli-a",
+                "public-key-a",
+                "operator",
+                &first_scopes,
+                None,
+            )
+            .expect("evaluate first connect");
+        let first_request = match first_request {
+            ControlPlanePairingConnectDecision::PairingRequired { request, .. } => request,
+            other => panic!("expected first pairing request, got {other:?}"),
+        };
+        let _first_approved = registry
+            .resolve_request(&first_request.pairing_request_id, true)
+            .expect("approve first request")
+            .expect("first request should exist");
+
+        let second_request = registry
+            .evaluate_connect(
+                "device-b",
+                "cli-b",
+                "public-key-b",
+                "operator",
+                &second_scopes,
+                None,
+            )
+            .expect("evaluate second connect");
+        let second_request = match second_request {
+            ControlPlanePairingConnectDecision::PairingRequired { request, .. } => request,
+            other => panic!("expected second pairing request, got {other:?}"),
+        };
+        let second_approved = registry
+            .resolve_request(&second_request.pairing_request_id, true)
+            .expect("approve second request")
+            .expect("second request should exist");
+
+        let summaries = registry.list_approved_devices(10);
+
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].device_id, "device-b");
+        assert_eq!(summaries[0].approved_scopes, second_scopes);
+        assert_eq!(
+            summaries[0].issued_at_ms,
+            second_approved
                 .resolved_at_ms
                 .expect("approved request should resolve")
         );
