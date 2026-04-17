@@ -106,24 +106,16 @@ pub use registry::{
     WEBHOOK_COMMAND_FAMILY_DESCRIPTOR, WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR,
     WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_RUNTIME_COMMAND_DESCRIPTOR, WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WHATSAPP_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
-    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
-    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
-    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
-    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
-    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
-    validate_plugin_channel_bridge_manifest,
+    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+    WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
+    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
+    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
+    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
+    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor, validate_plugin_channel_bridge_manifest,
 };
 pub use runtime::state::{ChannelOperationRuntime, ChannelOperationRuntimeTracker};
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
-pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
@@ -135,6 +127,13 @@ pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channe
     feature = "channel-webhook"
 ))]
 pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channel_session_target};
 pub use sdk::{
     ChannelDescriptor, ChannelRuntimeKind, background_channel_runtime_descriptors,
     catalog_only_channel_descriptors, channel_descriptor, is_background_channel_surface_enabled,
@@ -1816,7 +1815,10 @@ mod tests {
         assert_eq!(resolved.channel_id, "telegram");
         assert_eq!(resolved.account_id.as_deref(), Some("ops-bot"));
         assert_eq!(resolved.session_shape, "telegram_thread");
-        assert_eq!(resolved.target_kind, ChannelOutboundTargetKind::Conversation);
+        assert_eq!(
+            resolved.target_kind,
+            ChannelOutboundTargetKind::Conversation
+        );
         assert_eq!(resolved.target_id, "123:42");
         assert_eq!(resolved.conversation_id.as_deref(), Some("123"));
         assert_eq!(resolved.thread_id.as_deref(), Some("42"));

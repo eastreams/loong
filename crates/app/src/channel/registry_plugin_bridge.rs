@@ -769,6 +769,9 @@ fn discovered_plugin_match_from_descriptor(
     let setup_details = plugin_bridge_setup_details(&descriptor.manifest);
     let manifest_status = validation.status;
     let status = discovered_plugin_bridge_status_from_validation(manifest_status, channel_bridge);
+    let mut issues = validation.issues;
+    let runtime_metadata_issues = channel_bridge_runtime_metadata_issues(channel_bridge);
+    issues.extend(runtime_metadata_issues);
 
     ChannelDiscoveredPluginBridge {
         plugin_id: descriptor.manifest.plugin_id.clone(),
@@ -783,7 +786,7 @@ fn discovered_plugin_match_from_descriptor(
         runtime_contract,
         runtime_operations,
         status,
-        issues: validation.issues,
+        issues,
         missing_fields,
         required_env_vars: setup_details.required_env_vars,
         recommended_env_vars: setup_details.recommended_env_vars,
@@ -932,6 +935,16 @@ fn channel_bridge_runtime_operations(
     };
 
     channel_bridge.runtime_operations.clone()
+}
+
+fn channel_bridge_runtime_metadata_issues(
+    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+) -> Vec<String> {
+    let Some(channel_bridge) = channel_bridge else {
+        return Vec::new();
+    };
+
+    channel_bridge.runtime_metadata_issues.clone()
 }
 
 fn channel_bridge_missing_fields(

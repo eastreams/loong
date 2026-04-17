@@ -1,16 +1,16 @@
 use crate::mvp;
 use crate::{
     ChannelSendCliSpec, ChannelServeCliSpec, run_dingtalk_send_cli_impl, run_discord_send_cli_impl,
-    run_email_send_cli_impl, run_feishu_send_cli_impl, run_feishu_serve_cli_impl,
-    run_google_chat_send_cli_impl, run_imessage_send_cli_impl, run_irc_send_cli_impl,
-    run_line_send_cli_impl, run_matrix_send_cli_impl, run_matrix_serve_cli_impl,
-    run_mattermost_send_cli_impl, run_nextcloud_talk_send_cli_impl, run_nostr_send_cli_impl,
-    run_onebot_send_cli_impl, run_onebot_serve_cli_impl, run_qqbot_send_cli_impl,
-    run_qqbot_serve_cli_impl, run_signal_send_cli_impl, run_slack_send_cli_impl,
-    run_synology_chat_send_cli_impl, run_teams_send_cli_impl, run_telegram_send_cli_impl,
-    run_telegram_serve_cli_impl, run_twitch_send_cli_impl, run_webhook_send_cli_impl,
-    run_wecom_send_cli_impl, run_wecom_serve_cli_impl, run_weixin_send_cli_impl,
-    run_weixin_serve_cli_impl, run_whatsapp_send_cli_impl, run_whatsapp_serve_cli_impl,
+    run_email_send_cli_impl, run_feishu_send_cli_impl, run_google_chat_send_cli_impl,
+    run_imessage_send_cli_impl, run_irc_send_cli_impl, run_line_send_cli_impl,
+    run_matrix_send_cli_impl, run_matrix_serve_cli_impl, run_mattermost_send_cli_impl,
+    run_nextcloud_talk_send_cli_impl, run_nostr_send_cli_impl, run_onebot_send_cli_impl,
+    run_onebot_serve_cli_impl, run_qqbot_send_cli_impl, run_qqbot_serve_cli_impl,
+    run_signal_send_cli_impl, run_slack_send_cli_impl, run_synology_chat_send_cli_impl,
+    run_teams_send_cli_impl, run_telegram_send_cli_impl, run_telegram_serve_cli_impl,
+    run_twitch_send_cli_impl, run_webhook_send_cli_impl, run_wecom_send_cli_impl,
+    run_wecom_serve_cli_impl, run_weixin_send_cli_impl, run_weixin_serve_cli_impl,
+    run_whatsapp_send_cli_impl,
 };
 
 pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
@@ -138,11 +138,6 @@ pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     run: run_telegram_serve_cli_impl,
 };
 
-pub const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_feishu_serve_cli_impl,
-};
-
 pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_matrix_serve_cli_impl,
@@ -151,11 +146,6 @@ pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
 pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_wecom_serve_cli_impl,
-};
-
-pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_whatsapp_serve_cli_impl,
 };
 
 pub const WEIXIN_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {

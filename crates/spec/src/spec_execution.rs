@@ -3197,6 +3197,7 @@ mod plugin_metadata_tests {
                     account_scope: Some("multi_account".to_owned()),
                     runtime_contract: Some("loongclaw_channel_bridge_v1".to_owned()),
                     runtime_operations: vec!["send_message".to_owned(), "receive_batch".to_owned()],
+                    runtime_metadata_issues: Vec::new(),
                     readiness: kernel::PluginChannelBridgeReadiness {
                         ready: true,
                         missing_fields: Vec::new(),
