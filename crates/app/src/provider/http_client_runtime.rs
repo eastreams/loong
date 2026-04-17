@@ -63,32 +63,21 @@ fn with_provider_http_client_runtime_metrics<R>(
     run(&mut guard)
 }
 
-fn load_cached_provider_http_client(
+fn load_or_build_provider_http_client(
     cache_key: ProviderHttpClientCacheKey,
-) -> Option<reqwest::Client> {
-    with_provider_http_client_cache(|cache| {
-        let cached_client = cache.entries.get(&cache_key)?;
-        let cloned_client = cached_client.clone();
-
-        Some(cloned_client)
-    })
-}
-
-fn store_provider_http_client(
-    cache_key: ProviderHttpClientCacheKey,
-    built_client: reqwest::Client,
-) -> reqwest::Client {
+) -> CliResult<reqwest::Client> {
     with_provider_http_client_cache(|cache| {
         if let Some(cached_client) = cache.entries.get(&cache_key) {
-            let cloned_client = cached_client.clone();
-
-            return cloned_client;
+            record_provider_http_client_cache_hit();
+            return Ok(cached_client.clone());
         }
 
+        record_provider_http_client_cache_miss();
+        let built_client = build_provider_http_client(cache_key)?;
         let cached_client = built_client.clone();
         cache.entries.insert(cache_key, cached_client);
 
-        built_client
+        Ok(built_client)
     })
 }
 
@@ -110,16 +99,7 @@ pub(super) fn build_http_client(
 ) -> CliResult<reqwest::Client> {
     let cache_key = ProviderHttpClientCacheKey::from_request_policy(request_policy);
 
-    if let Some(cached_client) = load_cached_provider_http_client(cache_key) {
-        record_provider_http_client_cache_hit();
-        return Ok(cached_client);
-    }
-
-    record_provider_http_client_cache_miss();
-    let built_client = build_provider_http_client(cache_key)?;
-    let cached_client = store_provider_http_client(cache_key, built_client);
-
-    Ok(cached_client)
+    load_or_build_provider_http_client(cache_key)
 }
 
 static PROVIDER_HTTP_CLIENT_CACHE: OnceLock<Mutex<ProviderHttpClientCache>> = OnceLock::new();

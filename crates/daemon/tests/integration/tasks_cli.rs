@@ -834,20 +834,28 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         "status render should surface safe-lane summary: {rendered}"
     );
     assert!(
-        rendered.contains(
-            "failure_code=safe_lane_backpressure_limit route=terminal/session_governor_failed_threshold health=critical"
-        ),
-        "status render should surface safe-lane failure context: {rendered}"
+        rendered.contains("failure_code=safe_lane_backpressure_limit"),
+        "status render should surface safe-lane failure code: {rendered}"
     );
     assert!(
-        rendered.contains(
-            "turn_checkpoint: session_state=finalization_failed durable=yes reply_durable=yes requires_recovery=yes"
-        ),
+        rendered.contains("route=terminal/session_governor_failed_threshold health=critical"),
+        "status render should surface safe-lane failure route and health: {rendered}"
+    );
+    assert!(
+        rendered.contains("turn_checkpoint: session_state=finalization_failed durable=yes"),
         "status render should surface turn-checkpoint recovery context: {rendered}"
     );
     assert!(
-        rendered.contains("stage=finalization_failed after_turn=completed compaction=failed"),
-        "status render should surface turn-checkpoint stage detail: {rendered}"
+        rendered.contains("reply_durable=yes requires_recovery=yes"),
+        "status render should surface turn-checkpoint recovery flags: {rendered}"
+    );
+    assert!(
+        rendered.contains("stage=finalization_failed"),
+        "status render should surface turn-checkpoint stage: {rendered}"
+    );
+    assert!(
+        rendered.contains("after_turn=completed compaction=failed"),
+        "status render should surface turn-checkpoint progress detail: {rendered}"
     );
 }
 

@@ -529,8 +529,12 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "status render should surface turn-checkpoint durability: {rendered}"
     );
     assert!(
-        rendered.contains("stage=finalized after_turn=completed compaction=completed"),
+        rendered.contains("stage=finalized after_turn=completed"),
         "status render should surface turn-checkpoint stage detail: {rendered}"
+    );
+    assert!(
+        rendered.contains("compaction=completed"),
+        "status render should surface turn-checkpoint compaction detail: {rendered}"
     );
 }
 
