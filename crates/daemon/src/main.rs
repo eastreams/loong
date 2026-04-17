@@ -87,17 +87,26 @@ fn check_legacy_home_migration() {
 // This avoids `STATUS_STACK_OVERFLOW` on Windows in debug builds, where
 // the default tokio worker stack size is often insufficient for deep
 // async future chains (e.g., Feishu websocket processing).
-fn main() {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+fn main() -> std::process::ExitCode {
+    let _stdin_guard = StdinGuard;
+    let runtime_result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(DAEMON_STACK_SIZE_BYTES)
-        .build()
-        .expect("build daemon tokio runtime");
-    runtime.block_on(async_main());
+        .build();
+    let runtime = match runtime_result {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("error: failed to build daemon tokio runtime: {error}");
+            }
+            return std::process::ExitCode::from(2);
+        }
+    };
+    runtime.block_on(async_main())
 }
 
-async fn async_main() {
-    let _stdin_guard = StdinGuard;
+async fn async_main() -> std::process::ExitCode {
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
     loongclaw_daemon::make_env_compatible();
@@ -1204,9 +1213,10 @@ async fn async_main() {
         {
             eprintln!("error: {error}");
         }
-        flush_stdin();
-        std::process::exit(2);
+        return std::process::ExitCode::from(2);
     }
+
+    std::process::ExitCode::SUCCESS
 }
 
 #[cfg(test)]

@@ -287,7 +287,7 @@ async fn run_feishu_websocket_session(
     ping_interval.tick().await;
 
     let mut fragments = FeishuWsFragments::default();
-    let mut tasks: JoinSet<Result<Vec<u8>, String>> = JoinSet::new();
+    let mut tasks: JoinSet<Result<FeishuWsCompletedTask, String>> = JoinSet::new();
 
     loop {
         tokio::select! {
@@ -295,10 +295,13 @@ async fn run_feishu_websocket_session(
             task = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(result) = task {
                     match result {
-                        Ok(Ok(response_bytes)) => {
+                        Ok(Ok(completed_task)) => {
+                            let response_bytes = completed_task.response_bytes;
+                            let deferred_updates = completed_task.deferred_updates;
                             writer.send(Message::Binary(response_bytes.into()))
                                 .await
                                 .map_err(|error| format!("send Feishu websocket response failed: {error}"))?;
+                            state.dispatch_deferred_updates(deferred_updates);
                         }
                         Ok(Err(error)) => return Err(error),
                         Err(error) => {
@@ -391,7 +394,7 @@ async fn handle_ws_data_frame(
     state: Arc<FeishuWebhookState>,
     payload_bytes: Vec<u8>,
     mut frame: FeishuWsFrame,
-) -> Result<Vec<u8>, String> {
+) -> Result<FeishuWsCompletedTask, String> {
     let started_at = Instant::now();
     let payload = serde_json::from_slice::<Value>(&payload_bytes)
         .map_err(|error| format!("decode Feishu websocket event payload failed: {error}"))?;
@@ -409,8 +412,10 @@ async fn handle_ws_data_frame(
     };
 
     let response_bytes = encode_ws_response_frame(&mut frame, &response)?;
-    state.dispatch_deferred_updates(response.deferred_updates);
-    Ok(response_bytes)
+    Ok(FeishuWsCompletedTask {
+        response_bytes,
+        deferred_updates: response.deferred_updates,
+    })
 }
 
 fn build_ws_success_response(
@@ -436,6 +441,11 @@ fn build_ws_error_response(
         deferred_updates: Vec::new(),
         biz_rt_ms: elapsed.as_millis() as u64,
     }
+}
+
+struct FeishuWsCompletedTask {
+    response_bytes: Vec<u8>,
+    deferred_updates: Vec<crate::tools::DeferredFeishuCardUpdate>,
 }
 
 struct FeishuWsOutboundResponse {
@@ -668,6 +678,31 @@ data: [DONE]\n\n",
         spawn_mock_http_server(router).await
     }
 
+    async fn spawn_mock_provider_delayed_success_server(
+        requests: Arc<Mutex<Vec<MockRequest>>>,
+        response_delay: Duration,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let state = MockServerState { requests };
+        let router = Router::new().route(
+            "/v1/chat/completions",
+            post({
+                let state = state.clone();
+                move |request| {
+                    let state = state.clone();
+                    async move {
+                        let request_body = record_request(State(state), request).await;
+                        tokio::time::sleep(response_delay).await;
+                        mock_provider_success_response(
+                            request_body.as_str(),
+                            MOCK_PROVIDER_MARKDOWN_REPLY,
+                        )
+                    }
+                }
+            }),
+        );
+        spawn_mock_http_server(router).await
+    }
+
     async fn spawn_mock_feishu_api_server(
         requests: Arc<Mutex<Vec<MockRequest>>>,
         reply_message_id: &'static str,
@@ -825,6 +860,97 @@ data: [DONE]\n\n",
                             .await
                             .map_err(|error| format!("close websocket server failed: {error}"))?;
                         return Ok(response);
+                    }
+                    Message::Ping(_) | Message::Pong(_) | Message::Text(_) | Message::Frame(_) => {}
+                    Message::Close(_) => {
+                        return Err("websocket client closed before sending a reply".to_owned());
+                    }
+                }
+            }
+        });
+        (format!("ws://{address}/events?service_id=42"), handle)
+    }
+
+    struct MockWsObservedResponse {
+        saw_ping_before_response: bool,
+        response_frame: FeishuWsFrame,
+    }
+
+    async fn spawn_mock_ws_server_tracking_ping(
+        payload: Value,
+    ) -> (
+        String,
+        tokio::task::JoinHandle<CliResult<MockWsObservedResponse>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock websocket server");
+        let address = listener.local_addr().expect("mock websocket server addr");
+        let handle = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.map_err(|error| error.to_string())?;
+            let mut stream = accept_async(socket)
+                .await
+                .map_err(|error| format!("accept websocket failed: {error}"))?;
+            let request_frame = FeishuWsFrame {
+                seq_id: 1,
+                log_id: 1,
+                service: 42,
+                method: FRAME_TYPE_DATA,
+                headers: vec![
+                    FeishuWsHeader {
+                        key: HEADER_MESSAGE_ID.to_owned(),
+                        value: "evt_ws_inbound_1".to_owned(),
+                    },
+                    FeishuWsHeader {
+                        key: HEADER_SEQ.to_owned(),
+                        value: "0".to_owned(),
+                    },
+                    FeishuWsHeader {
+                        key: HEADER_SUM.to_owned(),
+                        value: "1".to_owned(),
+                    },
+                ],
+                payload_encoding: "json".to_owned(),
+                payload_type: "event".to_owned(),
+                payload: serde_json::to_vec(&payload)
+                    .map_err(|error| format!("encode websocket payload failed: {error}"))?,
+                log_id_new: String::new(),
+            };
+            let mut bytes = Vec::new();
+            request_frame
+                .encode(&mut bytes)
+                .map_err(|error| format!("encode websocket frame failed: {error}"))?;
+            stream
+                .send(Message::Binary(bytes.into()))
+                .await
+                .map_err(|error| format!("send websocket frame failed: {error}"))?;
+
+            let mut saw_ping_before_response = false;
+            loop {
+                let message = stream
+                    .next()
+                    .await
+                    .ok_or_else(|| "websocket client disconnected before replying".to_owned())?
+                    .map_err(|error| format!("read websocket reply failed: {error}"))?;
+                match message {
+                    Message::Binary(bytes) => {
+                        let frame = FeishuWsFrame::decode(bytes.as_ref()).map_err(|error| {
+                            format!("decode websocket reply frame failed: {error}")
+                        })?;
+                        let is_control_ping = frame.method == FRAME_TYPE_CONTROL
+                            && frame.header_value(HEADER_TYPE) == Some(MESSAGE_TYPE_PING);
+                        if is_control_ping {
+                            saw_ping_before_response = true;
+                            continue;
+                        }
+                        stream
+                            .close(None)
+                            .await
+                            .map_err(|error| format!("close websocket server failed: {error}"))?;
+                        return Ok(MockWsObservedResponse {
+                            saw_ping_before_response,
+                            response_frame: frame,
+                        });
                     }
                     Message::Ping(_) | Message::Pong(_) | Message::Text(_) | Message::Frame(_) => {}
                     Message::Close(_) => {
@@ -1117,6 +1243,113 @@ data: [DONE]\n\n",
 
         release_socket.notify_waiters();
         let _ = server.await;
+        provider_server.abort();
+        feishu_server.abort();
+    }
+
+    #[test]
+    fn feishu_websocket_session_keeps_pinging_during_long_provider_turn() {
+        run_feishu_websocket_test_on_large_stack(
+            "feishu-websocket-ping-during-turn",
+            || async move {
+                feishu_websocket_session_keeps_pinging_during_long_provider_turn_impl().await;
+            },
+        );
+    }
+
+    async fn feishu_websocket_session_keeps_pinging_during_long_provider_turn_impl() {
+        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let response_delay = Duration::from_millis(2_200);
+        let (provider_base_url, provider_server) =
+            spawn_mock_provider_delayed_success_server(provider_requests.clone(), response_delay)
+                .await;
+        let (feishu_base_url, feishu_server) =
+            spawn_mock_feishu_api_server(feishu_requests.clone(), "om_reply_ws_ping_1").await;
+
+        let config = test_websocket_config(&provider_base_url, &feishu_base_url);
+        let resolved = config
+            .feishu
+            .resolve_account(None)
+            .expect("resolve websocket feishu account");
+        let mut adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
+        adapter
+            .refresh_tenant_token()
+            .await
+            .expect("refresh tenant token before websocket ping test");
+        let kernel_ctx = bootstrap_test_kernel_context(
+            "feishu-websocket-ping-during-turn-test",
+            DEFAULT_TOKEN_TTL_S,
+        )
+        .expect("bootstrap kernel context");
+        let runtime = Arc::new(
+            ChannelOperationRuntimeTracker::start(
+                ChannelPlatform::Feishu,
+                "serve",
+                resolved.account.id.as_str(),
+                resolved.account.label.as_str(),
+            )
+            .await
+            .expect("start runtime tracker"),
+        );
+        let state = Arc::new(FeishuWebhookState::new(
+            config, &resolved, adapter, kernel_ctx, runtime,
+        ));
+
+        let payload = json!({
+            "header": {
+                "event_id": "evt_ws_inbound_ping_1",
+                "event_type": "im.message.receive_v1"
+            },
+            "event": {
+                "sender": {
+                    "sender_type": "user",
+                    "sender_id": {
+                        "open_id": "ou_sender_ws_ping_1"
+                    }
+                },
+                "message": {
+                    "chat_id": "oc_demo",
+                    "message_id": "om_inbound_ws_ping_1",
+                    "message_type": "text",
+                    "content": "{\"text\":\"hello over websocket with delayed provider\"}"
+                }
+            }
+        });
+        let (url, ws_server) = spawn_mock_ws_server_tracking_ping(payload).await;
+
+        let session_error = run_feishu_websocket_session(
+            &state,
+            url.as_str(),
+            &FeishuWsEndpointClientConfig {
+                ping_interval_s: Some(1),
+                ..FeishuWsEndpointClientConfig::default()
+            },
+            ChannelServeStopHandle::new(),
+        )
+        .await
+        .expect_err("session should end after the mock server closes");
+        assert!(
+            session_error.contains("closed by remote peer"),
+            "unexpected websocket session result: {session_error}"
+        );
+
+        let observed = ws_server
+            .await
+            .expect("join websocket server")
+            .expect("capture websocket response frame");
+        assert!(
+            observed.saw_ping_before_response,
+            "client should keep sending ping frames while a provider turn is still running"
+        );
+
+        let response_envelope = serde_json::from_slice::<Value>(&observed.response_frame.payload)
+            .expect("response envelope");
+        assert_eq!(response_envelope["code"], json!(200));
+
+        let provider_requests = provider_requests.lock().await.clone();
+        assert_eq!(provider_requests.len(), 1);
+
         provider_server.abort();
         feishu_server.abort();
     }
