@@ -186,6 +186,50 @@ fn bridge_setup_with_docs_and_remediation(
 }
 
 #[test]
+fn metadata_only_channel_bridge_manifest_is_discovery_ready_without_runtime_metadata() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let manifest = sample_channel_bridge_manifest_with_metadata(
+        Some("weixin"),
+        Some("channel"),
+        BTreeMap::from([
+            ("adapter_family".to_owned(), "channel-bridge".to_owned()),
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            ("target_contract".to_owned(), "weixin_reply_loop".to_owned()),
+        ]),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-metadata-only", &manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+    let plugin = discovery.plugins.first().expect("discovered plugin");
+
+    assert_eq!(
+        plugin.status,
+        ChannelDiscoveredPluginBridgeStatus::CompatibleReady
+    );
+    assert_eq!(discovery.compatible_plugins, 1);
+    assert_eq!(
+        discovery.selection_status,
+        Some(ChannelPluginBridgeSelectionStatus::SingleCompatibleMatch)
+    );
+}
+
+#[test]
 fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
     let telegram = resolve_channel_catalog_entry("telegram").expect("telegram entry");
     let weixin = resolve_channel_catalog_entry("weixin").expect("weixin entry");
