@@ -93,6 +93,7 @@ impl HarnessAdapter for EmbeddedAgentHarness {
             channel_id: None,
             account_id: None,
             conversation_id: None,
+            participant_id: None,
             thread_id: None,
             metadata: payload.metadata,
             acp: payload.acp,

@@ -2399,7 +2399,8 @@ async fn turn_submit(
         };
         let turn_service =
             crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
-                .with_acp_manager(acp_manager);
+                .with_acp_manager(acp_manager)
+                .without_runtime_environment_init();
         let turn_options = crate::mvp::agent_runtime::TurnExecutionOptions {
             event_sink: Some(&event_forwarder),
             ..Default::default()

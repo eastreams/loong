@@ -108,6 +108,7 @@ pub struct TurnExecutionService {
     config: crate::config::LoongClawConfig,
     kernel_ctx: Option<crate::KernelContext>,
     acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    initialize_runtime_environment: bool,
 }
 
 pub struct TurnExecutionOptions<'a> {
@@ -226,8 +227,8 @@ impl<'a> RuntimeTurnExecutionService<'a> {
 
             let (effective_ingress, effective_provenance) =
                 effective_turn_context(ingress, provenance);
-            let output_text =
-                crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_and_acp_manager(
+            let turn_outcome =
+                crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
                     runtime,
                     &turn_address,
                     message,
@@ -246,13 +247,13 @@ impl<'a> RuntimeTurnExecutionService<'a> {
 
             Ok(AgentTurnResult {
                 session_id: runtime.session_id.clone(),
-                output_text,
+                output_text: turn_outcome.reply,
                 turn_mode: request.turn_mode,
                 governed_session_mode: ConversationRuntimeBinding::kernel(&runtime.kernel_ctx)
                     .session_mode(),
                 state: None,
                 stop_reason: None,
-                usage: None,
+                usage: turn_outcome.usage,
                 event_count: 0,
                 prompt_assembly,
                 prompt_cache,
@@ -268,6 +269,7 @@ impl TurnExecutionService {
             config,
             kernel_ctx: None,
             acp_manager: None,
+            initialize_runtime_environment: true,
         }
     }
 
@@ -278,6 +280,11 @@ impl TurnExecutionService {
 
     pub fn with_acp_manager(mut self, acp_manager: Arc<crate::acp::AcpSessionManager>) -> Self {
         self.acp_manager = Some(acp_manager);
+        self
+    }
+
+    pub fn without_runtime_environment_init(mut self) -> Self {
+        self.initialize_runtime_environment = false;
         self
     }
 
@@ -300,6 +307,7 @@ impl TurnExecutionService {
         let ingress = options.ingress;
         let provenance = options.provenance;
         let provider_error_mode = options.provider_error_mode;
+        let initialize_runtime_environment = self.initialize_runtime_environment;
 
         Box::pin(async move {
             let cli_options = cli_chat_options_for_turn_request(request);
@@ -319,7 +327,7 @@ impl TurnExecutionService {
                     &cli_options,
                     kernel_scope_for_turn_mode(request.turn_mode),
                     crate::chat::CliSessionRequirement::AllowImplicitDefault,
-                    true,
+                    initialize_runtime_environment,
                 )?,
             };
             let turn_options = TurnExecutionOptions {
@@ -407,7 +415,8 @@ impl AgentRuntime {
             return Err("agent runtime message must not be empty".to_owned());
         }
 
-        let turn_service = TurnExecutionService::new(resolved_path, config);
+        let turn_service =
+            TurnExecutionService::new(resolved_path, config).without_runtime_environment_init();
         let turn_options = TurnExecutionOptions {
             event_sink,
             ..Default::default()
@@ -432,27 +441,18 @@ impl AgentRuntime {
             return Err("agent runtime message must not be empty".to_owned());
         }
 
-        let options = cli_chat_options_for_turn_request(request);
-        let runtime = initialize_cli_turn_runtime_with_loaded_config(
-            resolved_path,
-            config,
-            session_hint,
-            &options,
-            kernel_scope_for_turn_mode(request.turn_mode),
-            crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            false,
-        )?;
-
-        self.run_turn_with_runtime_and_observer_and_context_and_error_mode(
-            &runtime,
-            request,
+        let turn_service =
+            TurnExecutionService::new(resolved_path, config).without_runtime_environment_init();
+        let turn_options = TurnExecutionOptions {
             event_sink,
             observer,
-            None,
-            AcpTurnProvenance::default(),
             provider_error_mode,
-        )
-        .await
+            ..Default::default()
+        };
+
+        turn_service
+            .execute(session_hint, request, turn_options)
+            .await
     }
 
     /// Execute a turn with a preloaded config while reusing an existing ACP
@@ -474,8 +474,9 @@ impl AgentRuntime {
             return Err("agent runtime message must not be empty".to_owned());
         }
 
-        let turn_service =
-            TurnExecutionService::new(resolved_path, config).with_acp_manager(acp_manager);
+        let turn_service = TurnExecutionService::new(resolved_path, config)
+            .with_acp_manager(acp_manager)
+            .without_runtime_environment_init();
         let turn_options = TurnExecutionOptions {
             event_sink,
             ..Default::default()

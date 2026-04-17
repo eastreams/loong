@@ -133,6 +133,7 @@ pub(crate) async fn handle_turn(
         channel_id: turn_request.channel_id.clone(),
         account_id: turn_request.account_id.clone(),
         conversation_id: turn_request.conversation_id.clone(),
+        participant_id: turn_request.participant_id.clone(),
         thread_id: turn_request.thread_id.clone(),
         metadata: turn_request.metadata.clone(),
         acp: true,
@@ -145,7 +146,8 @@ pub(crate) async fn handle_turn(
         PathBuf::from(app_state.config_path.clone()),
         config.clone(),
     )
-    .with_acp_manager(acp_manager.clone());
+    .with_acp_manager(acp_manager.clone())
+    .without_runtime_environment_init();
     let turn_options = crate::mvp::agent_runtime::TurnExecutionOptions {
         event_sink: event_sink
             .as_ref()
