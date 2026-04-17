@@ -846,6 +846,9 @@ fn should_skip_history_turn(role: &str, content: &str) -> bool {
     if role != "assistant" {
         return false;
     }
+    if content.trim_start().starts_with("[provider_error] ") {
+        return true;
+    }
     let parsed = match serde_json::from_str::<Value>(content) {
         Ok(value) => value,
         Err(_) => return false,
@@ -1262,6 +1265,17 @@ mod tests {
         }))
         .expect("serialize");
         push_history_message(&mut messages, "assistant", payload.as_str());
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn push_history_message_skips_inline_provider_errors() {
+        let mut messages = Vec::new();
+        push_history_message(
+            &mut messages,
+            "assistant",
+            "[provider_error] provider credentials are missing",
+        );
         assert!(messages.is_empty());
     }
 
