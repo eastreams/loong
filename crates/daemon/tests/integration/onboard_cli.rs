@@ -2585,6 +2585,8 @@ fn channel_preflight_checks_summarize_outbound_multi_account_state_and_reserved_
     let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
         "discord": {
             "enabled": true,
+            // Keep alerts from inheriting an ambient DISCORD_BOT_TOKEN in test shells.
+            "bot_token_env": "",
             "accounts": {
                 "ops": {
                     "bot_token": "discord-ops-token",

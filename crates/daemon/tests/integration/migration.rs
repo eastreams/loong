@@ -1328,7 +1328,8 @@ fn migration_classify_current_setup_treats_blocked_outbound_only_channel_as_repa
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
     config.discord.enabled = true;
     config.discord.bot_token = None;
-    config.discord.bot_token_env = None;
+    // Keep the persisted config from falling back to an ambient DISCORD_BOT_TOKEN.
+    config.discord.bot_token_env = Some(String::new());
 
     mvp::config::write(Some(path.to_string_lossy().as_ref()), &config, true)
         .expect("write outbound-only repairable config");
