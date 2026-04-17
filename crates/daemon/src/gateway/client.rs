@@ -4,6 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use loongclaw_protocol::{
+    ControlPlanePairingListResponse, ControlPlanePairingResolveRequest,
+    ControlPlanePairingResolveResponse,
+};
 use reqwest::blocking::Client as BlockingClient;
 use reqwest::{Client, Method, Response};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -41,6 +45,14 @@ pub struct GatewayAcpStatusRequest<'a> {
     pub route_session_id: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GatewayPairingRequestsRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub struct GatewayLocalDiscovery {
     runtime_dir: PathBuf,
@@ -48,6 +60,15 @@ pub struct GatewayLocalDiscovery {
     socket_address: SocketAddr,
     base_url: String,
     bearer_token: String,
+    source: GatewayLocalDiscoverySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayLocalDiscoverySource {
+    OwnerState,
+    DefaultBootstrap,
+    OwnerStateFallback,
 }
 
 impl GatewayLocalDiscovery {
@@ -77,6 +98,7 @@ impl GatewayLocalDiscovery {
             socket_address,
             base_url,
             bearer_token,
+            source: GatewayLocalDiscoverySource::OwnerState,
         })
     }
 
@@ -96,6 +118,10 @@ impl GatewayLocalDiscovery {
         self.base_url.as_str()
     }
 
+    pub fn source(&self) -> GatewayLocalDiscoverySource {
+        self.source
+    }
+
     fn bearer_token(&self) -> &str {
         self.bearer_token.as_str()
     }
@@ -112,7 +138,10 @@ fn discover_prefer_bootstrap(
 
     let owner_state_result = GatewayLocalDiscovery::discover(runtime_dir);
     match owner_state_result {
-        Ok(discovery) => Ok(discovery),
+        Ok(mut discovery) => {
+            discovery.source = GatewayLocalDiscoverySource::OwnerStateFallback;
+            Ok(discovery)
+        }
         Err(owner_state_error) => {
             let bootstrap_error = bootstrap_result.expect_err("bootstrap result should be err");
             let runtime_dir_text = runtime_dir.display().to_string();
@@ -142,6 +171,7 @@ fn discover_with_bootstrap(
         socket_address,
         base_url,
         bearer_token,
+        source: GatewayLocalDiscoverySource::DefaultBootstrap,
     })
 }
 
@@ -302,6 +332,31 @@ impl GatewayLocalClient {
     pub async fn stop(&self) -> CliResult<GatewayStopResponse> {
         let path = "/api/gateway/stop";
         self.request_json(Method::POST, path).await
+    }
+
+    pub async fn pairing_requests(
+        &self,
+        request: &GatewayPairingRequestsRequest<'_>,
+    ) -> CliResult<ControlPlanePairingListResponse> {
+        let path = "/v1/pairing/requests";
+        self.request_json_with_query(Method::GET, path, request)
+            .await
+    }
+
+    pub async fn pairing_resolve(
+        &self,
+        request: &ControlPlanePairingResolveRequest,
+    ) -> CliResult<ControlPlanePairingResolveResponse> {
+        let path = "/v1/pairing/resolve";
+        let endpoint = self.endpoint_url(path)?;
+        let request_builder = self.http_client.post(endpoint.as_str());
+        let request_builder = request_builder.bearer_auth(self.discovery.bearer_token());
+        let request_builder = request_builder.json(request);
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), "POST", path)
+            .await
     }
 
     pub async fn health(&self) -> CliResult<Value> {
@@ -759,6 +814,10 @@ mod tests {
 
         assert_eq!(discovery.socket_address(), socket_address);
         assert_eq!(discovery.owner_status().port, Some(socket_address.port()));
+        assert_eq!(
+            discovery.source(),
+            GatewayLocalDiscoverySource::DefaultBootstrap
+        );
 
         server.join().expect("bootstrap server join");
         fs::remove_dir_all(runtime_dir).ok();
@@ -784,6 +843,10 @@ mod tests {
 
         assert_eq!(discovery.socket_address().port(), 7_777);
         assert_eq!(discovery.owner_status().port, Some(7_777));
+        assert_eq!(
+            discovery.source(),
+            GatewayLocalDiscoverySource::OwnerStateFallback
+        );
 
         fs::remove_dir_all(runtime_dir).ok();
     }

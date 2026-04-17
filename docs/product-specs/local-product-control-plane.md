@@ -33,6 +33,8 @@ The current localhost control-plane slice now includes:
 - a stable loopback gateway front door at `127.0.0.1:26306` by default, with
   explicit operator overrides through `--port`, `LOONGCLAW_GATEWAY_PORT`, and
   the deliberate ephemeral escape hatch `--port 0`
+- local pairing inbox and resolve routes so trusted operators can review and
+  approve pending device pairing requests without leaving the gateway surface
 
 Turn execution still reuses the existing ACP conversation preparation path and
 the current session/runtime addressing model. The first turn-result cache stays

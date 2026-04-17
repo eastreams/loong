@@ -14,6 +14,11 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use loongclaw_protocol::{
+    ControlPlanePairingListResponse, ControlPlanePairingRequestSummary,
+    ControlPlanePairingResolveRequest, ControlPlanePairingResolveResponse,
+    ControlPlanePairingStatus, ControlPlaneRole, ControlPlaneScope,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
@@ -69,6 +74,12 @@ struct GatewayAcpStatusQuery {
     session: Option<String>,
     conversation_id: Option<String>,
     route_session_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GatewayPairingListQuery {
+    status: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -337,6 +348,14 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
             "/api/gateway/acp/observability",
             get(handle_gateway_acp_observability),
         )
+        .route(
+            "/api/gateway/pairing/requests",
+            get(handle_gateway_pairing_requests),
+        )
+        .route(
+            "/api/gateway/pairing/resolve",
+            post(handle_gateway_pairing_resolve),
+        )
         .route("/api/gateway/stop", post(handle_gateway_stop))
         .route("/v1/status", get(handle_gateway_status))
         .route("/v1/channels", get(handle_gateway_channels))
@@ -344,6 +363,8 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route("/v1/acp/status", get(handle_acp_status))
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
+        .route("/v1/pairing/requests", get(handle_gateway_pairing_requests))
+        .route("/v1/pairing/resolve", post(handle_gateway_pairing_resolve))
         .route("/v1/events", get(handle_events))
         .route("/v1/turn", post(handle_turn))
         .route("/health", get(handle_health))
@@ -652,6 +673,118 @@ async fn handle_gateway_acp_observability(
     json_response(StatusCode::OK, payload)
 }
 
+async fn handle_gateway_pairing_requests(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Query(query): Query<GatewayPairingListQuery>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let pairing_registry = match gateway_pairing_registry(app_state.as_ref()) {
+        Ok(pairing_registry) => pairing_registry,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pairing_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let parsed_status = match query.status.as_deref() {
+        Some(raw_status) => match parse_gateway_pairing_status(raw_status) {
+            Ok(status) => Some(status),
+            Err(error) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_pairing_status",
+                    error.as_str(),
+                );
+            }
+        },
+        None => None,
+    };
+    let limit = query.limit.unwrap_or(50);
+    let requests = pairing_registry.list_requests(parsed_status, limit);
+    let matched_count = requests.len();
+    let returned_count = matched_count;
+    let payload = ControlPlanePairingListResponse {
+        matched_count,
+        returned_count,
+        requests: requests
+            .into_iter()
+            .map(map_gateway_pairing_request)
+            .collect::<Vec<_>>(),
+    };
+    let payload = match serialize_json_value(&payload, "gateway pairing list payload") {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_failed",
+                error.as_str(),
+            );
+        }
+    };
+
+    json_response(StatusCode::OK, payload)
+}
+
+async fn handle_gateway_pairing_resolve(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Json(request): Json<ControlPlanePairingResolveRequest>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let pairing_registry = match gateway_pairing_registry(app_state.as_ref()) {
+        Ok(pairing_registry) => pairing_registry,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pairing_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    match pairing_registry.resolve_request(request.pairing_request_id.as_str(), request.approve) {
+        Ok(Some(record)) => {
+            let payload = ControlPlanePairingResolveResponse {
+                request: map_gateway_pairing_request(record.clone()),
+                device_token: record.device_token,
+            };
+            let payload = match serialize_json_value(&payload, "gateway pairing resolve payload") {
+                Ok(payload) => payload,
+                Err(error) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "serialize_failed",
+                        error.as_str(),
+                    );
+                }
+            };
+            json_response(StatusCode::OK, payload)
+        }
+        Ok(None) => {
+            let message = format!(
+                "pairing request `{}` not found",
+                request.pairing_request_id.trim()
+            );
+            json_error(StatusCode::NOT_FOUND, "pairing_not_found", message.as_str())
+        }
+        Err(error) => json_error(
+            StatusCode::BAD_REQUEST,
+            "pairing_resolve_failed",
+            error.as_str(),
+        ),
+    }
+}
+
 async fn handle_gateway_stop(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
@@ -771,6 +904,76 @@ fn gateway_control_acp_manager(
         .as_deref()
         .ok_or_else(|| "gateway ACP session manager is unavailable".to_owned())?;
     Ok(manager)
+}
+
+fn gateway_pairing_registry(
+    app_state: &GatewayControlAppState,
+) -> CliResult<mvp::control_plane::ControlPlanePairingRegistry> {
+    let config = gateway_control_config(app_state)?;
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let memory_config =
+            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config)
+    }
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = config;
+        Err("gateway pairing requires sqlite memory support".to_owned())
+    }
+}
+
+fn map_gateway_pairing_status(
+    status: mvp::control_plane::ControlPlanePairingStatus,
+) -> ControlPlanePairingStatus {
+    match status {
+        mvp::control_plane::ControlPlanePairingStatus::Pending => {
+            ControlPlanePairingStatus::Pending
+        }
+        mvp::control_plane::ControlPlanePairingStatus::Approved => {
+            ControlPlanePairingStatus::Approved
+        }
+        mvp::control_plane::ControlPlanePairingStatus::Rejected => {
+            ControlPlanePairingStatus::Rejected
+        }
+    }
+}
+
+fn map_gateway_pairing_request(
+    request: mvp::control_plane::ControlPlanePairingRequestRecord,
+) -> ControlPlanePairingRequestSummary {
+    let requested_scopes = request
+        .requested_scopes
+        .into_iter()
+        .filter_map(|scope| ControlPlaneScope::parse(scope.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let role = match request.role.as_str() {
+        "operator" => ControlPlaneRole::Operator,
+        _ => ControlPlaneRole::Node,
+    };
+
+    ControlPlanePairingRequestSummary {
+        pairing_request_id: request.pairing_request_id,
+        device_id: request.device_id,
+        client_id: request.client_id,
+        public_key: request.public_key,
+        role,
+        requested_scopes,
+        status: map_gateway_pairing_status(request.status),
+        requested_at_ms: request.requested_at_ms,
+        resolved_at_ms: request.resolved_at_ms,
+    }
+}
+
+fn parse_gateway_pairing_status(
+    raw: &str,
+) -> Result<mvp::control_plane::ControlPlanePairingStatus, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "pending" => Ok(mvp::control_plane::ControlPlanePairingStatus::Pending),
+        "approved" => Ok(mvp::control_plane::ControlPlanePairingStatus::Approved),
+        "rejected" => Ok(mvp::control_plane::ControlPlanePairingStatus::Rejected),
+        _ => Err(format!("unknown pairing status `{raw}`")),
+    }
 }
 
 fn gateway_acp_session_list_limit(requested_limit: Option<usize>) -> usize {
@@ -1092,6 +1295,18 @@ pub fn build_gateway_acp_test_router(
         .route("/v1/acp/status", get(handle_acp_status))
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
+        .with_state(app_state)
+}
+
+/// Minimal router for gateway pairing endpoint integration tests.
+#[doc(hidden)]
+pub fn build_gateway_pairing_test_router(bearer_token: String, config: LoongClawConfig) -> Router {
+    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    state.config = Some(config);
+    let app_state = Arc::new(state);
+    Router::new()
+        .route("/v1/pairing/requests", get(handle_gateway_pairing_requests))
+        .route("/v1/pairing/resolve", post(handle_gateway_pairing_resolve))
         .with_state(app_state)
 }
 

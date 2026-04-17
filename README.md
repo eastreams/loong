@@ -623,8 +623,9 @@ The current gateway slice now includes:
 - `loongclaw gateway status` for cross-process owner inspection
 - `loongclaw gateway stop` for cooperative shutdown
 - a localhost-only authenticated control surface that publishes status,
-  channel inventory, runtime snapshot, ACP session/operator views, operator
-  summary, and cooperative stop endpoints from the same `gateway run` owner
+  channel inventory, runtime snapshot, pairing inbox/resolve routes, ACP
+  session/operator views, operator summary, and cooperative stop endpoints from
+  the same `gateway run` owner
 
 `gateway run` starts headless by default. Pass `--session` when you want the
 concurrent CLI host attached to the same runtime owner.
