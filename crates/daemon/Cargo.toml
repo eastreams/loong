@@ -1,11 +1,11 @@
 [package]
-name = "loongclaw"
+name = "loong"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 default-run = "loong"
-description = "Primary CLI crate for LoongClaw vertical AI agents"
+description = "Primary CLI crate for Loong vertical AI agents"
 repository.workspace = true
 homepage.workspace = true
 readme = "../../README.md"
@@ -101,10 +101,6 @@ wat = "1"
 
 [[bin]]
 name = "loong"
-path = "src/main.rs"
-
-[[bin]]
-name = "loongclaw"
 path = "src/main.rs"
 
 [lints]
