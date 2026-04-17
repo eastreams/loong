@@ -2831,6 +2831,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "loong"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "dialoguer",
+ "dunce",
+ "ed25519-dalek",
+ "futures-util",
+ "hex",
+ "libc",
+ "loong-app",
+ "loong-bench",
+ "loong-contracts",
+ "loong-kernel",
+ "loong-protocol",
+ "loong-spec",
+ "loongclaw-bridge-runtime",
+ "rand 0.10.1",
+ "reqwest",
+ "rusqlite",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "syn 2.0.117",
+ "tempfile",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "wait-timeout",
+ "wat",
+]
+
+[[package]]
 name = "loong-app"
 version = "0.1.0-alpha.3"
 dependencies = [
@@ -2966,49 +3009,6 @@ dependencies = [
  "tokio",
  "wasmparser 0.246.2",
  "wasmtime",
- "wat",
-]
-
-[[package]]
-name = "loongclaw"
-version = "0.1.0-alpha.3"
-dependencies = [
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "clap",
- "clap_complete",
- "dialoguer",
- "dunce",
- "ed25519-dalek",
- "futures-util",
- "hex",
- "libc",
- "loong-app",
- "loong-bench",
- "loong-contracts",
- "loong-kernel",
- "loong-protocol",
- "loong-spec",
- "loongclaw-bridge-runtime",
- "rand 0.10.1",
- "reqwest",
- "rusqlite",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "syn 2.0.117",
- "tempfile",
- "time",
- "tokio",
- "tokio-stream",
- "toml",
- "tower",
- "tracing",
- "tracing-subscriber",
- "wait-timeout",
  "wat",
 ]
 
