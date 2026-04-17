@@ -414,19 +414,13 @@ pub async fn run_cli_ask(
     let acp_event_printer = options
         .acp_event_stream
         .then(|| JsonlAcpTurnEventSink::stderr_with_prefix("acp-event> "));
-    let assistant_text = run_cli_turn_with_address_and_ingress_and_error_mode(
+    let assistant_text = run_cli_turn(
         &runtime,
-        &runtime.session_address,
         input,
         acp_event_printer
             .as_ref()
             .map(|printer| printer as &dyn AcpTurnEventSink),
         false,
-        None,
-        None,
-        AcpTurnProvenance::default(),
-        ProviderErrorMode::Propagate,
-        None,
     )
     .await?;
     println!("{assistant_text}");
