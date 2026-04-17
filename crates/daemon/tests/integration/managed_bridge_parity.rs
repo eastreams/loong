@@ -55,6 +55,10 @@ fn runtime_snapshot_fixture(
         tools: loong_daemon::gateway::read_models::GatewayRuntimeSnapshotToolsReadModel {
             visible_tool_count: 0,
             visible_tool_names: Vec::new(),
+            visible_direct_tool_names: Vec::new(),
+            hidden_tool_count: 0,
+            hidden_tool_tags: Vec::new(),
+            hidden_tool_surfaces: Vec::new(),
             capability_snapshot_sha256: String::new(),
             capability_snapshot: String::new(),
             tool_calling: loong_daemon::gateway::read_models::GatewayToolCallingReadModel {

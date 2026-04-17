@@ -277,10 +277,34 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         render_string_list(snapshot.tool_runtime.web_fetch.blocked_domains.iter().map(String::as_str))
     ));
     lines.push(format!(
-        "tools visible_count={} capability_snapshot_sha256={} visible_names={}",
+        "tools visible_count={} hidden_count={} capability_snapshot_sha256={} visible_names={} visible_direct_names={}",
         snapshot.visible_tool_names.len(),
+        snapshot.discoverable_tool_summary.hidden_tool_count,
         snapshot.capability_snapshot_sha256,
-        render_string_list(snapshot.visible_tool_names.iter().map(String::as_str))
+        render_string_list(snapshot.visible_tool_names.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .discoverable_tool_summary
+                .visible_direct_tools
+                .iter()
+                .map(String::as_str)
+        )
+    ));
+    lines.push(format!(
+        "tools hidden_tags={} hidden_surfaces={}",
+        render_string_list(
+            snapshot
+                .discoverable_tool_summary
+                .hidden_tags
+                .iter()
+                .map(String::as_str)
+        ),
+        render_tool_surface_summary(
+            snapshot
+                .discoverable_tool_summary
+                .hidden_surfaces
+                .as_slice()
+        )
     ));
     lines.extend(render_runtime_plugins_lines(&snapshot.runtime_plugins));
     lines.push(format!(
@@ -340,6 +364,18 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         body_lines,
         Vec::new(),
     )
+}
+
+fn render_tool_surface_summary(surfaces: &[crate::mvp::tools::ToolSurfaceState]) -> String {
+    if surfaces.is_empty() {
+        return "-".to_owned();
+    }
+
+    surfaces
+        .iter()
+        .map(|surface| format!("{}:{}", surface.surface_id, surface.tool_count()))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -> Vec<String> {
