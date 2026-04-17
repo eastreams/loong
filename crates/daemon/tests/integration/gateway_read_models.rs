@@ -463,10 +463,17 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         &owner_status,
         &inventory,
         &runtime_snapshot,
+        gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 1,
+            approved_device_count: 2,
+            last_activity_ms: Some(300),
+        },
     );
     let encoded = serde_json::to_value(&summary).expect("serialize operator summary read model");
 
     assert_eq!(summary.owner.phase, "running");
+    assert_eq!(summary.pairing.pending_request_count, 1);
+    assert_eq!(summary.pairing.approved_device_count, 2);
     assert_eq!(
         summary.control_surface.base_url.as_deref(),
         Some("http://127.0.0.1:7777")

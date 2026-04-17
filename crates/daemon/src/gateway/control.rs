@@ -40,10 +40,11 @@ use super::api_health::handle_health;
 use super::api_turn::handle_turn;
 use super::event_bus::GatewayEventBus;
 use super::read_models::{
-    GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
-    GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
-    build_acp_session_list_read_model, build_acp_status_read_model,
-    build_operator_summary_read_model, build_runtime_snapshot_read_model,
+    GatewayChannelInventoryReadModel, GatewayOperatorPairingSummaryReadModel,
+    GatewayOperatorSummaryReadModel, GatewayRuntimeSnapshotReadModel,
+    build_acp_observability_read_model, build_acp_session_list_read_model,
+    build_acp_status_read_model, build_operator_summary_read_model,
+    build_runtime_snapshot_read_model,
 };
 use super::state::{
     GatewayControlSurfaceBinding, GatewayPortSource, GatewayStopRequestOutcome,
@@ -464,6 +465,7 @@ async fn handle_gateway_operator_summary(
         &status,
         app_state.channel_inventory.as_ref(),
         app_state.runtime_snapshot.as_ref(),
+        app_state.as_ref(),
     );
     let payload = serialize_json_value(&summary, "gateway operator summary payload");
     match payload {
@@ -884,8 +886,28 @@ fn build_gateway_operator_summary_read_model(
     status: &super::state::GatewayOwnerStatus,
     channel_inventory: &GatewayChannelInventoryReadModel,
     runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
+    app_state: &GatewayControlAppState,
 ) -> GatewayOperatorSummaryReadModel {
-    build_operator_summary_read_model(status, channel_inventory, runtime_snapshot)
+    let pairing_summary = build_gateway_pairing_summary_read_model(app_state);
+    build_operator_summary_read_model(status, channel_inventory, runtime_snapshot, pairing_summary)
+}
+
+fn build_gateway_pairing_summary_read_model(
+    app_state: &GatewayControlAppState,
+) -> GatewayOperatorPairingSummaryReadModel {
+    let pairing_registry_result = gateway_pairing_registry(app_state);
+    match pairing_registry_result {
+        Ok(pairing_registry) => GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: pairing_registry.pending_request_count(),
+            approved_device_count: pairing_registry.approved_device_count(),
+            last_activity_ms: pairing_registry.last_activity_ms(),
+        },
+        Err(_error) => GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 0,
+            approved_device_count: 0,
+            last_activity_ms: None,
+        },
+    }
 }
 
 fn gateway_control_config(app_state: &GatewayControlAppState) -> CliResult<&LoongClawConfig> {

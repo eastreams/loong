@@ -4,9 +4,9 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::gateway::read_models::{
-    GatewayAcpObservabilityReadModel, GatewayOperatorSummaryReadModel,
-    build_acp_observability_read_model, build_operator_summary_read_model,
-    build_runtime_snapshot_read_model,
+    GatewayAcpObservabilityReadModel, GatewayOperatorPairingSummaryReadModel,
+    GatewayOperatorSummaryReadModel, build_acp_observability_read_model,
+    build_operator_summary_read_model, build_runtime_snapshot_read_model,
 };
 use crate::gateway::service::default_gateway_owner_status;
 use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owner_status};
@@ -91,8 +91,17 @@ pub async fn collect_status_cli_read_model(
         config_path_text,
         owner_status_option,
     );
-    let gateway =
-        build_operator_summary_read_model(&owner_status, &channel_inventory, &runtime_snapshot);
+    let pairing = GatewayOperatorPairingSummaryReadModel {
+        pending_request_count: 0,
+        approved_device_count: 0,
+        last_activity_ms: None,
+    };
+    let gateway = build_operator_summary_read_model(
+        &owner_status,
+        &channel_inventory,
+        &runtime_snapshot,
+        pairing,
+    );
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
     let recipes = build_status_cli_recipes(config_path_text);
@@ -287,6 +296,7 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let control_surface = &gateway.control_surface;
     let channels = &gateway.channels;
     let runtime = &gateway.runtime;
+    let pairing = &gateway.pairing;
     let base_url_option = control_surface.base_url.as_deref();
     let base_url = base_url_option.unwrap_or("-");
     let owner_pid = render_optional_u32(owner.pid);
@@ -347,6 +357,15 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         tool_calling.effective_tool_schema_mode,
         tool_calling.active_model,
         tool_calling.reason,
+    ));
+    lines.push(format!(
+        "pairing pending={} approved_devices={} last_activity_ms={}",
+        pairing.pending_request_count,
+        pairing.approved_device_count,
+        pairing
+            .last_activity_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
     ));
     lines.push(render_status_cli_acp_text(&status.acp));
     lines.push(render_status_cli_work_units_text(&status.work_units));
@@ -434,7 +453,7 @@ mod tests {
     use super::*;
     use crate::gateway::read_models::{
         GatewayOperatorChannelsSummaryReadModel, GatewayOperatorControlSurfaceReadModel,
-        GatewayOperatorRuntimeSummaryReadModel,
+        GatewayOperatorPairingSummaryReadModel, GatewayOperatorRuntimeSummaryReadModel,
     };
     use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus, GatewayPortSource};
 
@@ -495,6 +514,11 @@ mod tests {
                             .to_owned(),
                 },
             },
+            pairing: GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 1,
+                approved_device_count: 2,
+                last_activity_ms: Some(3),
+            },
         };
         let status = StatusCliReadModel {
             config: "/tmp/config.toml".to_owned(),
@@ -533,6 +557,7 @@ mod tests {
 
         assert!(rendered.contains("gateway phase=running"));
         assert!(rendered.contains("tool_calling availability=ready"));
+        assert!(rendered.contains("pairing pending=1 approved_devices=2"));
         assert!(rendered.contains("acp enabled=false availability=disabled"));
         assert!(rendered.contains("work_units availability=available total_count=0"));
         assert!(rendered.contains("recipes:\n- loong gateway status"));

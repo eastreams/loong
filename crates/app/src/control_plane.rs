@@ -1194,6 +1194,47 @@ impl ControlPlanePairingRegistry {
         requests
     }
 
+    pub fn pending_request_count(&self) -> usize {
+        self.requests
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .filter(|record| record.status == ControlPlanePairingStatus::Pending)
+            .count()
+    }
+
+    pub fn approved_device_count(&self) -> usize {
+        self.approved_devices
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .len()
+    }
+
+    pub fn last_activity_ms(&self) -> Option<u64> {
+        let requests_last_activity = self
+            .requests
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .flat_map(|record| [Some(record.requested_at_ms), record.resolved_at_ms])
+            .flatten()
+            .max();
+        let devices_last_activity = self
+            .approved_devices
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .map(|device| device.approved_at_ms)
+            .max();
+
+        match (requests_last_activity, devices_last_activity) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }
+    }
+
     pub fn resolve_request(
         &self,
         pairing_request_id: &str,
@@ -2501,6 +2542,50 @@ mod tests {
 
         assert_eq!(reparing_request.role, "node");
         assert_eq!(reparing_request.requested_scopes, scopes);
+    }
+
+    #[test]
+    fn pairing_registry_summary_counts_and_last_activity_follow_request_lifecycle() {
+        let registry = ControlPlanePairingRegistry::new();
+        let requested_scopes = BTreeSet::from(["operator.read".to_owned()]);
+        let decision = registry
+            .evaluate_connect(
+                "device-summary",
+                "cli",
+                "public-key-summary",
+                "operator",
+                &requested_scopes,
+                None,
+            )
+            .expect("evaluate connect");
+        let request = match decision {
+            ControlPlanePairingConnectDecision::PairingRequired { request, .. } => request,
+            other => panic!("expected pairing request, got {other:?}"),
+        };
+
+        assert_eq!(registry.pending_request_count(), 1);
+        assert_eq!(registry.approved_device_count(), 0);
+        let pending_last_activity = registry
+            .last_activity_ms()
+            .expect("pending request should count as activity");
+        assert_eq!(pending_last_activity, request.requested_at_ms);
+
+        let approved = registry
+            .resolve_request(&request.pairing_request_id, true)
+            .expect("approve pairing request")
+            .expect("pairing request should exist");
+
+        assert_eq!(registry.pending_request_count(), 0);
+        assert_eq!(registry.approved_device_count(), 1);
+        let approved_last_activity = registry
+            .last_activity_ms()
+            .expect("approved device should count as activity");
+        assert_eq!(
+            approved_last_activity,
+            approved
+                .resolved_at_ms
+                .expect("approved request should resolve")
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]

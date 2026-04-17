@@ -88,6 +88,11 @@ fn managed_bridge_parity_keeps_summary_aligned_across_text_json_and_operator_vie
             &owner_status,
             &channels_payload,
             &runtime_snapshot,
+            loongclaw_daemon::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 0,
+                approved_device_count: 0,
+                last_activity_ms: None,
+            },
         );
     let weixin_channels_surface = channels_payload
         .channel_surfaces
