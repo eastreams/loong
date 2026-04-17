@@ -987,11 +987,14 @@ fn supported_multi_channel_serve_channel_ids() -> Vec<&'static str> {
 #[path = "lib_multi_channel_serve_tests.rs"]
 mod multi_channel_serve_tests;
 
-fn resolved_default_entry_config_path() -> PathBuf {
+fn default_entry_config_path_override() -> Option<PathBuf> {
     std::env::var_os("LOONG_CONFIG_PATH")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(mvp::config::default_config_path)
+}
+
+fn resolved_default_entry_config_path() -> PathBuf {
+    default_entry_config_path_override().unwrap_or_else(mvp::config::default_config_path)
 }
 
 fn default_onboard_command() -> Commands {
@@ -1013,11 +1016,20 @@ fn default_onboard_command() -> Commands {
 }
 
 pub fn resolve_default_entry_command() -> Commands {
-    if resolved_default_entry_config_path().is_file() {
-        Commands::Welcome
-    } else {
-        default_onboard_command()
+    let config_path = resolved_default_entry_config_path();
+    if config_path.is_file() {
+        return Commands::Welcome;
     }
+
+    if default_entry_config_path_override().is_some() {
+        return default_onboard_command();
+    }
+
+    if detected_legacy_home_for_default_entry().is_some() {
+        return default_import_preview_command();
+    }
+
+    default_onboard_command()
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {

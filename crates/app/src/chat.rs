@@ -947,6 +947,7 @@ async fn process_cli_chat_input(
         channel_id: runtime.session_address.channel_id.clone(),
         account_id: runtime.session_address.account_id.clone(),
         conversation_id: runtime.session_address.conversation_id.clone(),
+        participant_id: runtime.session_address.participant_id.clone(),
         thread_id: runtime.session_address.thread_id.clone(),
         metadata: BTreeMap::new(),
         acp: runtime.explicit_acp_request,
@@ -1034,36 +1035,6 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
         provider_error_mode,
         observer_override,
         None,
-    )
-    .await
-    .map(|outcome| outcome.reply)
-}
-
-pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_and_acp_manager(
-    runtime: &CliTurnRuntime,
-    address: &ConversationSessionAddress,
-    input: &str,
-    event_sink: Option<&dyn AcpTurnEventSink>,
-    live_surface_enabled: bool,
-    metadata: Option<&BTreeMap<String, String>>,
-    ingress: Option<&ConversationIngressContext>,
-    provenance: AcpTurnProvenance<'_>,
-    provider_error_mode: ProviderErrorMode,
-    observer_override: Option<ConversationTurnObserverHandle>,
-    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
-) -> CliResult<String> {
-    run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
-        runtime,
-        address,
-        input,
-        event_sink,
-        live_surface_enabled,
-        metadata,
-        ingress,
-        provenance,
-        provider_error_mode,
-        observer_override,
-        acp_manager,
     )
     .await
     .map(|outcome| outcome.reply)

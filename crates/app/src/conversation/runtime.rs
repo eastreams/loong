@@ -337,7 +337,7 @@ impl SessionContext {
     }
 }
 
-fn configured_root_session_workspace_root(config: &LoongClawConfig) -> Option<PathBuf> {
+fn configured_root_session_workspace_root(config: &LoongConfig) -> Option<PathBuf> {
     config
         .tools
         .configured_runtime_workspace_root()
@@ -351,7 +351,7 @@ fn configured_root_session_workspace_root(config: &LoongClawConfig) -> Option<Pa
 }
 
 fn root_session_context_from_config(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: impl Into<String>,
     tool_view: ToolView,
 ) -> SessionContext {
