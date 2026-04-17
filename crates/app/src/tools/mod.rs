@@ -10,6 +10,7 @@ use std::{
 };
 
 use loong_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(test)]
 use tool_search::searchable_entry_from_provider_definition;
@@ -66,6 +67,7 @@ mod shell_request_prep;
 mod tool_lease;
 mod tool_lease_authority;
 mod tool_search;
+mod tool_surface;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
 #[cfg(any(
@@ -126,6 +128,7 @@ pub use bundled_skills::{
     bundled_preinstall_targets, bundled_skill_pack, bundled_skill_pack_memberships,
     bundled_skill_packs,
 };
+pub use tool_surface::ToolSurfaceState;
 
 const BROWSER_COMPANION_TOOL_PREFIX: &str = "browser.companion.";
 const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
@@ -578,10 +581,10 @@ fn required_capabilities_for_tool_name_and_payload(
                 invoked_payload,
             );
         }
-        "file.read" | "glob.search" | "content.search" => {
+        "read" | "file.read" | "glob.search" | "content.search" => {
             caps.insert(Capability::FilesystemRead);
         }
-        "memory_search" | "memory_get" => {
+        "memory" | "memory_search" | "memory_get" => {
             caps.insert(Capability::FilesystemRead);
         }
         "sessions_list"
@@ -593,10 +596,10 @@ fn required_capabilities_for_tool_name_and_payload(
         | "session_tool_policy_status" => {
             caps.insert(Capability::MemoryRead);
         }
-        "file.write" | "file.edit" => {
+        "write" | "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
-        BASH_EXEC_TOOL_NAME => {
+        "exec" | BASH_EXEC_TOOL_NAME => {
             caps.insert(Capability::FilesystemRead);
             caps.insert(Capability::FilesystemWrite);
             caps.insert(Capability::NetworkEgress);
@@ -635,11 +638,14 @@ fn invoked_discoverable_tool_request(payload: &Value) -> Option<(&str, &Value)> 
 fn tool_requires_network_egress(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        HTTP_REQUEST_TOOL_NAME
+        "web"
+            | "browser"
+            | HTTP_REQUEST_TOOL_NAME
             | "web.fetch"
             | "web.search"
             | "browser.open"
             | "browser.click"
+            | "exec"
             | "external_skills.fetch"
             | "external_skills.source_search"
     )
@@ -669,7 +675,12 @@ pub fn is_known_tool_name_in_view(raw: &str, view: &ToolView) -> bool {
 
 pub fn is_provider_exposed_tool_name(raw: &str) -> bool {
     catalog::find_tool_catalog_entry(canonical_tool_name(raw))
-        .is_some_and(|entry| entry.is_provider_core())
+        .is_some_and(|entry| entry.is_provider_exposed())
+}
+
+pub(crate) fn direct_tool_name_for_hidden_tool(raw: &str) -> Option<&'static str> {
+    let canonical_name = canonical_tool_name(raw);
+    tool_surface::direct_tool_name_for_hidden_tool(canonical_name)
 }
 
 pub fn runtime_tool_view_from_loong_config(config: &crate::config::LoongConfig) -> ToolView {
@@ -718,15 +729,242 @@ pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution>
 }
 
 fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &Value) -> String {
-    if canonical_name != "tool.invoke" {
+    if canonical_name == "tool.invoke" {
+        let inner_tool_id = payload.get("tool_id");
+        let inner_tool_id = inner_tool_id.and_then(Value::as_str);
+        let inner_tool_name = inner_tool_id.map(canonical_tool_name);
+        let inner_tool_name = inner_tool_name.unwrap_or("-");
+        return inner_tool_name.to_owned();
+    }
+
+    let is_direct_tool = matches!(
+        canonical_name,
+        "read" | "write" | "exec" | "web" | "browser" | "memory"
+    );
+    if !is_direct_tool {
         return "-".to_owned();
     }
 
-    let inner_tool_id = payload.get("tool_id");
-    let inner_tool_id = inner_tool_id.and_then(Value::as_str);
-    let inner_tool_name = inner_tool_id.map(canonical_tool_name);
-    let inner_tool_name = inner_tool_name.unwrap_or("-");
-    inner_tool_name.to_owned()
+    let direct_tool_name = canonical_name;
+    let resolved_tool_name = route_direct_tool_name(direct_tool_name, payload).ok();
+    let resolved_tool_name = resolved_tool_name.unwrap_or("-");
+    resolved_tool_name.to_owned()
+}
+
+fn execute_direct_tool_core_with_config(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let routed_request = route_direct_tool_request(request, config)?;
+    execute_discoverable_tool_core_with_config(routed_request, config)
+}
+
+fn route_direct_tool_request(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreRequest, String> {
+    let tool_name = request.tool_name;
+    let payload = request.payload;
+    let routed_tool_name = route_direct_tool_name(tool_name.as_str(), &payload)?;
+    let runtime_view = runtime_tool_view_for_runtime_config(config);
+    let tool_visible = runtime_view.contains(routed_tool_name);
+    if !tool_visible {
+        return Err(format!(
+            "tool_surface_unavailable: `{}` cannot route to `{}` in this runtime",
+            tool_name, routed_tool_name
+        ));
+    }
+
+    let routed_request = ToolCoreRequest {
+        tool_name: routed_tool_name.to_owned(),
+        payload,
+    };
+    Ok(routed_request)
+}
+
+fn route_direct_tool_name(tool_name: &str, payload: &Value) -> Result<&'static str, String> {
+    match tool_name {
+        "read" => route_direct_read_tool_name(payload),
+        "write" => route_direct_write_tool_name(payload),
+        "exec" => Ok(SHELL_EXEC_TOOL_NAME),
+        "web" => route_direct_web_tool_name(payload),
+        "browser" => route_direct_browser_tool_name(payload),
+        "memory" => route_direct_memory_tool_name(payload),
+        _ => Ok("-"),
+    }
+}
+
+fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_path = payload_has_non_null_field(payload, "path");
+    let has_query = payload_has_non_null_field(payload, "query");
+    let has_pattern = payload_has_non_null_field(payload, "pattern");
+    let mode_count = count_true([has_path, has_query, has_pattern]);
+
+    if mode_count == 0 {
+        return Err(
+            "direct_read_requires_one_of: expected exactly one of `path`, `query`, or `pattern`"
+                .to_owned(),
+        );
+    }
+
+    if mode_count > 1 {
+        return Err(
+            "direct_read_ambiguous: provide exactly one of `path`, `query`, or `pattern`"
+                .to_owned(),
+        );
+    }
+
+    if has_path {
+        return Ok("file.read");
+    }
+
+    if has_query {
+        return Ok("content.search");
+    }
+
+    Ok("glob.search")
+}
+
+fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_content = payload_has_non_null_field(payload, "content");
+    let has_old_string = payload_has_non_null_field(payload, "old_string");
+    let has_new_string = payload_has_non_null_field(payload, "new_string");
+    let edit_mode = has_old_string || has_new_string;
+    let create_mode = has_content;
+    let mode_count = count_true([create_mode, edit_mode]);
+
+    if mode_count == 0 {
+        return Err(
+            "direct_write_requires_one_mode: expected `path` plus `content`, or `path` plus `old_string` and `new_string`"
+                .to_owned(),
+        );
+    }
+
+    if mode_count > 1 {
+        return Err(
+            "direct_write_ambiguous: do not mix whole-file write fields with exact-edit fields"
+                .to_owned(),
+        );
+    }
+
+    let has_path = payload_has_non_null_field(payload, "path");
+    if !has_path {
+        return Err("direct_write_requires_path: expected `path` for direct write".to_owned());
+    }
+
+    if create_mode {
+        return Ok("file.write");
+    }
+
+    if !has_old_string || !has_new_string {
+        return Err(
+            "direct_write_edit_requires_both_strings: expected `old_string` and `new_string` for exact-edit mode"
+                .to_owned(),
+        );
+    }
+
+    Ok("file.edit")
+}
+
+fn route_direct_web_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_url = payload_has_non_null_field(payload, "url");
+    let has_query = payload_has_non_null_field(payload, "query");
+    let mode_count = count_true([has_url, has_query]);
+
+    if mode_count == 0 {
+        return Err(
+            "direct_web_requires_one_of: expected exactly one of `url` or `query`".to_owned(),
+        );
+    }
+
+    if mode_count > 1 {
+        return Err("direct_web_ambiguous: provide either `url` or `query`, not both".to_owned());
+    }
+
+    if has_url {
+        return Ok("web.fetch");
+    }
+
+    Ok("web.search")
+}
+
+fn route_direct_browser_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_url = payload_has_non_null_field(payload, "url");
+    let has_session_id = payload_has_non_null_field(payload, "session_id");
+    let has_link_id = payload_has_non_null_field(payload, "link_id");
+
+    if has_url && (has_session_id || has_link_id) {
+        return Err(
+            "direct_browser_ambiguous: use `url` for open, or `session_id` with optional `link_id` for existing sessions"
+                .to_owned(),
+        );
+    }
+
+    if has_url {
+        return Ok("browser.open");
+    }
+
+    if has_link_id && !has_session_id {
+        return Err(
+            "direct_browser_click_requires_session_id: expected `session_id` with `link_id`"
+                .to_owned(),
+        );
+    }
+
+    if has_session_id && has_link_id {
+        return Ok("browser.click");
+    }
+
+    if has_session_id {
+        return Ok("browser.extract");
+    }
+
+    Err(
+        "direct_browser_requires_url_or_session: expected `url`, or `session_id` with optional `link_id`"
+            .to_owned(),
+    )
+}
+
+fn route_direct_memory_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_query = payload_has_non_null_field(payload, "query");
+    let has_path = payload_has_non_null_field(payload, "path");
+    let mode_count = count_true([has_query, has_path]);
+
+    if mode_count == 0 {
+        return Err(
+            "direct_memory_requires_one_of: expected exactly one of `query` or `path`".to_owned(),
+        );
+    }
+
+    if mode_count > 1 {
+        return Err(
+            "direct_memory_ambiguous: provide either `query` or `path`, not both".to_owned(),
+        );
+    }
+
+    if has_query {
+        return Ok("memory_search");
+    }
+
+    Ok("memory_get")
+}
+
+fn payload_has_non_null_field(payload: &Value, field_name: &str) -> bool {
+    let field_value = payload.get(field_name);
+    let field_value = field_value.filter(|value| !value.is_null());
+    field_value.is_some()
+}
+
+fn count_true<const N: usize>(values: [bool; N]) -> usize {
+    let mut count = 0usize;
+
+    for value in values {
+        if value {
+            count = count.saturating_add(1);
+        }
+    }
+
+    count
 }
 
 pub fn execute_tool_core_with_config(
@@ -775,6 +1013,9 @@ pub fn execute_tool_core_with_config(
         match canonical_name {
             "tool.search" => execute_tool_search_tool_with_config(request, config),
             "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
+            "read" | "write" | "exec" | "web" | "browser" | "memory" => {
+                execute_direct_tool_core_with_config(request, config)
+            }
             _ => execute_discoverable_tool_core_with_config(request, config),
         }
     };
@@ -1091,11 +1332,22 @@ where
 /// Tool registry entry for capability snapshot disclosure.
 #[derive(Debug, Clone)]
 pub struct ToolRegistryEntry {
-    pub name: &'static str,
-    pub description: &'static str,
+    pub name: String,
+    pub description: String,
 }
 
-/// Returns a sorted list of all registered tools, gated by feature flags.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoverableToolSurfaceSummary {
+    #[serde(default)]
+    pub visible_direct_tools: Vec<String>,
+    pub hidden_tool_count: usize,
+    #[serde(default)]
+    pub hidden_tags: Vec<String>,
+    #[serde(default)]
+    pub hidden_surfaces: Vec<ToolSurfaceState>,
+}
+
+/// Returns a sorted list of all registered hidden specialized tools, gated by feature flags.
 pub fn tool_registry() -> Vec<ToolRegistryEntry> {
     tool_registry_with_config(Some(runtime_config::get_tool_runtime_config()))
 }
@@ -1111,17 +1363,19 @@ pub(crate) fn tool_registry_with_config(
             &default_runtime_config
         }
     };
-    let runtime_visible_tool_view = full_runtime_tool_view_for_runtime_config(config);
-    let mut entries: Vec<ToolRegistryEntry> = catalog::discoverable_tool_catalog()
-        .into_iter()
-        .filter(|entry| runtime_visible_tool_view.contains(entry.canonical_name))
-        .filter(|entry| tool_search_entry_is_runtime_usable(entry.canonical_name, config))
-        .map(|entry| ToolRegistryEntry {
+
+    let discoverable_entries = runtime_discoverable_tool_entries(config, None);
+    let mut entries = Vec::new();
+
+    for entry in discoverable_entries {
+        let registry_entry = ToolRegistryEntry {
             name: entry.canonical_name,
             description: entry.summary,
-        })
-        .collect();
-    entries.sort_by_key(|entry| entry.name);
+        };
+        entries.push(registry_entry);
+    }
+
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
     entries
 }
 
@@ -1144,47 +1398,143 @@ pub(crate) fn capability_snapshot_for_view_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> String {
     let mut lines = vec!["[tool_discovery_runtime]".to_owned()];
-    let provider_core_entries = catalog::provider_core_tool_catalog();
-    for entry in provider_core_entries {
-        lines.push(format!("- {}: {}", entry.canonical_name, entry.summary));
-    }
-    let hidden_tools_line =
-        "Non-core tools are intentionally hidden until discovered with tool.search.".to_owned();
-    lines.push(hidden_tools_line);
 
-    if let Some(capability_tag_line) = discoverable_capability_tag_line(view, config) {
-        lines.push(capability_tag_line);
+    let visible_direct_lines = render_visible_direct_tool_lines(view);
+    lines.extend(visible_direct_lines);
+
+    let gateway_entries = catalog::provider_exposed_tool_catalog();
+    let gateway_entries = gateway_entries
+        .into_iter()
+        .filter(|entry| entry.is_gateway())
+        .collect::<Vec<_>>();
+    if !gateway_entries.is_empty() {
+        lines.push("Discovery gateway:".to_owned());
+        for entry in gateway_entries {
+            let line = format!("- {}: {}", entry.canonical_name, entry.summary);
+            lines.push(line);
+        }
     }
+
+    let discoverable_summary =
+        runtime_discoverable_tool_surface_summary_with_config(config, Some(view));
+    let hidden_tool_count = discoverable_summary.hidden_tool_count;
+
+    if hidden_tool_count == 0 {
+        lines.push(
+            "No hidden specialized tools are currently discoverable beyond the visible direct surface."
+                .to_owned(),
+        );
+    } else {
+        let hidden_count_line = format!(
+            "{hidden_tool_count} hidden specialized tools are currently discoverable through tool.search."
+        );
+        lines.push(hidden_count_line);
+
+        let hidden_tag_line = hidden_tool_tag_line(discoverable_summary.hidden_tags.as_slice());
+        if let Some(hidden_tag_line) = hidden_tag_line {
+            lines.push(hidden_tag_line);
+        }
+
+        let hidden_surface_lines =
+            render_hidden_tool_surface_lines(discoverable_summary.hidden_surfaces.as_slice());
+        lines.extend(hidden_surface_lines);
+    }
+
+    lines.push("Discovery workflow:".to_owned());
 
     let discovery_workflow_lines = [
-        "Discovery workflow: if a task may need a hidden capability, call tool.search before concluding the capability is unavailable.".to_owned(),
-        "A hidden tool stays unavailable until tool.search returns a lease-bearing tool card.".to_owned(),
-        "After discovery, call tool.invoke with the returned lease and the arguments for the selected tool.".to_owned(),
+        "Use a visible direct tool first when it fits the task.".to_owned(),
+        "If no visible direct tool fits, call tool.search before concluding the capability is unavailable.".to_owned(),
+        "A hidden specialized tool stays unavailable until tool.search returns a lease-bearing tool card.".to_owned(),
+        "After discovery, call tool.invoke with the returned lease and the arguments for the selected hidden tool.".to_owned(),
     ];
     lines.extend(discovery_workflow_lines);
 
     let tool_search_guidance_line =
-        "If no visible tool fits, call tool.search with the capability you need and let the discovery workflow surface the next valid tool.".to_owned();
+        "If no visible direct tool fits, call tool.search with the capability you need and let the discovery workflow surface the next valid hidden tool.".to_owned();
     lines.push(tool_search_guidance_line);
     lines.join("\n")
 }
 
-fn discoverable_capability_tag_line(
-    view: &ToolView,
+fn render_visible_direct_tool_lines(view: &ToolView) -> Vec<String> {
+    let visible_direct_states = tool_surface::visible_direct_tool_states_for_view(view);
+    if visible_direct_states.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    lines.push("Visible direct tools:".to_owned());
+
+    for state in visible_direct_states {
+        let line = format!(
+            "- {}: {} {}",
+            state.surface_id, state.prompt_snippet, state.usage_guidance
+        );
+        lines.push(line);
+    }
+
+    lines
+}
+
+fn render_hidden_tool_surface_lines(surfaces: &[ToolSurfaceState]) -> Vec<String> {
+    if surfaces.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    lines.push("Hidden specialized surfaces currently active:".to_owned());
+
+    for surface in surfaces {
+        let line = surface.render_prompt_line();
+        lines.push(line);
+    }
+
+    lines
+}
+
+pub fn runtime_discoverable_tool_surface_summary_with_config(
     config: &runtime_config::ToolRuntimeConfig,
-) -> Option<String> {
-    let discoverable_entries = runtime_discoverable_tool_entries(config, Some(view));
-    let discoverable_tags = summarize_discoverable_capability_tags(&discoverable_entries);
-    if discoverable_tags.is_empty() {
+    visible_tool_view: Option<&ToolView>,
+) -> DiscoverableToolSurfaceSummary {
+    let effective_view = effective_runtime_visible_tool_view(config, visible_tool_view);
+    let discoverable_entries = runtime_discoverable_tool_entries(config, Some(&effective_view));
+    let direct_states = tool_surface::visible_direct_tool_states_for_view(&effective_view);
+    summarize_discoverable_tool_surface(discoverable_entries.as_slice(), direct_states)
+}
+
+fn summarize_discoverable_tool_surface(
+    discoverable_entries: &[SearchableToolEntry],
+    direct_states: Vec<ToolSurfaceState>,
+) -> DiscoverableToolSurfaceSummary {
+    let visible_direct_tools = direct_states
+        .into_iter()
+        .map(|state| state.surface_id)
+        .collect::<Vec<_>>();
+    let hidden_surfaces = tool_surface::active_discoverable_tool_surface_states(
+        discoverable_entries
+            .iter()
+            .map(|entry| entry.tool_id.as_str()),
+    );
+
+    DiscoverableToolSurfaceSummary {
+        visible_direct_tools,
+        hidden_tool_count: discoverable_entries.len(),
+        hidden_tags: summarize_hidden_tool_tags(discoverable_entries),
+        hidden_surfaces,
+    }
+}
+
+fn hidden_tool_tag_line(hidden_tags: &[String]) -> Option<String> {
+    if hidden_tags.is_empty() {
         return None;
     }
 
-    let joined_tags = discoverable_tags.join(", ");
-    let line = format!("Discoverable capability tags currently discoverable: {joined_tags}.");
+    let joined_tags = hidden_tags.join(", ");
+    let line = format!("Hidden specialized tool tags currently discoverable: {joined_tags}.");
     Some(line)
 }
 
-fn summarize_discoverable_capability_tags(entries: &[SearchableToolEntry]) -> Vec<String> {
+fn summarize_hidden_tool_tags(entries: &[SearchableToolEntry]) -> Vec<String> {
     const IGNORED_TAGS: &[&str] = &["core", "discover", "search", "dispatch", "invoke"];
     const MAX_DISCOVERABLE_CAPABILITY_TAGS: usize = 8;
 
@@ -1232,25 +1582,52 @@ pub fn provider_tool_definitions() -> Vec<Value> {
 }
 
 pub(crate) fn provider_tool_definitions_with_config(
-    _config: Option<&runtime_config::ToolRuntimeConfig>,
+    config: Option<&runtime_config::ToolRuntimeConfig>,
 ) -> Vec<Value> {
-    provider_tool_definitions_for_view(&runtime_tool_view())
+    let default_runtime_config;
+    let config = match config {
+        Some(config) => config,
+        None => {
+            default_runtime_config = runtime_config::ToolRuntimeConfig::default();
+            &default_runtime_config
+        }
+    };
+
+    let view = runtime_tool_view_for_runtime_config(config);
+    provider_tool_definitions_for_view_with_config(&view)
 }
 
-pub fn try_provider_tool_definitions_for_view(_view: &ToolView) -> Result<Vec<Value>, String> {
-    Ok(provider_tool_definitions_for_view(_view))
+pub fn try_provider_tool_definitions_for_view(view: &ToolView) -> Result<Vec<Value>, String> {
+    Ok(provider_tool_definitions_for_view_with_config(view))
 }
 
-fn provider_tool_definitions_for_view(_view: &ToolView) -> Vec<Value> {
+fn provider_tool_definitions_for_view_with_config(view: &ToolView) -> Vec<Value> {
     let catalog = tool_catalog();
-    let mut tools = catalog
-        .descriptors()
-        .iter()
-        .filter(|descriptor| {
-            descriptor.is_provider_core() && descriptor.availability == ToolAvailability::Runtime
-        })
-        .map(ToolDescriptor::provider_definition)
-        .collect::<Vec<_>>();
+    let mut tools = Vec::new();
+
+    for descriptor in catalog.descriptors().iter() {
+        let runtime_available = descriptor.availability == ToolAvailability::Runtime;
+        if !runtime_available {
+            continue;
+        }
+
+        let provider_exposed = descriptor.is_provider_exposed();
+        if !provider_exposed {
+            continue;
+        }
+
+        if descriptor.is_direct() {
+            let direct_tool_visible =
+                tool_surface::direct_tool_visible_in_view(descriptor.name, view);
+            if !direct_tool_visible {
+                continue;
+            }
+        }
+
+        let definition = descriptor.provider_definition();
+        tools.push(definition);
+    }
+
     tools.sort_by(|left, right| tool_function_name(left).cmp(tool_function_name(right)));
     tools
 }
@@ -1273,38 +1650,78 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 .to_owned();
             let tags = vec!["feishu".to_owned()];
             let canonical_name = canonical_tool_name(provider_name).to_owned();
+            let tool_id = tool_surface::discovery_tool_name_for_tool_name(canonical_name.as_str());
             let search_hint = canonical_name.clone();
             let preferred_parameter_order: &[(&str, &str)] = &[];
             Some(searchable_entry_from_provider_definition(
                 canonical_name.as_str(),
                 provider_name,
                 &[],
+                tool_id,
                 summary,
                 search_hint,
                 &parameters,
                 preferred_parameter_order,
                 tags,
+                None,
+                None,
+                true,
             ))
         })
         .collect()
+}
+
+fn effective_runtime_visible_tool_view(
+    config: &runtime_config::ToolRuntimeConfig,
+    visible_tool_view: Option<&ToolView>,
+) -> ToolView {
+    let runtime_view = full_runtime_tool_view_for_runtime_config(config);
+
+    match visible_tool_view {
+        Some(injected) => {
+            // Intersect the injected view with the runtime-visible surface so that
+            // trusted _loongclaw.tool_search.visible_tool_ids cannot re-expose
+            // tools disabled by runtime config (browser.*, session_*, etc.).
+            injected.intersect(&runtime_view)
+        }
+        None => runtime_view,
+    }
+}
+
+fn runtime_tool_search_entries(
+    config: &runtime_config::ToolRuntimeConfig,
+    visible_tool_view: Option<&ToolView>,
+) -> Vec<SearchableToolEntry> {
+    let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
+    let mut entries = Vec::new();
+
+    for descriptor in catalog::tool_catalog().descriptors().iter() {
+        let runtime_available = descriptor.availability == ToolAvailability::Runtime;
+        if !runtime_available {
+            continue;
+        }
+
+        if descriptor.is_direct() {
+            let direct_tool_visible =
+                tool_surface::direct_tool_visible_in_view(descriptor.name, &visible_tool_view);
+            if !direct_tool_visible {
+                continue;
+            }
+            let entry = searchable_entry_from_descriptor(descriptor);
+            entries.push(entry);
+        }
+    }
+
+    let hidden_entries = runtime_discoverable_tool_entries(config, Some(&visible_tool_view));
+    entries.extend(hidden_entries);
+    entries
 }
 
 fn runtime_discoverable_tool_entries(
     config: &runtime_config::ToolRuntimeConfig,
     visible_tool_view: Option<&ToolView>,
 ) -> Vec<SearchableToolEntry> {
-    let runtime_view = full_runtime_tool_view_for_runtime_config(config);
-    let intersected_view;
-    let visible_tool_view = match visible_tool_view {
-        Some(injected) => {
-            // Intersect the injected view with the runtime-visible surface so that
-            // trusted _loong.tool_search.visible_tool_ids cannot re-expose
-            // tools disabled by runtime config (browser.*, session_*, etc.).
-            intersected_view = injected.intersect(&runtime_view);
-            &intersected_view
-        }
-        None => &runtime_view,
-    };
+    let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
     catalog::tool_catalog()
         .descriptors()
         .iter()
@@ -1313,6 +1730,12 @@ fn runtime_discoverable_tool_entries(
         .filter(|descriptor| {
             descriptor.name == SHELL_EXEC_TOOL_NAME
                 || tool_search_entry_is_runtime_usable(descriptor.name, config)
+        })
+        .filter(|descriptor| {
+            !tool_surface::hidden_tool_is_covered_by_visible_direct_tool(
+                descriptor.name,
+                &visible_tool_view,
+            )
         })
         .map(searchable_entry_from_descriptor)
         .collect::<Vec<_>>()
@@ -1594,11 +2017,17 @@ mod tests {
     fn capability_snapshot_is_deterministic() {
         let snapshot = capability_snapshot();
         assert!(snapshot.starts_with("[tool_discovery_runtime]"));
-        assert!(snapshot.contains("- tool.search: Discover non-core tools"));
-        assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
-        assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("Visible direct tools:"));
+        assert!(snapshot.contains("- read:"));
+        assert!(snapshot.contains("- write:"));
+        assert!(snapshot.contains("- exec:"));
+        assert!(snapshot.contains("Discovery gateway:"));
+        assert!(snapshot.contains("- tool.search: Discover hidden specialized tools"));
+        assert!(snapshot.contains("- tool.invoke: Invoke a discovered hidden specialized tool"));
+        assert!(snapshot.contains("Hidden specialized tool tags currently discoverable:"));
+        assert!(snapshot.contains("Hidden specialized surfaces currently active:"));
         assert!(snapshot.contains("Discovery workflow:"));
-        assert!(snapshot.contains("let the discovery workflow surface the next valid tool"));
+        assert!(snapshot.contains("next valid hidden tool"));
         assert!(!snapshot.contains("shell.exec"));
         assert!(!snapshot.contains("file.read"));
 
@@ -1666,23 +2095,28 @@ mod tests {
         feature = "memory-sqlite"
     ))]
     #[test]
-    fn capability_snapshot_only_lists_core_discovery_tools() {
+    fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
         let snapshot = capability_snapshot();
-        assert!(snapshot.contains("- tool.search: Discover non-core tools"));
-        assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
-        assert!(snapshot.contains("Non-core tools are intentionally hidden"));
-        assert!(snapshot.contains("Discoverable capability tags currently discoverable:"));
+        assert!(snapshot.contains("Visible direct tools:"));
+        assert!(snapshot.contains("- read:"));
+        assert!(snapshot.contains("- write:"));
+        assert!(snapshot.contains("- exec:"));
+        assert!(snapshot.contains("Discovery gateway:"));
+        assert!(snapshot.contains("- tool.search: Discover hidden specialized tools"));
+        assert!(snapshot.contains("- tool.invoke: Invoke a discovered hidden specialized tool"));
+        assert!(snapshot.contains("Hidden specialized tool tags currently discoverable:"));
+        assert!(snapshot.contains("Hidden specialized surfaces currently active:"));
         assert!(snapshot.contains("Discovery workflow:"));
-        assert!(snapshot.contains("let the discovery workflow surface the next valid tool"));
+        assert!(snapshot.contains("next valid hidden tool"));
         assert!(!snapshot.contains("claw.migrate"));
         assert!(!snapshot.contains("external_skills.fetch"));
         assert!(!snapshot.contains("file.read"));
         assert!(!snapshot.contains("shell.exec"));
 
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 8);
-        assert!(lines[0].starts_with("- tool.invoke"));
-        assert!(lines[1].starts_with("- tool.search"));
+        assert!(lines.len() >= 8);
+        assert!(lines.iter().any(|line| line.starts_with("- read:")));
+        assert!(lines.iter().any(|line| line.starts_with("- tool.search:")));
     }
 
     #[cfg(all(
@@ -1697,25 +2131,17 @@ mod tests {
         let entries = tool_registry_with_config(Some(&config));
         let names = entries
             .iter()
-            .map(|entry| entry.name)
+            .map(|entry| entry.name.as_str())
             .collect::<BTreeSet<_>>();
         #[allow(unused_mut)]
         let mut expected = BTreeSet::from([
             "approval_request_resolve",
             "approval_request_status",
             "approval_requests_list",
-            "browser.click",
-            "browser.extract",
-            "browser.open",
             "config.import",
-            "content.search",
             "delegate",
             "delegate_async",
             "external_skills.policy",
-            "file.edit",
-            "file.read",
-            "file.write",
-            "glob.search",
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
@@ -1724,8 +2150,6 @@ mod tests {
             "session_wait",
             "sessions_history",
             "sessions_list",
-            "web.fetch",
-            "web.search",
         ]);
         #[cfg(feature = "tool-http")]
         expected.insert(HTTP_REQUEST_TOOL_NAME);
@@ -1744,25 +2168,17 @@ mod tests {
         let entries = tool_registry_with_config(Some(&config));
         let names = entries
             .iter()
-            .map(|entry| entry.name)
+            .map(|entry| entry.name.as_str())
             .collect::<BTreeSet<_>>();
         #[allow(unused_mut)]
         let mut expected = BTreeSet::from([
             "approval_request_resolve",
             "approval_request_status",
             "approval_requests_list",
-            "browser.click",
-            "browser.extract",
-            "browser.open",
             "config.import",
-            "content.search",
             "delegate",
             "delegate_async",
             "external_skills.policy",
-            "file.edit",
-            "file.read",
-            "file.write",
-            "glob.search",
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
@@ -1771,7 +2187,6 @@ mod tests {
             "session_wait",
             "sessions_history",
             "sessions_list",
-            "web.fetch",
         ]);
         #[cfg(feature = "tool-http")]
         expected.insert(HTTP_REQUEST_TOOL_NAME);
@@ -1789,34 +2204,39 @@ mod tests {
         };
 
         let entries = tool_registry_with_config(Some(&config));
-        let names: Vec<&str> = entries.iter().map(|entry| entry.name).collect();
+        let names = entries
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>();
 
-        assert!(names.contains(&"session_archive"));
-        assert!(names.contains(&"session_cancel"));
-        assert!(names.contains(&"session_continue"));
-        assert!(names.contains(&"session_recover"));
-        assert!(names.contains(&"session_tool_policy_set"));
-        assert!(names.contains(&"session_tool_policy_clear"));
+        assert!(names.contains(&"session_archive".to_owned()));
+        assert!(names.contains(&"session_cancel".to_owned()));
+        assert!(names.contains(&"session_continue".to_owned()));
+        assert!(names.contains(&"session_recover".to_owned()));
+        assert!(names.contains(&"session_tool_policy_set".to_owned()));
+        assert!(names.contains(&"session_tool_policy_clear".to_owned()));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
-    fn capability_snapshot_for_view_stays_core_only_under_restricted_view() {
+    fn capability_snapshot_for_view_keeps_hidden_tools_out_of_direct_surface_copy() {
         let view = ToolView::from_tool_names(["config.import", "shell.exec"]);
         let snapshot = capability_snapshot_for_view(&view);
 
-        assert!(snapshot.contains("- tool.search: Discover non-core tools"));
-        assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
+        assert!(snapshot.contains("Discovery gateway:"));
+        assert!(snapshot.contains("- tool.search: Discover hidden specialized tools"));
+        assert!(snapshot.contains("- tool.invoke: Invoke a discovered hidden specialized tool"));
         assert!(!snapshot.contains("- config.import:"));
         assert!(!snapshot.contains("- shell.exec:"));
+        assert!(snapshot.contains("- exec:"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
-    fn try_provider_tool_definitions_for_view_returns_core_only_subset() {
-        let view = ToolView::from_tool_names(["shell.exec", "config.import"]);
+    fn try_provider_tool_definitions_for_view_exposes_gateway_when_no_direct_tool_is_visible() {
+        let view = ToolView::from_tool_names(["config.import"]);
         let defs = try_provider_tool_definitions_for_view(&view)
-            .expect("restricted runtime view should still expose provider-core schemas");
+            .expect("restricted runtime view should still expose the discovery gateway");
         let names: Vec<&str> = defs
             .iter()
             .filter_map(|item| item.get("function"))
@@ -2045,9 +2465,9 @@ mod tests {
         feature = "memory-sqlite"
     ))]
     #[test]
-    fn provider_tool_definitions_are_stable_and_core_only() {
+    fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 2);
+        assert_eq!(defs.len(), 8);
 
         let names: Vec<&str> = defs
             .iter()
@@ -2055,7 +2475,19 @@ mod tests {
             .filter_map(|function| function.get("name"))
             .filter_map(Value::as_str)
             .collect();
-        assert_eq!(names, vec!["tool_invoke", "tool_search"]);
+        assert_eq!(
+            names,
+            vec![
+                "browser",
+                "exec",
+                "memory",
+                "read",
+                "tool_invoke",
+                "tool_search",
+                "web",
+                "write",
+            ]
+        );
 
         for item in &defs {
             assert_eq!(item["type"], "function");
@@ -2088,7 +2520,10 @@ mod tests {
     }
 
     #[test]
-    fn provider_exposed_tool_gate_is_core_only() {
+    fn provider_exposed_tool_gate_covers_direct_and_gateway_tools() {
+        assert!(is_provider_exposed_tool_name("read"));
+        assert!(is_provider_exposed_tool_name("write"));
+        assert!(is_provider_exposed_tool_name("exec"));
         assert!(is_provider_exposed_tool_name("tool.search"));
         assert!(is_provider_exposed_tool_name("tool.invoke"));
         assert!(!is_provider_exposed_tool_name("file.read"));
@@ -2338,7 +2773,7 @@ mod tests {
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
-    fn tool_search_returns_discoverable_tools_with_leases() {
+    fn tool_search_returns_direct_results_for_common_file_queries() {
         use std::fs;
         use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2371,11 +2806,13 @@ mod tests {
                 .iter()
                 .all(|entry| entry["tool_id"] != "tool.search")
         );
-        assert!(
-            results
-                .iter()
-                .any(|entry| entry["tool_id"] == "file.read" && entry["lease"].as_str().is_some())
-        );
+        assert!(results.iter().any(|entry| entry["tool_id"] == "read"));
+        assert!(results.iter().all(|entry| {
+            if entry["tool_id"] != "read" {
+                return true;
+            }
+            entry.get("lease").is_none()
+        }));
 
         fs::remove_dir_all(&root).ok();
     }
@@ -2410,12 +2847,7 @@ mod tests {
 
         let results = outcome.payload["results"].as_array().expect("results");
 
-        assert!(
-            results
-                .iter()
-                .any(|entry| entry["tool_id"] == "memory_search")
-        );
-        assert!(results.iter().any(|entry| entry["tool_id"] == "memory_get"));
+        assert!(results.iter().any(|entry| entry["tool_id"] == "memory"));
     }
 
     #[cfg(feature = "tool-file")]
@@ -2772,8 +3204,8 @@ mod tests {
         let results = outcome.payload["results"].as_array().expect("results");
         let shell_entry = results
             .iter()
-            .find(|entry| entry["tool_id"] == "shell.exec")
-            .expect("shell.exec should be discoverable");
+            .find(|entry| entry["tool_id"] == "exec")
+            .expect("direct exec should be discoverable");
 
         assert!(shell_entry["search_hint"].as_str().is_some());
         assert!(shell_entry["schema_preview"].is_object());
@@ -2804,7 +3236,7 @@ mod tests {
 
         assert!(!results.is_empty());
         assert_eq!(outcome.payload["query"], json!("run shell command"));
-        assert_eq!(results[0]["tool_id"], "shell.exec");
+        assert_eq!(results[0]["tool_id"], "exec");
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -2830,8 +3262,8 @@ mod tests {
 
         let results = outcome.payload["results"].as_array().expect("results");
         assert!(
-            results.iter().any(|entry| entry["tool_id"] == "web.fetch"),
-            "schema-derived enum terms should make web.fetch discoverable: {results:?}"
+            results.iter().any(|entry| entry["tool_id"] == "web"),
+            "schema-derived enum terms should make direct web discoverable: {results:?}"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -2849,13 +3281,13 @@ mod tests {
 
         let config = test_tool_runtime_config(root.clone());
         let cases = vec![
-            ("编辑文件", "file.edit"),
-            ("ファイルを読む", "file.read"),
-            ("메모 검색", "memory_search"),
-            ("искать веб", "web.search"),
-            ("تثبيت مهارة", "external_skills.install"),
-            ("cambiar proveedor", "provider.switch"),
-            ("प्रदाता बदलें", "provider.switch"),
+            ("编辑文件", "write"),
+            ("ファイルを読む", "read"),
+            ("메모 검색", "memory"),
+            ("искать веб", "web"),
+            ("تثبيت مهارة", "external-skills-install"),
+            ("cambiar proveedor", "provider-switch"),
+            ("प्रदाता बदलें", "provider-switch"),
         ];
 
         for (query, expected_tool) in cases {
@@ -2934,8 +3366,8 @@ mod tests {
 
     #[cfg(feature = "tool-file")]
     #[test]
-    fn tool_search_prefers_file_write_for_write_queries() {
-        let root = unique_tool_temp_dir("loong-tool-search-write-query");
+    fn tool_search_prefers_direct_write_for_write_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-write-query");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -2956,7 +3388,7 @@ mod tests {
             .first()
             .and_then(|entry| entry.get("tool_id"))
             .and_then(Value::as_str);
-        assert_eq!(first_tool_id, Some("file.write"));
+        assert_eq!(first_tool_id, Some("write"));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -2988,27 +3420,55 @@ mod tests {
             .and_then(Value::as_str);
 
         assert_eq!(query, Some("write file"));
-        assert_eq!(first_tool_id, Some("file.write"));
+        assert_eq!(first_tool_id, Some("write"));
 
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn capability_snapshot_summarizes_discoverable_tags_without_tool_names() {
+    fn capability_snapshot_summarizes_hidden_tags_without_tool_names() {
         let snapshot = capability_snapshot();
-        let discoverable_tag_line = snapshot
+        let hidden_tag_line = snapshot
             .lines()
-            .find(|line| line.starts_with("Discoverable capability tags currently discoverable:"))
-            .expect("discoverable capability tag line");
+            .find(|line| line.starts_with("Hidden specialized tool tags currently discoverable:"))
+            .expect("hidden tool tag line");
 
         assert!(
-            !discoverable_tag_line.contains("file.read"),
-            "capability summary should expose tags, not tool names: {discoverable_tag_line}"
+            !hidden_tag_line.contains("provider.switch"),
+            "capability summary should expose tags, not tool names: {hidden_tag_line}"
         );
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn runtime_discoverable_tool_surface_summary_groups_visible_direct_and_hidden_surfaces() {
+        let root = unique_tool_temp_dir("loongclaw-tool-surface-summary");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let summary = runtime_discoverable_tool_surface_summary_with_config(
+            &config,
+            Some(&runtime_tool_view_for_runtime_config(&config)),
+        );
+
+        assert!(summary.hidden_tool_count > 0);
+        assert!(summary.visible_direct_tools.contains(&"read".to_owned()));
+        assert!(summary.visible_direct_tools.contains(&"write".to_owned()));
+        assert!(summary.visible_direct_tools.contains(&"exec".to_owned()));
+        assert!(!summary.hidden_tags.is_empty());
+
+        let session_surface = summary
+            .hidden_surfaces
+            .iter()
+            .find(|surface| surface.surface_id == "session")
+            .expect("session surface");
         assert!(
-            discoverable_tag_line.contains("file"),
-            "expected the summary to surface runtime file capabilities: {discoverable_tag_line}"
+            session_surface
+                .tool_ids
+                .contains(&"session-events".to_owned())
         );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[cfg(feature = "tool-file")]
@@ -3077,19 +3537,19 @@ mod tests {
         assert!(
             results
                 .iter()
-                .any(|entry| entry["tool_id"] == "browser.companion.session.start"),
+                .any(|entry| entry["tool_id"] == "browser-companion-session-start"),
             "session start should be discoverable once runtime-ready: {results:?}"
         );
         assert!(
             results
                 .iter()
-                .any(|entry| entry["tool_id"] == "browser.companion.navigate"),
+                .any(|entry| entry["tool_id"] == "browser-companion-navigate"),
             "navigate should be discoverable once runtime-ready: {results:?}"
         );
         assert!(
             results
                 .iter()
-                .any(|entry| entry["tool_id"] == "browser.companion.click"),
+                .any(|entry| entry["tool_id"] == "browser-companion-click"),
             "click should be discoverable once runtime-ready: {results:?}"
         );
 
@@ -3609,13 +4069,13 @@ mod tests {
         assert!(
             results
                 .iter()
-                .any(|entry| entry["tool_id"] == "feishu.messages.search"),
+                .any(|entry| entry["tool_id"] == "feishu-messages-search"),
             "feishu runtime tools should be discoverable through tool.search: {results:?}"
         );
         assert!(
             results
                 .iter()
-                .any(|entry| entry["tool_id"] == "feishu.messages.send"),
+                .any(|entry| entry["tool_id"] == "feishu-messages-send"),
             "feishu send should be discoverable through tool.search: {results:?}"
         );
     }
@@ -3667,14 +4127,14 @@ mod tests {
             .as_array()
             .expect("results")
             .iter()
-            .find(|entry| entry["tool_id"] == "feishu.messages.send")
-            .expect("feishu.messages.send search result");
+            .find(|entry| entry["tool_id"] == "feishu-messages-send")
+            .expect("feishu-messages-send search result");
 
         let error = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "tool.invoke".to_owned(),
                 payload: json!({
-                    "tool_id": "feishu.messages.send",
+                    "tool_id": "feishu-messages-send",
                     "lease": result["lease"].clone(),
                     "arguments": {
                         "text": "ship by invoke"
@@ -3711,7 +4171,7 @@ mod tests {
         let search = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "tool.search".to_owned(),
-                payload: json!({"query": "read file"}),
+                payload: json!({"query": "external skills policy"}),
             },
             &config,
         )
@@ -3721,19 +4181,16 @@ mod tests {
             .as_array()
             .expect("results")
             .iter()
-            .find(|entry| entry["tool_id"] == "file.read")
-            .expect("file.read search result");
+            .find(|entry| entry["tool_id"] == "external-skills-policy")
+            .expect("external-skills-policy search result");
 
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "tool.invoke".to_owned(),
                 payload: json!({
-                    "tool_id": "file.read",
+                    "tool_id": "external-skills-policy",
                     "lease": result["lease"].clone(),
-                    "arguments": {
-                        "path": "README.md",
-                        "max_bytes": 64
-                    }
+                    "arguments": {}
                 }),
             },
             &config,
@@ -3741,12 +4198,8 @@ mod tests {
         .expect("tool invoke should succeed");
 
         assert_eq!(outcome.status, "ok");
-        assert!(
-            outcome.payload["path"]
-                .as_str()
-                .is_some_and(|path| path.ends_with("README.md"))
-        );
-        assert_eq!(outcome.payload["content"], "tool invoke fixture");
+        assert_eq!(outcome.payload["action"], "get");
+        assert!(outcome.payload["policy"].is_object());
 
         fs::remove_dir_all(&root).ok();
     }
@@ -3759,7 +4212,7 @@ mod tests {
         let search = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "tool.search".to_owned(),
-                payload: json!({"query": "read file"}),
+                payload: json!({"query": "switch provider"}),
             },
             &config,
         )
@@ -3769,9 +4222,9 @@ mod tests {
             .as_array()
             .expect("results")
             .iter()
-            .find(|entry| entry["tool_id"] == "file.read")
+            .find(|entry| entry["tool_id"] == "provider-switch")
             .and_then(|entry| entry["lease"].as_str())
-            .expect("file.read lease");
+            .expect("provider-switch lease");
         let lease_parts = lease.split_once('.').expect("lease separator");
         let encoded_claims = lease_parts.0;
         let claims_bytes = URL_SAFE_NO_PAD
@@ -3826,7 +4279,7 @@ mod tests {
             ToolCoreRequest {
                 tool_name: "tool.search".to_owned(),
                 payload: json!({
-                    "query": "read file",
+                    "query": "external skills policy",
                     TOOL_LEASE_SESSION_ID_FIELD: "session-a",
                     TOOL_LEASE_TURN_ID_FIELD: "turn-a"
                 }),
@@ -3839,18 +4292,16 @@ mod tests {
             .as_array()
             .expect("results")
             .iter()
-            .find(|entry| entry["tool_id"] == "file.read")
-            .expect("file.read search result");
+            .find(|entry| entry["tool_id"] == "external-skills-policy")
+            .expect("external-skills-policy search result");
 
         let error = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "tool.invoke".to_owned(),
                 payload: json!({
-                    "tool_id": "file.read",
+                    "tool_id": "external-skills-policy",
                     "lease": result["lease"].clone(),
-                    "arguments": {
-                        "path": "README.md"
-                    },
+                    "arguments": {},
                     TOOL_LEASE_SESSION_ID_FIELD: "session-a",
                     TOOL_LEASE_TURN_ID_FIELD: "turn-b"
                 }),
@@ -4114,27 +4565,31 @@ mod tests {
         });
 
         let entries = tool_registry_with_config(Some(&config));
-        let names = entries.iter().map(|entry| entry.name).collect::<Vec<_>>();
+        let names = entries
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>();
 
-        assert!(names.contains(&"feishu.whoami"));
-        assert!(names.contains(&"feishu.doc.create"));
-        assert!(names.contains(&"feishu.doc.append"));
-        assert!(names.contains(&"feishu.doc.read"));
-        assert!(names.contains(&"feishu.messages.history"));
-        assert!(names.contains(&"feishu.messages.get"));
-        assert!(names.contains(&"feishu.messages.resource.get"));
-        assert!(names.contains(&"feishu.messages.search"));
-        assert!(names.contains(&"feishu.messages.send"));
-        assert!(names.contains(&"feishu.messages.reply"));
-        assert!(names.contains(&"feishu.card.update"));
-        assert!(names.contains(&"feishu.calendar.list"));
-        assert!(names.contains(&"feishu.calendar.freebusy"));
-        assert!(names.contains(&"feishu.calendar.primary.get"));
+        assert!(names.contains(&"feishu.whoami".to_owned()));
+        assert!(names.contains(&"feishu.doc.create".to_owned()));
+        assert!(names.contains(&"feishu.doc.append".to_owned()));
+        assert!(names.contains(&"feishu.doc.read".to_owned()));
+        assert!(names.contains(&"feishu.messages.history".to_owned()));
+        assert!(names.contains(&"feishu.messages.get".to_owned()));
+        assert!(names.contains(&"feishu.messages.resource.get".to_owned()));
+        assert!(names.contains(&"feishu.messages.search".to_owned()));
+        assert!(names.contains(&"feishu.messages.send".to_owned()));
+        assert!(names.contains(&"feishu.messages.reply".to_owned()));
+        assert!(names.contains(&"feishu.card.update".to_owned()));
+        assert!(names.contains(&"feishu.calendar.list".to_owned()));
+        assert!(names.contains(&"feishu.calendar.freebusy".to_owned()));
+        assert!(names.contains(&"feishu.calendar.primary.get".to_owned()));
     }
 
     #[cfg(feature = "feishu-integration")]
     #[test]
-    fn provider_tool_definitions_with_config_remains_core_only_when_feishu_runtime_is_configured() {
+    fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtime_is_configured()
+     {
         let mut config = runtime_config::ToolRuntimeConfig::default();
         config.feishu = Some(runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
@@ -4154,7 +4609,14 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
 
-        assert_eq!(names, vec!["tool_invoke", "tool_search"]);
+        assert!(names.contains(&"browser"));
+        assert!(names.contains(&"exec"));
+        assert!(names.contains(&"read"));
+        assert!(names.contains(&"tool_invoke"));
+        assert!(names.contains(&"tool_search"));
+        assert!(names.contains(&"web"));
+        assert!(names.contains(&"write"));
+        assert_eq!(names.len(), 7);
     }
 
     #[cfg(feature = "feishu-integration")]
@@ -4166,7 +4628,7 @@ mod tests {
 
         let registry_names = registry
             .iter()
-            .map(|entry| entry.name)
+            .map(|entry| entry.name.clone())
             .collect::<BTreeSet<_>>();
         let definition_names = defs
             .iter()
@@ -4174,6 +4636,7 @@ mod tests {
             .filter_map(|function| function.get("name"))
             .filter_map(Value::as_str)
             .map(canonical_tool_name)
+            .map(str::to_owned)
             .collect::<BTreeSet<_>>();
 
         assert_eq!(registry_names, definition_names);
@@ -4183,7 +4646,7 @@ mod tests {
             assert!(feishu::is_known_feishu_tool_name(canonical));
         }
         for name in registry_names {
-            assert!(feishu::is_known_feishu_tool_name(name));
+            assert!(feishu::is_known_feishu_tool_name(&name));
         }
     }
 

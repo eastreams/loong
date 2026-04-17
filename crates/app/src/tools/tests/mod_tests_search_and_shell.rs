@@ -62,13 +62,10 @@ fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
     let results = outcome.payload["results"].as_array().expect("results");
     let shell_entry = results
         .iter()
-        .find(|entry| entry["tool_id"] == "shell.exec")
-        .expect("shell.exec should remain discoverable");
-    let lease = shell_entry["lease"]
-        .as_str()
-        .expect("shell.exec should include a lease");
+        .find(|entry| entry["tool_id"] == "exec")
+        .expect("direct exec should remain discoverable");
 
-    assert!(!lease.is_empty(), "lease should not be empty");
+    assert!(shell_entry.get("lease").is_none());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -651,7 +648,7 @@ fn tool_search_result_includes_compact_argument_hints() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(results.iter().any(|entry| {
-        entry["tool_id"] == "shell.exec"
+        entry["tool_id"] == "exec"
             && entry["argument_hint"].as_str()
                 == Some("command:string,args?:string[],timeout_ms?:integer,cwd?:string")
     }));
@@ -681,8 +678,14 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
     let first = results.first().expect("one result should be returned");
 
     assert_eq!(outcome.payload["returned"], 1);
-    assert_eq!(first["tool_id"], "file.read");
-    assert!(first["lease"].as_str().is_some());
+    assert_eq!(first["tool_id"], "read");
+    assert_eq!(first["surface_id"], "read");
+    assert!(
+        first["usage_guidance"]
+            .as_str()
+            .is_some_and(|value| value.contains("direct read first"))
+    );
+    assert!(first.get("lease").is_none());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -716,7 +719,7 @@ fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_w
     let diagnostics = &outcome.payload["diagnostics"];
 
     assert!(!results.is_empty());
-    assert_eq!(results[0]["tool_id"], "shell.exec");
+    assert_eq!(results[0]["tool_id"], "exec");
     assert_eq!(outcome.payload["exact_tool_id"], "file_read");
     assert_eq!(diagnostics["reason"], "exact_tool_id_not_visible");
     assert_eq!(diagnostics["requested_tool_id"], "file_read");

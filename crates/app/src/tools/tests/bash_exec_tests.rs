@@ -98,8 +98,8 @@ fn tool_search_includes_bash_exec_when_runtime_is_available() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(
-        results.iter().any(|entry| entry["tool_id"] == "bash.exec"),
-        "runtime-ready bash.exec should appear in tool search results"
+        results.iter().any(|entry| entry["tool_id"] == "bash-exec"),
+        "runtime-ready bash-exec should appear in tool search results"
     );
 }
 
@@ -125,8 +125,8 @@ fn tool_search_exact_query_surfaces_bash_exec() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(
-        results.iter().any(|entry| entry["tool_id"] == "bash.exec"),
-        "exact tool-id query should surface bash.exec, got: {results:?}"
+        results.iter().any(|entry| entry["tool_id"] == "bash-exec"),
+        "exact tool-id query should surface bash-exec, got: {results:?}"
     );
 }
 
@@ -766,14 +766,14 @@ fn tool_invoke_dispatches_bash_exec_with_trusted_internal_context() {
         .as_array()
         .expect("results")
         .iter()
-        .find(|entry| entry["tool_id"] == "bash.exec")
-        .expect("bash.exec search result");
+        .find(|entry| entry["tool_id"] == "bash-exec")
+        .expect("bash-exec search result");
 
     let outcome = execute_tool_core_with_test_context(
         ToolCoreRequest {
             tool_name: "tool.invoke".to_owned(),
             payload: json!({
-                "tool_id": "bash.exec",
+                "tool_id": "bash-exec",
                 "lease": result["lease"].clone(),
                 "arguments": {
                     "command": "printf 'invoke-bash'"

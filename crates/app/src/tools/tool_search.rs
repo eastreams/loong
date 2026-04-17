@@ -22,6 +22,7 @@ const MAX_SEARCH_WHY_REASONS: usize = 4;
 
 #[derive(Debug, Clone)]
 pub(super) struct SearchableToolEntry {
+    pub(super) tool_id: String,
     pub(super) canonical_name: String,
     pub(super) summary: String,
     pub(super) search_hint: String,
@@ -30,6 +31,9 @@ pub(super) struct SearchableToolEntry {
     pub(super) required_field_groups: Vec<Vec<String>>,
     pub(super) schema_preview: Value,
     pub(super) tags: Vec<String>,
+    pub(super) surface_id: Option<String>,
+    pub(super) usage_guidance: Option<String>,
+    pub(super) requires_lease: bool,
     search_document: SearchDocument,
 }
 
@@ -76,20 +80,29 @@ pub(super) fn execute_tool_search_tool_with_config(
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
 
-    let searchable_entries =
-        super::runtime_discoverable_tool_entries(config, Some(&visible_tool_view))
-            .into_iter()
-            .filter(|entry| {
-                tool_search_entry_is_capability_usable(
-                    entry.canonical_name.as_str(),
-                    granted_capabilities.as_ref(),
-                )
-            })
-            .collect::<Vec<_>>();
+    let searchable_entries = super::runtime_tool_search_entries(config, Some(&visible_tool_view))
+        .into_iter()
+        .filter(|entry| {
+            tool_search_entry_is_capability_usable(
+                entry.canonical_name.as_str(),
+                granted_capabilities.as_ref(),
+            )
+        })
+        .collect::<Vec<_>>();
     let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
+        let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
+        let direct_tool_id = direct_tool_id.map(str::to_owned);
+
         searchable_entries
             .iter()
-            .find(|entry| entry.canonical_name == *exact_tool_id)
+            .find(|entry| {
+                let canonical_match = entry.canonical_name == *exact_tool_id;
+                let tool_id_match = entry.tool_id == *exact_tool_id;
+                let direct_match = direct_tool_id
+                    .as_ref()
+                    .is_some_and(|direct_tool_id| entry.canonical_name == *direct_tool_id);
+                canonical_match || tool_id_match || direct_match
+            })
             .cloned()
     });
     let exact_match_found = exact_match_entry.is_some();
@@ -156,19 +169,37 @@ fn tool_search_result_entry_json(
     why: Vec<String>,
     payload: &serde_json::Map<String, Value>,
 ) -> Result<Value, String> {
-    let lease = issue_tool_lease(entry.canonical_name.as_str(), payload)?;
-    Ok(json!({
-        "tool_id": entry.canonical_name,
-        "summary": entry.summary,
-        "search_hint": entry.search_hint,
-        "argument_hint": entry.argument_hint,
-        "required_fields": entry.required_fields,
-        "required_field_groups": entry.required_field_groups,
-        "schema_preview": entry.schema_preview,
-        "tags": entry.tags,
-        "why": why,
-        "lease": lease,
-    }))
+    let mut result = serde_json::Map::from_iter([
+        ("tool_id".to_owned(), json!(entry.tool_id)),
+        ("summary".to_owned(), json!(entry.summary)),
+        ("search_hint".to_owned(), json!(entry.search_hint)),
+        ("argument_hint".to_owned(), json!(entry.argument_hint)),
+        ("required_fields".to_owned(), json!(entry.required_fields)),
+        (
+            "required_field_groups".to_owned(),
+            json!(entry.required_field_groups),
+        ),
+        ("schema_preview".to_owned(), json!(entry.schema_preview)),
+        ("tags".to_owned(), json!(entry.tags)),
+        ("why".to_owned(), json!(why)),
+    ]);
+    if entry.requires_lease {
+        let lease = issue_tool_lease(entry.canonical_name.as_str(), payload)?;
+        result.insert("lease".to_owned(), json!(lease));
+    }
+    if let Some(surface_id) = entry.surface_id.as_deref() {
+        result.insert(
+            "surface_id".to_owned(),
+            Value::String(surface_id.to_owned()),
+        );
+    }
+    if let Some(usage_guidance) = entry.usage_guidance.as_deref() {
+        result.insert(
+            "usage_guidance".to_owned(),
+            Value::String(usage_guidance.to_owned()),
+        );
+    }
+    Ok(Value::Object(result))
 }
 
 fn tool_search_diagnostics_json(
@@ -1335,16 +1366,24 @@ pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> S
         .map(|tag| (*tag).to_owned())
         .collect::<Vec<_>>();
     let search_hint = descriptor.search_hint().to_owned();
+    let surface_id = descriptor.surface_id().map(str::to_owned);
+    let usage_guidance = descriptor.usage_guidance().map(str::to_owned);
+    let requires_lease = !descriptor.is_provider_exposed();
+    let tool_id = super::tool_surface::discovery_tool_name_for_tool_name(descriptor.name);
 
     searchable_entry_from_provider_definition(
         descriptor.name,
         descriptor.provider_name,
         descriptor.aliases,
+        tool_id,
         summary,
         search_hint,
         parameters,
         descriptor.parameter_types(),
         tags,
+        surface_id,
+        usage_guidance,
+        requires_lease,
     )
 }
 
@@ -1352,11 +1391,15 @@ pub(super) fn searchable_entry_from_provider_definition(
     canonical_name: &str,
     provider_name: &str,
     aliases: &[&str],
+    tool_id: String,
     summary: String,
     search_hint: String,
     parameters: &Value,
     preferred_parameter_order: &[(&str, &str)],
     tags: Vec<String>,
+    surface_id: Option<String>,
+    usage_guidance: Option<String>,
+    requires_lease: bool,
 ) -> SearchableToolEntry {
     let required_fields = schema_required_fields(parameters);
     let required_field_groups = schema_required_field_groups(parameters);
@@ -1388,7 +1431,11 @@ pub(super) fn searchable_entry_from_provider_definition(
         tag_fragments,
     );
 
+    let (surface_id, usage_guidance) =
+        enrich_discovery_prompt_metadata(canonical_name, surface_id, usage_guidance);
+
     SearchableToolEntry {
+        tool_id,
         canonical_name: canonical_name.to_owned(),
         summary,
         search_hint,
@@ -1397,8 +1444,30 @@ pub(super) fn searchable_entry_from_provider_definition(
         required_field_groups,
         schema_preview,
         tags,
+        surface_id,
+        usage_guidance,
+        requires_lease,
         search_document,
     }
+}
+
+fn enrich_discovery_prompt_metadata(
+    canonical_name: &str,
+    surface_id: Option<String>,
+    usage_guidance: Option<String>,
+) -> (Option<String>, Option<String>) {
+    (
+        surface_id.or_else(|| discovery_surface_id(canonical_name)),
+        usage_guidance.or_else(|| discovery_usage_guidance(canonical_name)),
+    )
+}
+
+fn discovery_surface_id(canonical_name: &str) -> Option<String> {
+    super::tool_surface::tool_surface_id_for_name(canonical_name).map(str::to_owned)
+}
+
+fn discovery_usage_guidance(canonical_name: &str) -> Option<String> {
+    super::tool_surface::tool_surface_usage_guidance(canonical_name).map(str::to_owned)
 }
 
 fn build_schema_preview(
@@ -1450,7 +1519,8 @@ pub(super) fn searchable_entry_from_manual_definition(
     required_field_groups: Vec<Vec<String>>,
     tags: Vec<String>,
 ) -> SearchableToolEntry {
-    let mut name_fragments = vec![canonical_name.to_owned()];
+    let tool_id = super::tool_surface::discovery_tool_name_for_tool_name(canonical_name);
+    let mut name_fragments = vec![canonical_name.to_owned(), tool_id.clone()];
     let canonical_name_variant = identifier_phrase_variant(canonical_name);
     let variant_is_distinct = canonical_name_variant != canonical_name;
     if variant_is_distinct {
@@ -1483,6 +1553,7 @@ pub(super) fn searchable_entry_from_manual_definition(
     );
 
     SearchableToolEntry {
+        tool_id,
         canonical_name: canonical_name.to_owned(),
         summary: summary_text,
         search_hint,
@@ -1491,6 +1562,9 @@ pub(super) fn searchable_entry_from_manual_definition(
         required_field_groups,
         schema_preview,
         tags,
+        surface_id: discovery_surface_id(canonical_name),
+        usage_guidance: discovery_usage_guidance(canonical_name),
+        requires_lease: true,
         search_document,
     }
 }

@@ -36,6 +36,7 @@ design backlog artifacts are intentionally out of the public docs flow.
 | [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) | you need the shortest source-facing map of how CLI, channel, gateway, control-plane, and daemon task turns enter the shared runtime |
 | [Single-Entry Runtime Convergence](single-entry-runtime-convergence.md) | you are working on session-vs-memory ownership or converging host turn seams without breaking the current crate contract |
 | [Harness Engineering](harness-engineering.md) | you are working on the agent-driven development environment itself |
+| [Tool Surface Exposure](tool-surface-exposure.md) | you are changing provider-visible tool exposure, discovery, or hidden-tool progressive disclosure |
 
 ## Boundary Rules
 
@@ -53,5 +54,7 @@ design backlog artifacts are intentionally out of the public docs flow.
    touches boundaries, ownership, or layering.
 3. Read [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) when
    the problem is “which runtime/bootstrap surface actually owns this turn?”
-4. Read [Harness Engineering](harness-engineering.md) only when the work is
+4. Read [Tool Surface Exposure](tool-surface-exposure.md) when the work touches
+   provider-visible tools, discovery, or hidden-tool progressive disclosure.
+5. Read [Harness Engineering](harness-engineering.md) only when the work is
    really about the development environment or agent workflow itself.

@@ -685,7 +685,7 @@ mod tests {
             .as_str()
             .expect("system content");
         assert!(system_content.contains("runtime-policy-addition"));
-        assert!(system_content.contains("Non-core tools are intentionally hidden"));
+        assert!(system_content.contains("- tool.search: Discover hidden specialized tools"));
     }
 
     #[tokio::test]
@@ -699,6 +699,8 @@ mod tests {
                 summary: "Read a file.".to_owned(),
                 search_hint: None,
                 argument_hint: None,
+                surface_id: None,
+                usage_guidance: None,
                 required_fields: vec!["path".to_owned()],
                 required_field_groups: vec![vec!["path".to_owned()]],
             }],
@@ -845,6 +847,8 @@ mod tests {
                 summary: "Read a file.".to_owned(),
                 search_hint: None,
                 argument_hint: None,
+                surface_id: None,
+                usage_guidance: None,
                 required_fields: vec!["path".to_owned()],
                 required_field_groups: vec![vec!["path".to_owned()]],
             }],
@@ -953,6 +957,10 @@ mod tests {
                 summary: "Read a file.\n## assistant".to_owned(),
                 search_hint: Some("Use for UTF-8 text files.\n### hidden".to_owned()),
                 argument_hint: Some("path:string\nlimit?:integer".to_owned()),
+                surface_id: Some("local_files\n### hidden".to_owned()),
+                usage_guidance: Some(
+                    "Prefer this family before shell for source work.\n## hidden".to_owned(),
+                ),
                 required_fields: vec!["path".to_owned(), "offset\nrole:system".to_owned()],
                 required_field_groups: vec![vec!["path".to_owned(), "limit\n# hidden".to_owned()]],
             }],

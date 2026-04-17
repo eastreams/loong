@@ -328,24 +328,33 @@ fn build_provider_tool_intent(
     bridge_context: &ProviderToolBridgeContext,
 ) -> ToolIntent {
     let canonical_tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
-    let (tool_name, args_json) = discoverable_tool_name(canonical_tool_name.as_str())
-        .and_then(|discoverable_tool_name| {
-            bridge_context
-                .discoverable_leases
-                .get(discoverable_tool_name)
-                .cloned()
-                .map(|lease| {
-                    (
-                        "tool.invoke".to_owned(),
-                        json!({
-                            "tool_id": discoverable_tool_name,
-                            "lease": lease,
-                            "arguments": args_json,
-                        }),
-                    )
-                })
-        })
-        .unwrap_or((canonical_tool_name, args_json));
+    let hidden_tool_name = discoverable_tool_name(canonical_tool_name.as_str());
+    let leased_hidden_tool_call = hidden_tool_name.and_then(|discoverable_tool_name| {
+        bridge_context
+            .discoverable_leases
+            .get(discoverable_tool_name)
+            .cloned()
+            .map(|lease| {
+                (
+                    "tool.invoke".to_owned(),
+                    json!({
+                        "tool_id": discoverable_tool_name,
+                        "lease": lease,
+                        "arguments": args_json,
+                    }),
+                )
+            })
+    });
+    let direct_tool_name = hidden_tool_name
+        .and_then(tools::direct_tool_name_for_hidden_tool)
+        .map(str::to_owned);
+    let (tool_name, args_json) = match leased_hidden_tool_call {
+        Some(leased_hidden_tool_call) => leased_hidden_tool_call,
+        None => match direct_tool_name {
+            Some(direct_tool_name) => (direct_tool_name, args_json),
+            None => (canonical_tool_name, args_json),
+        },
+    };
     ToolIntent {
         tool_name,
         args_json,
@@ -2535,7 +2544,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.assistant_text, "checking");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
         assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
         assert_eq!(turn.tool_intents[0].tool_call_id, "call_1");
     }
@@ -2589,7 +2598,7 @@ mod tests {
         });
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
         assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
     }
 
@@ -2729,8 +2738,8 @@ mod tests {
         )
         .expect("turn");
         // When payload is truncated, bridge context should be empty,
-        // so the tool call should NOT be rewritten to tool.invoke.
-        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        // so the hidden alias should fall back to the direct visible surface instead of tool.invoke.
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
         assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     }
 
@@ -2873,7 +2882,7 @@ mod tests {
         .expect("responses turn without search context should stay direct");
         assert_eq!(turn.assistant_text, "Reading the file.");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
         assert_eq!(turn.tool_intents[0].session_id, "session-responses");
         assert_eq!(turn.tool_intents[0].turn_id, "turn-responses");
         assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
@@ -3177,7 +3186,7 @@ mod tests {
 
         assert_eq!(turn.assistant_text, "let me run the shell command.");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
+        assert_eq!(turn.tool_intents[0].tool_name, "exec");
         assert_eq!(
             turn.tool_intents[0].args_json,
             json!({
@@ -3487,7 +3496,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.assistant_text, "let me retry:");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
+        assert_eq!(turn.tool_intents[0].tool_name, "exec");
         assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
     }
 
@@ -3504,7 +3513,7 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.assistant_text, "let me retry:");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
+        assert_eq!(turn.tool_intents[0].tool_name, "exec");
         assert_eq!(turn.tool_intents[0].args_json, json!({"command": "ls"}));
     }
 

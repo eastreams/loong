@@ -2406,7 +2406,7 @@ fn effective_visible_tool_name(
         .and_then(|tool_name| {
             tool_catalog()
                 .descriptor(tool_name)
-                .filter(|target| !target.is_provider_core())
+                .filter(|target| !target.is_provider_exposed())
                 .map(|target| target.name.to_owned())
         })
         .unwrap_or_else(|| descriptor.name.to_owned())
@@ -2421,7 +2421,7 @@ fn provider_tool_denial_should_conceal_name(
         return false;
     }
 
-    if !descriptor.is_provider_core() {
+    if !descriptor.is_provider_exposed() {
         return true;
     }
 
@@ -2456,13 +2456,18 @@ fn tool_intent_is_visible(
     intent: &ToolIntent,
     descriptor: &crate::tools::ToolDescriptor,
 ) -> bool {
-    if descriptor.is_provider_core() {
+    if descriptor.is_provider_exposed() {
         if descriptor.name != "tool.invoke" {
             return true;
         }
         let effective_name = effective_visible_tool_name(intent, descriptor);
         return effective_name == descriptor.name
             || session_context.tool_view.contains(effective_name.as_str());
+    }
+
+    let provider_origin = intent.source.starts_with("provider_");
+    if provider_origin {
+        return false;
     }
 
     session_context.tool_view.contains(descriptor.name)

@@ -1389,7 +1389,7 @@ pub(super) fn feishu_tool_registry_entries() -> Vec<super::ToolRegistryEntry> {
         "feishu.whoami",
         "Inspect the active Feishu grant principal and profile",
     );
-    entries.sort_by_key(|entry| entry.name);
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
     entries
 }
 
@@ -5799,7 +5799,11 @@ fn push_feishu_registry_entry(
     name: &'static str,
     description: &'static str,
 ) {
-    entries.push(super::ToolRegistryEntry { name, description });
+    let entry = super::ToolRegistryEntry {
+        name: name.to_owned(),
+        description: description.to_owned(),
+    };
+    entries.push(entry);
 }
 
 fn push_feishu_provider_tool_definition(

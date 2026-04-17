@@ -1289,7 +1289,8 @@ fn persisted_internal_records_by_type(
 fn assert_discovery_first_followup_summary(
     persisted: &[(String, String, String)],
     raw_tool_output_requested: bool,
-    expected_target_tool_id: &str,
+    expected_followup_tool_name: &str,
+    expected_target_tool_id: Option<&str>,
 ) {
     let summary = super::analytics::summarize_discovery_first_events(
         persisted
@@ -1303,18 +1304,19 @@ fn assert_discovery_first_followup_summary(
         summary.raw_output_followup_events,
         u32::from(raw_tool_output_requested)
     );
-    assert_eq!(summary.search_to_invoke_hits, 1);
+    let expected_invoke_hits = u32::from(expected_followup_tool_name == "tool.invoke");
+    assert_eq!(summary.search_to_invoke_hits, expected_invoke_hits);
     assert_eq!(
         summary.latest_followup_outcome.as_deref(),
-        Some("tool.invoke")
+        Some(expected_followup_tool_name)
     );
     assert_eq!(
         summary.latest_followup_tool_name.as_deref(),
-        Some("tool.invoke")
+        Some(expected_followup_tool_name)
     );
     assert_eq!(
         summary.latest_followup_target_tool_id.as_deref(),
-        Some(expected_target_tool_id)
+        expected_target_tool_id
     );
     assert!(
         summary.aggregate_added_estimated_tokens > 0,
@@ -2558,9 +2560,9 @@ async fn default_runtime_build_messages_respects_restricted_tool_view() {
 
     assert!(!messages.is_empty());
     let system_content = messages[0]["content"].as_str().expect("system content");
-    assert!(system_content.contains("- tool.search: Discover non-core tools"));
-    assert!(system_content.contains("- tool.invoke: Invoke a discovered non-core tool"));
-    assert!(system_content.contains("Non-core tools are intentionally hidden"));
+    assert!(system_content.contains("- read:"));
+    assert!(system_content.contains("- tool.search: Discover hidden specialized tools"));
+    assert!(system_content.contains("- tool.invoke: Invoke a discovered hidden specialized tool"));
     assert!(!system_content.contains("- file.read:"));
     assert!(!system_content.contains("- file.write:"));
     assert!(!system_content.contains("- shell.exec:"));
@@ -8074,7 +8076,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_openai_cha
     );
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    assert_discovery_first_followup_summary(&persisted, false, "file.read");
+    assert_discovery_first_followup_summary(&persisted, false, "read", None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -8132,7 +8134,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_responses(
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    assert_discovery_first_followup_summary(&persisted, false, "file.read");
+    assert_discovery_first_followup_summary(&persisted, false, "read", None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -8189,7 +8191,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_anthropic(
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    assert_discovery_first_followup_summary(&persisted, false, "file.read");
+    assert_discovery_first_followup_summary(&persisted, false, "read", None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -8258,7 +8260,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_bedrock() 
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    assert_discovery_first_followup_summary(&persisted, false, "file.read");
+    assert_discovery_first_followup_summary(&persisted, false, "read", None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -8304,7 +8306,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_inline_raw
     );
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    assert_discovery_first_followup_summary(&persisted, true, "file.read");
+    assert_discovery_first_followup_summary(&persisted, true, "read", None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -8350,7 +8352,7 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_json_raw_o
     );
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    assert_discovery_first_followup_summary(&persisted, true, "file.read");
+    assert_discovery_first_followup_summary(&persisted, true, "read", None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -12080,8 +12082,8 @@ fn turn_engine_no_tool_intents_returns_final_text() {
 }
 
 #[test]
-fn provider_direct_discoverable_alias_without_search_is_rejected() {
-    use crate::conversation::turn_engine::{TurnEngine, TurnFailureKind};
+fn provider_hidden_alias_without_search_falls_back_to_visible_direct_tool() {
+    use crate::conversation::turn_engine::TurnEngine;
     use crate::provider::extract_provider_turn;
 
     let response_body = serde_json::json!({
@@ -12102,25 +12104,12 @@ fn provider_direct_discoverable_alias_without_search_is_rejected() {
 
     let turn = extract_provider_turn(&response_body).expect("provider turn");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+    assert_eq!(turn.tool_intents[0].tool_name, "read");
 
     let engine = TurnEngine::new(1);
-    let result = engine.validate_turn(&turn);
-    match result {
-        Err(failure) => {
-            assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
-            assert_eq!(failure.code, "tool_not_found");
-            assert!(
-                !failure.reason.contains("file.read"),
-                "provider denial should not confirm guessed discoverable tool names: {failure:?}"
-            );
-            assert!(
-                failure.reason.contains("tool.search"),
-                "provider denial should guide the model back toward discovery: {failure:?}"
-            );
-        }
-        other => panic!("expected provider denial, got {:?}", other),
-    }
+    engine
+        .validate_turn(&turn)
+        .expect("direct read alias should validate");
 }
 
 #[test]

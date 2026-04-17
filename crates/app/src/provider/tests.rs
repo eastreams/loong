@@ -1206,10 +1206,13 @@ fn build_messages_includes_capability_snapshot_block() {
         "system prompt should contain capability snapshot marker, got: {system_content}"
     );
     assert!(
-        system_content.contains("- tool.search: Discover non-core tools"),
-        "system prompt should describe tool.search"
+        system_content.contains("- read:"),
+        "system prompt should advertise the direct read surface"
     );
-    assert!(system_content.contains("- tool.invoke: Invoke a discovered non-core tool"));
+    assert!(system_content.contains("- write:"));
+    assert!(system_content.contains("- exec:"));
+    assert!(system_content.contains("- tool.search: Discover hidden specialized tools"));
+    assert!(system_content.contains("- tool.invoke: Invoke a discovered hidden specialized tool"));
     assert!(!system_content.contains("shell.exec"));
     assert!(!system_content.contains("file.read"));
     assert!(!system_content.contains("file.write"));
@@ -1620,7 +1623,15 @@ fn turn_body_includes_tool_schema_and_auto_choice() {
         .filter_map(Value::as_str)
         .collect();
 
-    let expected = vec!["tool_invoke", "tool_search"];
+    let expected = vec![
+        "browser",
+        "exec",
+        "read",
+        "tool_invoke",
+        "tool_search",
+        "web",
+        "write",
+    ];
 
     for expected_name in expected {
         assert!(
@@ -1744,7 +1755,7 @@ fn anthropic_turn_body_preserves_native_tool_use_and_tool_result_blocks() {
                     {
                         "type": "tool_use",
                         "id": "toolu_1",
-                        "name": "file_read",
+                        "name": "read",
                         "input": {
                             "path": "README.md"
                         }
@@ -1864,7 +1875,7 @@ fn opencode_zen_gemini_turn_body_preserves_native_tool_result_blocks() {
                 {
                     "type": "tool_use",
                     "id": "toolu_1",
-                    "name": "file_read",
+                    "name": "read",
                     "input": {
                         "path": "README.md"
                     }
@@ -1920,12 +1931,12 @@ fn opencode_zen_gemini_turn_body_preserves_native_tool_result_blocks() {
     assert_eq!(body["contents"][0]["role"], "model");
     assert_eq!(
         body["contents"][0]["parts"][1]["functionCall"]["name"],
-        "file_read"
+        "read"
     );
     assert_eq!(body["contents"][1]["role"], "user");
     assert_eq!(
         body["contents"][1]["parts"][0]["functionResponse"]["name"],
-        "file_read"
+        "read"
     );
     assert_eq!(
         body["contents"][1]["parts"][0]["functionResponse"]["response"]["path"],
@@ -1959,7 +1970,7 @@ fn opencode_zen_gemini_turn_body_preserves_native_tool_results() {
                 {
                     "type": "tool_use",
                     "id": "toolu_1",
-                    "name": "file_read",
+                    "name": "read",
                     "input": {
                         "path": "README.md"
                     }
@@ -2014,12 +2025,12 @@ fn opencode_zen_gemini_turn_body_preserves_native_tool_results() {
     assert_eq!(body["contents"][0]["role"], "model");
     assert_eq!(
         body["contents"][0]["parts"][1]["functionCall"]["name"],
-        "file_read"
+        "read"
     );
     assert_eq!(body["contents"][1]["role"], "user");
     assert_eq!(
         body["contents"][1]["parts"][0]["functionResponse"]["name"],
-        "file_read"
+        "read"
     );
     assert_eq!(
         body["contents"][1]["parts"][0]["functionResponse"]["response"]["result"],
@@ -2055,7 +2066,7 @@ fn bedrock_turn_body_uses_native_tool_blocks_and_tool_config() {
                     {
                         "type": "tool_use",
                         "id": "toolu_1",
-                        "name": "file_read",
+                        "name": "read",
                         "input": {
                             "path": "README.md"
                         }
@@ -2137,7 +2148,7 @@ fn extract_provider_turn_supports_google_generate_content_tool_calls() {
                         },
                         {
                             "functionCall": {
-                                "name": "file_read",
+                                "name": "read",
                                 "args": {
                                     "path": "README.md"
                                 }
@@ -2154,7 +2165,7 @@ fn extract_provider_turn_supports_google_generate_content_tool_calls() {
 
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
-    assert_eq!(turn.tool_intents[0].tool_name, "file.read");
+    assert_eq!(turn.tool_intents[0].tool_name, "read");
     assert_eq!(turn.tool_intents[0].args_json["path"], "README.md");
 }
 
@@ -2206,7 +2217,7 @@ fn responses_turn_body_preserves_native_function_call_roundtrip_items() {
             }),
             json!({
                 "type": "function_call",
-                "name": "file_read",
+                "name": "read",
                 "call_id": "call_resp_1",
                 "arguments": "{\"path\":\"README.md\"}"
             }),

@@ -326,16 +326,27 @@ fn render_deferred_tool_text_workflow_section_if_needed(config: &LoongConfig) ->
 }
 
 fn render_deferred_tool_text_workflow_section() -> String {
+    let direct_call_example_lines = [
+        "{",
+        "  \"name\": \"read\",",
+        "  \"arguments\": {",
+        "    \"path\": \"README.md\"",
+        "  }",
+        "}",
+    ];
+    let direct_call_example = direct_call_example_lines.join("\n");
+
     let discovery_call_example_lines = [
         "{",
         "  \"name\": \"tool_search\",",
         "  \"arguments\": {",
-        "    \"query\": \"<natural-language capability description>\",",
+        "    \"query\": \"<natural-language capability description for a hidden specialized tool>\",",
         "    \"limit\": 5",
         "  }",
         "}",
     ];
     let discovery_call_example = discovery_call_example_lines.join("\n");
+
     let invoke_call_example_lines = [
         "{",
         "  \"name\": \"tool_invoke\",",
@@ -349,11 +360,15 @@ fn render_deferred_tool_text_workflow_section() -> String {
         "}",
     ];
     let invoke_call_example = invoke_call_example_lines.join("\n");
+
     let lines = [
         "## Deferred Tool Text Workflow".to_owned(),
         "Structured provider tool schemas are disabled for this profile.".to_owned(),
-        "In raw JSON tool calls, use the provider tool names `tool_search` and `tool_invoke`.".to_owned(),
+        "In raw JSON tool calls, use direct tool names such as `read`, `write`, `exec`, `web`, `browser`, and `memory` when one fits the task.".to_owned(),
+        "Use `tool_search` and `tool_invoke` only for hidden specialized tools.".to_owned(),
         "When you need a tool, emit a raw JSON tool call instead of only describing the missing capability.".to_owned(),
+        "Direct tool example:".to_owned(),
+        direct_call_example,
         "Discovery example:".to_owned(),
         discovery_call_example,
         "Invocation example:".to_owned(),
