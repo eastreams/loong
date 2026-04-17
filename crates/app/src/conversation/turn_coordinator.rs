@@ -1130,7 +1130,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.compact_session_with_runtime(config, session_id, &runtime, production_binding)
             .await
@@ -1282,7 +1282,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.repair_turn_checkpoint_tail_with_runtime(
             config,
@@ -1378,7 +1378,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
@@ -1412,7 +1412,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
