@@ -849,6 +849,24 @@ async fn main() {
             )
             .await
         }
+        Commands::LineServe {
+            config,
+            account,
+            bind,
+            path,
+        } => {
+            run_channel_serve_cli(
+                LINE_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: bind.as_deref(),
+                    path_override: path.as_deref(),
+                },
+            )
+            .await
+        }
         Commands::WhatsappSend {
             config,
             account,
@@ -905,6 +923,24 @@ async fn main() {
                     target_kind,
                     text: &text,
                     as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::WebhookServe {
+            config,
+            account,
+            bind,
+            path,
+        } => {
+            run_channel_serve_cli(
+                WEBHOOK_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: bind.as_deref(),
+                    path_override: path.as_deref(),
                 },
             )
             .await

@@ -554,6 +554,9 @@ mod tests {
             for env_name in descriptor.api_key_env_names {
                 env.remove(*env_name);
             }
+            if let Some(default_env_name) = descriptor.default_api_key_env {
+                env.remove(default_env_name);
+            }
         }
     }
 
@@ -607,6 +610,8 @@ mod tests {
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
+        let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
 
         let recommendation = resolve_web_search_provider_recommendation(&options, &config)
             .await

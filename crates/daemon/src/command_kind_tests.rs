@@ -46,4 +46,24 @@ fn command_kind_for_logging_uses_stable_variant_names() {
         .command_kind_for_logging(),
         "whatsapp_serve"
     );
+    assert_eq!(
+        Commands::LineServe {
+            config: None,
+            account: None,
+            bind: Some("127.0.0.1:9998".to_owned()),
+            path: None,
+        }
+        .command_kind_for_logging(),
+        "line_serve"
+    );
+    assert_eq!(
+        Commands::WebhookServe {
+            config: None,
+            account: None,
+            bind: Some("127.0.0.1:9999".to_owned()),
+            path: None,
+        }
+        .command_kind_for_logging(),
+        "webhook_serve"
+    );
 }

@@ -6,7 +6,10 @@ use std::{
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, sleep};
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loongclaw_contracts::{
+    GovernedSessionMode, GovernedWorkflowPhase, ToolCoreOutcome, ToolCoreRequest,
+    WorkflowOperationKind, WorkflowOperationScope, WorktreeBindingDescriptor,
+};
 use serde_json::{Value, json};
 
 use super::payload::{
@@ -37,7 +40,7 @@ use crate::session::recovery::{
 #[cfg(feature = "memory-sqlite")]
 use crate::session::{
     DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED, DELEGATE_CANCEL_REQUESTED_EVENT_KIND,
-    DELEGATE_CANCELLED_EVENT_KIND, delegate_cancelled_error,
+    DELEGATE_CANCELLED_EVENT_KIND, delegate_cancelled_error, parse_delegate_cancelled_reason,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::tools::ToolView;
@@ -105,14 +108,14 @@ struct DelegateExecutionContract {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SessionDelegateLifecycleRecord {
-    profile: Option<&'static str>,
-    mode: &'static str,
-    phase: &'static str,
-    queued_at: Option<i64>,
-    started_at: Option<i64>,
-    timeout_seconds: Option<u64>,
-    execution: Option<ConstrainedSubagentExecution>,
+pub(crate) struct SessionDelegateLifecycleRecord {
+    pub(crate) profile: Option<&'static str>,
+    pub(crate) mode: &'static str,
+    pub(crate) phase: &'static str,
+    pub(crate) queued_at: Option<i64>,
+    pub(crate) started_at: Option<i64>,
+    pub(crate) timeout_seconds: Option<u64>,
+    pub(crate) execution: Option<ConstrainedSubagentExecution>,
     staleness: Option<SessionDelegateStalenessRecord>,
     cancellation: Option<SessionDelegateCancellationRecord>,
 }
@@ -138,19 +141,35 @@ struct SessionDelegateCancellationRecord {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SessionWorkflowRecord {
-    task: Option<String>,
-    lineage_root_session_id: Option<String>,
-    lineage_depth: Option<usize>,
-    runtime_self_continuity: Option<SessionRuntimeSelfContinuityRecord>,
+pub(crate) struct SessionWorkflowRecord {
+    pub(crate) workflow_id: String,
+    pub(crate) task: Option<String>,
+    pub(crate) phase: Option<GovernedWorkflowPhase>,
+    pub(crate) operation_kind: Option<WorkflowOperationKind>,
+    pub(crate) operation_scope: Option<WorkflowOperationScope>,
+    pub(crate) task_session_id: Option<String>,
+    pub(crate) lineage_root_session_id: Option<String>,
+    pub(crate) lineage_depth: Option<usize>,
+    pub(crate) runtime_self_continuity: Option<SessionRuntimeSelfContinuityRecord>,
+    pub(crate) binding: Option<SessionWorkflowBindingRecord>,
 }
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SessionRuntimeSelfContinuityRecord {
-    present: bool,
-    resolved_identity_present: bool,
-    session_profile_projection_present: bool,
+pub(crate) struct SessionWorkflowBindingRecord {
+    pub(crate) session_id: String,
+    pub(crate) task_id: String,
+    pub(crate) mode: GovernedSessionMode,
+    pub(crate) execution_surface: String,
+    pub(crate) worktree: Option<WorktreeBindingDescriptor>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionRuntimeSelfContinuityRecord {
+    pub(crate) present: bool,
+    pub(crate) resolved_identity_present: bool,
+    pub(crate) session_profile_projection_present: bool,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1840,7 +1859,7 @@ fn load_delegate_lifecycle_events(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn load_session_workflow_record(
+pub(crate) fn load_session_workflow_record(
     repo: &SessionRepository,
     session: &SessionSummaryRecord,
     delegate_events: Option<&[SessionEventRecord]>,
@@ -1860,19 +1879,41 @@ fn load_session_workflow_record(
         Some(events) => events,
         None => loaded_delegate_events.as_deref().unwrap_or(&[]),
     };
+    let workflow_id = session_workflow_id(session, lineage_root_session_id.as_deref());
     let task = delegate_events
         .iter()
         .rev()
         .find_map(session_workflow_task_from_event);
+    let phase = session_workflow_phase(session, delegate_events);
+    let operation_kind = session_workflow_operation_kind(session);
+    let operation_scope = session_workflow_operation_scope(session);
+    let task_session_id = session_workflow_task_session_id(session);
     let runtime_self_continuity =
         load_session_runtime_self_continuity_record(repo, session, delegate_events)?;
+    let binding = session_workflow_binding_record(session, delegate_events);
 
     Ok(SessionWorkflowRecord {
+        workflow_id,
         task,
+        phase,
+        operation_kind,
+        operation_scope,
+        task_session_id,
         lineage_root_session_id,
         lineage_depth,
         runtime_self_continuity,
+        binding,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_id(
+    session: &SessionSummaryRecord,
+    lineage_root_session_id: Option<&str>,
+) -> String {
+    let fallback_session_id = session.session_id.as_str();
+    let resolved_workflow_id = lineage_root_session_id.unwrap_or(fallback_session_id);
+    resolved_workflow_id.to_owned()
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1882,6 +1923,156 @@ fn session_workflow_task_from_event(event: &SessionEventRecord) -> Option<String
         .get("task")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_phase(
+    session: &SessionSummaryRecord,
+    delegate_events: &[SessionEventRecord],
+) -> Option<GovernedWorkflowPhase> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    let cancellation_reason = session
+        .last_error
+        .as_deref()
+        .and_then(parse_delegate_cancelled_reason);
+    let was_cancelled = cancellation_reason.is_some();
+    if was_cancelled {
+        return Some(GovernedWorkflowPhase::Cancelled);
+    }
+
+    let has_delegate_events = !delegate_events.is_empty();
+    if !has_delegate_events && session.parent_session_id.is_none() {
+        return None;
+    }
+
+    match session.state {
+        SessionState::Ready => Some(GovernedWorkflowPhase::Execute),
+        SessionState::Running => Some(GovernedWorkflowPhase::Execute),
+        SessionState::Completed => Some(GovernedWorkflowPhase::Complete),
+        SessionState::Failed => Some(GovernedWorkflowPhase::Failed),
+        SessionState::TimedOut => Some(GovernedWorkflowPhase::Failed),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_operation_kind(
+    session: &SessionSummaryRecord,
+) -> Option<WorkflowOperationKind> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    Some(WorkflowOperationKind::Task)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_operation_scope(
+    session: &SessionSummaryRecord,
+) -> Option<WorkflowOperationScope> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    Some(WorkflowOperationScope::Task)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_task_session_id(session: &SessionSummaryRecord) -> Option<String> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    Some(session.session_id.clone())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_binding_record(
+    session: &SessionSummaryRecord,
+    delegate_events: &[SessionEventRecord],
+) -> Option<SessionWorkflowBindingRecord> {
+    if session.kind != SessionKind::DelegateChild {
+        return None;
+    }
+
+    let (execution, execution_surface) =
+        latest_delegate_execution_binding_components(delegate_events)?;
+    let mode = session_workflow_binding_mode(&execution);
+    let worktree = session_workflow_worktree_binding(session, &execution);
+    let task_id = session.session_id.clone();
+    let binding = SessionWorkflowBindingRecord {
+        session_id: session.session_id.clone(),
+        task_id,
+        mode,
+        execution_surface,
+        worktree,
+    };
+
+    Some(binding)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn latest_delegate_execution_binding_components(
+    delegate_events: &[SessionEventRecord],
+) -> Option<(ConstrainedSubagentExecution, String)> {
+    for event in delegate_events.iter().rev() {
+        let event_kind = event.event_kind.as_str();
+        let is_delegate_execution_event =
+            matches!(event_kind, "delegate_queued" | "delegate_started");
+        if !is_delegate_execution_event {
+            continue;
+        }
+
+        let execution = ConstrainedSubagentExecution::from_event_payload(&event.payload_json)?;
+        let execution_surface = session_workflow_execution_surface(event, &execution);
+        return Some((execution, execution_surface));
+    }
+
+    None
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_execution_surface(
+    event: &SessionEventRecord,
+    execution: &ConstrainedSubagentExecution,
+) -> String {
+    let trust_event = crate::trust::extract_trust_event_payload(&event.payload_json);
+    if let Some(trust_event) = trust_event {
+        return trust_event.source_surface;
+    }
+
+    let fallback_surface = match execution.mode {
+        crate::conversation::ConstrainedSubagentMode::Inline => "delegate.inline",
+        crate::conversation::ConstrainedSubagentMode::Async => "delegate.async",
+    };
+
+    fallback_surface.to_owned()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_binding_mode(execution: &ConstrainedSubagentExecution) -> GovernedSessionMode {
+    if execution.kernel_bound {
+        return GovernedSessionMode::MutatingCapable;
+    }
+
+    GovernedSessionMode::AdvisoryOnly
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_worktree_binding(
+    session: &SessionSummaryRecord,
+    execution: &ConstrainedSubagentExecution,
+) -> Option<WorktreeBindingDescriptor> {
+    let workspace_root = execution.workspace_root.as_ref()?;
+    let workspace_root_string = workspace_root.display().to_string();
+    let worktree = WorktreeBindingDescriptor {
+        worktree_id: session.session_id.clone(),
+        workspace_root: workspace_root_string,
+    };
+
+    Some(worktree)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2665,7 +2856,7 @@ fn build_session_cancel_plan(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn session_delegate_lifecycle_at(
+pub(crate) fn session_delegate_lifecycle_at(
     session: &SessionSummaryRecord,
     recent_events: &[SessionEventRecord],
     now_ts: i64,
@@ -3061,7 +3252,7 @@ fn runtime_narrowing_json(runtime_narrowing: Option<ToolRuntimeNarrowing>) -> Va
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn build_session_tool_policy_status_payload(
+pub(crate) fn build_session_tool_policy_status_payload(
     repo: &SessionRepository,
     target_session_id: &str,
     tool_config: &ToolConfig,
@@ -3704,12 +3895,18 @@ fn subagent_handle_coordination_actions(
 #[cfg(feature = "memory-sqlite")]
 fn session_workflow_json(workflow: SessionWorkflowRecord) -> Value {
     json!({
+        "workflow_id": workflow.workflow_id,
         "task": workflow.task,
+        "phase": workflow.phase,
+        "operation_kind": workflow.operation_kind,
+        "operation_scope": workflow.operation_scope,
+        "task_session_id": workflow.task_session_id,
         "lineage_root_session_id": workflow.lineage_root_session_id,
         "lineage_depth": workflow.lineage_depth,
         "runtime_self_continuity": workflow
             .runtime_self_continuity
             .map(session_runtime_self_continuity_json),
+        "binding": workflow.binding.map(session_workflow_binding_json),
     })
 }
 
@@ -3722,6 +3919,17 @@ fn session_runtime_self_continuity_json(
         "resolved_identity_present": runtime_self_continuity.resolved_identity_present,
         "session_profile_projection_present": runtime_self_continuity
             .session_profile_projection_present,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_binding_json(binding: SessionWorkflowBindingRecord) -> Value {
+    json!({
+        "session_id": binding.session_id,
+        "task_id": binding.task_id,
+        "mode": binding.mode,
+        "execution_surface": binding.execution_surface,
+        "worktree": binding.worktree,
     })
 }
 
@@ -4416,6 +4624,7 @@ mod tests {
                     "timeout_seconds": 120,
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["file.read"],
+                    "workspace_root": "/tmp/loongclaw/sessions-list-workflow/child-session",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
                 }
@@ -4441,9 +4650,25 @@ mod tests {
             .iter()
             .find(|item| item["session_id"] == "child-session")
             .expect("child session");
+        assert_eq!(child["workflow"]["workflow_id"], "root-session");
         assert_eq!(child["workflow"]["task"], "research release readiness");
+        assert_eq!(child["workflow"]["phase"], "execute");
+        assert_eq!(child["workflow"]["operation_kind"], "task");
+        assert_eq!(child["workflow"]["operation_scope"], "task");
+        assert_eq!(child["workflow"]["task_session_id"], "child-session");
         assert_eq!(child["workflow"]["lineage_root_session_id"], "root-session");
         assert_eq!(child["workflow"]["lineage_depth"], 1);
+        assert_eq!(child["workflow"]["binding"]["session_id"], "child-session");
+        assert_eq!(child["workflow"]["binding"]["task_id"], "child-session");
+        assert_eq!(child["workflow"]["binding"]["mode"], "advisory_only");
+        assert_eq!(
+            child["workflow"]["binding"]["execution_surface"],
+            "delegate.async"
+        );
+        assert_eq!(
+            child["workflow"]["binding"]["worktree"]["worktree_id"],
+            "child-session"
+        );
         assert_eq!(child["subagent"]["session_id"], "child-session");
         assert_eq!(child["subagent_identity"]["nickname"], "Research Child");
         assert_eq!(
@@ -4618,6 +4843,7 @@ mod tests {
                     "timeout_seconds": 90,
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["file.read"],
+                    "workspace_root": "/tmp/loongclaw/session-status-workflow/child-session",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
                 },
@@ -4654,7 +4880,15 @@ mod tests {
         )
         .expect("session_status outcome");
 
+        assert_eq!(outcome.payload["workflow"]["workflow_id"], "root-session");
         assert_eq!(outcome.payload["workflow"]["task"], "research continuity");
+        assert_eq!(outcome.payload["workflow"]["phase"], "execute");
+        assert_eq!(outcome.payload["workflow"]["operation_kind"], "task");
+        assert_eq!(outcome.payload["workflow"]["operation_scope"], "task");
+        assert_eq!(
+            outcome.payload["workflow"]["task_session_id"],
+            "child-session"
+        );
         assert_eq!(
             outcome.payload["workflow"]["lineage_root_session_id"],
             "root-session"
@@ -4663,6 +4897,30 @@ mod tests {
         assert_eq!(
             outcome.payload["workflow"]["runtime_self_continuity"]["present"],
             true
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["session_id"],
+            "child-session"
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["task_id"],
+            "child-session"
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["mode"],
+            "advisory_only"
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["execution_surface"],
+            "delegate.async"
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["worktree"]["worktree_id"],
+            "child-session"
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["worktree"]["workspace_root"],
+            "/tmp/loongclaw/session-status-workflow/child-session"
         );
         assert_eq!(
             outcome.payload["workflow"]["runtime_self_continuity"]["resolved_identity_present"],
@@ -5869,6 +6127,7 @@ mod tests {
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["session"]["state"], "failed");
+        assert_eq!(outcome.payload["workflow"]["phase"], "cancelled");
         assert_eq!(outcome.payload["terminal_outcome_state"], "present");
         assert_eq!(outcome.payload["terminal_outcome"]["status"], "error");
         assert_eq!(

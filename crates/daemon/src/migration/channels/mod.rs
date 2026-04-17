@@ -9,11 +9,14 @@ use super::types::{
 };
 
 mod feishu;
+mod line;
 mod matrix;
 mod outbound;
 mod plugin_bridge;
 mod telegram;
+mod webhook;
 mod wecom;
+mod whatsapp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelPreview {
@@ -65,7 +68,7 @@ struct ChannelAdapter {
     apply_default_env_bindings: fn(&mut mvp::config::LoongClawConfig) -> Vec<String>,
 }
 
-const REGISTRY: [ChannelAdapter; 4] = [
+const REGISTRY: [ChannelAdapter; 7] = [
     ChannelAdapter {
         id: telegram::ID,
         collect_preview: telegram::collect_preview,
@@ -87,6 +90,16 @@ const REGISTRY: [ChannelAdapter; 4] = [
         apply_default_env_bindings: feishu::apply_default_env_bindings,
     },
     ChannelAdapter {
+        id: line::ID,
+        collect_preview: line::collect_preview,
+        apply: line::apply,
+        readiness_state: line::readiness_state,
+        apply_import_readiness: line::apply_import_readiness,
+        collect_preflight_checks: line::collect_preflight_checks,
+        collect_doctor_checks: line::collect_doctor_checks,
+        apply_default_env_bindings: line::apply_default_env_bindings,
+    },
+    ChannelAdapter {
         id: matrix::ID,
         collect_preview: matrix::collect_preview,
         apply: matrix::apply,
@@ -105,6 +118,26 @@ const REGISTRY: [ChannelAdapter; 4] = [
         collect_preflight_checks: wecom::collect_preflight_checks,
         collect_doctor_checks: wecom::collect_doctor_checks,
         apply_default_env_bindings: wecom::apply_default_env_bindings,
+    },
+    ChannelAdapter {
+        id: whatsapp::ID,
+        collect_preview: whatsapp::collect_preview,
+        apply: whatsapp::apply,
+        readiness_state: whatsapp::readiness_state,
+        apply_import_readiness: whatsapp::apply_import_readiness,
+        collect_preflight_checks: whatsapp::collect_preflight_checks,
+        collect_doctor_checks: whatsapp::collect_doctor_checks,
+        apply_default_env_bindings: whatsapp::apply_default_env_bindings,
+    },
+    ChannelAdapter {
+        id: webhook::ID,
+        collect_preview: webhook::collect_preview,
+        apply: webhook::apply,
+        readiness_state: webhook::readiness_state,
+        apply_import_readiness: webhook::apply_import_readiness,
+        collect_preflight_checks: webhook::collect_preflight_checks,
+        collect_doctor_checks: webhook::collect_doctor_checks,
+        apply_default_env_bindings: webhook::apply_default_env_bindings,
     },
 ];
 

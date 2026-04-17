@@ -59,8 +59,8 @@ pub use work_types::{
     WorkUnitSourceRef, WorkUnitStatus,
 };
 pub use workflow_types::{
-    GovernedSessionBindingDescriptor, GovernedSessionMode, TaskScopeDescriptor,
-    WorkflowOperationKind, WorkflowOperationScope, WorktreeBindingDescriptor,
+    GovernedSessionBindingDescriptor, GovernedSessionMode, GovernedWorkflowPhase,
+    TaskScopeDescriptor, WorkflowOperationKind, WorkflowOperationScope, WorktreeBindingDescriptor,
 };
 
 #[cfg(test)]

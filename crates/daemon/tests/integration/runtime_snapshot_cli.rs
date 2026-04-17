@@ -599,7 +599,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("outbound_only_enabled=-"));
     assert!(
         rendered.contains(
-            "surfaces=28 runtime_backed=5 config_backed=17 plugin_backed=3 catalog_only=3"
+            "surfaces=28 runtime_backed=7 config_backed=15 plugin_backed=3 catalog_only=3"
         )
     );
     assert!(rendered.contains("acp_mcp docs status=pending"));

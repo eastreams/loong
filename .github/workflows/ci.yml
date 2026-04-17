@@ -45,7 +45,7 @@ jobs:
 
       - name: Classify changed files
         id: classify
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/workflow_change_router.mjs`;
@@ -85,6 +85,7 @@ jobs:
           bash -n scripts/architecture_budget_lib.sh
           bash -n scripts/check_architecture_boundaries.sh
           bash -n scripts/check_architecture_drift_freshness.sh
+          bash -n scripts/check_public_repo_hygiene.sh
           bash -n scripts/generate_architecture_drift_report.sh
           bash -n scripts/test_architecture_budget_scripts.sh
           bash -n scripts/test_check_architecture_drift_freshness.sh
@@ -121,6 +122,7 @@ jobs:
           bash scripts/test_release_artifact_lib.sh
           bash scripts/test_release_workflow_hardening.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
+          bash scripts/check_public_repo_hygiene.sh
           bash scripts/test_ci_workflow_change_routing.sh
           bash scripts/test_promotion_guard_workflows.sh
           bash scripts/test_workflow_change_router.sh
@@ -161,7 +163,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: ${{ env.MINTLIFY_NODE_VERSION }}
 
