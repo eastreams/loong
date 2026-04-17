@@ -6,22 +6,22 @@ use crate::{
 };
 
 pub const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_feishu_serve_cli_impl,
 };
 
 pub const LINE_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::LINE_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_line_serve_cli_impl,
 };
 
 pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_whatsapp_serve_cli_impl,
 };
 
 pub const WEBHOOK_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WEBHOOK_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_webhook_serve_cli_impl,
 };
 

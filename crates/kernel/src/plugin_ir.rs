@@ -102,6 +102,8 @@ pub struct PluginChannelBridgeContract {
     #[serde(default)]
     pub runtime_operations: Vec<String>,
     #[serde(default)]
+    pub runtime_metadata_issues: Vec<String>,
+    #[serde(default)]
     pub readiness: PluginChannelBridgeReadiness,
 }
 
@@ -1289,6 +1291,14 @@ fn derive_channel_bridge_contract(
     let runtime_contract = normalized_manifest_metadata_value(manifest, "channel_runtime_contract");
     let runtime_operations =
         normalized_manifest_metadata_string_list(manifest, "channel_runtime_operations_json");
+    let mut runtime_metadata_issues = Vec::new();
+    let runtime_operations = match runtime_operations {
+        Ok(runtime_operations) => runtime_operations,
+        Err(issue) => {
+            runtime_metadata_issues.push(issue);
+            Vec::new()
+        }
+    };
     let adapter_family = normalized_manifest_metadata_value(manifest, "adapter_family");
 
     let has_channel_bridge_metadata =
@@ -1318,6 +1328,7 @@ fn derive_channel_bridge_contract(
         account_scope,
         runtime_contract,
         runtime_operations,
+        runtime_metadata_issues,
         readiness,
     })
 }
@@ -1360,15 +1371,16 @@ fn normalized_manifest_metadata_value(manifest: &PluginManifest, key: &str) -> O
     normalized_optional_value(value)
 }
 
-fn normalized_manifest_metadata_string_list(manifest: &PluginManifest, key: &str) -> Vec<String> {
+fn normalized_manifest_metadata_string_list(
+    manifest: &PluginManifest,
+    key: &str,
+) -> Result<Vec<String>, String> {
     let Some(raw_value) = manifest.metadata.get(key) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
-    let parsed_values = serde_json::from_str::<Vec<String>>(raw_value);
-    let Ok(parsed_values) = parsed_values else {
-        return Vec::new();
-    };
+    let parsed_values = serde_json::from_str::<Vec<String>>(raw_value)
+        .map_err(|error| format!("metadata.{key} must be valid json string array: {error}"))?;
 
     let mut normalized_values = Vec::new();
     for parsed_value in parsed_values {
@@ -1381,7 +1393,7 @@ fn normalized_manifest_metadata_string_list(manifest: &PluginManifest, key: &str
         normalized_values.push(normalized_value);
     }
 
-    normalized_values
+    Ok(normalized_values)
 }
 
 fn normalized_optional_value(raw: Option<&str>) -> Option<String> {
@@ -1881,7 +1893,7 @@ mod tests {
     }
 
     #[test]
-    fn translator_ignores_invalid_runtime_operations_metadata_json() {
+    fn translator_preserves_invalid_runtime_operations_metadata_json_as_issue() {
         let descriptor = channel_bridge_descriptor(BTreeMap::from([
             (
                 "transport_family".to_owned(),
@@ -1905,6 +1917,14 @@ mod tests {
             .expect("channel bridge contract should exist");
 
         assert!(channel_bridge.runtime_operations.is_empty());
+        assert_eq!(channel_bridge.runtime_metadata_issues.len(), 1);
+        let issue = channel_bridge
+            .runtime_metadata_issues
+            .first()
+            .expect("runtime metadata issue should exist");
+        assert!(issue.starts_with(
+            "metadata.channel_runtime_operations_json must be valid json string array:"
+        ));
     }
 
     #[test]

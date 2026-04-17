@@ -91,9 +91,14 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
     );
     let runnable_candidates =
         filter_runnable_runtime_candidates(config, &resolved_account, &runtime_candidates);
+    if runnable_candidates.candidates.is_empty() && !runnable_candidates.failure_reasons.is_empty()
+    {
+        let failure_reasons = runnable_candidates.failure_reasons.join("; ");
+        return Err(failure_reasons);
+    }
     let selected_candidate = select_runtime_candidate(
         channel_id,
-        &runnable_candidates,
+        &runnable_candidates.candidates,
         configured_plugin_id(config, channel_id),
     )?;
     let endpoint = resolved_runtime_endpoint(selected_candidate.plugin, &resolved_account)?;
@@ -131,6 +136,12 @@ struct ManagedPluginBridgeResolvedAccount {
     account_label: String,
     endpoint_override: Option<String>,
     runtime_context: Value,
+}
+
+#[derive(Debug, Clone)]
+struct ManagedPluginBridgeRunnableCandidates<'a> {
+    candidates: Vec<ManagedPluginBridgeRuntimeCandidate<'a>>,
+    failure_reasons: Vec<String>,
 }
 
 fn scan_runtime_plugin_roots(roots: &[std::path::PathBuf]) -> CliResult<PluginScanReport> {
@@ -263,32 +274,44 @@ fn filter_runnable_runtime_candidates<'a>(
     config: &LoongClawConfig,
     resolved_account: &ManagedPluginBridgeResolvedAccount,
     candidates: &'a [ManagedPluginBridgeRuntimeCandidate<'a>],
-) -> Vec<ManagedPluginBridgeRuntimeCandidate<'a>> {
+) -> ManagedPluginBridgeRunnableCandidates<'a> {
     let mut runnable_candidates = Vec::new();
+    let mut failure_reasons = Vec::new();
 
     for candidate in candidates {
         let endpoint_result = resolved_runtime_endpoint(candidate.plugin, resolved_account);
-        let endpoint_is_ready = endpoint_result.is_ok();
-        if !endpoint_is_ready {
-            continue;
-        }
+        let endpoint = match endpoint_result {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                failure_reasons.push(error);
+                continue;
+            }
+        };
 
         let runtime_contract_result = resolved_runtime_contract(candidate.plugin);
-        let runtime_contract_is_ready = runtime_contract_result.is_ok();
-        if !runtime_contract_is_ready {
-            continue;
-        }
+        let runtime_contract = match runtime_contract_result {
+            Ok(runtime_contract) => runtime_contract,
+            Err(error) => {
+                failure_reasons.push(error);
+                continue;
+            }
+        };
 
         let requirements_result = validate_binding_execution_requirements(config, candidate.plugin);
-        let requirements_are_ready = requirements_result.is_ok();
-        if !requirements_are_ready {
+        if let Err(error) = requirements_result {
+            failure_reasons.push(error);
             continue;
         }
 
+        let _ = endpoint;
+        let _ = runtime_contract;
         runnable_candidates.push(candidate.clone());
     }
 
-    runnable_candidates
+    ManagedPluginBridgeRunnableCandidates {
+        candidates: runnable_candidates,
+        failure_reasons,
+    }
 }
 
 fn select_runtime_candidate<'a>(

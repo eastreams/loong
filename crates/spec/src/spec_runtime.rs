@@ -3099,30 +3099,7 @@ pub fn caller_is_allowed(caller: Option<&str>, allowed: &BTreeSet<String>) -> bo
 }
 
 pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> bool {
-    if allowed.is_empty() {
-        return false;
-    }
-
-    let trimmed_program = program.trim();
-    let normalized = trimmed_program.to_ascii_lowercase();
-    if allowed.contains(&normalized) {
-        return true;
-    }
-
-    let program_path = Path::new(trimmed_program);
-    let has_path_component = program_path.is_absolute()
-        || program_path
-            .parent()
-            .is_some_and(|parent| !parent.as_os_str().is_empty());
-    if has_path_component {
-        return false;
-    }
-
-    program_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| allowed.contains(&name.to_ascii_lowercase()))
-        .unwrap_or(false)
+    loongclaw_bridge_runtime::is_process_command_allowed(program, allowed)
 }
 
 pub fn detect_provider_bridge_kind(
