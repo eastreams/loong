@@ -45,6 +45,23 @@ fn ensure_feishu_websocket_rustls_provider() {
     });
 }
 
+fn redact_feishu_websocket_log_url(raw_url: &str) -> String {
+    let trimmed_url = raw_url.trim();
+    let parsed_url = reqwest::Url::parse(trimmed_url);
+
+    let Ok(mut parsed_url) = parsed_url else {
+        let without_query = trimmed_url.split('?').next().unwrap_or(trimmed_url);
+        let without_fragment = without_query.split('#').next().unwrap_or(without_query);
+        return without_fragment.to_owned();
+    };
+
+    let _ = parsed_url.set_username("");
+    let _ = parsed_url.set_password(None);
+    parsed_url.set_query(None);
+    parsed_url.set_fragment(None);
+    parsed_url.to_string()
+}
+
 #[derive(Clone, PartialEq, prost::Message)]
 struct FeishuWsHeader {
     #[prost(string, tag = "1")]
@@ -267,12 +284,14 @@ async fn run_feishu_websocket_session(
     ws_config: &FeishuWsEndpointClientConfig,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
+    let redacted_url = redact_feishu_websocket_log_url(url);
+
     tracing::info!(
         target: "loongclaw.channel.feishu",
         transport = "websocket",
         configured_account_id = %state.configured_account_id(),
         account_id = %state.account_id(),
-        url = %url,
+        url = %redacted_url,
         "connecting feishu websocket session"
     );
 
@@ -497,6 +516,23 @@ mod tests {
         path: String,
         authorization: Option<String>,
         body: String,
+    }
+
+    #[test]
+    fn redact_feishu_websocket_log_url_strips_query_fragment_and_userinfo() {
+        let raw_url =
+            "wss://user:secret@example.com/ws/connect?ticket=secret-token&service_id=7#fragment";
+        let redacted_url = redact_feishu_websocket_log_url(raw_url);
+
+        assert_eq!(redacted_url, "wss://example.com/ws/connect");
+    }
+
+    #[test]
+    fn redact_feishu_websocket_log_url_falls_back_for_invalid_urls() {
+        let raw_url = "not a url?ticket=secret-token#fragment";
+        let redacted_url = redact_feishu_websocket_log_url(raw_url);
+
+        assert_eq!(redacted_url, "not a url");
     }
 
     #[derive(Clone, Default)]
