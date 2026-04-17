@@ -2608,7 +2608,8 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
     if let Some(observer) = observer
         && provider_turn_observer_supports_streaming(config, Some(observer))
     {
-        let on_token = build_observer_streaming_token_callback(observer);
+        let request_started_at = std::time::Instant::now();
+        let on_token = build_observer_streaming_token_callback(observer, request_started_at);
         return runtime
             .request_turn_streaming_with_retry_progress(
                 config,
@@ -4355,6 +4356,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                     let execution_policy = DelegateChildExecutionPolicy {
                         isolation: delegate_policy.isolation,
                         profile: delegate_policy.profile,
+                        owner_kind: None,
                         timeout_seconds: delegate_policy.timeout_seconds,
                         allow_shell_in_child: delegate_policy.allow_shell_in_child,
                         child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -4436,6 +4438,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         session_context,
         delegate_request,
         binding,
+        Some(crate::conversation::ConstrainedSubagentOwnerKind::AsyncDelegateSpawner),
     )
     .await?;
     let detached_config = std::sync::Arc::new(config.clone());
@@ -4476,6 +4479,7 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
         session_context,
         delegate_request,
         binding,
+        Some(crate::conversation::ConstrainedSubagentOwnerKind::BackgroundTaskHost),
     )
     .await?;
     let spawn_result = spawner.spawn(delegate_request.request.clone()).await;
@@ -4534,6 +4538,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     session_context: &SessionContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
     binding: ConversationRuntimeBinding<'_>,
+    owner_kind: Option<crate::conversation::ConstrainedSubagentOwnerKind>,
 ) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
@@ -4561,6 +4566,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                 let execution_policy = DelegateChildExecutionPolicy {
                     isolation: delegate_policy.isolation,
                     profile: delegate_policy.profile,
+                    owner_kind,
                     timeout_seconds: delegate_policy.timeout_seconds,
                     allow_shell_in_child: delegate_policy.allow_shell_in_child,
                     child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -7522,6 +7528,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -7654,6 +7661,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
