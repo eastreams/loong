@@ -3209,10 +3209,26 @@ mod tests {
         target_contract: &str,
     ) -> BTreeMap<String, String> {
         let mut metadata = BTreeMap::new();
+        let runtime_operations = vec![
+            "send_message".to_owned(),
+            "receive_batch".to_owned(),
+            "ack_inbound".to_owned(),
+            "complete_batch".to_owned(),
+        ];
+        let runtime_operations_json =
+            serde_json::to_string(&runtime_operations).expect("serialize runtime operations");
 
         metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
         metadata.insert("transport_family".to_owned(), transport_family.to_owned());
         metadata.insert("target_contract".to_owned(), target_contract.to_owned());
+        metadata.insert(
+            "channel_runtime_contract".to_owned(),
+            "loongclaw_channel_bridge_v1".to_owned(),
+        );
+        metadata.insert(
+            "channel_runtime_operations_json".to_owned(),
+            runtime_operations_json,
+        );
 
         metadata
     }
@@ -3683,6 +3699,47 @@ mod tests {
                 && check.detail.contains(
                     "setup_remediation=\"Run the QQ bridge setup flow before enabling this bridge.\\nThen confirm exactly one managed bridge remains.\"",
                 )
+        }));
+    }
+
+    #[test]
+    fn check_channel_surfaces_marks_missing_runtime_metadata_as_incomplete_managed_bridge_setup() {
+        let install_root = browser_companion_temp_dir("managed-bridge-missing-runtime-contract");
+        let mut metadata =
+            compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop");
+        let removed_runtime_contract = metadata.remove("channel_runtime_contract");
+        let manifest = managed_bridge_manifest("weixin", Some("channel"), metadata);
+        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "weixin": {
+                "enabled": true,
+                "bridge_url": "https://bridge.example.test/weixin",
+                "bridge_access_token": "weixin-token",
+                "allowed_contact_ids": ["wxid_alice"]
+            }
+        }))
+        .expect("deserialize weixin config");
+
+        assert_eq!(
+            removed_runtime_contract.as_deref(),
+            Some("loongclaw_channel_bridge_v1")
+        );
+
+        write_managed_bridge_manifest(
+            install_root.as_path(),
+            "weixin-runtime-incomplete",
+            &manifest,
+        );
+        config.external_skills.install_root = Some(install_root.display().to_string());
+
+        let checks = check_channel_surfaces(&config);
+
+        assert!(checks.iter().any(|check| {
+            check.name == "weixin managed bridge discovery"
+                && check.level == DoctorCheckLevel::Warn
+                && check.detail.contains("incomplete=1")
+                && check
+                    .detail
+                    .contains("status=compatible_incomplete_contract")
         }));
     }
 
