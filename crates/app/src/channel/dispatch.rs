@@ -3371,59 +3371,19 @@ pub async fn process_inbound_with_provider(
 ) -> CliResult<String> {
     let started_at = std::time::Instant::now();
     let result = match reload_channel_turn_config(config, resolved_path) {
-        Ok(turn_config) => {
-            let address = message.session.conversation_address();
-            let acp_turn_hints = resolve_channel_acp_turn_hints(&turn_config, &message.session)?;
-            let request = crate::agent_runtime::AgentTurnRequest {
-                message: message.text.clone(),
-                turn_mode: crate::agent_runtime::AgentTurnMode::Oneshot,
-                channel_id: address.channel_id.clone(),
-                account_id: address.account_id.clone(),
-                conversation_id: address.conversation_id.clone(),
-                participant_id: address.participant_id.clone(),
-                thread_id: address.thread_id.clone(),
-                acp_bootstrap_mcp_servers: acp_turn_hints.bootstrap_mcp_servers.clone(),
-                acp_cwd: acp_turn_hints
-                    .working_directory
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
-                ..Default::default()
-            };
-            let runtime =
-                crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
-                    resolved_path
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_default(),
-                    turn_config,
-                    Some(address.session_id.as_str()),
-                    &crate::chat::CliChatOptions {
-                        acp_requested: false,
-                        acp_event_stream: false,
-                        acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
-                        acp_working_directory: request
-                            .acp_cwd
-                            .as_deref()
-                            .map(std::path::PathBuf::from),
-                    },
-                    kernel_ctx.clone(),
-                    crate::chat::CliSessionRequirement::AllowImplicitDefault,
-                )?;
-            let ingress = channel_message_ingress_context(message);
-            let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
-            let observer = feedback_capture.observer_handle();
-            let result = crate::agent_runtime::AgentRuntime::new()
-                .run_turn_with_runtime_and_observer_and_context_and_error_mode(
+        Ok(turn_config) => match DefaultConversationRuntime::from_config_or_env(&turn_config) {
+            Ok(runtime) => {
+                Box::pin(process_inbound_with_runtime_and_feedback(
+                    &turn_config,
                     &runtime,
-                    &request,
-                    None,
-                    observer,
-                    ingress.as_ref(),
-                    channel_message_acp_turn_provenance(message),
-                    crate::conversation::ProviderErrorMode::Propagate,
-                )
-                .await?;
-            Ok(feedback_capture.render_reply(result.output_text))
-        }
+                    message,
+                    ConversationRuntimeBinding::kernel(kernel_ctx),
+                    feedback_policy,
+                ))
+                .await
+            }
+            Err(error) => Err(error),
+        },
         Err(error) => Err(error),
     };
     let duration_ms = started_at.elapsed().as_millis();
