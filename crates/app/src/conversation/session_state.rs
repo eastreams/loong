@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use loongclaw_kernel::mailbox::AgentMailbox;
+use loong_kernel::mailbox::AgentMailbox;
 
 #[cfg(test)]
-use loongclaw_kernel::mailbox::AgentPath;
-pub(crate) use loongclaw_kernel::mailbox::InterAgentMessage;
+use loong_kernel::mailbox::AgentPath;
+pub(crate) use loong_kernel::mailbox::InterAgentMessage;
 #[cfg(test)]
-use loongclaw_kernel::mailbox::MailboxContent;
+use loong_kernel::mailbox::MailboxContent;
 
 fn normalize_session_id(session_id: &str) -> String {
     let trimmed = session_id.trim();

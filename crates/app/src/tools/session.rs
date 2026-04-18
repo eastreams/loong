@@ -3993,10 +3993,13 @@ mod tests {
     use std::fs;
 
     use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_kernel::mailbox::{AgentPath, MailboxContent};
     use rusqlite::params;
     use serde_json::{Value, json};
+    use tokio::time::{Duration, Instant, sleep};
 
     use crate::config::{SessionVisibility, ToolConfig};
+    use crate::conversation::{InterAgentMessage, mailbox_for_session};
     use crate::memory::append_turn_direct;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{
@@ -4004,7 +4007,10 @@ mod tests {
         SessionKind, SessionRepository, SessionState, SessionSummaryRecord,
     };
 
-    use super::{execute_session_tool_with_config, execute_session_tool_with_policies};
+    use super::{
+        execute_session_tool_with_config, execute_session_tool_with_policies,
+        wait_for_single_session_with_policies,
+    };
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
@@ -7481,6 +7487,86 @@ mod tests {
                 .archived_at,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn session_wait_wakes_when_parent_mailbox_receives_delegate_result() {
+        let config = isolated_memory_config("session-wait-mailbox-wake");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+
+        let config_for_completion = config.clone();
+        let completion = tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            let repo = SessionRepository::new(&config_for_completion).expect("completion repo");
+            repo.finalize_session_terminal(
+                "child-session",
+                FinalizeSessionTerminalRequest {
+                    state: SessionState::Completed,
+                    last_error: None,
+                    event_kind: "delegate_completed".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({
+                        "result": "ok"
+                    }),
+                    outcome_status: "ok".to_owned(),
+                    outcome_payload_json: json!({
+                        "child_session_id": "child-session",
+                        "result": "ok"
+                    }),
+                    frozen_result: None,
+                },
+            )
+            .expect("finalize child");
+
+            let mailbox = mailbox_for_session("root-session");
+            let send_result = mailbox.send(InterAgentMessage {
+                author: AgentPath::root(),
+                recipient: AgentPath::root(),
+                content: MailboxContent::DelegateResult {
+                    session_id: "child-session".to_owned(),
+                    frozen_result: json!({
+                        "status": "ok"
+                    }),
+                },
+                trigger_turn: true,
+            });
+            assert!(send_result.is_ok());
+        });
+
+        let started_at = Instant::now();
+        let outcome = wait_for_single_session_with_policies(
+            "child-session",
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+            None,
+            1_000,
+            10,
+        )
+        .await
+        .expect("session_wait outcome");
+        completion.await.expect("completion task");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["wait_status"], "completed");
+        assert_eq!(outcome.payload["session"]["state"], "completed");
+        assert!(started_at.elapsed() < Duration::from_millis(500));
     }
 
     #[test]

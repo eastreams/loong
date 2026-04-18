@@ -164,7 +164,7 @@ use crate::session::repository::{
     SessionRepository, SessionState,
 };
 #[cfg(feature = "memory-sqlite")]
-use loongclaw_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
+use loong_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
 use support::{
     ProviderTurnPreparation, ProviderTurnReplyTailPhase, ProviderTurnSessionState,
     emit_async_delegate_child_queued_event, emit_discovery_first_event, emit_prompt_frame_event,
@@ -4954,7 +4954,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
 fn notify_parent_delegate_result(
     parent_session_id: &str,
     child_session_id: &str,
-    outcome: &loongclaw_contracts::ToolCoreOutcome,
+    outcome: &loong_contracts::ToolCoreOutcome,
 ) {
     let mailbox = mailbox_for_session(parent_session_id);
     let author = AgentPath::root()
