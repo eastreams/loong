@@ -16,7 +16,6 @@ use crate::config::{
     GovernedToolApprovalMode, LoongConfig, SessionVisibility, ToolConfig, ToolConsentMode,
 };
 use crate::context::KernelContext;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
 #[cfg(feature = "memory-sqlite")]
@@ -27,6 +26,7 @@ use crate::operator::session_graph::OperatorSessionGraph;
 use crate::session::repository::{
     NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };
+use crate::session::store::{self, SessionStoreConfig};
 use crate::tools::runtime_events::{
     ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
@@ -568,13 +568,13 @@ impl ToolExecutionPreflight {
 
 #[derive(Clone)]
 pub struct DefaultAppToolDispatcher {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     tool_config: ToolConfig,
     app_config: Option<Arc<LoongConfig>>,
 }
 
 impl DefaultAppToolDispatcher {
-    pub fn new(memory_config: MemoryRuntimeConfig, tool_config: ToolConfig) -> Self {
+    pub fn new(memory_config: SessionStoreConfig, tool_config: ToolConfig) -> Self {
         Self {
             memory_config,
             tool_config,
@@ -582,7 +582,7 @@ impl DefaultAppToolDispatcher {
         }
     }
 
-    pub fn with_config(memory_config: MemoryRuntimeConfig, app_config: LoongConfig) -> Self {
+    pub fn with_config(memory_config: SessionStoreConfig, app_config: LoongConfig) -> Self {
         Self {
             memory_config,
             tool_config: app_config.tools.clone(),
@@ -592,7 +592,7 @@ impl DefaultAppToolDispatcher {
 
     pub fn runtime() -> Self {
         Self::new(
-            crate::memory::runtime_config::get_memory_runtime_config().clone(),
+            store::current_session_store_config().clone(),
             ToolConfig::default(),
         )
     }
@@ -3969,7 +3969,7 @@ mod tests {
         SessionRepository, SessionState,
     };
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-turn-engine-approval-{test_name}-{}",
             std::process::id()
@@ -3977,9 +3977,9 @@ mod tests {
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 

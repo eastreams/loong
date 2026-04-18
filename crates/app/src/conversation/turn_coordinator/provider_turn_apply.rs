@@ -279,7 +279,7 @@ where
                 #[cfg(feature = "memory-sqlite")]
                 {
                     let memory_config =
-                        MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+                        store::session_store_config_from_memory_config(&self.config.memory);
                     let effective_tool_config =
                         effective_tool_config_for_session(&self.config.tools, session_context);
                     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(

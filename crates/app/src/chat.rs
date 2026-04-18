@@ -95,14 +95,12 @@ use super::conversation::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::conversation::{load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary};
-#[cfg(any(test, feature = "memory-sqlite"))]
-use super::memory;
-#[cfg(feature = "memory-sqlite")]
-use super::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use super::session::LATEST_SESSION_SELECTOR;
 #[cfg(feature = "memory-sqlite")]
 use super::session::latest_resumable_root_session_id;
+#[cfg(feature = "memory-sqlite")]
+use super::session::store::{self, SessionStoreConfig as MemoryRuntimeConfig};
 use super::tui_surface::{
     TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec, TuiHeaderStyle,
     TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec, render_tui_message_body_spec,
@@ -587,7 +585,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     #[cfg(feature = "memory-sqlite")]
     let memory_label = {
         let sqlite_path = config.memory.resolved_sqlite_path();
-        let initialized = memory::ensure_memory_db_ready(Some(sqlite_path), &memory_config)
+        let initialized = store::ensure_session_store_ready(Some(sqlite_path), &memory_config)
             .map_err(|error| format!("failed to initialize sqlite memory: {error}"))?;
         initialized.display().to_string()
     };
@@ -3685,7 +3683,7 @@ mod tests {
         config.audit.mode = crate::config::AuditMode::InMemory;
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::ensure_memory_db_ready(
+        store::ensure_session_store_ready(
             Some(config.memory.resolved_sqlite_path()),
             &memory_config,
         )
@@ -3798,7 +3796,7 @@ mod tests {
         memory_config: &MemoryRuntimeConfig,
     ) {
         for payload in payloads {
-            crate::memory::append_turn_direct(session_id, "assistant", payload, memory_config)
+            store::append_session_turn_direct(session_id, "assistant", payload, memory_config)
                 .expect("persist assistant payload");
         }
     }
@@ -4045,9 +4043,9 @@ mod tests {
         let (config, memory_config, sqlite_path) = init_chat_test_memory("diagnostics");
 
         let session_id = "chat-binding-history-direct";
-        crate::memory::append_turn_direct(session_id, "user", "hello", &memory_config)
+        store::append_session_turn_direct(session_id, "user", "hello", &memory_config)
             .expect("persist user turn");
-        crate::memory::append_turn_direct(session_id, "assistant", "world", &memory_config)
+        store::append_session_turn_direct(session_id, "assistant", "world", &memory_config)
             .expect("persist assistant turn");
 
         let direct_lines = load_history_lines(
@@ -6138,7 +6136,7 @@ allowed_decisions: yes / auto / full / esc";
             ("user", "recent ask"),
             ("assistant", "recent reply"),
         ] {
-            crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            store::append_session_turn_direct(session_id, role, content, &memory_config)
                 .expect("seed turns should succeed");
         }
 
@@ -6170,7 +6168,7 @@ allowed_decisions: yes / auto / full / esc";
             "manual compaction detail should reuse the continuity boundary note"
         );
 
-        let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        let turns = store::window_session_turns(session_id, 32, &memory_config)
             .expect("window load should succeed");
         assert!(
             turns[0]

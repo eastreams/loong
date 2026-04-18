@@ -1,8 +1,8 @@
 use crate::CliResult;
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{ApprovalRequestRecord, SessionRepository};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store::SessionStoreConfig;
 
 pub(crate) const CHAT_SESSION_KIND_DELEGATE_CHILD: &str = "delegate_child";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -106,7 +106,7 @@ impl ChatControlPlaneSessionSummary {
 
 impl ChatControlPlaneStore {
     #[cfg(feature = "memory-sqlite")]
-    pub(crate) fn new(memory_config: &MemoryRuntimeConfig) -> CliResult<Self> {
+    pub(crate) fn new(memory_config: &SessionStoreConfig) -> CliResult<Self> {
         let repo = SessionRepository::new(memory_config)?;
         Ok(Self { repo })
     }
