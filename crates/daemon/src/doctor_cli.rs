@@ -3088,6 +3088,21 @@ mod tests {
         setup_surface: Option<&str>,
         metadata: BTreeMap<String, String>,
     ) -> kernel::PluginManifest {
+        let mut metadata = metadata;
+        metadata
+            .entry("channel_runtime_contract".to_owned())
+            .or_insert_with(|| "loongclaw_channel_bridge_v1".to_owned());
+        metadata
+            .entry("channel_runtime_operations_json".to_owned())
+            .or_insert_with(|| {
+                serde_json::to_string(&[
+                    "send_message",
+                    "receive_batch",
+                    "ack_inbound",
+                    "complete_batch",
+                ])
+                .expect("serialize default runtime operations")
+            });
         let setup = setup_surface.map(|surface| kernel::PluginSetup {
             mode: kernel::PluginSetupMode::MetadataOnly,
             surface: Some(surface.to_owned()),
@@ -6144,7 +6159,7 @@ mod tests {
             install_root
                 .join("browser-companion-preview")
                 .join("SKILL.md"),
-            "# Browser Companion Preview\n\nUse agent-browser through shell.exec.\n",
+            "# Browser Companion Preview\n\nUse agent-browser through exec.\n",
         )
         .expect("write managed preview skill");
         let checks = vec![DoctorCheck {

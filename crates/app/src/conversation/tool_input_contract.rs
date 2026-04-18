@@ -81,6 +81,10 @@ pub(crate) fn render_tool_input_repair_guidance_from_reason(
     )
 }
 
+pub(crate) fn repair_guidance_visible_tool_name(tool_name: &str) -> String {
+    tools::user_visible_tool_name(tool_name)
+}
+
 fn render_tool_input_repair_guidance_for_issue(
     tool_name: &str,
     descriptor: &tools::ToolDescriptor,
@@ -353,9 +357,17 @@ fn render_repair_guidance_for_issue(
     descriptor: &tools::ToolDescriptor,
     issue: &ToolInputContractIssue,
 ) -> String {
+    let canonical_tool_name = tools::canonical_tool_name(tool_name);
+    let visible_tool_name = repair_guidance_visible_tool_name(canonical_tool_name);
     let mut lines = Vec::new();
-    let heading = format!("Repair guidance for {tool_name}:");
+    let heading = format!("Repair guidance for {visible_tool_name}:");
     lines.push(heading);
+
+    if visible_tool_name != canonical_tool_name {
+        lines.push(format!(
+            "Prefer the direct `{visible_tool_name}` surface instead of hidden `{canonical_tool_name}` when possible."
+        ));
+    }
 
     match issue {
         ToolInputContractIssue::PayloadMustBeObject => {
@@ -442,9 +454,14 @@ mod tests {
         let guidance = render_tool_input_repair_guidance("file.read", summary.get("request"))
             .expect("guidance");
 
-        assert!(guidance.contains("Repair guidance for file.read:"));
+        assert!(guidance.contains("Repair guidance for read:"));
+        assert!(guidance.contains(
+            "Prefer the direct `read` surface instead of hidden `file.read` when possible."
+        ));
         assert!(guidance.contains("Add required field `payload.path` as a string."));
-        assert!(guidance.contains("Expected payload shape: path:string,max_bytes?:integer."));
+        assert!(guidance.contains(
+            "Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer."
+        ));
     }
 
     #[test]
@@ -500,7 +517,10 @@ mod tests {
         )
         .expect("guidance");
 
-        assert!(guidance.contains("Repair guidance for shell.exec:"));
+        assert!(guidance.contains("Repair guidance for exec:"));
+        assert!(guidance.contains(
+            "Prefer the direct `exec` surface instead of hidden `shell.exec` when possible."
+        ));
         assert!(guidance.contains("Set `payload.args` to an array value."));
         assert!(guidance.contains(
             "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."

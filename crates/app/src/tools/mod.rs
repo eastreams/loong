@@ -15,13 +15,25 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use tool_search::searchable_entry_from_provider_definition;
 use tool_search::{
-    SearchableToolEntry, execute_tool_search_tool_with_config, searchable_entry_from_descriptor,
+    SearchableToolEntry, collapse_hidden_surface_search_entries,
+    execute_tool_search_tool_with_config, searchable_entry_from_descriptor,
     tool_search_entry_is_runtime_usable,
 };
 
 use crate::KernelContext;
 use crate::config::ToolConfig;
+use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::session::store::SessionStoreConfig;
+use provider_schema::provider_definition_for_view;
+use routing::{
+    execute_direct_tool_core_with_config, resolved_inner_tool_name_for_logs,
+    route_hidden_discoverable_tool_name,
+};
+#[cfg(test)]
+use routing::{
+    route_direct_browser_tool_name, route_direct_web_tool_name,
+    route_direct_web_tool_name_for_view,
+};
 
 pub(crate) mod approval;
 mod bash;
@@ -53,9 +65,11 @@ mod memory_tools;
 pub(crate) mod messaging;
 mod payload;
 mod process_exec;
+mod provider_schema;
 mod provider_switch;
 #[cfg(test)]
 mod required_capabilities_tests;
+mod routing;
 pub mod runtime_config;
 pub(crate) mod runtime_events;
 pub(crate) mod session;
@@ -97,6 +111,7 @@ pub use catalog::{
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub use kernel_adapter::MvpToolAdapter;
+pub use shell_request_prep::summarize_tool_request_for_display;
 pub(crate) use shell_request_prep::{
     TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TOKEN_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD,
     TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, inject_tool_lease_binding,
@@ -128,11 +143,23 @@ pub use bundled_skills::{
     bundled_preinstall_targets, bundled_skill_pack, bundled_skill_pack_memberships,
     bundled_skill_packs,
 };
+pub(crate) use provider_schema::provider_tool_definitions_with_config;
+pub use provider_schema::{
+    provider_tool_definitions, tool_parameter_schema_types, try_provider_tool_definitions_for_view,
+};
+pub(crate) use routing::hidden_operation_for_tool_name;
+#[cfg(test)]
+pub(crate) use routing::route_direct_tool_name;
 pub use tool_surface::ToolSurfaceState;
 
 const BROWSER_COMPANION_TOOL_PREFIX: &str = "browser.companion.";
 const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
 const DELEGATE_TOOL_NAME: &str = "delegate";
+// Grouped hidden façade ids keep the model-facing vocabulary small.
+// `channel` stays separate from `agent`/`skills` so addon boundaries remain explicit.
+const HIDDEN_AGENT_TOOL_NAME: &str = "agent";
+const HIDDEN_SKILLS_TOOL_NAME: &str = "skills";
+const HIDDEN_CHANNEL_TOOL_NAME: &str = "channel";
 pub(crate) const SHELL_EXEC_TOOL_NAME: &str = "shell.exec";
 const BASH_EXEC_TOOL_NAME: &str = "bash.exec";
 const HTTP_REQUEST_TOOL_NAME: &str = "http.request";
@@ -617,7 +644,7 @@ fn required_capabilities_for_tool_name_and_payload(
     caps
 }
 
-fn invoked_discoverable_tool_request(payload: &Value) -> Option<(&str, &Value)> {
+pub(crate) fn invoked_discoverable_tool_request(payload: &Value) -> Option<(&str, &Value)> {
     let tool_id = payload
         .get("tool_id")
         .and_then(Value::as_str)
@@ -625,14 +652,14 @@ fn invoked_discoverable_tool_request(payload: &Value) -> Option<(&str, &Value)> 
     if matches!(tool_id, "tool.search" | "tool.invoke") {
         return None;
     }
-    let resolved = resolve_tool_execution(tool_id)?;
+    let arguments = payload.get("arguments").unwrap_or(payload);
+    let routed_hidden_tool_name = route_hidden_discoverable_tool_name(tool_id, arguments).ok();
+    let resolved_tool_name = routed_hidden_tool_name.unwrap_or(tool_id);
+    let resolved = resolve_tool_execution(resolved_tool_name)?;
     if is_provider_exposed_tool_name(resolved.canonical_name) {
         return None;
     }
-    Some((
-        resolved.canonical_name,
-        payload.get("arguments").unwrap_or(payload),
-    ))
+    Some((resolved.canonical_name, arguments))
 }
 
 fn tool_requires_network_egress(tool_name: &str) -> bool {
@@ -653,6 +680,13 @@ fn tool_requires_network_egress(tool_name: &str) -> bool {
 
 pub fn is_known_tool_name(raw: &str) -> bool {
     if tool_catalog().resolve(raw).is_some() {
+        return true;
+    }
+    let canonical_name = canonical_tool_name(raw);
+    if matches!(
+        canonical_name,
+        HIDDEN_AGENT_TOOL_NAME | HIDDEN_SKILLS_TOOL_NAME | HIDDEN_CHANNEL_TOOL_NAME
+    ) {
         return true;
     }
     if is_known_tool_name_in_view(raw, &runtime_tool_view()) {
@@ -678,9 +712,46 @@ pub fn is_provider_exposed_tool_name(raw: &str) -> bool {
         .is_some_and(|entry| entry.is_provider_exposed())
 }
 
+pub(crate) fn hidden_facade_tool_name_for_hidden_tool(raw: &str) -> Option<&'static str> {
+    let canonical_name = canonical_tool_name(raw);
+    tool_surface::hidden_facade_tool_name_for_hidden_tool(canonical_name)
+}
+
 pub(crate) fn direct_tool_name_for_hidden_tool(raw: &str) -> Option<&'static str> {
     let canonical_name = canonical_tool_name(raw);
     tool_surface::direct_tool_name_for_hidden_tool(canonical_name)
+}
+
+pub fn user_visible_tool_name(raw: &str) -> String {
+    let canonical_name = canonical_tool_name(raw);
+
+    if is_tool_surface_id(canonical_name) {
+        return canonical_name.to_owned();
+    }
+
+    if let Some(direct_tool_name) = direct_tool_name_for_hidden_tool(canonical_name) {
+        return direct_tool_name.to_owned();
+    }
+
+    canonical_name.to_owned()
+}
+
+pub(crate) fn model_visible_tool_name(raw: &str) -> String {
+    let canonical_name = canonical_tool_name(raw);
+
+    if let Some(hidden_facade_tool_name) = hidden_facade_tool_name_for_hidden_tool(canonical_name) {
+        return hidden_facade_tool_name.to_owned();
+    }
+
+    user_visible_tool_name(canonical_name)
+}
+
+pub(crate) fn tool_surface_visible_in_view(surface_id: &str, view: &ToolView) -> bool {
+    tool_surface::tool_surface_visible_in_view(surface_id, view)
+}
+
+pub(crate) fn is_tool_surface_id(surface_id: &str) -> bool {
+    tool_surface::is_tool_surface_id(surface_id)
 }
 
 pub fn runtime_tool_view_from_loong_config(config: &crate::config::LoongConfig) -> ToolView {
@@ -718,6 +789,27 @@ pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution>
             execution_kind: descriptor.execution_kind,
         });
     }
+
+    let canonical_name = canonical_tool_name(raw);
+    if canonical_name == HIDDEN_AGENT_TOOL_NAME {
+        return Some(ResolvedToolExecution {
+            canonical_name: HIDDEN_AGENT_TOOL_NAME,
+            execution_kind: ToolExecutionKind::Core,
+        });
+    }
+    if canonical_name == HIDDEN_SKILLS_TOOL_NAME {
+        return Some(ResolvedToolExecution {
+            canonical_name: HIDDEN_SKILLS_TOOL_NAME,
+            execution_kind: ToolExecutionKind::Core,
+        });
+    }
+    if canonical_name == HIDDEN_CHANNEL_TOOL_NAME {
+        return Some(ResolvedToolExecution {
+            canonical_name: HIDDEN_CHANNEL_TOOL_NAME,
+            execution_kind: ToolExecutionKind::Core,
+        });
+    }
+
     #[cfg(feature = "feishu-integration")]
     if let Some(canonical_name) = feishu::canonical_feishu_tool_name(raw) {
         return Some(ResolvedToolExecution {
@@ -726,245 +818,6 @@ pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution>
         });
     }
     None
-}
-
-fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &Value) -> String {
-    if canonical_name == "tool.invoke" {
-        let inner_tool_id = payload.get("tool_id");
-        let inner_tool_id = inner_tool_id.and_then(Value::as_str);
-        let inner_tool_name = inner_tool_id.map(canonical_tool_name);
-        let inner_tool_name = inner_tool_name.unwrap_or("-");
-        return inner_tool_name.to_owned();
-    }
-
-    let is_direct_tool = matches!(
-        canonical_name,
-        "read" | "write" | "exec" | "web" | "browser" | "memory"
-    );
-    if !is_direct_tool {
-        return "-".to_owned();
-    }
-
-    let direct_tool_name = canonical_name;
-    let resolved_tool_name = route_direct_tool_name(direct_tool_name, payload).ok();
-    let resolved_tool_name = resolved_tool_name.unwrap_or("-");
-    resolved_tool_name.to_owned()
-}
-
-fn execute_direct_tool_core_with_config(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-) -> Result<ToolCoreOutcome, String> {
-    let routed_request = route_direct_tool_request(request, config)?;
-    execute_discoverable_tool_core_with_config(routed_request, config)
-}
-
-fn route_direct_tool_request(
-    request: ToolCoreRequest,
-    config: &runtime_config::ToolRuntimeConfig,
-) -> Result<ToolCoreRequest, String> {
-    let tool_name = request.tool_name;
-    let payload = request.payload;
-    let routed_tool_name = route_direct_tool_name(tool_name.as_str(), &payload)?;
-    let runtime_view = runtime_tool_view_for_runtime_config(config);
-    let tool_visible = runtime_view.contains(routed_tool_name);
-    if !tool_visible {
-        return Err(format!(
-            "tool_surface_unavailable: `{}` cannot route to `{}` in this runtime",
-            tool_name, routed_tool_name
-        ));
-    }
-
-    let routed_request = ToolCoreRequest {
-        tool_name: routed_tool_name.to_owned(),
-        payload,
-    };
-    Ok(routed_request)
-}
-
-fn route_direct_tool_name(tool_name: &str, payload: &Value) -> Result<&'static str, String> {
-    match tool_name {
-        "read" => route_direct_read_tool_name(payload),
-        "write" => route_direct_write_tool_name(payload),
-        "exec" => Ok(SHELL_EXEC_TOOL_NAME),
-        "web" => route_direct_web_tool_name(payload),
-        "browser" => route_direct_browser_tool_name(payload),
-        "memory" => route_direct_memory_tool_name(payload),
-        _ => Ok("-"),
-    }
-}
-
-fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_path = payload_has_non_null_field(payload, "path");
-    let has_query = payload_has_non_null_field(payload, "query");
-    let has_pattern = payload_has_non_null_field(payload, "pattern");
-    let mode_count = count_true([has_path, has_query, has_pattern]);
-
-    if mode_count == 0 {
-        return Err(
-            "direct_read_requires_one_of: expected exactly one of `path`, `query`, or `pattern`"
-                .to_owned(),
-        );
-    }
-
-    if mode_count > 1 {
-        return Err(
-            "direct_read_ambiguous: provide exactly one of `path`, `query`, or `pattern`"
-                .to_owned(),
-        );
-    }
-
-    if has_path {
-        return Ok("file.read");
-    }
-
-    if has_query {
-        return Ok("content.search");
-    }
-
-    Ok("glob.search")
-}
-
-fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_content = payload_has_non_null_field(payload, "content");
-    let has_old_string = payload_has_non_null_field(payload, "old_string");
-    let has_new_string = payload_has_non_null_field(payload, "new_string");
-    let edit_mode = has_old_string || has_new_string;
-    let create_mode = has_content;
-    let mode_count = count_true([create_mode, edit_mode]);
-
-    if mode_count == 0 {
-        return Err(
-            "direct_write_requires_one_mode: expected `path` plus `content`, or `path` plus `old_string` and `new_string`"
-                .to_owned(),
-        );
-    }
-
-    if mode_count > 1 {
-        return Err(
-            "direct_write_ambiguous: do not mix whole-file write fields with exact-edit fields"
-                .to_owned(),
-        );
-    }
-
-    let has_path = payload_has_non_null_field(payload, "path");
-    if !has_path {
-        return Err("direct_write_requires_path: expected `path` for direct write".to_owned());
-    }
-
-    if create_mode {
-        return Ok("file.write");
-    }
-
-    if !has_old_string || !has_new_string {
-        return Err(
-            "direct_write_edit_requires_both_strings: expected `old_string` and `new_string` for exact-edit mode"
-                .to_owned(),
-        );
-    }
-
-    Ok("file.edit")
-}
-
-fn route_direct_web_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_url = payload_has_non_null_field(payload, "url");
-    let has_query = payload_has_non_null_field(payload, "query");
-    let mode_count = count_true([has_url, has_query]);
-
-    if mode_count == 0 {
-        return Err(
-            "direct_web_requires_one_of: expected exactly one of `url` or `query`".to_owned(),
-        );
-    }
-
-    if mode_count > 1 {
-        return Err("direct_web_ambiguous: provide either `url` or `query`, not both".to_owned());
-    }
-
-    if has_url {
-        return Ok("web.fetch");
-    }
-
-    Ok("web.search")
-}
-
-fn route_direct_browser_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_url = payload_has_non_null_field(payload, "url");
-    let has_session_id = payload_has_non_null_field(payload, "session_id");
-    let has_link_id = payload_has_non_null_field(payload, "link_id");
-
-    if has_url && (has_session_id || has_link_id) {
-        return Err(
-            "direct_browser_ambiguous: use `url` for open, or `session_id` with optional `link_id` for existing sessions"
-                .to_owned(),
-        );
-    }
-
-    if has_url {
-        return Ok("browser.open");
-    }
-
-    if has_link_id && !has_session_id {
-        return Err(
-            "direct_browser_click_requires_session_id: expected `session_id` with `link_id`"
-                .to_owned(),
-        );
-    }
-
-    if has_session_id && has_link_id {
-        return Ok("browser.click");
-    }
-
-    if has_session_id {
-        return Ok("browser.extract");
-    }
-
-    Err(
-        "direct_browser_requires_url_or_session: expected `url`, or `session_id` with optional `link_id`"
-            .to_owned(),
-    )
-}
-
-fn route_direct_memory_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_query = payload_has_non_null_field(payload, "query");
-    let has_path = payload_has_non_null_field(payload, "path");
-    let mode_count = count_true([has_query, has_path]);
-
-    if mode_count == 0 {
-        return Err(
-            "direct_memory_requires_one_of: expected exactly one of `query` or `path`".to_owned(),
-        );
-    }
-
-    if mode_count > 1 {
-        return Err(
-            "direct_memory_ambiguous: provide either `query` or `path`, not both".to_owned(),
-        );
-    }
-
-    if has_query {
-        return Ok("memory_search");
-    }
-
-    Ok("memory_get")
-}
-
-fn payload_has_non_null_field(payload: &Value, field_name: &str) -> bool {
-    let field_value = payload.get(field_name);
-    let field_value = field_value.filter(|value| !value.is_null());
-    field_value.is_some()
-}
-
-fn count_true<const N: usize>(values: [bool; N]) -> usize {
-    let mut count = 0usize;
-
-    for value in values {
-        if value {
-            count = count.saturating_add(1);
-        }
-    }
-
-    count
 }
 
 pub fn execute_tool_core_with_config(
@@ -1397,9 +1250,13 @@ pub(crate) fn capability_snapshot_for_view_with_config(
     view: &ToolView,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> String {
-    let mut lines = vec!["[tool_discovery_runtime]".to_owned()];
+    let mut lines = vec![
+        "[tool_discovery_runtime]".to_owned(),
+        "Available tools:".to_owned(),
+    ];
 
-    let visible_direct_lines = render_visible_direct_tool_lines(view);
+    let visible_direct_states = tool_surface::visible_direct_tool_states_for_view(view);
+    let visible_direct_lines = render_visible_direct_tool_lines(visible_direct_states.as_slice());
     lines.extend(visible_direct_lines);
 
     let gateway_entries = catalog::provider_exposed_tool_catalog();
@@ -1407,12 +1264,9 @@ pub(crate) fn capability_snapshot_for_view_with_config(
         .into_iter()
         .filter(|entry| entry.is_gateway())
         .collect::<Vec<_>>();
-    if !gateway_entries.is_empty() {
-        lines.push("Discovery gateway:".to_owned());
-        for entry in gateway_entries {
-            let line = format!("- {}: {}", entry.canonical_name, entry.summary);
-            lines.push(line);
-        }
+    for entry in gateway_entries {
+        let line = format!("- {}: {}", entry.canonical_name, entry.summary);
+        lines.push(line);
     }
 
     let discoverable_summary =
@@ -1421,51 +1275,37 @@ pub(crate) fn capability_snapshot_for_view_with_config(
 
     if hidden_tool_count == 0 {
         lines.push(
-            "No hidden specialized tools are currently discoverable beyond the visible direct surface."
+            "No additional specialized tools are currently available through tool.search."
                 .to_owned(),
         );
     } else {
         let hidden_count_line = format!(
-            "{hidden_tool_count} hidden specialized tools are currently discoverable through tool.search."
+            "Additional specialized tools available through tool.search: {hidden_tool_count}."
         );
         lines.push(hidden_count_line);
+
+        let hidden_surface_lines =
+            render_hidden_tool_surface_lines(discoverable_summary.hidden_surfaces.as_slice());
+        lines.extend(hidden_surface_lines);
 
         let hidden_tag_line = hidden_tool_tag_line(discoverable_summary.hidden_tags.as_slice());
         if let Some(hidden_tag_line) = hidden_tag_line {
             lines.push(hidden_tag_line);
         }
-
-        let hidden_surface_lines =
-            render_hidden_tool_surface_lines(discoverable_summary.hidden_surfaces.as_slice());
-        lines.extend(hidden_surface_lines);
     }
 
-    lines.push("Discovery workflow:".to_owned());
-
-    let discovery_workflow_lines = [
-        "Use a visible direct tool first when it fits the task.".to_owned(),
-        "If no visible direct tool fits, call tool.search before concluding the capability is unavailable.".to_owned(),
-        "A hidden specialized tool stays unavailable until tool.search returns a lease-bearing tool card.".to_owned(),
-        "After discovery, call tool.invoke with the returned lease and the arguments for the selected hidden tool.".to_owned(),
-    ];
-    lines.extend(discovery_workflow_lines);
-
-    let tool_search_guidance_line =
-        "If no visible direct tool fits, call tool.search with the capability you need and let the discovery workflow surface the next valid hidden tool.".to_owned();
-    lines.push(tool_search_guidance_line);
+    lines.push("Guidelines:".to_owned());
+    lines.extend(render_active_tool_guideline_lines(
+        visible_direct_states.as_slice(),
+        discoverable_summary.hidden_surfaces.as_slice(),
+    ));
     lines.join("\n")
 }
 
-fn render_visible_direct_tool_lines(view: &ToolView) -> Vec<String> {
-    let visible_direct_states = tool_surface::visible_direct_tool_states_for_view(view);
-    if visible_direct_states.is_empty() {
-        return Vec::new();
-    }
-
+fn render_visible_direct_tool_lines(states: &[ToolSurfaceState]) -> Vec<String> {
     let mut lines = Vec::new();
-    lines.push("Visible direct tools:".to_owned());
 
-    for state in visible_direct_states {
+    for state in states {
         let line = format!(
             "- {}: {} {}",
             state.surface_id, state.prompt_snippet, state.usage_guidance
@@ -1476,20 +1316,42 @@ fn render_visible_direct_tool_lines(view: &ToolView) -> Vec<String> {
     lines
 }
 
-fn render_hidden_tool_surface_lines(surfaces: &[ToolSurfaceState]) -> Vec<String> {
-    if surfaces.is_empty() {
-        return Vec::new();
-    }
+fn render_active_tool_guideline_lines(
+    visible_direct_states: &[ToolSurfaceState],
+    hidden_surfaces: &[ToolSurfaceState],
+) -> Vec<String> {
+    let mut lines = vec![
+        "- Prefer a direct tool when one clearly fits.".to_owned(),
+        "- Use tool.search only when you need a specialized capability that is not already direct.".to_owned(),
+        "- Keep tool.search queries short and capability-focused.".to_owned(),
+        "- Use tool.invoke only with a fresh lease returned by tool.search.".to_owned(),
+        "- If the user wants different permissions or guardrails, edit the relevant config or prompt files instead of treating the runtime as fixed.".to_owned(),
+    ];
+    let mut seen = lines.iter().cloned().collect::<BTreeSet<_>>();
 
-    let mut lines = Vec::new();
-    lines.push("Hidden specialized surfaces currently active:".to_owned());
-
-    for surface in surfaces {
-        let line = surface.render_prompt_line();
-        lines.push(line);
+    for surface in visible_direct_states.iter().chain(hidden_surfaces.iter()) {
+        let Some(guidelines) =
+            tool_surface::tool_surface_prompt_guidelines_for_id(surface.surface_id.as_str())
+        else {
+            continue;
+        };
+        for guideline in guidelines {
+            let line = format!("- {guideline}");
+            let inserted = seen.insert(line.clone());
+            if inserted {
+                lines.push(line);
+            }
+        }
     }
 
     lines
+}
+
+fn render_hidden_tool_surface_lines(surfaces: &[ToolSurfaceState]) -> Vec<String> {
+    surfaces
+        .iter()
+        .map(ToolSurfaceState::render_prompt_line)
+        .collect()
 }
 
 pub fn runtime_discoverable_tool_surface_summary_with_config(
@@ -1573,65 +1435,6 @@ fn summarize_hidden_tool_tags(entries: &[SearchableToolEntry]) -> Vec<String> {
         .collect()
 }
 
-/// Provider request tool schema for function-calling capable models.
-///
-/// The output shape matches OpenAI-compatible `tools=[{type:function,...}]`.
-/// Order is deterministic for stable prompting/tests.
-pub fn provider_tool_definitions() -> Vec<Value> {
-    provider_tool_definitions_with_config(Some(runtime_config::get_tool_runtime_config()))
-}
-
-pub(crate) fn provider_tool_definitions_with_config(
-    config: Option<&runtime_config::ToolRuntimeConfig>,
-) -> Vec<Value> {
-    let default_runtime_config;
-    let config = match config {
-        Some(config) => config,
-        None => {
-            default_runtime_config = runtime_config::ToolRuntimeConfig::default();
-            &default_runtime_config
-        }
-    };
-
-    let view = runtime_tool_view_for_runtime_config(config);
-    provider_tool_definitions_for_view_with_config(&view)
-}
-
-pub fn try_provider_tool_definitions_for_view(view: &ToolView) -> Result<Vec<Value>, String> {
-    Ok(provider_tool_definitions_for_view_with_config(view))
-}
-
-fn provider_tool_definitions_for_view_with_config(view: &ToolView) -> Vec<Value> {
-    let catalog = tool_catalog();
-    let mut tools = Vec::new();
-
-    for descriptor in catalog.descriptors().iter() {
-        let runtime_available = descriptor.availability == ToolAvailability::Runtime;
-        if !runtime_available {
-            continue;
-        }
-
-        let provider_exposed = descriptor.is_provider_exposed();
-        if !provider_exposed {
-            continue;
-        }
-
-        if descriptor.is_direct() {
-            let direct_tool_visible =
-                tool_surface::direct_tool_visible_in_view(descriptor.name, view);
-            if !direct_tool_visible {
-                continue;
-            }
-        }
-
-        let definition = descriptor.provider_definition();
-        tools.push(definition);
-    }
-
-    tools.sort_by(|left, right| tool_function_name(left).cmp(tool_function_name(right)));
-    tools
-}
-
 #[cfg(all(test, feature = "feishu-integration"))]
 fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
     feishu::feishu_provider_tool_definitions()
@@ -1680,7 +1483,7 @@ fn effective_runtime_visible_tool_view(
     match visible_tool_view {
         Some(injected) => {
             // Intersect the injected view with the runtime-visible surface so that
-            // trusted _loongclaw.tool_search.visible_tool_ids cannot re-expose
+            // trusted _loong.tool_search.visible_tool_ids cannot re-expose
             // tools disabled by runtime config (browser.*, session_*, etc.).
             injected.intersect(&runtime_view)
         }
@@ -1691,6 +1494,7 @@ fn effective_runtime_visible_tool_view(
 fn runtime_tool_search_entries(
     config: &runtime_config::ToolRuntimeConfig,
     visible_tool_view: Option<&ToolView>,
+    collapse_hidden_surfaces: bool,
 ) -> Vec<SearchableToolEntry> {
     let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
     let mut entries = Vec::new();
@@ -1707,12 +1511,20 @@ fn runtime_tool_search_entries(
             if !direct_tool_visible {
                 continue;
             }
-            let entry = searchable_entry_from_descriptor(descriptor);
+            let entry = tool_search::searchable_entry_from_descriptor_for_runtime_view(
+                descriptor,
+                &visible_tool_view,
+            );
             entries.push(entry);
         }
     }
 
     let hidden_entries = runtime_discoverable_tool_entries(config, Some(&visible_tool_view));
+    let hidden_entries = if collapse_hidden_surfaces {
+        collapse_hidden_surface_search_entries(hidden_entries)
+    } else {
+        hidden_entries
+    };
     entries.extend(hidden_entries);
     entries
 }
@@ -1741,29 +1553,9 @@ fn runtime_discoverable_tool_entries(
         .collect::<Vec<_>>()
 }
 
-pub fn tool_parameter_schema_types() -> BTreeMap<String, BTreeMap<String, &'static str>> {
-    let mut tools_by_name = BTreeMap::<String, BTreeMap<String, &'static str>>::new();
-    for entry in catalog::all_tool_catalog() {
-        let parameters = entry
-            .parameter_types
-            .iter()
-            .map(|(parameter_name, parameter_type)| ((*parameter_name).to_owned(), *parameter_type))
-            .collect::<BTreeMap<_, _>>();
-        if !parameters.is_empty() {
-            tools_by_name.insert(entry.canonical_name.to_owned(), parameters);
-        }
-    }
-    tools_by_name
-}
-fn tool_function_name(tool: &Value) -> &str {
-    tool.get("function")
-        .and_then(|value| value.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-}
-
 #[cfg(test)]
-mod tests {
+#[path = "tools_mod_tests.rs"]
+mod tests;
     use super::*;
     use crate::test_support::{ScopedEnv, ScopedLoongHome, unique_temp_dir};
     use base64::Engine as _;
@@ -14830,5 +14622,4 @@ mod tests {
                 loong_kernel::PolicyError::ExtensionDenied { ref extension, .. }
             ) if extension == "no-network-egress"
         ));
-    }
-}
+

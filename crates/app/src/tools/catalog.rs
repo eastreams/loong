@@ -255,6 +255,13 @@ pub struct ToolDescriptor {
     provider_definition_builder: fn(&ToolDescriptor) -> Value,
 }
 
+fn primary_surface_id(raw: &str) -> bool {
+    matches!(
+        raw,
+        "read" | "write" | "exec" | "web" | "browser" | "memory" | "agent" | "skills" | "channel"
+    )
+}
+
 impl ToolDescriptor {
     pub fn matches_name(&self, raw: &str) -> bool {
         if self.name == raw {
@@ -267,8 +274,18 @@ impl ToolDescriptor {
             return true;
         }
 
+        if primary_surface_id(raw) {
+            return false;
+        }
+
         let discovery_name = super::tool_surface::discovery_tool_name_for_tool_name(self.name);
-        discovery_name == raw
+        if discovery_name == raw {
+            return true;
+        }
+
+        super::tool_surface::legacy_discovery_tool_names_for_tool_name(self.name)
+            .iter()
+            .any(|legacy_name| legacy_name == raw)
     }
 
     pub fn provider_definition(&self) -> Value {
@@ -630,7 +647,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "tool.search",
             provider_name: "tool_search",
             aliases: &[],
-            description: "Discover hidden specialized tools",
+            description: "Discover hidden specialized tools relevant to the current task.",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Gateway,
@@ -644,7 +661,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "tool.invoke",
             provider_name: "tool_invoke",
             aliases: &[],
-            description: "Invoke a discovered hidden specialized tool",
+            description: "Invoke a discovered hidden specialized tool using a valid lease from tool_search.",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Gateway,
@@ -658,7 +675,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "read",
             provider_name: "read",
             aliases: &[],
-            description: "Read workspace files, search file contents, or list matching paths",
+            description: "Read workspace files, page through large files, search file contents, or list matching paths",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
@@ -672,7 +689,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "write",
             provider_name: "write",
             aliases: &[],
-            description: "Write workspace files or apply exact text edits",
+            description: "Write workspace files or apply one or more exact text edits",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
@@ -686,7 +703,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "exec",
             provider_name: "exec",
             aliases: &[],
-            description: "Execute guarded workspace commands",
+            description: "Run guarded workspace commands or raw shell scripts",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
@@ -700,7 +717,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "web",
             provider_name: "web",
             aliases: &[],
-            description: "Fetch a URL or search the public web",
+            description: "Fetch a URL, send HTTP requests, or search the public web",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
@@ -1549,7 +1566,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "file.edit",
             provider_name: "file_edit",
             aliases: &[],
-            description: "Replace text in a file",
+            description: "Apply one or more exact text edits to a file",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -1567,7 +1584,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "shell.exec",
             provider_name: "shell_exec",
             aliases: &["shell"],
-            description: "Execute shell commands",
+            description: "Execute shell commands. Inline stdout and stderr are capped; details.handoff.recommended_payload and details.handoff.recipes expose read-ready follow-up payloads when full output is saved.",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -1585,7 +1602,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "bash.exec",
             provider_name: "bash_exec",
             aliases: &[],
-            description: "Execute bash commands",
+            description: "Execute bash commands. Inline stdout and stderr are capped; details.handoff.recommended_payload and details.handoff.recipes expose read-ready follow-up payloads when full output is saved.",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -1786,7 +1803,7 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_name: "web_search",
             aliases: &[],
             description:
-                "Search the web for APIs, documentation, and error messages using configured web search providers",
+                "Search the web for APIs, documentation, and error messages using configured web-search providers. This search mode is separate from plain URL fetch/request network access",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
@@ -1847,7 +1864,17 @@ fn build_resolved_name_indices(descriptors: &[ToolDescriptor]) -> BTreeMap<Strin
 
         let discovery_name =
             super::tool_surface::discovery_tool_name_for_tool_name(descriptor.name);
-        resolved_name_indices.entry(discovery_name).or_insert(index);
+        let primary_surface_name = primary_surface_id(discovery_name.as_str());
+        let descriptor_is_primary_surface = descriptor.name == discovery_name;
+        if !primary_surface_name || descriptor_is_primary_surface {
+            resolved_name_indices.entry(discovery_name).or_insert(index);
+        }
+
+        for legacy_name in
+            super::tool_surface::legacy_discovery_tool_names_for_tool_name(descriptor.name)
+        {
+            resolved_name_indices.entry(legacy_name).or_insert(index);
+        }
     }
 
     resolved_name_indices
@@ -2258,13 +2285,13 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Discover non-core tools relevant to the current task.",
+            "description": "Discover a specialized tool when the direct tools do not fit the task.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural-language description of the tool capability you need. Any language is acceptable."
+                        "description": "Short capability phrase for the specialized tool you need. Match the prompt snippets shown in the system prompt."
                     },
                     "exact_tool_id": {
                         "type": "string",
@@ -2299,7 +2326,17 @@ fn direct_read_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 8_388_608,
-                        "description": "Optional read limit in bytes when reading one file."
+                        "description": "Optional read limit in bytes when reading one file or file window."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional 1-indexed line number to start from when reading one file."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional maximum number of lines to return when reading one file."
                     },
                     "query": {
                         "type": "string",
@@ -2355,6 +2392,25 @@ fn direct_read_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn exact_edit_block_definition() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "old_text": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact text for one targeted replacement. It must match uniquely in the original file and must not overlap any other edit block."
+            },
+            "new_text": {
+                "type": "string",
+                "description": "Replacement text for this targeted edit block."
+            }
+        },
+        "required": ["old_text", "new_text"],
+        "additionalProperties": false
+    })
+}
+
 fn direct_write_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2380,26 +2436,36 @@ fn direct_write_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "boolean",
                         "description": "Allow replacing an existing file. Defaults to false."
                     },
+                    "edits": {
+                        "type": "array",
+                        "description": "One or more exact text replacement blocks matched against the original file. Merge nearby edits instead of sending overlapping blocks.",
+                        "items": exact_edit_block_definition(),
+                        "minItems": 1
+                    },
                     "old_string": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Literal substring to replace in exact-edit mode."
+                        "description": "Legacy single-block exact edit field. Prefer `edits` for new requests."
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "Replacement text used in exact-edit mode."
+                        "description": "Legacy replacement text paired with `old_string`. Prefer `edits` for new requests."
                     },
                     "replace_all": {
                         "type": "boolean",
-                        "description": "Replace all matches in exact-edit mode. Defaults to false."
+                        "description": "Legacy single-block mode only. Replace all matches instead of requiring a unique match. Defaults to false."
                     }
                 },
+                "required": ["path"],
                 "anyOf": [
                     {
-                        "required": ["path", "content"]
+                        "required": ["content"]
                     },
                     {
-                        "required": ["path", "old_string", "new_string"]
+                        "required": ["edits"]
+                    },
+                    {
+                        "required": ["old_string", "new_string"]
                     }
                 ],
                 "additionalProperties": false
@@ -2419,12 +2485,16 @@ fn direct_exec_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Executable command name. Must stay inside the configured shell policy."
+                        "description": "Executable command or simple shell command. Routes to argv mode unless it clearly uses shell syntax."
+                    },
+                    "script": {
+                        "type": "string",
+                        "description": "Raw shell or bash script text. Use this for pipes, redirects, chaining, or multi-line commands."
                     },
                     "args": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional command arguments."
+                        "description": "Optional command arguments for argv mode."
                     },
                     "timeout_ms": {
                         "type": "integer",
@@ -2437,7 +2507,14 @@ fn direct_exec_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Optional working directory."
                     }
                 },
-                "required": ["command"],
+                "anyOf": [
+                    {
+                        "required": ["command"]
+                    },
+                    {
+                        "required": ["script"]
+                    }
+                ],
                 "additionalProperties": false
             }
         }
@@ -2455,22 +2532,22 @@ fn direct_web_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "Fetch this HTTP or HTTPS URL."
+                        "description": "Fetch or request this HTTP or HTTPS URL without using a web-search provider."
                     },
                     "mode": {
                         "type": "string",
                         "enum": ["readable_text", "raw_text"],
-                        "description": "Fetch rendering mode. Used only with url mode."
+                        "description": "Fetch rendering mode. Used only for plain fetch mode."
                     },
                     "max_bytes": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
-                        "description": "Optional fetch byte limit."
+                        "description": "Optional response byte limit."
                     },
                     "query": {
                         "type": "string",
-                        "description": "Search the public web for this query."
+                        "description": "Search the public web for this query through web-search providers. This is separate from plain URL fetch/request mode."
                     },
                     "provider": {
                         "type": "string",
@@ -2482,6 +2559,23 @@ fn direct_web_definition(descriptor: &ToolDescriptor) -> Value {
                         "minimum": 1,
                         "maximum": 10,
                         "description": "Optional maximum result count in search mode."
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "Optional HTTP method. When present, web routes to low-level request mode."
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Optional HTTP headers for request mode."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional request body for request mode."
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Optional Content-Type header for request mode."
                     }
                 },
                 "anyOf": [
@@ -2509,38 +2603,52 @@ fn direct_browser_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "Open this HTTP or HTTPS URL into a bounded browser session."
+                        "description": "Open a page or continue a browser session at this HTTP or HTTPS URL."
                     },
                     "max_bytes": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
-                        "description": "Optional byte limit used only when opening a page."
+                        "description": "Optional byte limit used when opening a page."
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Existing bounded browser session identifier."
+                        "description": "Existing browser session identifier for follow-up reads or interactions."
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["page_text", "title", "links", "selector_text"],
-                        "description": "Extraction mode used with session_id extraction."
+                        "enum": ["page_text", "title", "links", "selector_text", "summary", "html"],
+                        "description": "Read mode for browser inspection."
                     },
                     "selector": {
                         "type": "string",
-                        "description": "Optional CSS selector used only with selector_text extraction."
+                        "description": "CSS selector for focused extraction or browser interaction."
                     },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": crate::config::MAX_BROWSER_MAX_LINKS,
-                        "description": "Maximum extracted items when extraction returns a list."
+                        "description": "Maximum extracted items when the browser result returns a list."
                     },
                     "link_id": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": crate::config::MAX_BROWSER_MAX_LINKS,
                         "description": "One-based link identifier returned by the current page snapshot."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type into the selected element."
+                    },
+                    "condition": {
+                        "type": "string",
+                        "description": "Optional wait condition for browser session progress."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 30000,
+                        "description": "Optional wait timeout in milliseconds."
                     }
                 },
                 "anyOf": [
@@ -2552,6 +2660,15 @@ fn direct_browser_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     {
                         "required": ["session_id", "link_id"]
+                    },
+                    {
+                        "required": ["session_id", "selector"]
+                    },
+                    {
+                        "required": ["session_id", "selector", "text"]
+                    },
+                    {
+                        "required": ["session_id", "url"]
                     }
                 ],
                 "additionalProperties": false
@@ -3324,6 +3441,16 @@ fn file_read_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Path to read (absolute or relative to configured file root)."
                     },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional 1-indexed line number to start from."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional maximum number of lines to return."
+                    },
                     "max_bytes": {
                         "type": "integer",
                         "minimum": 1,
@@ -3523,23 +3650,35 @@ fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Path to the file (absolute or relative to configured file root)."
                     },
+                    "edits": {
+                        "type": "array",
+                        "description": "One or more exact text replacement blocks matched against the original file. Each block must match uniquely and must not overlap another block.",
+                        "items": exact_edit_block_definition(),
+                        "minItems": 1
+                    },
                     "old_string": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Literal substring to find. Must be non-empty. \
-                                        Must match exactly once unless replace_all is true."
+                        "description": "Legacy single-block exact edit field. Prefer `edits` for new requests."
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "Replacement text."
+                        "description": "Legacy replacement text paired with `old_string`. Prefer `edits` for new requests."
                     },
                     "replace_all": {
                         "type": "boolean",
-                        "description": "Replace all occurrences instead of requiring a unique match. \
-                                        Zero-match still fails regardless of this flag. Defaults to false."
+                        "description": "Legacy single-block mode only. Replace all occurrences instead of requiring a unique match. Zero-match still fails regardless of this flag. Defaults to false."
                     }
                 },
-                "required": ["path", "old_string", "new_string"],
+                "required": ["path"],
+                "anyOf": [
+                    {
+                        "required": ["edits"]
+                    },
+                    {
+                        "required": ["old_string", "new_string"]
+                    }
+                ],
                 "additionalProperties": false
             }
         }
@@ -4446,6 +4585,10 @@ fn feishu_definition(descriptor: &ToolDescriptor) -> Value {
 }
 
 fn tool_argument_hint(name: &str) -> &'static str {
+    if let Some(argument_hint) = super::tool_surface::direct_tool_argument_hint(name) {
+        return argument_hint;
+    }
+
     match name {
         "feishu.bitable.app.create" => {
             "account_id?:string,open_id?:string,name:string,folder_token?:string"
@@ -4555,12 +4698,12 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "tool.search" => "query?:string,exact_tool_id?:string,limit?:integer",
         "tool.invoke" => "tool_id:string,lease:string,arguments:object",
         "read" => {
-            "path?:string,query?:string,pattern?:string,max_bytes?:integer,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean"
+            "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean"
         }
         "write" => {
-            "path:string,content?:string,create_dirs?:boolean,overwrite?:boolean,old_string?:string,new_string?:string,replace_all?:boolean"
+            "path:string,content?:string,create_dirs?:boolean,overwrite?:boolean,edits?:array,old_string?:string,new_string?:string,replace_all?:boolean"
         }
-        "exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
+        "exec" => "command?:string,script?:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "web" => {
             "url?:string,mode?:string,max_bytes?:integer,query?:string,provider?:string,max_results?:integer"
         }
@@ -4598,7 +4741,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "http.request" => {
             "url:string,method?:string,headers?:object,body?:string,content_type?:string,max_bytes?:integer"
         }
-        "file.read" => "path:string,max_bytes?:integer",
+        "file.read" => "path:string,offset?:integer,limit?:integer,max_bytes?:integer",
         "glob.search" => {
             "pattern:string,root?:string,max_results?:integer,include_directories?:boolean"
         }
@@ -4608,7 +4751,9 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "memory_search" => "query:string,max_results?:integer",
         "memory_get" => "path:string,from?:integer,lines?:integer",
         "file.write" => "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
-        "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
+        "file.edit" => {
+            "path:string,edits?:array,old_string?:string,new_string?:string,replace_all?:boolean"
+        }
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
@@ -4626,27 +4771,21 @@ fn tool_argument_hint(name: &str) -> &'static str {
 }
 
 fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
+    if let Some(search_hint) = super::tool_surface::direct_tool_search_hint(name) {
+        return search_hint;
+    }
+
     match name {
         "tool.search" => {
-            "discover a non-core tool for the task or refresh a known tool card by exact tool id"
+            "discover a specialized tool when the visible direct tools do not fit, or refresh a known tool card"
         }
-        "tool.invoke" => {
-            "invoke a discovered hidden specialized tool with a valid short-lived lease"
-        }
-        "read" => {
-            "read one file, search workspace content, or list matching paths through one direct tool"
-        }
-        "write" => "create a file or apply an exact text edit through one direct tool",
-        "exec" => "run a guarded workspace command through the direct command surface",
-        "web" => "fetch a specific url or search the public web through one direct tool",
-        "browser" => {
-            "open a page, extract content, or follow a discovered link through the direct browser surface"
-        }
-        "memory" => "search durable memory or read one durable memory note file",
+        "tool.invoke" => "run a discovered specialized tool with the lease returned by tool.search",
         "http.request" => {
             "send a bounded http request, inspect status and headers, fetch text or binary responses"
         }
-        "file.read" => "read a workspace file, inspect file contents, open a repo text file",
+        "file.read" => {
+            "read a workspace file, inspect file contents, or page through a file window"
+        }
         "glob.search" => {
             "find workspace files by glob pattern, list files in a directory, browse folder contents, search repo paths, match files under a root"
         }
@@ -4656,7 +4795,9 @@ fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
         "file.write" => {
             "write a workspace file, save file content, create or overwrite a repo file"
         }
-        "file.edit" => "edit a workspace file, patch file content, replace text in a repo file",
+        "file.edit" => {
+            "edit a workspace file, patch file content, or apply exact replacement blocks in a repo file"
+        }
         "shell.exec" => {
             "run a shell command, execute a terminal command, bash, zsh, powershell, cli"
         }
@@ -4672,6 +4813,10 @@ fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
 }
 
 fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
+    if let Some(parameter_types) = super::tool_surface::direct_tool_parameter_types(name) {
+        return parameter_types;
+    }
+
     match name {
         "feishu.bitable.app.create" => &[
             ("account_id", "string"),
@@ -4970,57 +5115,6 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("lease", "string"),
             ("arguments", "object"),
         ],
-        "read" => &[
-            ("path", "string"),
-            ("max_bytes", "integer"),
-            ("query", "string"),
-            ("pattern", "string"),
-            ("root", "string"),
-            ("glob", "string"),
-            ("max_results", "integer"),
-            ("max_bytes_per_file", "integer"),
-            ("case_sensitive", "boolean"),
-            ("include_directories", "boolean"),
-        ],
-        "write" => &[
-            ("path", "string"),
-            ("content", "string"),
-            ("create_dirs", "boolean"),
-            ("overwrite", "boolean"),
-            ("old_string", "string"),
-            ("new_string", "string"),
-            ("replace_all", "boolean"),
-        ],
-        "exec" => &[
-            ("command", "string"),
-            ("args", "array"),
-            ("timeout_ms", "integer"),
-            ("cwd", "string"),
-        ],
-        "web" => &[
-            ("url", "string"),
-            ("mode", "string"),
-            ("max_bytes", "integer"),
-            ("query", "string"),
-            ("provider", "string"),
-            ("max_results", "integer"),
-        ],
-        "browser" => &[
-            ("url", "string"),
-            ("max_bytes", "integer"),
-            ("session_id", "string"),
-            ("mode", "string"),
-            ("selector", "string"),
-            ("limit", "integer"),
-            ("link_id", "integer"),
-        ],
-        "memory" => &[
-            ("query", "string"),
-            ("max_results", "integer"),
-            ("path", "string"),
-            ("from", "integer"),
-            ("lines", "integer"),
-        ],
         "config.import" => &[
             ("input_path", "string"),
             ("output_path", "string"),
@@ -5088,7 +5182,12 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("allowed_domains", "array"),
             ("blocked_domains", "array"),
         ],
-        "file.read" => &[("path", "string"), ("max_bytes", "integer")],
+        "file.read" => &[
+            ("path", "string"),
+            ("offset", "integer"),
+            ("limit", "integer"),
+            ("max_bytes", "integer"),
+        ],
         "glob.search" => &[
             ("pattern", "string"),
             ("root", "string"),
@@ -5117,6 +5216,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         ],
         "file.edit" => &[
             ("path", "string"),
+            ("edits", "array"),
             ("old_string", "string"),
             ("new_string", "string"),
             ("replace_all", "boolean"),
@@ -5177,6 +5277,10 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
 }
 
 fn tool_required_fields(name: &str) -> &'static [&'static str] {
+    if let Some(required_fields) = super::tool_surface::direct_tool_required_fields(name) {
+        return required_fields;
+    }
+
     match name {
         "feishu.bitable.app.create" => &["name"],
         "feishu.bitable.app.get" => &["app_token"],
@@ -5212,8 +5316,6 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "feishu.messages.send" => &["receive_id"],
         "tool.search" => &[],
         "tool.invoke" => &["tool_id", "lease", "arguments"],
-        "read" | "write" | "web" | "browser" | "memory" => &[],
-        "exec" => &["command"],
         "external_skills.fetch" => &[],
         "external_skills.resolve" => &["reference"],
         "external_skills.search" => &["query", "limit"],
@@ -5238,7 +5340,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "memory_search" => &["query"],
         "memory_get" => &["path"],
         "file.write" => &["path", "content"],
-        "file.edit" => &["path", "old_string", "new_string"],
+        "file.edit" => &["path"],
         "shell.exec" => &["command"],
         "bash.exec" => &["command"],
         "delegate" | "delegate_async" => &["task"],
@@ -5254,6 +5356,10 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
 }
 
 fn tool_tags(name: &str) -> &'static [&'static str] {
+    if let Some(tags) = super::tool_surface::direct_tool_tags(name) {
+        return tags;
+    }
+
     match name {
         "feishu.bitable.app.get" | "feishu.bitable.app.list" => {
             &["feishu", "bitable", "app", "read"]
@@ -5296,12 +5402,6 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "feishu.whoami" => &["feishu", "identity", "read"],
         "tool.search" => &["core", "discover", "search"],
         "tool.invoke" => &["core", "dispatch", "invoke"],
-        "read" => &["surface", "read", "file", "search"],
-        "write" => &["surface", "write", "file", "edit"],
-        "exec" => &["surface", "exec", "shell", "command"],
-        "web" => &["surface", "web", "fetch", "search"],
-        "browser" => &["surface", "browser", "navigation", "extract"],
-        "memory" => &["surface", "memory", "recall", "read"],
         "config.import" => &["config", "import", "migration", "workspace", "legacy"],
         "external_skills.fetch" => &["skills", "download", "external", "fetch"],
         "external_skills.resolve" => &["skills", "resolve", "normalize", "external"],
@@ -5339,7 +5439,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
         "file.write" => &["file", "write", "filesystem"],
-        "file.edit" => &["file", "edit", "filesystem"],
+        "file.edit" => &["file", "edit", "filesystem", "exact", "replace"],
         "shell.exec" => &["shell", "command", "process", "exec"],
         "bash.exec" => &["bash", "command", "process", "exec"],
         "provider.switch" => &["provider", "switch", "model", "runtime"],
@@ -5849,7 +5949,7 @@ mod tests {
         assert!(
             file_write
                 .usage_guidance
-                .is_some_and(|guidance| guidance.contains("normal file creation and patch work"))
+                .is_some_and(|guidance| guidance.contains("normal patching and file creation"))
         );
 
         let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
@@ -6293,5 +6393,54 @@ mod tests {
             "limit?:integer,offset?:integer,state?:string"
         );
         assert!(has_offset_parameter);
+    }
+
+    #[test]
+    fn read_definitions_surface_line_window_fields() {
+        let catalog = tool_catalog();
+        let direct_descriptor = catalog.descriptor("read").expect("read descriptor");
+        let direct_definition = direct_descriptor.provider_definition();
+        let direct_properties = &direct_definition["function"]["parameters"]["properties"];
+        let direct_parameter_types = direct_descriptor.parameter_types();
+
+        assert!(direct_properties.get("offset").is_some());
+        assert!(direct_properties.get("limit").is_some());
+        assert!(
+            direct_descriptor
+                .argument_hint()
+                .contains("offset?:integer")
+        );
+        assert!(direct_descriptor.argument_hint().contains("limit?:integer"));
+        assert!(direct_parameter_types.contains(&("offset", "integer")));
+        assert!(direct_parameter_types.contains(&("limit", "integer")));
+
+        let file_descriptor = catalog
+            .descriptor("file.read")
+            .expect("file.read descriptor");
+        let file_definition = file_descriptor.provider_definition();
+        let file_properties = &file_definition["function"]["parameters"]["properties"];
+        let file_parameter_types = file_descriptor.parameter_types();
+
+        assert!(file_properties.get("offset").is_some());
+        assert!(file_properties.get("limit").is_some());
+        assert!(file_descriptor.argument_hint().contains("offset?:integer"));
+        assert!(file_descriptor.argument_hint().contains("limit?:integer"));
+        assert!(file_parameter_types.contains(&("offset", "integer")));
+        assert!(file_parameter_types.contains(&("limit", "integer")));
+    }
+
+    #[test]
+    fn exec_definition_supports_script_mode() {
+        let catalog = tool_catalog();
+        let descriptor = catalog.descriptor("exec").expect("exec descriptor");
+        let definition = descriptor.provider_definition();
+        let properties = &definition["function"]["parameters"]["properties"];
+        let any_of = &definition["function"]["parameters"]["anyOf"];
+
+        assert!(properties.get("script").is_some());
+        assert!(descriptor.argument_hint().contains("script?:string"));
+        assert!(descriptor.parameter_types().contains(&("script", "string")));
+        assert_eq!(descriptor.required_fields(), Vec::<&str>::new());
+        assert!(any_of.is_array());
     }
 }

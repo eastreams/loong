@@ -328,32 +328,53 @@ fn build_provider_tool_intent(
     bridge_context: &ProviderToolBridgeContext,
 ) -> ToolIntent {
     let canonical_tool_name = tools::canonical_tool_name(raw_tool_name).to_owned();
-    let hidden_tool_name = discoverable_tool_name(canonical_tool_name.as_str());
-    let leased_hidden_tool_call = hidden_tool_name.and_then(|discoverable_tool_name| {
-        bridge_context
-            .discoverable_leases
-            .get(discoverable_tool_name)
-            .cloned()
-            .map(|lease| {
-                (
-                    "tool.invoke".to_owned(),
-                    json!({
-                        "tool_id": discoverable_tool_name,
-                        "lease": lease,
-                        "arguments": args_json,
-                    }),
-                )
-            })
-    });
-    let direct_tool_name = hidden_tool_name
-        .and_then(tools::direct_tool_name_for_hidden_tool)
-        .map(str::to_owned);
-    let (tool_name, args_json) = match leased_hidden_tool_call {
-        Some(leased_hidden_tool_call) => leased_hidden_tool_call,
-        None => match direct_tool_name {
+
+    let normalized_direct_tool_intent = (canonical_tool_name == "tool.invoke")
+        .then(|| direct_tool_intent_from_invoke_payload(&args_json))
+        .flatten();
+    let (tool_name, args_json) = if let Some((tool_name, arguments)) = normalized_direct_tool_intent
+    {
+        (tool_name, arguments)
+    } else {
+        let direct_tool_name =
+            tools::direct_tool_name_for_hidden_tool(canonical_tool_name.as_str())
+                .map(str::to_owned);
+        let hidden_tool_name = direct_tool_name
+            .is_none()
+            .then(|| discoverable_tool_name(canonical_tool_name.as_str()))
+            .flatten();
+        let hidden_operation = tools::hidden_operation_for_tool_name(canonical_tool_name.as_str());
+        let leased_hidden_tool_call = hidden_tool_name.and_then(|discoverable_tool_name| {
+            bridge_context
+                .discoverable_leases
+                .get(discoverable_tool_name)
+                .cloned()
+                .map(|lease| {
+                    let mut arguments = args_json.clone();
+                    if let Some(operation) = hidden_operation.as_deref()
+                        && let Some(arguments_object) = arguments.as_object_mut()
+                    {
+                        arguments_object
+                            .entry("operation".to_owned())
+                            .or_insert_with(|| json!(operation));
+                    }
+                    (
+                        "tool.invoke".to_owned(),
+                        json!({
+                            "tool_id": discoverable_tool_name,
+                            "lease": lease,
+                            "arguments": arguments,
+                        }),
+                    )
+                })
+        });
+        match direct_tool_name {
             Some(direct_tool_name) => (direct_tool_name, args_json),
-            None => (canonical_tool_name, args_json),
-        },
+            None => match leased_hidden_tool_call {
+                Some(leased_hidden_tool_call) => leased_hidden_tool_call,
+                None => (canonical_tool_name, args_json),
+            },
+        }
     };
     ToolIntent {
         tool_name,
@@ -365,10 +386,24 @@ fn build_provider_tool_intent(
     }
 }
 
+fn direct_tool_intent_from_invoke_payload(payload: &Value) -> Option<(String, Value)> {
+    let payload_object = payload.as_object()?;
+    let tool_id = payload_object.get("tool_id")?.as_str()?;
+    let direct_tool_name = tools::direct_tool_name_for_hidden_tool(tool_id)?;
+    let arguments = payload_object.get("arguments")?.clone();
+
+    Some((direct_tool_name.to_owned(), arguments))
+}
+
 fn discoverable_tool_name(raw_tool_name: &str) -> Option<&'static str> {
     let resolved = tools::resolve_tool_execution(raw_tool_name)?;
-    (!tools::is_provider_exposed_tool_name(resolved.canonical_name))
-        .then_some(resolved.canonical_name)
+    if tools::is_provider_exposed_tool_name(resolved.canonical_name) {
+        return None;
+    }
+
+    tools::direct_tool_name_for_hidden_tool(resolved.canonical_name)
+        .or_else(|| tools::hidden_facade_tool_name_for_hidden_tool(resolved.canonical_name))
+        .or(Some(resolved.canonical_name))
 }
 
 fn extract_openai_tool_intents(
@@ -2603,7 +2638,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_provider_turn_with_scope_rewrites_discoverable_tools_to_tool_invoke_after_search() {
+    fn extract_provider_turn_with_scope_prefers_direct_surface_for_direct_tools_after_search() {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
@@ -2619,7 +2654,7 @@ mod tests {
                 }
             }]
         });
-        let messages = discovery_followup_messages("file.read", "lease-openai");
+        let messages = discovery_followup_messages("read", "lease-openai");
 
         let turn = extract_provider_turn_with_scope_and_messages(
             &body,
@@ -2630,16 +2665,11 @@ mod tests {
         .expect("turn");
         assert_eq!(turn.assistant_text, "checking");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
         assert_eq!(turn.tool_intents[0].session_id, "session-shape");
         assert_eq!(turn.tool_intents[0].turn_id, "turn-shape");
         assert_eq!(turn.tool_intents[0].tool_call_id, "call_compat");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
-            json!({"path":"README.md"})
-        );
-        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-openai");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path":"README.md"}));
     }
 
     #[cfg(feature = "feishu-integration")]
@@ -2679,13 +2709,10 @@ mod tests {
             turn.tool_intents[0].tool_call_id,
             "call_feishu_card_update_1"
         );
-        assert_eq!(
-            turn.tool_intents[0].args_json["tool_id"],
-            "feishu.card.update"
-        );
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "channel");
         assert_eq!(
             turn.tool_intents[0].args_json["arguments"],
-            json!({"markdown":"callback updated"})
+            json!({"markdown":"callback updated","operation":"card.update"})
         );
         assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-feishu");
     }
@@ -2695,7 +2722,7 @@ mod tests {
         let payload_summary = serde_json::to_string(&json!({
             "results": [
                 {
-                    "tool_id": "file.read",
+                    "tool_id": "read",
                     "lease": "lease-truncated",
                 }
             ]
@@ -2744,12 +2771,12 @@ mod tests {
     }
 
     #[test]
-    fn bridge_context_accepts_compacted_search_results() {
+    fn bridge_context_ignores_compacted_direct_surface_leases() {
         let payload_summary = serde_json::to_string(&json!({
             "query": "read repo file",
             "results": [
                 {
-                    "tool_id": "file.read",
+                    "tool_id": "read",
                     "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
                     "argument_hint": "path:string,offset?:integer,limit?:integer",
                     "required_fields": ["path"],
@@ -2774,19 +2801,20 @@ mod tests {
         })];
 
         let context = provider_tool_bridge_context_from_messages(&messages);
-        assert_eq!(
-            context.discoverable_leases.get("file.read"),
-            Some(&"lease-compacted".to_owned())
+        assert!(
+            context.discoverable_leases.is_empty(),
+            "direct surfaces should stay direct instead of being rebound through lease context"
         );
     }
 
     #[test]
-    fn provider_shape_discovery_followup_uses_first_lease_in_multiline_source_order() {
+    fn provider_shape_discovery_followup_keeps_direct_surfaces_out_of_lease_context_even_with_multiple_results()
+     {
         let first_summary = serde_json::to_string(&json!({
             "query": "read repo file",
             "results": [
                 {
-                    "tool_id": "file.read",
+                    "tool_id": "read",
                     "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
                     "argument_hint": "path:string,offset?:integer,limit?:integer",
                     "required_fields": ["path"],
@@ -2800,7 +2828,7 @@ mod tests {
             "query": "read repo file again",
             "results": [
                 {
-                    "tool_id": "file.read",
+                    "tool_id": "read",
                     "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
                     "argument_hint": "path:string,offset?:integer,limit?:integer",
                     "required_fields": ["path"],
@@ -2834,9 +2862,9 @@ mod tests {
         })];
 
         let context = provider_tool_bridge_context_from_messages(&messages);
-        assert_eq!(
-            context.discoverable_leases.get("file.read"),
-            Some(&"lease-first".to_owned())
+        assert!(
+            context.discoverable_leases.is_empty(),
+            "direct surfaces should not accumulate lease state from search followups"
         );
     }
 
@@ -2873,7 +2901,7 @@ mod tests {
                 }
             ]
         });
-        let messages = discovery_followup_messages("file.read", "lease-responses");
+        let messages = discovery_followup_messages("read", "lease-responses");
         let turn = extract_provider_turn_with_scope(
             &body,
             Some("session-responses"),
@@ -2896,13 +2924,8 @@ mod tests {
         )
         .expect("responses turn with search context");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
-            json!({"path": "README.md"})
-        );
-        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-responses");
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     }
 
     #[test]
@@ -2930,16 +2953,11 @@ mod tests {
         .expect("responses textual tool turn");
         assert_eq!(turn.assistant_text, "Let me run it.");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].tool_name, "exec");
         assert_eq!(turn.tool_intents[0].session_id, "session-responses-text");
         assert_eq!(turn.tool_intents[0].turn_id, "turn-responses-text");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "shell.exec");
         assert_eq!(
-            turn.tool_intents[0].args_json["lease"],
-            "lease-responses-text"
-        );
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
+            turn.tool_intents[0].args_json,
             json!({
                 "command": "echo",
                 "args": ["hello"]
@@ -2956,7 +2974,7 @@ mod tests {
                 }
             }]
         });
-        let messages = discovery_followup_messages("shell.exec", "lease-shell-inline");
+        let messages = discovery_followup_messages("exec", "lease-shell-inline");
 
         let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
             .expect("turn");
@@ -2965,15 +2983,10 @@ mod tests {
             "sorry, that command failed. let me retry with a simpler approach:"
         );
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "shell.exec");
+        assert_eq!(turn.tool_intents[0].tool_name, "exec");
         assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
+            turn.tool_intents[0].args_json,
             json!({"command":"ls /root"})
-        );
-        assert_eq!(
-            turn.tool_intents[0].args_json["lease"],
-            "lease-shell-inline"
         );
         assert_eq!(
             turn.raw_meta["loong_provider_parse"]["inline_function"]["status"],
@@ -3009,13 +3022,10 @@ mod tests {
         );
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(
-            turn.tool_intents[0].args_json["tool_id"],
-            "external_skills.invoke"
-        );
+        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "skills");
         assert_eq!(
             turn.tool_intents[0].args_json["arguments"],
-            json!({"skill_id":"home-assistant-1-0-0","action":"get_states"})
+            json!({"skill_id":"home-assistant-1-0-0","action":"get_states","operation":"run"})
         );
         assert_eq!(
             turn.tool_intents[0].args_json["lease"],
@@ -3126,11 +3136,9 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.assistant_text, "let me run the command.");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "shell.exec");
-        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-inline-wrap");
+        assert_eq!(turn.tool_intents[0].tool_name, "exec");
         assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
+            turn.tool_intents[0].args_json,
             json!({
                 "command": "echo",
                 "args": ["hello"]
@@ -3236,14 +3244,9 @@ mod tests {
         let turn = extract_provider_turn(&body).expect("turn");
         assert_eq!(turn.assistant_text, "let me handle this.");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "shell.exec");
+        assert_eq!(turn.tool_intents[0].tool_name, "exec");
         assert_eq!(
-            turn.tool_intents[0].args_json["lease"],
-            "lease-bracket-inline"
-        );
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
+            turn.tool_intents[0].args_json,
             json!({
                 "command": "echo",
                 "args": ["hello"]
@@ -3252,7 +3255,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_provider_turn_rewrites_function_calls_invoke_discoverable_tools_after_search() {
+    fn extract_provider_turn_prefers_direct_surface_for_function_call_followups_after_search() {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
@@ -3260,28 +3263,18 @@ mod tests {
                 }
             }]
         });
-        let messages = discovery_followup_messages("file.read", "lease-invoke-followup");
+        let messages = discovery_followup_messages("read", "lease-invoke-followup");
 
         let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
             .expect("turn");
         assert_eq!(turn.assistant_text, "now i'll read the file.");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-        assert_eq!(
-            turn.tool_intents[0].args_json["lease"],
-            "lease-invoke-followup"
-        );
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
-            json!({
-                "path": "note.md"
-            })
-        );
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "note.md"}));
     }
 
     #[test]
-    fn extract_provider_turn_rewrites_plain_json_discoverable_tool_to_tool_invoke_after_search() {
+    fn extract_provider_turn_prefers_direct_surface_for_plain_json_followups_after_search() {
         let body = serde_json::json!({
             "choices": [{
                 "message": {
@@ -3289,24 +3282,14 @@ mod tests {
                 }
             }]
         });
-        let messages = discovery_followup_messages("file.read", "lease-json-followup");
+        let messages = discovery_followup_messages("read", "lease-json-followup");
 
         let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
             .expect("turn");
         assert_eq!(turn.assistant_text, "now i'll read the file.");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-        assert_eq!(
-            turn.tool_intents[0].args_json["lease"],
-            "lease-json-followup"
-        );
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
-            json!({
-                "path": "note.md"
-            })
-        );
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "note.md"}));
     }
 
     #[test]
@@ -3641,19 +3624,14 @@ mod tests {
                 }
             ]
         });
-        let messages = discovery_followup_messages("file.read", "lease-anthropic");
+        let messages = discovery_followup_messages("read", "lease-anthropic");
         let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
             .expect("turn");
         assert_eq!(turn.assistant_text, "checking");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
         assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"]["path"],
-            "README.md"
-        );
-        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-anthropic");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     }
 
     #[test]
@@ -3680,19 +3658,14 @@ mod tests {
             },
             "stopReason": "tool_use"
         });
-        let messages = discovery_followup_messages("file.read", "lease-bedrock");
+        let messages = discovery_followup_messages("read", "lease-bedrock");
         let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
             .expect("turn");
         assert_eq!(turn.assistant_text, "checking");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
         assert_eq!(turn.tool_intents[0].tool_call_id, "toolu_1");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"]["path"],
-            "README.md"
-        );
-        assert_eq!(turn.tool_intents[0].args_json["lease"], "lease-bedrock");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
         assert_eq!(turn.raw_meta["content"][1]["type"], "tool_use");
         assert_eq!(turn.raw_meta["content"][1]["id"], "toolu_1");
     }

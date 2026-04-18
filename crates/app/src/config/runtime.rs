@@ -2244,6 +2244,7 @@ fn template_web_search_usage_comment() -> String {
         "# Web search provider notes:\n\
 # - `[tools.web_search].default_provider` accepts {WEB_SEARCH_PROVIDER_VALID_VALUES}.\n\
 # - The default provider is `{DEFAULT_WEB_SEARCH_PROVIDER}`.\n\
+# - These settings affect only `web {{ query }}` / `web.search`; plain `web {{ url }}`, low-level HTTP request mode, browser sessions, and other networked tools use their own runtime policy.\n\
 # - Brave credentials can use `tools.web_search.brave_api_key = \"${{{WEB_SEARCH_BRAVE_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_BRAVE_API_KEY_ENV}` environment variable.\n\
 # - Tavily credentials can use `tools.web_search.tavily_api_key = \"${{{WEB_SEARCH_TAVILY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_TAVILY_API_KEY_ENV}` environment variable.\n\
 # - Perplexity credentials can use `tools.web_search.perplexity_api_key = \"${{{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}` environment variable.\n\
@@ -2370,6 +2371,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains(WEB_SEARCH_FIRECRAWL_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
+        assert!(raw.contains("These settings affect only `web { query }` / `web.search`"));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();

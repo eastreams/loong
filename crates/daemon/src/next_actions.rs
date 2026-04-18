@@ -545,7 +545,7 @@ mod tests {
         write_file(
             &install_root,
             "browser-companion-preview/SKILL.md",
-            "# Browser Companion Preview\n\nUse agent-browser through shell.exec.\n",
+            "# Browser Companion Preview\n\nUse agent-browser through exec.\n",
         );
         let bin_dir = root.join("bin");
         write_fake_agent_browser(&bin_dir);
@@ -590,7 +590,7 @@ mod tests {
         write_file(
             &install_root,
             "browser-companion-preview/SKILL.md",
-            "# Browser Companion Preview\n\nUse agent-browser through shell.exec.\n",
+            "# Browser Companion Preview\n\nUse agent-browser through exec.\n",
         );
         let bin_dir = root.join("bin");
         write_fake_agent_browser(&bin_dir);
@@ -664,7 +664,7 @@ mod tests {
         write_file(
             &install_root,
             "browser-companion-preview/SKILL.md",
-            "# Browser Companion Preview\n\nUse agent-browser through shell.exec.\n",
+            "# Browser Companion Preview\n\nUse agent-browser through exec.\n",
         );
         let bin_dir = root.join("bin");
         write_non_executable_agent_browser(&bin_dir);

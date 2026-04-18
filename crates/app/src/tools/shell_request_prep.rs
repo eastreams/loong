@@ -24,6 +24,17 @@ pub(crate) fn normalize_shell_request_for_execution(
     request
 }
 
+pub fn summarize_tool_request_for_display(tool_name: &str, payload: Value) -> Value {
+    let canonical_tool_name = super::canonical_tool_name(tool_name);
+    let normalized_payload = normalize_shell_payload_for_request(canonical_tool_name, payload);
+
+    if canonical_tool_name != super::SHELL_EXEC_TOOL_NAME {
+        return normalized_payload;
+    }
+
+    summarize_shell_request_for_display(normalized_payload)
+}
+
 pub(crate) fn prepare_kernel_tool_request(
     mut request: ToolCoreRequest,
     granted_capabilities: &BTreeSet<Capability>,
@@ -52,6 +63,40 @@ pub(crate) fn prepare_kernel_tool_request(
     }
 
     request
+}
+
+fn summarize_shell_request_for_display(request: Value) -> Value {
+    let Value::Object(request_object) = request else {
+        return request;
+    };
+
+    let command = request_object
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let timeout_ms = request_object.get("timeout_ms").cloned();
+    let args_redacted = request_object
+        .get("args")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .filter(|count| *count > 0);
+
+    let mut summarized_request = serde_json::Map::new();
+
+    if let Some(command) = command {
+        summarized_request.insert("command".to_owned(), Value::String(command));
+    }
+
+    if let Some(timeout_ms) = timeout_ms {
+        summarized_request.insert("timeout_ms".to_owned(), timeout_ms);
+    }
+
+    if let Some(args_redacted) = args_redacted {
+        let args_redacted = serde_json::Number::from(args_redacted);
+        summarized_request.insert("args_redacted".to_owned(), Value::Number(args_redacted));
+    }
+
+    Value::Object(summarized_request)
 }
 
 fn normalize_shell_invoke_payload(payload: Value) -> Value {

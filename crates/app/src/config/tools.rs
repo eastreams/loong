@@ -1029,7 +1029,7 @@ pub fn parse_autonomy_profile(raw: &str) -> Option<AutonomyProfile> {
 #[cfg(feature = "tool-websearch")]
 pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
-        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, Firecrawl, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.firecrawl_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_FIRECRAWL_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
+        "Web search provider. This affects only `web {{ query }}` / `web.search`; plain URL fetch/request mode uses normal network egress instead. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, Firecrawl, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.firecrawl_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_FIRECRAWL_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
     )
 }
 
@@ -1622,6 +1622,8 @@ mod tests {
         assert!(description.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
         assert!(description.contains(DEFAULT_WEB_SEARCH_PROVIDER));
         assert!(description.contains(WEB_SEARCH_PROVIDER_VALID_VALUES));
+        assert!(description.contains("`web { query }` / `web.search`"));
+        assert!(description.contains("plain URL fetch/request mode"));
     }
 
     #[test]

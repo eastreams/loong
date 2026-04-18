@@ -267,7 +267,7 @@ fn web_search_provider_check(config: &mvp::config::LoongConfig) -> OnboardCheck 
     let detail = credential_summary
         .map(|summary| {
             format!(
-                "{provider_label}: {}. web.search will stay unavailable until the provider credential is supplied",
+                "{provider_label}: {}. web.search will stay unavailable until the provider credential is supplied, but ordinary network access remains separately governed",
                 summary.value
             )
         })

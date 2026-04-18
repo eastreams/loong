@@ -5,15 +5,15 @@ Use this managed skill when a task needs richer browser automation through the
 `browser.click` tools can reliably provide.
 
 This preview is loaded through `external_skills.invoke` and currently routes
-work through `shell.exec`. It does not yet provide the same bounded,
+work through `exec`. It does not yet provide the same bounded,
 profile-isolated safety model as the built-in browser tools.
 
 ## Preconditions
 
 - This preview expects the `agent-browser` CLI to be installed and available on
   `PATH`.
-- This preview uses `shell.exec` to call `agent-browser`, so shell policy must
-  allow the `agent-browser` command.
+- This preview uses `exec` to call `agent-browser`, so shell policy must allow
+  the `agent-browser` command.
 - Enabling this preview usually means the operator has also enabled the
   external-skills runtime with installed-skill auto exposure for the current
   config.
