@@ -23,6 +23,7 @@ mod protocol;
 pub mod runtime_config;
 #[cfg(feature = "memory-sqlite")]
 mod sqlite;
+mod sqlite_core;
 mod stage;
 mod system;
 mod system_registry;
@@ -63,6 +64,7 @@ pub use protocol::{
 pub(crate) use sqlite::{CanonicalMemorySearchHit, WorkspaceMemoryIndexedSearchHit};
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
+use sqlite_core::{append_turn, clear_session, load_window, replace_turns};
 pub use stage::{
     DerivedMemoryKind, MemoryAuthority, MemoryContextProvenance, MemoryProvenanceSourceKind,
     MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryStageFamily,
@@ -167,78 +169,6 @@ pub(crate) fn execute_builtin_backend_memory_core(
                 }),
             }),
         },
-    }
-}
-
-fn append_turn(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::append_turn(request, config)
-    }
-}
-
-fn load_window(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::load_window(request, config)
-    }
-}
-
-fn clear_session(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::clear_session(request, config)
-    }
-}
-
-fn replace_turns(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::replace_turns(request, config)
     }
 }
 
