@@ -8,6 +8,7 @@ use super::payload::{optional_payload_limit, optional_payload_string, required_p
 
 use crate::config::{SessionVisibility, ToolConfig};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::search_text::{normalize_search_text, tokenize_normalized_search_text};
 use crate::session::repository::{SessionRepository, SessionSearchSourceKind};
 
 const DEFAULT_SESSION_SEARCH_MAX_RESULTS: usize = 5;
@@ -103,7 +104,7 @@ pub(super) fn execute_session_search_with_policies(
         });
     }
 
-    let normalized_query = query.to_ascii_lowercase();
+    let normalized_query = normalize_search_text(query.as_str());
     let query_tokens = tokenize_search_query(normalized_query.as_str());
     let per_session_limit = max_results
         .min(SESSION_SEARCH_PER_SESSION_LIMIT_CAP)
@@ -223,7 +224,7 @@ fn ensure_session_search_target_visible(
 }
 
 fn session_search_score(query: &str, query_tokens: &[String], content: &str) -> u32 {
-    let normalized_content = content.to_ascii_lowercase();
+    let normalized_content = normalize_search_text(content);
     let mut score = 0u32;
 
     if normalized_content.contains(query) {
@@ -246,12 +247,7 @@ fn session_search_score(query: &str, query_tokens: &[String], content: &str) -> 
 }
 
 fn tokenize_search_query(query: &str) -> Vec<String> {
-    query
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
+    tokenize_normalized_search_text(query)
 }
 
 fn build_search_snippet(content: &str, query: &str, query_tokens: &[String]) -> String {
@@ -414,6 +410,41 @@ mod tests {
                 .iter()
                 .any(|entry| entry["source"] == "event" && entry["session_id"] == "child-session")
         );
+    }
+
+    #[test]
+    fn session_search_matches_segmented_chinese_event_queries() {
+        let config = isolated_memory_config("chinese-event-query");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_and_child(&repo);
+
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "memory_indexed".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "summary": "中文分词已经启用到数据库搜索"
+            }),
+        })
+        .expect("append child event");
+
+        let outcome = execute_session_search_with_policies(
+            json!({
+                "query": "中文 分词",
+                "max_results": 4,
+                "include_turns": false,
+                "include_events": true
+            }),
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("session_search outcome");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1, "results={results:?}");
+        assert_eq!(results[0]["source"], "event");
+        assert_eq!(results[0]["session_id"], "child-session");
     }
 
     #[test]

@@ -14,6 +14,23 @@ pub(crate) enum WorkspaceMemoryDocumentKind {
     DailyLog,
 }
 
+impl WorkspaceMemoryDocumentKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Curated => "curated",
+            Self::DailyLog => "daily_log",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "curated" => Some(Self::Curated),
+            "daily_log" => Some(Self::DailyLog),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspaceMemoryDocumentLocation {
     pub label: String,
