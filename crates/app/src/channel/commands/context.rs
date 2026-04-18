@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::config::ChannelResolvedAccountRoute;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(feature = "channel-feishu")]
 use crate::config::ResolvedFeishuChannelConfig;
 #[cfg(feature = "channel-line")]
@@ -20,7 +20,7 @@ use super::super::http;
 #[derive(Debug, Clone)]
 pub(in crate::channel) struct ChannelCommandContext<R> {
     pub(in crate::channel) resolved_path: PathBuf,
-    pub(in crate::channel) config: LoongClawConfig,
+    pub(in crate::channel) config: LoongConfig,
     pub(in crate::channel) resolved: R,
     pub(in crate::channel) route: ChannelResolvedAccountRoute,
 }

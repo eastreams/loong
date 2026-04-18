@@ -10,7 +10,7 @@ pub struct RuntimeSnapshotToolCallingState {
 }
 
 pub fn collect_runtime_snapshot_tool_calling_state(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     visible_tool_count: usize,
 ) -> RuntimeSnapshotToolCallingState {
     let provider_readiness = mvp::provider::provider_tool_schema_readiness(config);
@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn tool_calling_state_is_inactive_when_no_tools_are_visible() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
 
         let state = collect_runtime_snapshot_tool_calling_state(&config, 0);
 
@@ -65,12 +65,12 @@ mod tests {
 
     #[test]
     fn tool_calling_state_is_degraded_when_tool_schema_is_disabled() {
-        let config = mvp::config::LoongClawConfig {
+        let config = mvp::config::LoongConfig {
             provider: mvp::config::ProviderConfig {
                 tool_schema_mode: mvp::config::ProviderToolSchemaModeConfig::Disabled,
                 ..mvp::config::ProviderConfig::default()
             },
-            ..mvp::config::LoongClawConfig::default()
+            ..mvp::config::LoongConfig::default()
         };
 
         let state = collect_runtime_snapshot_tool_calling_state(&config, 2);

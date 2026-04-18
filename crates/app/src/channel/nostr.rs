@@ -503,7 +503,7 @@ mod tests {
         let config = crate::config::NostrChannelConfig {
             enabled: true,
             relay_urls,
-            private_key: Some(loongclaw_contracts::SecretRef::Inline(
+            private_key: Some(loong_contracts::SecretRef::Inline(
                 TEST_PRIVATE_KEY_HEX.to_owned(),
             )),
             ..crate::config::NostrChannelConfig::default()

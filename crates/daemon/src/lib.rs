@@ -23,16 +23,16 @@ use kernel::{
     PluginActivationStatus, PluginScanner, PluginSetupReadinessContext, PluginTranslator,
     TaskIntent, ToolCoreOutcome, ToolCoreRequest, evaluate_plugin_setup_requirements,
 };
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub use loongclaw_app as mvp;
-pub use loongclaw_spec::spec_execution::*;
-pub use loongclaw_spec::spec_runtime::*;
-pub use loongclaw_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
+pub use loong_app as mvp;
+pub use loong_spec::spec_execution::*;
+pub use loong_spec::spec_runtime::*;
+pub use loong_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
 
 pub use self::channel_cli_specs::{
     DINGTALK_SEND_CLI_SPEC, DISCORD_SEND_CLI_SPEC, EMAIL_SEND_CLI_SPEC, FEISHU_SEND_CLI_SPEC,
@@ -61,7 +61,7 @@ pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
     run_list_mcp_servers_cli, run_show_mcp_server_cli,
 };
-pub use loongclaw_bench::{
+pub use loong_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
 };
@@ -195,7 +195,7 @@ pub(crate) use channel_bridge_render::{
     render_line_safe_optional_text_value, render_line_safe_text_value, render_line_safe_text_values,
 };
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
-pub use loongclaw_spec::programmatic::{
+pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
@@ -242,7 +242,7 @@ pub use channel_serve_cli::{
     FEISHU_SERVE_CLI_SPEC, LINE_SERVE_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC, WHATSAPP_SERVE_CLI_SPEC,
 };
 
-pub const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
+pub const PUBLIC_GITHUB_REPO: &str = "loong-ai/loong";
 pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
 
 pub fn active_cli_command_name() -> &'static str {
@@ -486,7 +486,7 @@ pub enum Commands {
     AuditDemo,
     /// Generate a runnable JSON spec template for quick vertical customization
     InitSpec {
-        #[arg(long, default_value = "loongclaw.spec.json")]
+        #[arg(long, default_value = "loong.spec.json")]
         output: String,
         #[arg(long, value_enum, default_value_t = InitSpecPreset::Default)]
         preset: InitSpecPreset,
@@ -605,10 +605,10 @@ pub enum Commands {
     },
     #[command(
         about = "Guided onboarding for fast first-chat setup with preflight diagnostics",
-        long_about = "Guided onboarding for fast first-chat setup with preflight diagnostics.\n\nThis is the default path for most users. LoongClaw will detect reusable settings for provider, channels, or workspace guidance, suggest a starting point, and walk through quick review before first chat."
+        long_about = "Guided onboarding for fast first-chat setup with preflight diagnostics.\n\nThis is the default path for most users. Loong will detect reusable settings for provider, channels, or workspace guidance, suggest a starting point, and walk through quick review before first chat."
     )]
     Onboard {
-        /// Write the resulting config to a custom path instead of the default loongclaw config location
+        /// Write the resulting config to a custom path instead of the default loong config location
         #[arg(long)]
         output: Option<String>,
         /// Overwrite an existing target config path instead of stopping for manual review
@@ -668,7 +668,7 @@ pub enum Commands {
         long_about = "Power-user import flow for previewing or applying detected migration sources explicitly.\n\nUse this when you want exact CLI control over which source and domains are reused. If you want the guided path, use `loong onboard` instead. When the same source kind resolves to multiple detected configs, rerun with `--source-path <path>` to choose one exact source."
     )]
     Import {
-        /// Write the imported config to a custom path instead of the default loongclaw config location
+        /// Write the imported config to a custom path instead of the default loong config location
         #[arg(long)]
         output: Option<String>,
         /// Overwrite an existing target config path instead of stopping for manual review
@@ -710,7 +710,7 @@ pub enum Commands {
         /// Path to the legacy agent workspace or root to inspect
         #[arg(long)]
         input: Option<String>,
-        /// Target LoongClaw config path to preview, write, or roll back
+        /// Target Loong config path to preview, write, or roll back
         #[arg(long)]
         output: Option<String>,
         /// Hint the legacy claw-family source kind for single-source plan/apply modes
@@ -1765,7 +1765,6 @@ mod multi_channel_serve_tests {
 
 fn resolved_default_entry_config_path() -> PathBuf {
     std::env::var_os("LOONG_CONFIG_PATH")
-        .or_else(|| std::env::var_os("LOONGCLAW_CONFIG_PATH"))
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(mvp::config::default_config_path)
@@ -1789,46 +1788,12 @@ fn default_onboard_command() -> Commands {
     }
 }
 
-fn default_import_preview_command() -> Commands {
-    Commands::Import {
-        output: None,
-        force: false,
-        preview: true,
-        apply: false,
-        json: false,
-        from: None,
-        source_path: None,
-        provider: None,
-        include: Vec::new(),
-        exclude: Vec::new(),
-    }
-}
-
-fn detected_legacy_home_for_default_entry() -> Option<PathBuf> {
-    if std::env::var_os("LOONG_HOME")
-        .as_deref()
-        .is_some_and(|value| !value.is_empty())
-    {
-        return None;
-    }
-
-    let user_home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)?;
-
-    mvp::config::detect_legacy_home(user_home.as_path())
-}
-
 pub fn resolve_default_entry_command() -> Commands {
     if resolved_default_entry_config_path().is_file() {
-        return Commands::Welcome;
+        Commands::Welcome
+    } else {
+        default_onboard_command()
     }
-
-    if detected_legacy_home_for_default_entry().is_some() {
-        return default_import_preview_command();
-    }
-
-    default_onboard_command()
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {
@@ -1848,7 +1813,7 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
     }
 }
 
-fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongClawConfig) -> String {
+fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongConfig) -> String {
     let config_path_display = config_path.display().to_string();
     let next_actions = next_actions::collect_setup_next_actions(config, &config_path_display);
     let primary_action = next_actions.first().cloned();
@@ -1968,13 +1933,12 @@ mod first_run_entry_tests {
         env.set("HOME", &home);
         env.remove("LOONG_HOME");
         env.remove("LOONG_CONFIG_PATH");
-        env.remove("LOONGCLAW_CONFIG_PATH");
         (env, home)
     }
 
     #[test]
     fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
-        let (_env, _home) = isolated_home("loongclaw-default-entry-missing");
+        let (_env, _home) = isolated_home("loong-default-entry-missing");
 
         assert!(
             matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
@@ -1983,31 +1947,12 @@ mod first_run_entry_tests {
     }
 
     #[test]
-    fn resolve_default_entry_command_routes_to_import_preview_when_legacy_home_exists() {
-        let (_env, home) = isolated_home("loongclaw-default-entry-legacy-home");
-        let legacy_home = home.join(".loongclaw");
-        fs::create_dir_all(&legacy_home).expect("create legacy home");
-
-        assert!(
-            matches!(
-                resolve_default_entry_command(),
-                Commands::Import {
-                    preview: true,
-                    apply: false,
-                    ..
-                }
-            ),
-            "legacy home should route to import preview"
-        );
-    }
-
-    #[test]
     fn resolve_default_entry_command_routes_to_welcome_when_default_config_exists() {
-        let (_env, _home) = isolated_home("loongclaw-default-entry-present");
+        let (_env, _home) = isolated_home("loong-default-entry-present");
         let config_path = mvp::config::default_config_path();
         mvp::config::write(
             Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             true,
         )
         .expect("write default config");
@@ -2015,27 +1960,6 @@ mod first_run_entry_tests {
         assert!(
             matches!(resolve_default_entry_command(), Commands::Welcome),
             "present config should route to welcome"
-        );
-    }
-
-    #[test]
-    fn resolve_default_entry_command_honors_loongclaw_config_path_override() {
-        let mut env = ScopedEnv::new();
-        let config_path = unique_temp_dir("loongclaw-default-entry-env").join("custom-config.toml");
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent).expect("create config parent");
-        }
-        mvp::config::write(
-            Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
-            true,
-        )
-        .expect("write explicit config");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_path);
-
-        assert!(
-            matches!(resolve_default_entry_command(), Commands::Welcome),
-            "env override config should route to welcome"
         );
     }
 
@@ -2048,7 +1972,7 @@ mod first_run_entry_tests {
         }
         mvp::config::write(
             Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             true,
         )
         .expect("write explicit config");
@@ -2056,16 +1980,16 @@ mod first_run_entry_tests {
 
         assert!(
             matches!(resolve_default_entry_command(), Commands::Welcome),
-            "new env override config should route to welcome"
+            "env override config should route to welcome"
         );
     }
 
     #[test]
     fn resolve_default_entry_command_routes_to_onboard_when_config_path_is_a_directory() {
         let mut env = ScopedEnv::new();
-        let config_dir = unique_temp_dir("loongclaw-default-entry-dir");
+        let config_dir = unique_temp_dir("loong-default-entry-dir");
         fs::create_dir_all(&config_dir).expect("create config directory");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
+        env.set("LOONG_CONFIG_PATH", &config_dir);
 
         assert!(
             matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
@@ -2095,8 +2019,8 @@ mod first_run_entry_tests {
     #[test]
     fn run_welcome_cli_rejects_missing_config_file() {
         let mut env = ScopedEnv::new();
-        let config_path = unique_temp_dir("loongclaw-welcome-missing").join("missing-config.toml");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_path);
+        let config_path = unique_temp_dir("loong-welcome-missing").join("missing-config.toml");
+        env.set("LOONG_CONFIG_PATH", &config_path);
 
         let error = run_welcome_cli().expect_err("missing config should fail welcome");
 
@@ -2113,9 +2037,9 @@ mod first_run_entry_tests {
     #[test]
     fn run_welcome_cli_rejects_directory_config_path() {
         let mut env = ScopedEnv::new();
-        let config_dir = unique_temp_dir("loongclaw-welcome-dir");
+        let config_dir = unique_temp_dir("loong-welcome-dir");
         fs::create_dir_all(&config_dir).expect("create config directory");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
+        env.set("LOONG_CONFIG_PATH", &config_dir);
 
         let error = run_welcome_cli().expect_err("directory config path should fail welcome");
 
@@ -2134,7 +2058,7 @@ mod first_run_entry_tests {
         }
         mvp::config::write(
             Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             true,
         )
         .expect("write explicit config");
@@ -2148,8 +2072,8 @@ mod first_run_entry_tests {
 
     #[test]
     fn render_welcome_banner_includes_version_and_next_commands() {
-        let config = mvp::config::LoongClawConfig::default();
-        let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
+        let config = mvp::config::LoongConfig::default();
+        let rendered = render_welcome_banner(Path::new("/tmp/loong's config.toml"), &config);
 
         assert!(
             rendered.contains(env!("CARGO_PKG_VERSION")),
@@ -2164,11 +2088,11 @@ mod first_run_entry_tests {
             "welcome banner should lead with a start-here handoff: {rendered}"
         );
         assert!(
-            rendered.contains("loong ask --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong ask --config '/tmp/loong'\"'\"'s config.toml'"),
             "welcome banner should include a quoted ask command: {rendered}"
         );
         assert!(
-            rendered.contains("loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong chat --config '/tmp/loong'\"'\"'s config.toml'"),
             "welcome banner should include a quoted chat command: {rendered}"
         );
         assert!(
@@ -2574,7 +2498,7 @@ pub fn run_validate_config_cli(
         ValidateConfigOutput::ProblemJson => {
             let payload = if diagnostics.is_empty() {
                 json!({
-                    "type": "urn:loongclaw:problem:none",
+                    "type": "urn:loong:problem:none",
                     "title": "Configuration Valid",
                     "detail": "No configuration diagnostics were reported.",
                     "instance": resolved_path.display().to_string(),
@@ -2589,9 +2513,9 @@ pub fn run_validate_config_cli(
             } else {
                 json!({
                     "type": if diagnostics_summary.valid {
-                        "urn:loongclaw:problem:config.validation_warning"
+                        "urn:loong:problem:config.validation_warning"
                     } else {
-                        "urn:loongclaw:problem:config.validation_failed"
+                        "urn:loong:problem:config.validation_failed"
                     },
                     "title": if diagnostics_summary.valid {
                         "Configuration Warnings Reported"
@@ -2913,7 +2837,7 @@ pub(crate) fn collect_runtime_snapshot_cli_state_from_loaded_config(
 
 fn collect_runtime_snapshot_cli_state_from_parts(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> CliResult<RuntimeSnapshotCliState> {
     let config_display = resolved_path.display().to_string();
     let provider = collect_runtime_snapshot_provider_state(config);
@@ -2926,7 +2850,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let enabled_plugin_backed_channel_ids = config.enabled_plugin_backed_channel_ids();
     let enabled_outbound_only_channel_ids = config.enabled_outbound_only_channel_ids();
     let channels = mvp::channel::channel_inventory(config);
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         Some(resolved_path),
     );
@@ -2967,7 +2891,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
 }
 
 fn collect_runtime_snapshot_provider_state(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> RuntimeSnapshotProviderState {
     let active_profile_id = config
         .active_provider_id()
@@ -3147,7 +3071,7 @@ fn collect_runtime_snapshot_external_skills_state(
 }
 
 pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> RuntimeSnapshotRuntimePluginsState {
     let readiness_evaluation = config
         .runtime_plugins
@@ -3399,7 +3323,7 @@ fn merge_plugin_scan_report(
 }
 
 fn runtime_plugin_setup_readiness_context(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> PluginSetupReadinessContext {
     let verified_env_vars = std::env::vars_os()
         .filter_map(|(key, value)| {
@@ -3572,7 +3496,7 @@ fn json_string_array_to_set(
 }
 
 fn build_runtime_snapshot_restore_spec(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     external_skills: &RuntimeSnapshotExternalSkillsState,
 ) -> RuntimeSnapshotRestoreSpec {
     let mut warnings = Vec::new();
@@ -3602,7 +3526,7 @@ fn build_runtime_snapshot_restore_spec(
 }
 
 fn runtime_snapshot_restore_provider_profiles(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> BTreeMap<String, mvp::config::ProviderProfileConfig> {
     if !config.providers.is_empty() {
         return config.providers.clone();

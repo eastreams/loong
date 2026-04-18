@@ -84,9 +84,9 @@ product-specs area in `eastreams/knowledge-base`.
 
 | If you need source details about... | Start here |
 | --- | --- |
-| first-run success and repair | `eastreams/knowledge-base/loongclaw/product-specs/shipped` |
-| shipped runtime surfaces | `eastreams/knowledge-base/loongclaw/product-specs/shipped` |
-| continuity and day-to-day runtime behavior | `eastreams/knowledge-base/loongclaw/product-specs/active` |
+| first-run success and repair | `eastreams/knowledge-base/loong/product-specs/shipped` |
+| shipped runtime surfaces | `eastreams/knowledge-base/loong/product-specs/shipped` |
+| continuity and day-to-day runtime behavior | `eastreams/knowledge-base/loong/product-specs/active` |
 
 ## Public Surface Shape
 

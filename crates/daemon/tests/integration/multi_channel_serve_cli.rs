@@ -12,7 +12,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use loongclaw_daemon::supervisor::{
+use loong_daemon::supervisor::{
     BackgroundChannelRunnerRequest, BackgroundChannelSurface, LoadedSupervisorConfig,
     RuntimeOwnerPhase, SupervisorRuntimeHooks, SupervisorShutdownReason, SurfacePhase,
     run_multi_channel_serve_with_hooks_for_test,
@@ -61,11 +61,11 @@ fn pending_shutdown_future() -> BoxedShutdownFuture {
 }
 
 fn loaded_config_fixture() -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        resolved_path: PathBuf::from("/tmp/loong.toml"),
         config,
     }
 }
@@ -77,33 +77,33 @@ fn loaded_config_fixture_with_path(path: &str) -> LoadedSupervisorConfig {
 }
 
 fn all_service_channels_loaded_config_fixture() -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
     config.matrix.enabled = true;
     config.wecom.enabled = true;
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        resolved_path: PathBuf::from("/tmp/loong.toml"),
         config,
     }
 }
 
 fn telegram_only_loaded_config_fixture() -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = false;
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        resolved_path: PathBuf::from("/tmp/loong.toml"),
         config,
     }
 }
 
 fn feishu_only_loaded_config_fixture() -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = false;
     config.feishu.enabled = true;
     LoadedSupervisorConfig {
-        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        resolved_path: PathBuf::from("/tmp/loong.toml"),
         config,
     }
 }
@@ -161,9 +161,8 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
-    let runtime_dir = std::env::temp_dir().join(format!(
-        "loongclaw-daemon-multi-channel-serve-{label}-{suffix}"
-    ));
+    let runtime_dir =
+        std::env::temp_dir().join(format!("loong-daemon-multi-channel-serve-{label}-{suffix}"));
     std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
     runtime_dir
 }
@@ -192,13 +191,11 @@ fn background_channel_runner_registry(
     runners
 }
 
-fn channel_accounts(
-    values: &[(&str, &str)],
-) -> Vec<loongclaw_daemon::MultiChannelServeChannelAccount> {
+fn channel_accounts(values: &[(&str, &str)]) -> Vec<loong_daemon::MultiChannelServeChannelAccount> {
     values
         .iter()
         .map(
-            |(channel_id, account_id)| loongclaw_daemon::MultiChannelServeChannelAccount {
+            |(channel_id, account_id)| loong_daemon::MultiChannelServeChannelAccount {
                 channel_id: (*channel_id).to_owned(),
                 account_id: (*account_id).to_owned(),
             },
@@ -553,7 +550,7 @@ async fn multi_channel_serve_background_failure_exits_foreground_cli_host_with_s
     let log = EventLog::default();
     let fail_telegram = Arc::new(Notify::new());
     let run_log = log.clone();
-    let run: tokio::task::JoinHandle<CliResult<loongclaw_daemon::supervisor::SupervisorState>> = {
+    let run: tokio::task::JoinHandle<CliResult<loong_daemon::supervisor::SupervisorState>> = {
         let fail_telegram_for_run = fail_telegram.clone();
         tokio::spawn(async move {
             run_multi_channel_serve_with_hooks_for_test(
@@ -721,7 +718,7 @@ async fn multi_channel_serve_background_failure_before_cli_wait_still_stops_fore
 async fn multi_channel_serve_background_join_error_still_shuts_down_cli_and_other_surfaces() {
     let log = EventLog::default();
     let run_log = log.clone();
-    let run: tokio::task::JoinHandle<CliResult<loongclaw_daemon::supervisor::SupervisorState>> =
+    let run: tokio::task::JoinHandle<CliResult<loong_daemon::supervisor::SupervisorState>> =
         tokio::spawn(async move {
             run_multi_channel_serve_with_hooks_for_test(
                 None,
@@ -882,7 +879,7 @@ async fn multi_channel_serve_loads_config_once_before_spawning_children() {
     let load_count = Arc::new(AtomicUsize::new(0));
     let log = EventLog::default();
     let state = run_multi_channel_serve_with_hooks_for_test(
-        Some("/tmp/loongclaw.toml"),
+        Some("/tmp/loong.toml"),
         "cli-supervisor",
         channel_accounts(&[("telegram", "bot_123456"), ("feishu", "alerts")]),
         hooks(
@@ -950,13 +947,13 @@ async fn multi_channel_serve_loads_config_once_before_spawning_children() {
     assert_eq!(load_count.load(Ordering::SeqCst), 1);
     assert_eq!(
         log.snapshot().first().map(String::as_str),
-        Some("load-config path=/tmp/loongclaw.toml")
+        Some("load-config path=/tmp/loong.toml")
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn multi_channel_serve_initializes_runtime_environment_before_spawning_children() {
-    let expected_path = "/tmp/loongclaw-supervisor-runtime-env.toml";
+    let expected_path = "/tmp/loong-supervisor-runtime-env.toml";
     let expected_path_string = expected_path.to_owned();
     let initialized_config_path = Arc::new(Mutex::new(None::<String>));
     let started = Arc::new(AtomicUsize::new(0));
@@ -1088,7 +1085,7 @@ async fn multi_channel_serve_ctrl_c_waits_for_background_joins_and_reports_shutd
     let ctrl_c = Arc::new(Notify::new());
     let release_telegram = Arc::new(Notify::new());
     let log = EventLog::default();
-    let run: tokio::task::JoinHandle<CliResult<loongclaw_daemon::supervisor::SupervisorState>> =
+    let run: tokio::task::JoinHandle<CliResult<loong_daemon::supervisor::SupervisorState>> =
         tokio::spawn({
             let ctrl_c = ctrl_c.clone();
             let release_telegram = release_telegram.clone();
@@ -1202,7 +1199,7 @@ async fn multi_channel_serve_cooperative_stop_clears_channel_runtime_running_sta
     let runtime_entered = Arc::new(Notify::new());
     let ctrl_c = Arc::new(Notify::new());
 
-    let run: tokio::task::JoinHandle<CliResult<loongclaw_daemon::supervisor::SupervisorState>> = {
+    let run: tokio::task::JoinHandle<CliResult<loong_daemon::supervisor::SupervisorState>> = {
         let runtime_entered = runtime_entered.clone();
         let ctrl_c = ctrl_c.clone();
         tokio::spawn(async move {

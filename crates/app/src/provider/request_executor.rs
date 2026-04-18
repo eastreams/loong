@@ -1436,7 +1436,7 @@ mod tests {
     async fn execute_model_request_uses_mock_transport_without_http() {
         use crate::provider::mock_transport::MockTransport;
         use crate::provider::transport_trait::TransportResponse;
-        use loongclaw_contracts::SecretRef;
+        use loong_contracts::SecretRef;
 
         let provider = ProviderConfig {
             kind: crate::config::ProviderKind::Openai,

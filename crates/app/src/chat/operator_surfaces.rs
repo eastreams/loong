@@ -2,14 +2,14 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loongclaw_contracts::Capability;
+use loong_contracts::Capability;
 #[cfg(feature = "memory-sqlite")]
 use serde_json::json;
 
 use crate::CliResult;
 use crate::acp::resolve_acp_backend_selection;
 use crate::config;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::conversation::ContextCompactionReport;
 use crate::conversation::ConversationRuntimeBinding;
@@ -856,7 +856,7 @@ pub(super) async fn print_history(
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn load_manual_compaction_result(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     turn_coordinator: &ConversationTurnCoordinator,
     binding: ConversationRuntimeBinding<'_>,
@@ -894,7 +894,7 @@ async fn load_manual_compaction_window_snapshot(
         .kernel_context()
         .ok_or_else(|| "manual compaction requires a kernel-bound session".to_owned())?;
     let caps = BTreeSet::from([Capability::MemoryRead]);
-    let request = loongclaw_contracts::MemoryCoreRequest {
+    let request = loong_contracts::MemoryCoreRequest {
         operation: memory::MEMORY_OP_WINDOW.to_owned(),
         payload: json!({
             "session_id": session_id,

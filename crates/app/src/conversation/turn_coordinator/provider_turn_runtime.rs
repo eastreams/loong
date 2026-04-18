@@ -194,7 +194,7 @@ pub(super) fn summarize_tool_event_request(intent: &ToolIntent) -> Option<String
 }
 
 pub(super) fn provider_turn_observer_supports_streaming(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> bool {
     if observer.is_none() {
@@ -205,7 +205,7 @@ pub(super) fn provider_turn_observer_supports_streaming(
 }
 
 pub(super) async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     turn_id: &str,
@@ -231,7 +231,7 @@ pub(super) async fn request_provider_turn_with_observer<R: ConversationRuntime +
 }
 
 pub(super) async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     user_input: &str,
@@ -345,7 +345,7 @@ pub(super) fn build_turn_loop_circuit_breaker_resolved_turn(
 }
 
 pub(super) async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
@@ -404,7 +404,7 @@ pub(super) async fn prepare_provider_turn_continue_phase<R: ConversationRuntime 
 
 pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
     continue_phase: &ProviderTurnContinuePhase,

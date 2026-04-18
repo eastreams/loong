@@ -9,7 +9,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::CliResult;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 
 use super::binding::AcpSessionBindingScope;
 
@@ -230,12 +230,12 @@ impl AcpSessionMetadata {
     }
 }
 
-pub const ACP_TURN_METADATA_TRACE_ID: &str = "loongclaw.trace_id";
-pub const ACP_TURN_METADATA_SOURCE_MESSAGE_ID: &str = "loongclaw.channel.source_message_id";
-pub const ACP_TURN_METADATA_ACK_CURSOR: &str = "loongclaw.channel.ack_cursor";
-pub const ACP_TURN_METADATA_ROUTING_INTENT: &str = "loongclaw.acp.routing_intent";
-pub const ACP_TURN_METADATA_ROUTING_ORIGIN: &str = "loongclaw.acp.routing_origin";
-pub const ACP_SESSION_METADATA_ACTIVATION_ORIGIN: &str = "loongclaw.acp.activation_origin";
+pub const ACP_TURN_METADATA_TRACE_ID: &str = "loong.trace_id";
+pub const ACP_TURN_METADATA_SOURCE_MESSAGE_ID: &str = "loong.channel.source_message_id";
+pub const ACP_TURN_METADATA_ACK_CURSOR: &str = "loong.channel.ack_cursor";
+pub const ACP_TURN_METADATA_ROUTING_INTENT: &str = "loong.acp.routing_intent";
+pub const ACP_TURN_METADATA_ROUTING_ORIGIN: &str = "loong.acp.routing_origin";
+pub const ACP_SESSION_METADATA_ACTIVATION_ORIGIN: &str = "loong.acp.activation_origin";
 
 #[derive(Clone, Copy, Default)]
 pub struct AcpTurnProvenance<'a> {
@@ -575,20 +575,20 @@ pub trait AcpRuntimeBackend: Send + Sync {
 
     async fn ensure_session(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         request: &AcpSessionBootstrap,
     ) -> CliResult<AcpSessionHandle>;
 
     async fn run_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session: &AcpSessionHandle,
         request: &AcpTurnRequest,
     ) -> CliResult<AcpTurnResult>;
 
     async fn run_turn_with_sink(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session: &AcpSessionHandle,
         request: &AcpTurnRequest,
         _abort: Option<AcpAbortSignal>,
@@ -603,13 +603,13 @@ pub trait AcpRuntimeBackend: Send + Sync {
         Ok(result)
     }
 
-    async fn cancel(&self, config: &LoongClawConfig, session: &AcpSessionHandle) -> CliResult<()>;
+    async fn cancel(&self, config: &LoongConfig, session: &AcpSessionHandle) -> CliResult<()>;
 
-    async fn close(&self, config: &LoongClawConfig, session: &AcpSessionHandle) -> CliResult<()>;
+    async fn close(&self, config: &LoongConfig, session: &AcpSessionHandle) -> CliResult<()>;
 
     async fn get_status(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session: &AcpSessionHandle,
     ) -> CliResult<Option<AcpSessionStatus>> {
         Ok(None)
@@ -617,7 +617,7 @@ pub trait AcpRuntimeBackend: Send + Sync {
 
     async fn set_mode(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session: &AcpSessionHandle,
         _mode: AcpSessionMode,
     ) -> CliResult<()> {
@@ -626,14 +626,14 @@ pub trait AcpRuntimeBackend: Send + Sync {
 
     async fn set_config_option(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session: &AcpSessionHandle,
         _patch: &AcpConfigPatch,
     ) -> CliResult<()> {
         Ok(())
     }
 
-    async fn doctor(&self, _config: &LoongClawConfig) -> CliResult<Option<AcpDoctorReport>> {
+    async fn doctor(&self, _config: &LoongConfig) -> CliResult<Option<AcpDoctorReport>> {
         Ok(None)
     }
 }
@@ -657,7 +657,7 @@ impl AcpRuntimeBackend for PlanningStubAcpBackend {
 
     async fn ensure_session(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _request: &AcpSessionBootstrap,
     ) -> CliResult<AcpSessionHandle> {
         Err("ACP backend `planning_stub` is a placeholder and cannot spawn sessions yet".to_owned())
@@ -665,29 +665,25 @@ impl AcpRuntimeBackend for PlanningStubAcpBackend {
 
     async fn run_turn(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session: &AcpSessionHandle,
         _request: &AcpTurnRequest,
     ) -> CliResult<AcpTurnResult> {
         Err("ACP backend `planning_stub` is a placeholder and cannot execute turns yet".to_owned())
     }
 
-    async fn cancel(
-        &self,
-        _config: &LoongClawConfig,
-        _session: &AcpSessionHandle,
-    ) -> CliResult<()> {
+    async fn cancel(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
         Err(
             "ACP backend `planning_stub` is a placeholder and cannot cancel sessions yet"
                 .to_owned(),
         )
     }
 
-    async fn close(&self, _config: &LoongClawConfig, _session: &AcpSessionHandle) -> CliResult<()> {
+    async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
         Err("ACP backend `planning_stub` is a placeholder and cannot close sessions yet".to_owned())
     }
 
-    async fn doctor(&self, _config: &LoongClawConfig) -> CliResult<Option<AcpDoctorReport>> {
+    async fn doctor(&self, _config: &LoongConfig) -> CliResult<Option<AcpDoctorReport>> {
         Ok(Some(AcpDoctorReport {
             healthy: false,
             diagnostics: BTreeMap::from([

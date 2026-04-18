@@ -8,9 +8,9 @@ pub(crate) fn managed_bridge_manifest(
     channel_id: &str,
     setup_surface: Option<&str>,
     metadata: BTreeMap<String, String>,
-) -> loongclaw_daemon::kernel::PluginManifest {
-    let setup = setup_surface.map(|surface| loongclaw_daemon::kernel::PluginSetup {
-        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
+) -> loong_daemon::kernel::PluginManifest {
+    let setup = setup_surface.map(|surface| loong_daemon::kernel::PluginSetup {
+        mode: loong_daemon::kernel::PluginSetupMode::MetadataOnly,
         surface: Some(surface.to_owned()),
         required_env_vars: Vec::new(),
         recommended_env_vars: Vec::new(),
@@ -26,8 +26,8 @@ pub(crate) fn managed_bridge_manifest(
 pub(crate) fn managed_bridge_manifest_with_setup(
     channel_id: &str,
     metadata: BTreeMap<String, String>,
-    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
-) -> loongclaw_daemon::kernel::PluginManifest {
+    setup: Option<loong_daemon::kernel::PluginSetup>,
+) -> loong_daemon::kernel::PluginManifest {
     let plugin_id = format!("{channel_id}-managed-bridge");
 
     managed_bridge_manifest_with_plugin_id(plugin_id.as_str(), channel_id, metadata, setup)
@@ -37,9 +37,9 @@ pub(crate) fn managed_bridge_manifest_with_plugin_id(
     plugin_id: &str,
     channel_id: &str,
     metadata: BTreeMap<String, String>,
-    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
-) -> loongclaw_daemon::kernel::PluginManifest {
-    loongclaw_daemon::kernel::PluginManifest {
+    setup: Option<loong_daemon::kernel::PluginSetup>,
+) -> loong_daemon::kernel::PluginManifest {
+    loong_daemon::kernel::PluginManifest {
         api_version: Some("v1alpha1".to_owned()),
         version: Some("1.0.0".to_owned()),
         plugin_id: plugin_id.to_owned(),
@@ -48,7 +48,7 @@ pub(crate) fn managed_bridge_manifest_with_plugin_id(
         channel_id: Some(channel_id.to_owned()),
         endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
         capabilities: BTreeSet::new(),
-        trust_tier: loongclaw_daemon::kernel::PluginTrustTier::Unverified,
+        trust_tier: loong_daemon::kernel::PluginTrustTier::Unverified,
         metadata,
         summary: None,
         tags: Vec::new(),
@@ -67,7 +67,7 @@ pub(crate) fn managed_bridge_setup_with_guidance(
     required_config_keys: Vec<&str>,
     docs_urls: Vec<&str>,
     remediation: Option<&str>,
-) -> loongclaw_daemon::kernel::PluginSetup {
+) -> loong_daemon::kernel::PluginSetup {
     let normalized_required_env_vars = required_env_vars.into_iter().map(str::to_owned).collect();
     let normalized_required_config_keys = required_config_keys
         .into_iter()
@@ -76,8 +76,8 @@ pub(crate) fn managed_bridge_setup_with_guidance(
     let normalized_docs_urls = docs_urls.into_iter().map(str::to_owned).collect();
     let normalized_remediation = remediation.map(str::to_owned);
 
-    loongclaw_daemon::kernel::PluginSetup {
-        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
+    loong_daemon::kernel::PluginSetup {
+        mode: loong_daemon::kernel::PluginSetupMode::MetadataOnly,
         surface: Some(surface.to_owned()),
         required_env_vars: normalized_required_env_vars,
         recommended_env_vars: Vec::new(),
@@ -93,15 +93,30 @@ pub(crate) fn compatible_managed_bridge_metadata(
     target_contract: &str,
 ) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::new();
+    let runtime_operations = serde_json::to_string(&[
+        "send_message",
+        "receive_batch",
+        "ack_inbound",
+        "complete_batch",
+    ])
+    .expect("serialize runtime operations");
 
     metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
     metadata.insert("transport_family".to_owned(), transport_family.to_owned());
     metadata.insert("target_contract".to_owned(), target_contract.to_owned());
+    metadata.insert(
+        "channel_runtime_contract".to_owned(),
+        loong_daemon::mvp::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_CONTRACT_V1.to_owned(),
+    );
+    metadata.insert(
+        "channel_runtime_operations_json".to_owned(),
+        runtime_operations,
+    );
 
     metadata
 }
 
-pub(crate) fn mixed_account_weixin_plugin_bridge_config() -> mvp::config::LoongClawConfig {
+pub(crate) fn mixed_account_weixin_plugin_bridge_config() -> mvp::config::LoongConfig {
     serde_json::from_value(serde_json::json!({
         "weixin": {
             "enabled": true,
@@ -140,10 +155,10 @@ pub(crate) fn install_ready_weixin_managed_bridge(install_root: &Path) {
 pub(crate) fn write_managed_bridge_manifest(
     install_root: &Path,
     directory_name: &str,
-    manifest: &loongclaw_daemon::kernel::PluginManifest,
+    manifest: &loong_daemon::kernel::PluginManifest,
 ) {
     let plugin_directory = install_root.join(directory_name);
-    let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+    let manifest_path = plugin_directory.join("loong.plugin.json");
     let encoded_manifest =
         serde_json::to_string_pretty(manifest).expect("serialize managed bridge manifest");
 

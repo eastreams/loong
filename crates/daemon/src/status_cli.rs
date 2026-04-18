@@ -1,5 +1,5 @@
-use loongclaw_contracts::WorkRuntimeHealthSnapshot;
-use loongclaw_spec::CliResult;
+use loong_contracts::WorkRuntimeHealthSnapshot;
+use loong_spec::CliResult;
 use serde::Serialize;
 use std::path::Path;
 
@@ -326,24 +326,24 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let mut sections = Vec::new();
 
     if let Some(primary_action) = status.next_actions.first() {
-        sections.push(loongclaw_app::tui_surface::TuiSectionSpec::ActionGroup {
+        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
             title: Some("start here".to_owned()),
             inline_title_when_wide: false,
-            items: vec![loongclaw_app::tui_surface::TuiActionSpec {
+            items: vec![loong_app::tui_surface::TuiActionSpec {
                 label: primary_action.label.clone(),
                 command: primary_action.command.clone(),
             }],
         });
     }
     if status.next_actions.len() > 1 {
-        sections.push(loongclaw_app::tui_surface::TuiSectionSpec::ActionGroup {
+        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
             title: Some("also useful".to_owned()),
             inline_title_when_wide: false,
             items: status
                 .next_actions
                 .iter()
                 .skip(1)
-                .map(|action| loongclaw_app::tui_surface::TuiActionSpec {
+                .map(|action| loong_app::tui_surface::TuiActionSpec {
                     label: action.label.clone(),
                     command: action.command.clone(),
                 })
@@ -351,14 +351,14 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         });
     }
 
-    sections.push(loongclaw_app::tui_surface::TuiSectionSpec::Checklist {
+    sections.push(loong_app::tui_surface::TuiSectionSpec::Checklist {
         title: Some("runtime posture".to_owned()),
         items: vec![
-            loongclaw_app::tui_surface::TuiChecklistItemSpec {
+            loong_app::tui_surface::TuiChecklistItemSpec {
                 status: if tool_calling.availability == "ready" {
-                    loongclaw_app::tui_surface::TuiChecklistStatus::Pass
+                    loong_app::tui_surface::TuiChecklistStatus::Pass
                 } else {
-                    loongclaw_app::tui_surface::TuiChecklistStatus::Warn
+                    loong_app::tui_surface::TuiChecklistStatus::Warn
                 },
                 label: "tool calling".to_owned(),
                 detail: format!(
@@ -368,13 +368,13 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                     tool_calling.effective_tool_schema_mode
                 ),
             },
-            loongclaw_app::tui_surface::TuiChecklistItemSpec {
+            loong_app::tui_surface::TuiChecklistItemSpec {
                 status: if status.acp.availability == "available"
                     || status.acp.availability == "disabled"
                 {
-                    loongclaw_app::tui_surface::TuiChecklistStatus::Pass
+                    loong_app::tui_surface::TuiChecklistStatus::Pass
                 } else {
-                    loongclaw_app::tui_surface::TuiChecklistStatus::Warn
+                    loong_app::tui_surface::TuiChecklistStatus::Warn
                 },
                 label: "ACP".to_owned(),
                 detail: format!(
@@ -382,11 +382,11 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                     status.acp.enabled, status.acp.availability
                 ),
             },
-            loongclaw_app::tui_surface::TuiChecklistItemSpec {
+            loong_app::tui_surface::TuiChecklistItemSpec {
                 status: if status.work_units.availability == "available" {
-                    loongclaw_app::tui_surface::TuiChecklistStatus::Pass
+                    loong_app::tui_surface::TuiChecklistStatus::Pass
                 } else {
-                    loongclaw_app::tui_surface::TuiChecklistStatus::Warn
+                    loong_app::tui_surface::TuiChecklistStatus::Warn
                 },
                 label: "work units".to_owned(),
                 detail: format!("availability={}", status.work_units.availability),
@@ -394,176 +394,176 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         ],
     });
 
-    sections.push(loongclaw_app::tui_surface::TuiSectionSpec::KeyValues {
+    sections.push(loong_app::tui_surface::TuiSectionSpec::KeyValues {
         title: Some("saved runtime".to_owned()),
         items: vec![
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "config".to_owned(),
                 value: status.config.clone(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "provider".to_owned(),
                 value: status.active_provider.clone(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "model".to_owned(),
                 value: status.active_model.clone(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "memory profile".to_owned(),
                 value: status.memory_profile.clone(),
             },
         ],
     });
-    sections.push(loongclaw_app::tui_surface::TuiSectionSpec::KeyValues {
+    sections.push(loong_app::tui_surface::TuiSectionSpec::KeyValues {
         title: Some("gateway summary".to_owned()),
         items: vec![
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "phase".to_owned(),
                 value: owner.phase.clone(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "mode".to_owned(),
                 value: owner.mode.as_str().to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "pid".to_owned(),
                 value: owner_pid,
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "attached session".to_owned(),
                 value: owner_session.to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "control base url".to_owned(),
                 value: base_url.to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "visible tools".to_owned(),
                 value: runtime.visible_tool_count.to_string(),
             },
         ],
     });
-    sections.push(loongclaw_app::tui_surface::TuiSectionSpec::KeyValues {
+    sections.push(loong_app::tui_surface::TuiSectionSpec::KeyValues {
         title: Some("channel and recovery detail".to_owned()),
         items: vec![
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "owner config".to_owned(),
                 value: owner.config_path.clone(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "loopback only".to_owned(),
                 value: control_surface.loopback_only.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "configured surfaces".to_owned(),
                 value: owner.configured_surface_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "running surfaces".to_owned(),
                 value: owner.running_surface_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "channel catalog".to_owned(),
                 value: channels.catalog_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "configured accounts".to_owned(),
                 value: channels.configured_account_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "configured channels".to_owned(),
                 value: channels.configured_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled accounts".to_owned(),
                 value: channels.enabled_account_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "misconfigured accounts".to_owned(),
                 value: channels.misconfigured_account_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "runtime-backed channels".to_owned(),
                 value: channels.runtime_backed_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "config-backed channels".to_owned(),
                 value: channels.config_backed_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "plugin-backed channels".to_owned(),
                 value: channels.plugin_backed_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "catalog-only channels".to_owned(),
                 value: channels.catalog_only_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled runtime-backed".to_owned(),
                 value: channels.enabled_runtime_backed_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled service channels".to_owned(),
                 value: channels.enabled_service_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled plugin-backed".to_owned(),
                 value: channels.enabled_plugin_backed_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled outbound-only".to_owned(),
                 value: channels.enabled_outbound_only_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "ready service channels".to_owned(),
                 value: channels.ready_service_channel_count.to_string(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled channels".to_owned(),
                 value: render_status_channel_ids(&runtime.enabled_channel_ids),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "runtime-backed enabled ids".to_owned(),
                 value: render_status_channel_ids(&runtime.enabled_runtime_backed_channel_ids),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "service enabled ids".to_owned(),
                 value: render_status_channel_ids(&runtime.enabled_service_channel_ids),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "plugin-backed enabled ids".to_owned(),
                 value: render_status_channel_ids(&runtime.enabled_plugin_backed_channel_ids),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "outbound-only enabled ids".to_owned(),
                 value: render_status_channel_ids(&runtime.enabled_outbound_only_channel_ids),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "shutdown reason".to_owned(),
                 value: owner_shutdown_reason.to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "last error".to_owned(),
                 value: owner_error.to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "provider profile".to_owned(),
                 value: active_provider_profile_id.to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "provider label".to_owned(),
                 value: active_provider_label.to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "capability snapshot".to_owned(),
                 value: capability_snapshot_sha256.to_owned(),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "ACP".to_owned(),
                 value: render_status_cli_acp_text(&status.acp),
             },
-            loongclaw_app::tui_surface::TuiKeyValueSpec::Plain {
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "work units".to_owned(),
                 value: render_status_cli_work_units_text(&status.work_units),
             },
@@ -571,13 +571,13 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     });
 
     if !status.recipes.is_empty() {
-        sections.push(loongclaw_app::tui_surface::TuiSectionSpec::ActionGroup {
+        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
             title: Some("deep dives".to_owned()),
             inline_title_when_wide: false,
             items: status
                 .recipes
                 .iter()
-                .map(|recipe| loongclaw_app::tui_surface::TuiActionSpec {
+                .map(|recipe| loong_app::tui_surface::TuiActionSpec {
                     label: "recipe".to_owned(),
                     command: recipe.clone(),
                 })
@@ -585,8 +585,8 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         });
     }
 
-    let screen = loongclaw_app::tui_surface::TuiScreenSpec {
-        header_style: loongclaw_app::tui_surface::TuiHeaderStyle::Compact,
+    let screen = loong_app::tui_surface::TuiScreenSpec {
+        header_style: loong_app::tui_surface::TuiHeaderStyle::Compact,
         subtitle: Some("operator runtime summary".to_owned()),
         title: Some("status".to_owned()),
         progress_line: None,
@@ -600,9 +600,9 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         ],
     };
 
-    loongclaw_app::tui_surface::render_tui_screen_spec_ratatui(
+    loong_app::tui_surface::render_tui_screen_spec_ratatui(
         &screen,
-        loongclaw_app::presentation::detect_render_width(),
+        loong_app::presentation::detect_render_width(),
         false,
     )
     .join("\n")

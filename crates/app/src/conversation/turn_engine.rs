@@ -7,13 +7,13 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use futures_util::stream::{self, StreamExt};
-use loongclaw_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+use loong_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::{
-    GovernedToolApprovalMode, LoongClawConfig, SessionVisibility, ToolConfig, ToolConsentMode,
+    GovernedToolApprovalMode, LoongConfig, SessionVisibility, ToolConfig, ToolConsentMode,
 };
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -570,7 +570,7 @@ impl ToolExecutionPreflight {
 pub struct DefaultAppToolDispatcher {
     memory_config: MemoryRuntimeConfig,
     tool_config: ToolConfig,
-    app_config: Option<Arc<LoongClawConfig>>,
+    app_config: Option<Arc<LoongConfig>>,
 }
 
 impl DefaultAppToolDispatcher {
@@ -582,7 +582,7 @@ impl DefaultAppToolDispatcher {
         }
     }
 
-    pub fn with_config(memory_config: MemoryRuntimeConfig, app_config: LoongClawConfig) -> Self {
+    pub fn with_config(memory_config: MemoryRuntimeConfig, app_config: LoongConfig) -> Self {
         Self {
             memory_config,
             tool_config: app_config.tools.clone(),
@@ -1916,7 +1916,7 @@ fn inject_tool_search_visibility_context_trusted(
         serde_json::Map::new()
     };
     let mut tool_search_context = internal
-        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY)
+        .remove(crate::tools::LOONG_INTERNAL_TOOL_SEARCH_KEY)
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
     let visible_tool_ids = session_context
@@ -1925,11 +1925,11 @@ fn inject_tool_search_visibility_context_trusted(
         .map(|tool_name| serde_json::Value::String(tool_name.to_owned()))
         .collect::<Vec<_>>();
     tool_search_context.insert(
-        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY.to_owned(),
         serde_json::Value::Array(visible_tool_ids),
     );
     internal.insert(
-        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_TOOL_SEARCH_KEY.to_owned(),
         serde_json::Value::Object(tool_search_context),
     );
     object.insert(
@@ -1973,7 +1973,7 @@ fn inject_runtime_narrowing_context_trusted(
         serde_json::Map::new()
     };
     internal.insert(
-        crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_RUNTIME_NARROWING_KEY.to_owned(),
         serde_json::to_value(runtime_narrowing)
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
     );
@@ -2012,7 +2012,7 @@ fn inject_workspace_root_context_trusted(
     };
     let workspace_root_string = workspace_root.display().to_string();
     internal.insert(
-        crate::tools::LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY.to_owned(),
         serde_json::Value::String(workspace_root_string),
     );
     object.insert(
@@ -3971,7 +3971,7 @@ mod tests {
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-turn-engine-approval-{test_name}-{}",
+            "loong-turn-engine-approval-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);
@@ -5620,7 +5620,7 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let root = unique_browser_companion_temp_dir("loongclaw-turn-engine-browser-companion");
+        let root = unique_browser_companion_temp_dir("loong-turn-engine-browser-companion");
         fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -5636,7 +5636,7 @@ mod tests {
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
 
         let start = crate::tools::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "browser.companion.session.start".to_owned(),
                 payload: json!({
                     "url": "https://example.com",
@@ -5652,7 +5652,7 @@ mod tests {
             .to_owned();
 
         let mut env = crate::test_support::ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
 
         let mut tool_config = ToolConfig::default();
         tool_config.browser_companion.enabled = true;
@@ -5721,8 +5721,7 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let root =
-            unique_browser_companion_temp_dir("loongclaw-turn-engine-browser-companion-runtime");
+        let root = unique_browser_companion_temp_dir("loong-turn-engine-browser-companion-runtime");
         fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -5738,7 +5737,7 @@ mod tests {
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
 
         let start = crate::tools::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "browser.companion.session.start".to_owned(),
                 payload: json!({
                     "url": "https://example.com",
@@ -5754,7 +5753,7 @@ mod tests {
             .to_owned();
 
         let mut env = crate::test_support::ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
+        env.set("LOONG_BROWSER_COMPANION_READY", "false");
 
         let mut tool_config = ToolConfig::default();
         tool_config.browser_companion.enabled = true;
@@ -5823,9 +5822,8 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let root = unique_browser_companion_temp_dir(
-            "loongclaw-turn-engine-browser-companion-runtime-policy",
-        );
+        let root =
+            unique_browser_companion_temp_dir("loong-turn-engine-browser-companion-runtime-policy");
         fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -5841,7 +5839,7 @@ mod tests {
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
 
         let start = crate::tools::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "browser.companion.session.start".to_owned(),
                 payload: json!({
                     "url": "https://example.com",
@@ -5857,10 +5855,10 @@ mod tests {
             .to_owned();
 
         let mut env = crate::test_support::ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "false");
         env.set(
-            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
+            "LOONG_BROWSER_COMPANION_COMMAND",
             script_path.display().to_string(),
         );
 
@@ -6266,13 +6264,13 @@ mod tests {
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY]
-                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
+                [crate::tools::LOONG_INTERNAL_TOOL_SEARCH_KEY]
+                [crate::tools::LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
             json!(["file.read", "tool.invoke", "tool.search"])
         );
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-                [crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["browser"]["max_sessions"],
+                [crate::tools::LOONG_INTERNAL_RUNTIME_NARROWING_KEY]["browser"]["max_sessions"],
             1
         );
     }

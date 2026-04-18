@@ -990,7 +990,7 @@ fn attach_provider_parse_telemetry(
     error_code: Option<&str>,
 ) {
     const PROVIDER_PARSE_META_KEY: &str = "loong_provider_parse";
-    const LEGACY_PROVIDER_PARSE_META_KEY: &str = "loongclaw_provider_parse";
+    const LEGACY_PROVIDER_PARSE_META_KEY: &str = "loong_provider_parse";
 
     let Some(message) = raw_meta.as_object_mut() else {
         return;
@@ -2975,7 +2975,7 @@ mod tests {
             1
         );
         assert_eq!(
-            turn.raw_meta["loongclaw_provider_parse"]["inline_function"]["status"],
+            turn.raw_meta["loong_provider_parse"]["inline_function"]["status"],
             "parsed"
         );
     }
@@ -3047,7 +3047,7 @@ mod tests {
             1
         );
         assert_eq!(
-            turn.raw_meta["loongclaw_provider_parse"]["json_tool_block"]["status"],
+            turn.raw_meta["loong_provider_parse"]["json_tool_block"]["status"],
             "parsed"
         );
     }
@@ -3158,7 +3158,7 @@ mod tests {
             "parsed"
         );
         assert_eq!(
-            turn.raw_meta["loongclaw_provider_parse"]["invoke_block"]["status"],
+            turn.raw_meta["loong_provider_parse"]["invoke_block"]["status"],
             "parsed"
         );
     }
@@ -3343,7 +3343,7 @@ mod tests {
             "invalid_json"
         );
         assert_eq!(
-            turn.raw_meta["loongclaw_provider_parse"]["json_tool_block"]["status"],
+            turn.raw_meta["loong_provider_parse"]["json_tool_block"]["status"],
             "malformed"
         );
     }
@@ -3577,7 +3577,7 @@ mod tests {
             "missing_function_close"
         );
         assert_eq!(
-            turn.raw_meta["loongclaw_provider_parse"]["inline_function"]["status"],
+            turn.raw_meta["loong_provider_parse"]["inline_function"]["status"],
             "malformed"
         );
     }

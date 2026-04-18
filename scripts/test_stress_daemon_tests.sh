@@ -42,7 +42,7 @@ for arg in "$@"; do
       ;;
   esac
 done
-trap_mode="${LOONGCLAW_WASM_SIGNALS_BASED_TRAPS:-auto}"
+trap_mode="${LOONG_WASM_SIGNALS_BASED_TRAPS:-auto}"
 printf 'trap=%s mode=%s args=%s\n' "$trap_mode" "$mode" "$*" >>"$invocation_log"
 if grep -Fxq "trap=${trap_mode} mode=${mode}" "$behavior_file"; then
   echo "simulated failure trap=${trap_mode} mode=${mode}" >&2
@@ -125,7 +125,7 @@ EOF
   if PATH="$stub_dir:$PATH" \
     FAKE_CARGO_BEHAVIOR_FILE="$behavior_file" \
     FAKE_CARGO_INVOCATION_LOG="$invocation_log" \
-    LOONGCLAW_STRESS_CONTINUE_ON_FAILURE=true \
+    LOONG_STRESS_CONTINUE_ON_FAILURE=true \
     "$SCRIPT_UNDER_TEST" 1 "default,2,1" "$log_dir" "auto,true" >"$output_file" 2>&1; then
     rc=0
   else

@@ -1,9 +1,9 @@
-use loongclaw_contracts::ToolCoreOutcome;
+use loong_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
 use super::payload::required_payload_string;
 
-use crate::config::{LoongClawConfig, ToolConfig};
+use crate::config::{LoongConfig, ToolConfig};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 #[cfg(feature = "memory-sqlite")]
@@ -18,7 +18,7 @@ pub(crate) async fn execute_sessions_send_with_config(
     current_session_id: &str,
     memory_config: &MemoryRuntimeConfig,
     tool_config: &ToolConfig,
-    app_config: &LoongClawConfig,
+    app_config: &LoongConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
     {

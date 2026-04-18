@@ -1,4 +1,4 @@
-use crate::{CliResult, config::LoongClawConfig};
+use crate::{CliResult, config::LoongConfig};
 
 use super::auth_profile_runtime::resolve_provider_auth_profiles;
 use super::catalog_executor::{ModelCatalogRequestRuntime, fetch_available_models_with_policy};
@@ -14,7 +14,7 @@ use super::provider_validation_runtime::{
 };
 
 pub(super) async fn fetch_available_models_with_profiles(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> CliResult<Vec<String>> {
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;

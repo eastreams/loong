@@ -33,7 +33,7 @@ pub(crate) fn resolve_tool_invoke_request(
             .ok_or_else(|| "tool.invoke payload.arguments must be an object".to_owned())?;
         if let Some(internal_context) = payload
             .get(LOONG_INTERNAL_TOOL_CONTEXT_KEY)
-            .or_else(|| payload.get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY))
+            .or_else(|| payload.get(LOONG_INTERNAL_TOOL_CONTEXT_KEY))
         {
             merge_trusted_internal_tool_context_into_arguments(arguments_object, internal_context)?;
         }

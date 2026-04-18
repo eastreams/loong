@@ -68,7 +68,7 @@
         "step_id": "seed",
         "value": {
           "channel": "ops-alerts",
-          "message": "loongclaw-orchestration-ready",
+          "message": "loong-orchestration-ready",
           "status": "green"
         }
       },

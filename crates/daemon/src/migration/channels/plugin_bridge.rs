@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use super::{
     ChannelCheckLevel, ChannelDoctorCheck, ChannelPreflightCheck, ChannelPreview,
@@ -12,7 +12,7 @@ use crate::plugin_bridge_account_summary::{
 };
 
 pub(super) fn collect_previews(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     source: &str,
 ) -> Vec<ChannelPreview> {
     let surfaces = configured_plugin_bridge_surfaces(config);
@@ -24,7 +24,7 @@ pub(super) fn collect_previews(
 }
 
 pub(super) fn collect_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<ChannelPreflightCheck> {
     let surfaces = configured_plugin_bridge_surfaces(config);
 
@@ -34,9 +34,7 @@ pub(super) fn collect_preflight_checks(
         .collect()
 }
 
-pub(super) fn collect_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<ChannelDoctorCheck> {
+pub(super) fn collect_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck> {
     configured_plugin_bridge_surfaces(config)
         .into_iter()
         .filter_map(|surface| {
@@ -54,7 +52,7 @@ pub(super) fn collect_doctor_checks(
         .collect()
 }
 
-pub(super) fn enabled_channels_have_blockers(config: &mvp::config::LoongClawConfig) -> bool {
+pub(super) fn enabled_channels_have_blockers(config: &mvp::config::LoongConfig) -> bool {
     let checks = collect_preflight_checks(config);
 
     checks
@@ -63,7 +61,7 @@ pub(super) fn enabled_channels_have_blockers(config: &mvp::config::LoongClawConf
 }
 
 fn configured_plugin_bridge_surfaces(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<mvp::channel::ChannelSurface> {
     let inventory = mvp::channel::channel_inventory(config);
 

@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 /// mutation can race with readers in other threads.
 #[inline]
 pub(crate) fn set_var(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
-    // SAFETY: LoongClaw only mutates process env during single-threaded startup
+    // SAFETY: Loong only mutates process env during single-threaded startup
     // or in tests that serialize env access behind a global mutex.
     #[allow(unsafe_code, clippy::disallowed_methods)]
     unsafe {

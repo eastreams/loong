@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 #[cfg(feature = "memory-sqlite")]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1339,8 +1339,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use loongclaw_contracts::ToolCoreOutcome;
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreOutcome;
+    use loong_contracts::ToolCoreRequest;
     #[cfg(feature = "memory-sqlite")]
     use rusqlite::{Connection, params};
     use serde_json::Value;
@@ -1357,7 +1357,7 @@ mod tests {
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-approval-tools-{test_name}-{}",
+            "loong-approval-tools-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);

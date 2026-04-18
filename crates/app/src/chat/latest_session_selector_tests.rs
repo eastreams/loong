@@ -90,7 +90,7 @@ fn cli_runtime_resolves_latest_session_selector_to_latest_resumable_root() {
     append_session_turn("selected-session", "user", "hello", &memory_config);
 
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -114,7 +114,7 @@ fn cli_runtime_latest_session_selector_updates_startup_summary_session_id() {
 
     let options = CliChatOptions::default();
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         Some("latest"),
         &options,
@@ -137,7 +137,7 @@ fn cli_runtime_latest_session_selector_updates_startup_summary_session_id() {
 fn cli_runtime_rejects_latest_session_selector_when_no_resumable_root_exists() {
     let (config, _memory_config, sqlite_path) = init_chat_test_memory("latest-selector-none");
     let result = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -159,7 +159,7 @@ fn cli_runtime_rejects_latest_session_selector_when_no_resumable_root_exists() {
 fn cli_runtime_keeps_default_session_when_no_hint_is_provided() {
     let (config, _memory_config, sqlite_path) = init_chat_test_memory("default-selector");
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         None,
         &CliChatOptions::default(),
@@ -178,7 +178,7 @@ fn cli_runtime_keeps_default_session_when_no_hint_is_provided() {
 fn cli_runtime_keeps_explicit_literal_session_id() {
     let (config, _memory_config, sqlite_path) = init_chat_test_memory("literal-selector");
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         Some("custom-session"),
         &CliChatOptions::default(),
@@ -197,7 +197,7 @@ fn cli_runtime_keeps_explicit_literal_session_id() {
 fn concurrent_cli_runtime_keeps_latest_literal_when_explicit_session_is_required() {
     let (config, _memory_config, sqlite_path) = init_chat_test_memory("concurrent-latest");
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -249,7 +249,7 @@ fn cli_runtime_latest_session_selector_prefers_newest_resumable_root() {
     archive_chat_test_session(&sqlite_path, "root-archived", 600);
 
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -313,7 +313,7 @@ async fn cli_runtime_latest_session_selector_drives_history_loads() {
     archive_chat_test_session(&sqlite_path, "root-archived", 600);
 
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loongclaw.toml"),
+        PathBuf::from("/tmp/loong.toml"),
         config,
         Some("latest"),
         &CliChatOptions::default(),

@@ -200,7 +200,7 @@ pub fn render_tui_screen_spec_ratatui(
     let header_height = block_height(&header_lines);
     render_text_block(
         Rect::new(0, row, area.width, header_height),
-        "loongclaw",
+        "loong",
         &header_lines,
         &mut buffer,
     );
@@ -905,7 +905,7 @@ mod tests {
         let lines = render_tui_screen_spec_ratatui(&spec, 80, false);
         let rendered = lines.join("\n");
 
-        assert!(rendered.contains(" loongclaw "), "{rendered}");
+        assert!(rendered.contains(" loong "), "{rendered}");
         assert!(rendered.contains(" start here "), "{rendered}");
         assert!(rendered.contains(" preflight "), "{rendered}");
         assert!(rendered.contains(" choices "), "{rendered}");

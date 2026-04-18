@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-REPORT_MONTH="${LOONG_ARCH_REPORT_MONTH:-${LOONGCLAW_ARCH_REPORT_MONTH:-$(date -u +%Y-%m)}}"
+REPORT_MONTH="${LOONG_ARCH_REPORT_MONTH:-${LOONG_ARCH_REPORT_MONTH:-$(date -u +%Y-%m)}}"
 REPORT_PATH="${1:-docs/releases/support/architecture-drift-${REPORT_MONTH}.md}"
 REPORT_DIR="$(dirname "$REPORT_PATH")"
 derive_logical_report_path() {
@@ -26,8 +26,8 @@ REPORT_LOGICAL_PATH="$(derive_logical_report_path)"
 BASELINE_DIR_OVERRIDE="$REPORT_DIR"
 if [[ -n "${LOONG_ARCH_DRIFT_BASELINE_DIR:-}" ]]; then
   BASELINE_DIR_OVERRIDE="$LOONG_ARCH_DRIFT_BASELINE_DIR"
-elif [[ -n "${LOONGCLAW_ARCH_DRIFT_BASELINE_DIR:-}" ]]; then
-  BASELINE_DIR_OVERRIDE="$LOONGCLAW_ARCH_DRIFT_BASELINE_DIR"
+elif [[ -n "${LOONG_ARCH_DRIFT_BASELINE_DIR:-}" ]]; then
+  BASELINE_DIR_OVERRIDE="$LOONG_ARCH_DRIFT_BASELINE_DIR"
 fi
 mkdir -p "$REPORT_DIR"
 # Keep the temp report beside the tracked report so baseline resolution uses the same directory.
@@ -56,9 +56,9 @@ if ! git ls-files --error-unmatch "$REPORT_LOGICAL_PATH" >/dev/null 2>&1; then
 fi
 
 LOONG_ARCH_REPORT_MONTH="$REPORT_MONTH" \
-LOONGCLAW_ARCH_REPORT_MONTH="$REPORT_MONTH" \
+LOONG_ARCH_REPORT_MONTH="$REPORT_MONTH" \
 LOONG_ARCH_DRIFT_BASELINE_DIR="$BASELINE_DIR_OVERRIDE" \
-LOONGCLAW_ARCH_DRIFT_BASELINE_DIR="$BASELINE_DIR_OVERRIDE" \
+LOONG_ARCH_DRIFT_BASELINE_DIR="$BASELINE_DIR_OVERRIDE" \
 LOONG_ARCH_REPORT_LINK_PATH="$REPORT_LOGICAL_PATH" \
   scripts/generate_architecture_drift_report.sh "$TEMP_REPORT"
 normalize_architecture_drift_report "$REPORT_PATH" >"$NORMALIZED_TRACKED"

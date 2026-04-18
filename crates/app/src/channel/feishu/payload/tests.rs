@@ -124,7 +124,7 @@ fn feishu_message_event_parses_text_payload() {
                 "message_id": "om_123",
                 "root_id": "om_root_1",
                 "message_type": "text",
-                "content": "{\"text\":\"hello loongclaw\"}"
+                "content": "{\"text\":\"hello loong\"}"
             }
         }
     });
@@ -160,7 +160,7 @@ fn feishu_message_event_parses_text_payload() {
         ChannelOutboundTargetKind::MessageReply
     );
     assert_eq!(event.reply_target.feishu_reply_in_thread(), Some(true));
-    assert_eq!(event.text, "hello loongclaw");
+    assert_eq!(event.text, "hello loong");
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn feishu_message_event_is_ignored_when_sender_is_not_allowlisted() {
                 "chat_id": "oc_123",
                 "message_id": "om_123",
                 "message_type": "text",
-                "content": "{\"text\":\"hello loongclaw\"}"
+                "content": "{\"text\":\"hello loong\"}"
             }
         }
     });
@@ -273,7 +273,7 @@ fn feishu_message_event_uses_thread_id_and_sender_open_id_when_present() {
                 "thread_id": "omt_456",
                 "message_id": "om_123",
                 "message_type": "text",
-                "content": "{\"text\":\"hello loongclaw\"}"
+                "content": "{\"text\":\"hello loong\"}"
             }
         }
     });
@@ -327,7 +327,7 @@ fn feishu_message_without_sender_open_id_keeps_principal_empty() {
                 "root_id": "om_root_1",
                 "message_id": "om_123",
                 "message_type": "text",
-                "content": "{\"text\":\"hello loongclaw\"}"
+                "content": "{\"text\":\"hello loong\"}"
             }
         }
     });
@@ -1702,7 +1702,7 @@ fn feishu_message_event_is_ignored_when_allowlist_is_empty() {
                 "chat_id": "oc_123",
                 "message_id": "om_123",
                 "message_type": "text",
-                "content": "{\"text\":\"hello loongclaw\"}"
+                "content": "{\"text\":\"hello loong\"}"
             }
         }
     });
@@ -1735,7 +1735,7 @@ fn feishu_message_event_requires_verification_token_configuration() {
                 "chat_id": "oc_123",
                 "message_id": "om_123",
                 "message_type": "text",
-                "content": "{\"text\":\"hello loongclaw\"}"
+                "content": "{\"text\":\"hello loong\"}"
             }
         }
     });

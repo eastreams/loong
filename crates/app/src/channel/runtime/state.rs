@@ -13,7 +13,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio::{task::JoinHandle, time::sleep};
 
-use crate::{CliResult, config::default_loongclaw_home};
+use crate::{CliResult, config::default_loong_home};
 
 use super::super::ChannelPlatform;
 
@@ -579,7 +579,7 @@ fn prune_inactive_channel_operation_runtime_files_for_optional_account_from_dir(
 }
 
 pub(crate) fn default_channel_runtime_state_dir() -> PathBuf {
-    default_loongclaw_home().join("channel-runtime")
+    default_loong_home().join("channel-runtime")
 }
 
 fn channel_operation_runtime_file_prefix(
@@ -925,7 +925,7 @@ mod tests {
 
     fn temp_runtime_dir(suffix: &str) -> PathBuf {
         let unique = format!(
-            "loongclaw-channel-runtime-{suffix}-{}",
+            "loong-channel-runtime-{suffix}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")

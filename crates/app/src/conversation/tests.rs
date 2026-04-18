@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use async_trait::async_trait;
-use loongclaw_contracts::{
+use loong_contracts::{
     Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreOutcome, ToolCoreRequest,
 };
-use loongclaw_kernel::{
-    CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongClawKernel, MemoryCoreOutcome,
+use loong_kernel::{
+    CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,
     MemoryCoreRequest, StaticPolicyEngine, VerticalPackManifest,
 };
 #[cfg(feature = "memory-sqlite")]
@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::super::config::{
-    AuditMode, AutonomyProfile, LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
+    AuditMode, AutonomyProfile, LoongConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::{DefaultConversationRuntime, load_default_conversation_runtime};
@@ -98,7 +98,7 @@ fn delegate_announce_test_lock() -> &'static tokio::sync::Mutex<()> {
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn make_delegate_announce_test_config(db_path: &std::path::Path) -> LoongClawConfig {
+fn make_delegate_announce_test_config(db_path: &std::path::Path) -> LoongConfig {
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.delegate.announce_debounce_ms = 0;
@@ -200,7 +200,7 @@ struct RecordingTransformTurnMiddleware {
 impl ConversationRuntime for TraitDefaultToolViewRuntime {
     async fn build_messages(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _include_system_prompt: bool,
         _tool_view: &crate::tools::ToolView,
@@ -211,7 +211,7 @@ impl ConversationRuntime for TraitDefaultToolViewRuntime {
 
     async fn request_completion(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _messages: &[Value],
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
@@ -220,7 +220,7 @@ impl ConversationRuntime for TraitDefaultToolViewRuntime {
 
     async fn request_turn(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
@@ -232,7 +232,7 @@ impl ConversationRuntime for TraitDefaultToolViewRuntime {
 
     async fn request_turn_streaming(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _turn_id: &str,
         _messages: &[Value],
@@ -323,7 +323,7 @@ impl crate::conversation::AsyncDelegateSpawner for PostPrepareFailingAsyncDelega
 
 #[cfg(feature = "memory-sqlite")]
 struct LocalChildRuntimeAsyncDelegateSpawner {
-    config: LoongClawConfig,
+    config: LoongConfig,
     runtime: Arc<OnceLock<Arc<FakeRuntime>>>,
 }
 
@@ -449,7 +449,7 @@ impl ApprovalFinalizationConflictRuntime {
 impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
     fn session_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<SessionContext> {
@@ -464,7 +464,7 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
 
     fn tool_view(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<crate::tools::ToolView> {
@@ -473,7 +473,7 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
 
     async fn build_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
@@ -485,7 +485,7 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
 
     async fn build_messages(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         tool_view: &crate::tools::ToolView,
@@ -504,7 +504,7 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
 
     async fn request_completion(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         messages: &[Value],
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
@@ -515,7 +515,7 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
 
     async fn request_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -529,7 +529,7 @@ impl ConversationRuntime for ApprovalFinalizationConflictRuntime {
 
     async fn request_turn_streaming(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -678,7 +678,7 @@ impl ConversationContextEngine for StubContextEngine {
 
     async fn assemble_messages(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _include_system_prompt: bool,
         _binding: ConversationRuntimeBinding<'_>,
@@ -698,7 +698,7 @@ impl ConversationContextEngine for StubEnvContextEngine {
 
     async fn assemble_messages(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _include_system_prompt: bool,
         _binding: ConversationRuntimeBinding<'_>,
@@ -722,7 +722,7 @@ impl ConversationContextEngine for StubSystemPromptAdditionEngine {
 
     async fn assemble_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _include_system_prompt: bool,
         _binding: ConversationRuntimeBinding<'_>,
@@ -741,7 +741,7 @@ impl ConversationContextEngine for StubSystemPromptAdditionEngine {
 
     async fn assemble_messages(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _include_system_prompt: bool,
         _binding: ConversationRuntimeBinding<'_>,
@@ -792,7 +792,7 @@ impl ConversationTurnMiddleware for RecordingTransformTurnMiddleware {
 
     async fn transform_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         session_id: &str,
         _include_system_prompt: bool,
         mut assembled: AssembledConversationContext,
@@ -819,7 +819,7 @@ impl ConversationContextEngine for RecordingLifecycleContextEngine {
 
     async fn bootstrap(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         session_id: &str,
         _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
@@ -883,7 +883,7 @@ impl ConversationContextEngine for RecordingLifecycleContextEngine {
 
     async fn assemble_messages(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _include_system_prompt: bool,
         _binding: ConversationRuntimeBinding<'_>,
@@ -1439,7 +1439,7 @@ impl AcpRuntimeBackend for RoutedAcpBackend {
 
     async fn ensure_session(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         request: &AcpSessionBootstrap,
     ) -> CliResult<AcpSessionHandle> {
         let mut guard = self.shared.lock().expect("routed ACP state lock");
@@ -1458,7 +1458,7 @@ impl AcpRuntimeBackend for RoutedAcpBackend {
 
     async fn run_turn(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session: &AcpSessionHandle,
         request: &AcpTurnRequest,
     ) -> CliResult<AcpTurnResult> {
@@ -1477,15 +1477,11 @@ impl AcpRuntimeBackend for RoutedAcpBackend {
         })
     }
 
-    async fn cancel(
-        &self,
-        _config: &LoongClawConfig,
-        _session: &AcpSessionHandle,
-    ) -> CliResult<()> {
+    async fn cancel(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
         Ok(())
     }
 
-    async fn close(&self, _config: &LoongClawConfig, _session: &AcpSessionHandle) -> CliResult<()> {
+    async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
         Ok(())
     }
 }
@@ -1494,7 +1490,7 @@ impl AcpRuntimeBackend for RoutedAcpBackend {
 impl ConversationRuntime for FakeRuntime {
     fn tool_view(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<crate::tools::ToolView> {
@@ -1507,7 +1503,7 @@ impl ConversationRuntime for FakeRuntime {
     #[cfg(feature = "memory-sqlite")]
     fn async_delegate_spawner(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
     ) -> Option<Arc<dyn crate::conversation::AsyncDelegateSpawner>> {
         self.async_delegate_spawner_override.clone()
     }
@@ -1515,14 +1511,14 @@ impl ConversationRuntime for FakeRuntime {
     #[cfg(feature = "memory-sqlite")]
     fn background_task_spawner(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
     ) -> Option<Arc<dyn crate::conversation::AsyncDelegateSpawner>> {
         self.async_delegate_spawner_override.clone()
     }
 
     async fn bootstrap(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         session_id: &str,
         _kernel_ctx: &KernelContext,
     ) -> CliResult<ContextEngineBootstrapResult> {
@@ -1551,7 +1547,7 @@ impl ConversationRuntime for FakeRuntime {
     }
     async fn build_messages(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         include_system_prompt: bool,
         tool_view: &crate::tools::ToolView,
@@ -1573,7 +1569,7 @@ impl ConversationRuntime for FakeRuntime {
 
     async fn build_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         _binding: ConversationRuntimeBinding<'_>,
@@ -1597,7 +1593,7 @@ impl ConversationRuntime for FakeRuntime {
 
     async fn request_completion(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         messages: &[Value],
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
@@ -1622,7 +1618,7 @@ impl ConversationRuntime for FakeRuntime {
 
     async fn request_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1668,7 +1664,7 @@ impl ConversationRuntime for FakeRuntime {
 
     async fn request_turn_streaming(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -1727,7 +1723,7 @@ impl ConversationRuntime for FakeRuntime {
 
     async fn compact_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
         _kernel_ctx: &KernelContext,
@@ -1773,27 +1769,27 @@ impl ConversationRuntime for FakeRuntime {
     }
 }
 
-fn test_config() -> LoongClawConfig {
-    let mut config = LoongClawConfig {
+fn test_config() -> LoongConfig {
+    let mut config = LoongConfig {
         provider: ProviderConfig::default(),
-        ..LoongClawConfig::default()
+        ..LoongConfig::default()
     };
     config.audit.mode = AuditMode::InMemory;
     config
 }
 
-fn test_config_with_file_root(root: &std::path::Path) -> LoongClawConfig {
+fn test_config_with_file_root(root: &std::path::Path) -> LoongConfig {
     let mut config = test_config();
     let file_root = root.display().to_string();
     config.tools.file_root = Some(file_root);
     config
 }
 
-fn enable_guided_autonomy(config: &mut LoongClawConfig) {
+fn enable_guided_autonomy(config: &mut LoongConfig) {
     config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
 }
 
-fn preapprove_tool_call(config: &mut LoongClawConfig, tool_name: &str) {
+fn preapprove_tool_call(config: &mut LoongConfig, tool_name: &str) {
     let approval_key = format!("tool:{tool_name}");
     let approved_calls = &mut config.tools.approval.approved_calls;
     let is_already_approved = approved_calls.iter().any(|entry| entry == &approval_key);
@@ -1810,7 +1806,7 @@ fn test_kernel_context(agent_id: &str) -> KernelContext {
 
 #[cfg(feature = "memory-sqlite")]
 async fn provider_messages_with_kernel_binding(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     kernel_ctx: &KernelContext,
 ) -> Vec<Value> {
@@ -1870,7 +1866,7 @@ fn test_kernel_context_with_memory(
 ) -> KernelContext {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack-memory".to_owned(),
@@ -1926,7 +1922,7 @@ fn sample_delegate_runtime_narrowing() -> crate::tools::runtime_config::ToolRunt
 
 #[cfg(feature = "memory-sqlite")]
 fn seed_delegate_child_session_with_runtime_narrowing(
-    config: &mut LoongClawConfig,
+    config: &mut LoongConfig,
     suffix: &str,
     runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing,
 ) -> String {
@@ -1935,7 +1931,7 @@ fn seed_delegate_child_session_with_runtime_narrowing(
 
 #[cfg(feature = "memory-sqlite")]
 fn seed_delegate_child_session_with_contract(
-    config: &mut LoongClawConfig,
+    config: &mut LoongConfig,
     suffix: &str,
     runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
@@ -2259,9 +2255,9 @@ fn effective_tool_request(request: &ToolCoreRequest) -> (String, &Value) {
 
 fn autonomy_runtime_session_context(
     session_id: impl Into<String>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> SessionContext {
-    let tool_view = crate::tools::runtime_tool_view_from_loongclaw_config(config);
+    let tool_view = crate::tools::runtime_tool_view_from_loong_config(config);
     SessionContext::root_with_tool_view(session_id, tool_view)
 }
 
@@ -4588,13 +4584,13 @@ async fn default_runtime_prefers_env_context_engine_over_config() {
 #[test]
 fn conversation_runtime_trait_default_tool_view_includes_runtime_discovered_feishu_tools() {
     let runtime = TraitDefaultToolViewRuntime;
-    let config = LoongClawConfig {
+    let config = LoongConfig {
         feishu: crate::config::FeishuChannelConfig {
             enabled: true,
-            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+            app_id: Some(loong_contracts::SecretRef::Inline(
                 "test-feishu-app-id".to_owned(),
             )),
-            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+            app_secret: Some(loong_contracts::SecretRef::Inline(
                 "test-feishu-app-secret".to_owned(),
             )),
             ..crate::config::FeishuChannelConfig::default()
@@ -4960,7 +4956,7 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
     assert_eq!(
         bootstrap
             .metadata
-            .get("loongclaw.acp.activation_origin")
+            .get("loong.acp.activation_origin")
             .map(String::as_str),
         Some("explicit_request")
     );
@@ -4973,7 +4969,7 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
     assert_eq!(
         request
             .metadata
-            .get("loongclaw.acp.routing_origin")
+            .get("loong.acp.routing_origin")
             .map(String::as_str),
         Some("explicit_request")
     );
@@ -5502,7 +5498,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
     assert_eq!(
         bootstrap
             .metadata
-            .get("loongclaw.acp.activation_origin")
+            .get("loong.acp.activation_origin")
             .map(String::as_str),
         Some("automatic_agent_prefixed")
     );
@@ -5514,7 +5510,7 @@ async fn handle_turn_with_runtime_routes_only_agent_prefixed_sessions_when_confi
     assert_eq!(
         request
             .metadata
-            .get("loongclaw.acp.routing_origin")
+            .get("loong.acp.routing_origin")
             .map(String::as_str),
         Some("automatic_agent_prefixed")
     );
@@ -5708,7 +5704,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
         assert_eq!(
             bootstrap
                 .metadata
-                .get("loongclaw.acp.activation_origin")
+                .get("loong.acp.activation_origin")
                 .map(String::as_str),
             Some("automatic_dispatch")
         );
@@ -5719,7 +5715,7 @@ async fn handle_turn_with_runtime_routes_only_allowed_channels_into_acp() {
         assert_eq!(
             request
                 .metadata
-                .get("loongclaw.acp.routing_origin")
+                .get("loong.acp.routing_origin")
                 .map(String::as_str),
             Some("automatic_dispatch")
         );
@@ -7360,7 +7356,7 @@ async fn default_runtime_build_context_uses_configured_runtime_tool_view_for_too
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let session_id = "session-tool-discovery-delta-configured-runtime-view";
-    let runtime_tool_view = crate::tools::runtime_tool_view_from_loongclaw_config(&config);
+    let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(&config);
     let discovery_event = crate::memory::build_conversation_event_content(
         "tool_discovery_refreshed",
         json!({
@@ -7457,7 +7453,7 @@ async fn default_runtime_kernel_build_context_uses_configured_runtime_tool_view_
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let session_id = "session-tool-discovery-delta-configured-runtime-view-kernel";
-    let runtime_tool_view = crate::tools::runtime_tool_view_from_loongclaw_config(&config);
+    let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(&config);
     let discovery_event = crate::memory::build_conversation_event_content(
         "tool_discovery_refreshed",
         json!({
@@ -8879,7 +8875,7 @@ async fn handle_turn_with_runtime_provider_switch_tool_updates_provider_for_foll
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
-    let config_path = harness.temp_dir.join("loongclaw.toml");
+    let config_path = harness.temp_dir.join("loong.toml");
 
     let mut config = test_config();
     let mut openai = ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
@@ -9318,13 +9314,13 @@ async fn handle_turn_with_runtime_fast_lane_batch_persist_failure_surfaces_runti
         .snapshot()
         .iter()
         .filter_map(|event| {
-            if let loongclaw_kernel::AuditEventKind::PlaneInvoked {
+            if let loong_kernel::AuditEventKind::PlaneInvoked {
                 plane,
                 primary_adapter,
                 operation,
                 ..
             } = &event.kind
-                && *plane == loongclaw_contracts::ExecutionPlane::Runtime
+                && *plane == loong_contracts::ExecutionPlane::Runtime
             {
                 Some((primary_adapter.to_owned(), operation.to_owned()))
             } else {
@@ -9471,8 +9467,8 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batches_when_plan_path_is_disabled()
  {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_kernel::CoreToolAdapter;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::time::Duration;
 
@@ -9490,7 +9486,7 @@ async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batch
         async fn execute_core_tool(
             &self,
             request: ToolCoreRequest,
-        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+        ) -> Result<ToolCoreOutcome, loong_contracts::ToolPlaneError> {
             let active = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             if active > 1 {
                 self.overlap_observed.store(true, Ordering::SeqCst);
@@ -9510,7 +9506,7 @@ async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batch
     let in_flight = Arc::new(AtomicUsize::new(0));
 
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(
+    let mut kernel = LoongKernel::with_runtime(
         StaticPolicyEngine::default(),
         clock,
         Arc::new(InMemoryAuditSink::default()),
@@ -9909,14 +9905,14 @@ async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_even
     let runtime_ops = events
         .iter()
         .filter_map(|event| match &event.kind {
-            loongclaw_kernel::AuditEventKind::PlaneInvoked {
+            loong_kernel::AuditEventKind::PlaneInvoked {
                 pack_id,
                 plane,
                 tier,
                 primary_adapter,
                 operation,
                 ..
-            } if *plane == loongclaw_contracts::ExecutionPlane::Runtime
+            } if *plane == loong_contracts::ExecutionPlane::Runtime
                 && operation.starts_with("conversation.safe_lane.") =>
             {
                 Some((
@@ -9945,7 +9941,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_even
     assert!(
         runtime_ops.iter().all(|(pack_id, tier, adapter, _)| {
             pack_id == "test-pack"
-                && *tier == loongclaw_contracts::PlaneTier::Core
+                && *tier == loong_contracts::PlaneTier::Core
                 && adapter == "conversation.safe_lane"
         }),
         "unexpected runtime audit metadata: {runtime_ops:?}"
@@ -9997,8 +9993,8 @@ async fn handle_turn_with_runtime_safe_lane_plan_does_not_emit_kernel_runtime_au
     let has_safe_lane_runtime_event = harness.audit.snapshot().iter().any(|event| {
         matches!(
             &event.kind,
-            loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                plane: loongclaw_contracts::ExecutionPlane::Runtime,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                plane: loong_contracts::ExecutionPlane::Runtime,
                 operation,
                 ..
             } if operation.starts_with("conversation.safe_lane.")
@@ -10013,8 +10009,8 @@ async fn handle_turn_with_runtime_safe_lane_plan_does_not_emit_kernel_runtime_au
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_failure() {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct FlakyOnceToolAdapter {
         calls: Arc<Mutex<usize>>,
@@ -10054,7 +10050,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10236,8 +10232,8 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_storm() {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct FlakyAlwaysRetryableAdapter {
         calls: Arc<Mutex<usize>>,
@@ -10266,7 +10262,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10372,8 +10368,8 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_replan() {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct DenyMarkerAdapter {
         calls: Arc<Mutex<usize>>,
@@ -10407,7 +10403,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10561,8 +10557,8 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::{CoreMemoryAdapter, CoreToolAdapter};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::{CoreMemoryAdapter, CoreToolAdapter};
 
     struct FlakyAlwaysRetryableAdapter {
         calls: Arc<Mutex<usize>>,
@@ -10624,7 +10620,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10811,8 +10807,8 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_history_window() {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
-    use loongclaw_kernel::{CoreMemoryAdapter, CoreToolAdapter};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_kernel::{CoreMemoryAdapter, CoreToolAdapter};
 
     struct NoopToolAdapter;
 
@@ -10825,7 +10821,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
         async fn execute_core_tool(
             &self,
             _request: ToolCoreRequest,
-        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+        ) -> Result<ToolCoreOutcome, loong_contracts::ToolPlaneError> {
             Ok(ToolCoreOutcome {
                 status: "ok".to_owned(),
                 payload: json!({"ok": true}),
@@ -10869,7 +10865,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
     let memory_invocations = Arc::new(Mutex::new(Vec::<MemoryCoreRequest>::new()));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10988,8 +10984,8 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqlite_history_when_kernel_window_is_non_ok()
  {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::{CoreMemoryAdapter, CoreToolAdapter};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::{CoreMemoryAdapter, CoreToolAdapter};
 
     struct FlakyAlwaysRetryableAdapter {
         calls: Arc<Mutex<usize>>,
@@ -11051,7 +11047,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -11190,8 +11186,8 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     #[derive(Default)]
     struct CallCounters {
@@ -11249,7 +11245,7 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
     let counters = Arc::new(Mutex::new(CallCounters::default()));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -11645,9 +11641,9 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
 
     let harness = TurnTestHarness::with_tool_config(
         std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
         ]),
         crate::tools::runtime_config::ToolRuntimeConfig {
             shell_allow: std::collections::BTreeSet::from(["ls".to_owned(), "echo".to_owned()]),
@@ -12324,7 +12320,7 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_routes_app_tools_through_dispatcher() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
     #[derive(Default)]
     struct RecordingAppDispatcher {
@@ -12422,7 +12418,7 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
     #[derive(Default)]
     struct BindingRecordingAppDispatcher {
@@ -12523,7 +12519,7 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_direct_binding_denies_sessions_send_before_dispatch() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
     #[derive(Default)]
     struct GovernedAppBarrierDispatcher {
@@ -12614,7 +12610,7 @@ async fn turn_engine_direct_binding_denies_sessions_send_before_dispatch() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_requires_governed_approval_before_later_app_intent_execution() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
     #[derive(Default)]
     struct ApprovalBarrierDispatcher {
@@ -12772,7 +12768,7 @@ fn binding_first_approval_boundary_coordinator_source_does_not_reconstruct_bindi
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advisory_binding() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
     #[derive(Default)]
     struct GuardedApprovalDispatcher {
@@ -12900,7 +12896,7 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_intent() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
     #[derive(Default)]
     struct KernelBarrierDispatcher {
@@ -12995,7 +12991,7 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_order() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::time::Duration;
 
@@ -13131,7 +13127,7 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for_in_flight_work() {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::time::Duration;
 
@@ -13253,7 +13249,7 @@ async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for
 async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_crossing_serial_only_boundaries()
  {
     use async_trait::async_trait;
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::time::Duration;
 
@@ -13518,7 +13514,7 @@ async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_
     let outcome = dispatcher
         .execute_app_tool(
             &session_context,
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "session_wait".to_owned(),
                 payload: json!({
                     "session_id": "child-session",
@@ -13577,7 +13573,7 @@ async fn child_session_hidden_session_wait_is_rejected_by_default_dispatcher() {
     let error = dispatcher
         .execute_app_tool(
             &session_context,
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "session_wait".to_owned(),
                 payload: json!({
                     "session_id": "child-session",
@@ -13637,7 +13633,7 @@ async fn child_session_hidden_sessions_send_is_rejected_by_default_dispatcher() 
     let error = dispatcher
         .execute_app_tool(
             &session_context,
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "sessions_send".to_owned(),
                 payload: json!({
                     "session_id": "telegram:123",
@@ -13684,7 +13680,7 @@ async fn sessions_send_rejects_unknown_target_session() {
     let error = dispatcher
         .execute_app_tool(
             &session_context,
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "sessions_send".to_owned(),
                 payload: json!({
                     "session_id": "telegram:999",
@@ -13739,7 +13735,7 @@ async fn sessions_send_rejects_delegate_child_target() {
     let error = dispatcher
         .execute_app_tool(
             &session_context,
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "sessions_send".to_owned(),
                 payload: json!({
                     "session_id": "telegram:123",
@@ -14482,7 +14478,7 @@ async fn default_app_tool_dispatcher_rejects_session_continue_without_runtime_co
     let error = dispatcher
         .execute_app_tool(
             &session_context,
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "session_continue".to_owned(),
                 payload: json!({
                     "session_id": "child-session",
@@ -14503,8 +14499,8 @@ async fn default_app_tool_dispatcher_rejects_session_continue_without_runtime_co
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_tool_execution_error_is_marked_retryable() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnFailureKind, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct RetryableErrorToolAdapter;
 
@@ -14524,7 +14520,7 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -14625,7 +14621,7 @@ async fn turn_engine_marks_repairable_shell_preflight_failure_retryable() {
 #[test]
 fn kernel_error_classification_table_is_stable() {
     use crate::conversation::turn_engine::{KernelFailureClass, classify_kernel_error};
-    use loongclaw_contracts::{KernelError, PolicyError, RuntimePlaneError, ToolPlaneError};
+    use loong_contracts::{KernelError, PolicyError, RuntimePlaneError, ToolPlaneError};
 
     let policy_error = KernelError::Policy(PolicyError::ToolCallDenied {
         tool_name: "file.read".to_owned(),
@@ -14686,8 +14682,8 @@ fn kernel_error_classification_table_is_stable() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_executes_known_tool_with_kernel() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct EchoToolAdapter;
 
@@ -14712,7 +14708,7 @@ async fn turn_engine_executes_known_tool_with_kernel() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -14805,8 +14801,8 @@ async fn turn_engine_executes_known_tool_with_kernel() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_truncates_oversized_tool_payload_summary() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct LargePayloadToolAdapter;
 
@@ -14833,7 +14829,7 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -14922,8 +14918,8 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_compacts_tool_search_payload_summary_before_truncation() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct ToolSearchPayloadAdapter;
 
@@ -14993,7 +14989,7 @@ async fn turn_engine_compacts_tool_search_payload_summary_before_truncation() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15079,8 +15075,8 @@ async fn turn_engine_compacts_tool_search_payload_summary_before_truncation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compaction() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct LargeToolSearchAdapter;
 
@@ -15120,7 +15116,7 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15665,7 +15661,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_pr
     config.provider = openai;
     config.active_provider = Some("openai-gpt-5".to_owned());
 
-    let config_path = workspace_root.join("loongclaw.toml");
+    let config_path = workspace_root.join("loong.toml");
     let rendered_config = crate::config::render(&config).expect("render config");
     std::fs::write(&config_path, rendered_config).expect("write config");
     let canonical_config_path =
@@ -16333,8 +16329,8 @@ async fn autonomy_policy_telemetry_handle_turn_persists_allow_decision_and_tool_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct ExternalSkillInvokeAdapter;
 
@@ -16366,7 +16362,7 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16405,7 +16401,7 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
     );
     let session_context = crate::conversation::SessionContext::root_with_tool_view(
         "s1",
-        crate::tools::runtime_tool_view_from_loongclaw_config(&config),
+        crate::tools::runtime_tool_view_from_loong_config(&config),
     );
 
     let engine = TurnEngine::new(5);
@@ -16470,8 +16466,8 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_injects_browser_scope_into_kernel_request() {
     use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     // In the discovery-first model, browser.open is a discoverable Core tool
     // and must be invoked through tool.invoke.  The adapter receives the outer
@@ -16521,7 +16517,7 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16607,8 +16603,8 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_execute_turn_denied_without_capability() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
-    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
-    use loongclaw_kernel::CoreToolAdapter;
+    use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loong_kernel::CoreToolAdapter;
 
     struct NoopToolAdapter;
 
@@ -16631,7 +16627,7 @@ async fn turn_engine_execute_turn_denied_without_capability() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     // Grant only MemoryRead — InvokeTool is missing
     let pack = VerticalPackManifest {
@@ -16786,7 +16782,7 @@ fn build_kernel_context_with_window_turns(
     window_turns: Value,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16847,7 +16843,7 @@ fn governed_runtime_binding_direct_alias_is_advisory_only_and_non_mutating() {
 
     assert_eq!(
         binding.session_mode(),
-        loongclaw_contracts::GovernedSessionMode::AdvisoryOnly
+        loong_contracts::GovernedSessionMode::AdvisoryOnly
     );
     assert!(!binding.allows_mutation());
     assert!(!binding.is_kernel_bound());
@@ -16861,7 +16857,7 @@ fn governed_runtime_binding_kernel_path_is_mutating_capable() {
 
     assert_eq!(
         binding.session_mode(),
-        loongclaw_contracts::GovernedSessionMode::MutatingCapable
+        loong_contracts::GovernedSessionMode::MutatingCapable
     );
     assert!(binding.allows_mutation());
     assert!(binding.is_kernel_bound());
@@ -16873,7 +16869,7 @@ fn build_kernel_context_with_window_turn_sequence(
     window_turn_sequence: Vec<Value>,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16916,7 +16912,7 @@ fn build_kernel_context_with_window_error(
     error: &str,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16958,7 +16954,7 @@ fn build_kernel_context_with_raw_window_payload(
     payload: Value,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16999,7 +16995,7 @@ fn build_kernel_context_with_compaction_conflict(
     audit: Arc<InMemoryAuditSink>,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -17043,7 +17039,7 @@ fn build_kernel_context_with_incomplete_compaction_snapshot(
     turn_count: usize,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -17502,8 +17498,8 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
     let has_memory_plane = events.iter().any(|event| {
         matches!(
             &event.kind,
-            loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                plane: loongclaw_contracts::ExecutionPlane::Memory,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                plane: loong_contracts::ExecutionPlane::Memory,
                 ..
             }
         )
@@ -17565,8 +17561,8 @@ async fn build_messages_routes_memory_context_through_kernel_when_context_provid
     let has_memory_plane = events.iter().any(|event| {
         matches!(
             &event.kind,
-            loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                plane: loongclaw_contracts::ExecutionPlane::Memory,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                plane: loong_contracts::ExecutionPlane::Memory,
                 ..
             }
         )
@@ -20233,7 +20229,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
     struct EchoToolAdapter;
 
     #[async_trait::async_trait]
-    impl loongclaw_kernel::CoreToolAdapter for EchoToolAdapter {
+    impl loong_kernel::CoreToolAdapter for EchoToolAdapter {
         fn name(&self) -> &str {
             "echo-tools"
         }
@@ -20241,7 +20237,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
         async fn execute_core_tool(
             &self,
             request: ToolCoreRequest,
-        ) -> Result<ToolCoreOutcome, loongclaw_contracts::ToolPlaneError> {
+        ) -> Result<ToolCoreOutcome, loong_contracts::ToolPlaneError> {
             Ok(ToolCoreOutcome {
                 status: "ok".to_owned(),
                 payload: json!({
@@ -20331,7 +20327,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
 
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "testing".to_owned(),
@@ -20860,8 +20856,7 @@ async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher() {
-    let _home =
-        crate::test_support::ScopedLoongClawHome::new("conversation-session-tools-normal-home");
+    let _home = crate::test_support::ScopedLoongHome::new("conversation-session-tools-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-tools", "normal-lane")
@@ -20932,8 +20927,7 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
 #[cfg(all(feature = "memory-sqlite", feature = "channel-telegram"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher() {
-    let _home =
-        crate::test_support::ScopedLoongClawHome::new("conversation-sessions-send-normal-home");
+    let _home = crate::test_support::ScopedLoongHome::new("conversation-sessions-send-normal-home");
     let (base_url, request_rx, server) = spawn_telegram_send_server_once();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -20945,7 +20939,7 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.messages.enabled = true;
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:telegram-test-token".to_owned(),
     ));
     config.telegram.bot_token_env = None;
@@ -25596,8 +25590,7 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher() {
-    let _home =
-        crate::test_support::ScopedLoongClawHome::new("conversation-session-wait-normal-home");
+    let _home = crate::test_support::ScopedLoongHome::new("conversation-session-wait-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-wait", "normal-lane")
@@ -25688,8 +25681,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
     let _env_lock = context_engine_env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let _home =
-        crate::test_support::ScopedLoongClawHome::new("conversation-session-tools-safe-home");
+    let _home = crate::test_support::ScopedLoongHome::new("conversation-session-tools-safe-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-tools", "safe-lane")
@@ -25765,8 +25757,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
     let _env_lock = context_engine_env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let _home =
-        crate::test_support::ScopedLoongClawHome::new("conversation-sessions-send-safe-home");
+    let _home = crate::test_support::ScopedLoongHome::new("conversation-sessions-send-safe-home");
     let (base_url, request_rx, server) = spawn_telegram_send_server_once();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -25779,7 +25770,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
     config.conversation.safe_lane_plan_execution_enabled = true;
     config.tools.messages.enabled = true;
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:telegram-test-token".to_owned(),
     ));
     config.telegram.bot_token_env = None;
@@ -25872,8 +25863,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
     let _env_lock = context_engine_env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let _home =
-        crate::test_support::ScopedLoongClawHome::new("conversation-session-wait-safe-home");
+    let _home = crate::test_support::ScopedLoongHome::new("conversation-session-wait-safe-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-session-wait", "safe-lane")
@@ -27997,7 +27987,7 @@ impl DefaultCompactingRuntime {
 impl ConversationRuntime for DefaultCompactingRuntime {
     async fn build_messages(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         tool_view: &crate::tools::ToolView,
@@ -28016,7 +28006,7 @@ impl ConversationRuntime for DefaultCompactingRuntime {
 
     async fn request_completion(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         messages: &[Value],
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
@@ -28027,7 +28017,7 @@ impl ConversationRuntime for DefaultCompactingRuntime {
 
     async fn request_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -28041,7 +28031,7 @@ impl ConversationRuntime for DefaultCompactingRuntime {
 
     async fn request_turn_streaming(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         turn_id: &str,
         messages: &[Value],
@@ -28089,7 +28079,7 @@ impl ConversationRuntime for DefaultCompactingRuntime {
 
     async fn compact_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
         kernel_ctx: &KernelContext,
@@ -28299,7 +28289,7 @@ fn prompt_compiler_orders_lanes_and_dedupes_fragments() {
         "base",
         PromptLane::BaseSystem,
         "base-system",
-        "You are LoongClaw.",
+        "You are Loong.",
         ContextArtifactKind::SystemPrompt,
     )
     .with_dedupe_key("base-system");
@@ -28307,7 +28297,7 @@ fn prompt_compiler_orders_lanes_and_dedupes_fragments() {
         "base-duplicate",
         PromptLane::BaseSystem,
         "base-system",
-        "You are LoongClaw.",
+        "You are Loong.",
         ContextArtifactKind::SystemPrompt,
     )
     .with_dedupe_key("base-system");
@@ -28330,7 +28320,7 @@ fn prompt_compiler_orders_lanes_and_dedupes_fragments() {
     let system_text = compilation.system_text;
 
     assert!(
-        system_text.starts_with("You are LoongClaw."),
+        system_text.starts_with("You are Loong."),
         "base system fragment should render first: {system_text}"
     );
     assert!(
@@ -28406,7 +28396,7 @@ fn prompt_compiler_demotes_governed_headings_for_tool_discovery_fragments() {
         "base",
         PromptLane::BaseSystem,
         "base-system",
-        "You are LoongClaw.",
+        "You are Loong.",
         ContextArtifactKind::SystemPrompt,
     );
     let discovery_fragment = PromptFragment::new(

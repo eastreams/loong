@@ -217,7 +217,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_command_invocation_wraps_shebang_script_with_interpreter() {
-        let root = crate::test_support::unique_temp_dir("loongclaw-process-launch-sh");
+        let root = crate::test_support::unique_temp_dir("loong-process-launch-sh");
         std::fs::create_dir_all(&root).expect("create temp dir");
         let script_path = root.join("script.sh");
         crate::test_support::write_executable_script_atomically(
@@ -252,7 +252,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_command_invocation_supports_env_shebang_arguments() {
-        let root = crate::test_support::unique_temp_dir("loongclaw-process-launch-env");
+        let root = crate::test_support::unique_temp_dir("loong-process-launch-env");
         std::fs::create_dir_all(&root).expect("create temp dir");
         let script_path = root.join("script.py");
         crate::test_support::write_executable_script_atomically(
@@ -279,7 +279,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_command_invocation_preserves_env_split_arguments_as_one_argument() {
-        let root = crate::test_support::unique_temp_dir("loongclaw-process-launch-env-s");
+        let root = crate::test_support::unique_temp_dir("loong-process-launch-env-s");
         std::fs::create_dir_all(&root).expect("create temp dir");
         let script_path = root.join("script.py");
         crate::test_support::write_executable_script_atomically(
@@ -306,7 +306,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_command_invocation_uses_resolved_path_for_path_discovered_scripts() {
-        let root = crate::test_support::unique_temp_dir("loongclaw-process-launch-path");
+        let root = crate::test_support::unique_temp_dir("loong-process-launch-path");
         let bin_dir = root.join("bin");
         let script_path = bin_dir.join("path-script");
         std::fs::create_dir_all(&bin_dir).expect("create bin dir");

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Map, Value, json};
 
 use crate::config::{self, ProviderProfileConfig};
@@ -78,10 +78,7 @@ pub(super) fn resolve_provider_switch_config_path(
         })
 }
 
-fn provider_profile_payloads(
-    config: &config::LoongClawConfig,
-    active_provider: &str,
-) -> Vec<Value> {
+fn provider_profile_payloads(config: &config::LoongConfig, active_provider: &str) -> Vec<Value> {
     config
         .providers
         .iter()
@@ -92,7 +89,7 @@ fn provider_profile_payloads(
 }
 
 fn provider_profile_payload(
-    config: &config::LoongClawConfig,
+    config: &config::LoongConfig,
     profile_id: &str,
     profile: &ProviderProfileConfig,
     active_provider: &str,

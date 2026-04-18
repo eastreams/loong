@@ -8,7 +8,7 @@ use crate::runtime_experiment_cli::{
 use crate::sha2::{self, Digest};
 use clap::{Args, Subcommand, ValueEnum};
 use kernel::ToolCoreRequest;
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -2054,12 +2054,12 @@ fn execute_runtime_capability_activate_profile_note_addendum(
 
 fn build_runtime_capability_activation_tool_runtime(
     resolved_config_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     external_skills_enabled: bool,
 ) -> mvp::tools::runtime_config::ToolRuntimeConfig {
     let mut adjusted_config = config.clone();
     adjusted_config.external_skills.enabled = external_skills_enabled;
-    mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &adjusted_config,
         Some(resolved_config_path),
     )
@@ -2200,7 +2200,7 @@ fn build_runtime_capability_temp_dir(staging_base_root: &Path, label: &str) -> P
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let process_id = std::process::id();
-    let directory_name = format!("loongclaw-runtime-capability-{label}-{process_id}-{timestamp}");
+    let directory_name = format!("loong-runtime-capability-{label}-{process_id}-{timestamp}");
     staging_base_root.join(directory_name)
 }
 
@@ -2832,7 +2832,7 @@ fn execute_runtime_capability_rollback_profile_note_addendum(
 
 fn rollback_managed_skill_activation_state(
     resolved_config_path: &Path,
-    mut config: mvp::config::LoongClawConfig,
+    mut config: mvp::config::LoongConfig,
     artifact_id: &str,
     target_path: &Path,
     rollback: RuntimeCapabilityRollbackPayload,
@@ -2849,7 +2849,7 @@ fn rollback_managed_skill_activation_state(
     config.external_skills.install_root = target_path
         .parent()
         .map(|value| value.display().to_string());
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &config,
         Some(resolved_config_path),
     );

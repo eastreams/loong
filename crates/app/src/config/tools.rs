@@ -3,11 +3,11 @@ use std::{
     path::PathBuf,
 };
 
-use loongclaw_kernel::{BridgeSupportMatrix, PluginBridgeKind};
+use loong_kernel::{BridgeSupportMatrix, PluginBridgeKind};
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
-    ConfigValidationIssue, default_loongclaw_home, expand_path, validate_numeric_range,
+    ConfigValidationIssue, default_loong_home, expand_path, validate_numeric_range,
 };
 
 pub const DEFAULT_WEB_FETCH_MAX_BYTES: usize = 1024 * 1024;
@@ -980,7 +980,7 @@ impl BashToolConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(expand_path)
-            .unwrap_or_else(|| default_loongclaw_home().join("rules"))
+            .unwrap_or_else(|| default_loong_home().join("rules"))
     }
 }
 
@@ -1428,7 +1428,7 @@ fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
+    use crate::test_support::{ScopedEnv, ScopedLoongHome};
 
     #[test]
     fn tool_config_defaults_expose_session_runtime_policy() {
@@ -1776,7 +1776,7 @@ default_mode = "{raw_mode}"
 "#
             );
             let parsed =
-                toml::from_str::<crate::config::LoongClawConfig>(&raw).expect("parse tool config");
+                toml::from_str::<crate::config::LoongConfig>(&raw).expect("parse tool config");
 
             assert_eq!(parsed.tools.consent.default_mode, expected_mode);
         }
@@ -1790,8 +1790,7 @@ default_mode = "{raw_mode}"
 default_timeout_seconds = 12
 per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(
             parsed.tools.tool_execution.default_timeout_seconds,
@@ -1822,8 +1821,7 @@ per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
 [tools]
 autonomy_profile = "guided_acquisition"
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(
             parsed.tools.autonomy_profile,
@@ -1873,8 +1871,7 @@ max_sessions = 2
 max_links = 10
 max_text_chars = 1024
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(parsed.tools.approval.mode, GovernedToolApprovalMode::Strict);
         assert_eq!(
@@ -1961,8 +1958,7 @@ max_text_chars = 1024
 max_source_chars = 12345
 max_total_chars = 67890
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(parsed.tools.runtime_self.max_source_chars, 12345);
         assert_eq!(parsed.tools.runtime_self.max_total_chars, 67890);
@@ -1981,8 +1977,7 @@ timeout_seconds = 9
 max_bytes = 262144
 max_redirects = 1
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(!parsed.tools.web.enabled);
         assert!(parsed.tools.web.allow_private_hosts);
@@ -2009,8 +2004,7 @@ max_sessions = 4
 max_links = 12
 max_text_chars = 2048
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(!parsed.tools.browser.enabled);
         assert_eq!(parsed.tools.browser.max_sessions, 4);
@@ -2024,20 +2018,19 @@ max_text_chars = 2048
         let raw = r#"
 [tools.browser_companion]
 enabled = true
-command = "loongclaw-browser-companion"
+command = "loong-browser-companion"
 expected_version = "1.2.3"
 timeout_seconds = 7
 allow_private_hosts = true
 allowed_domains = ["Docs.Example.com", "docs.example.com", " api.example.com "]
 blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(parsed.tools.browser_companion.enabled);
         assert_eq!(
             parsed.tools.browser_companion.command.as_deref(),
-            Some("loongclaw-browser-companion")
+            Some("loong-browser-companion")
         );
         assert_eq!(
             parsed.tools.browser_companion.expected_version.as_deref(),
@@ -2065,8 +2058,8 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
-    fn bash_tool_config_defaults_to_loongclaw_home_rules_dir() {
-        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-home");
+    fn bash_tool_config_defaults_to_loong_home_rules_dir() {
+        let home = ScopedLoongHome::new("loong-bash-tool-config-home");
 
         assert_eq!(
             BashToolConfig::default().resolved_rules_dir(),
@@ -2086,7 +2079,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
     #[test]
     fn bash_tool_config_treats_blank_rules_dir_override_as_unset() {
-        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-blank-home");
+        let home = ScopedLoongHome::new("loong-bash-tool-config-blank-home");
         let expected_rules_dir = home.path().join("rules");
 
         for raw in ["", "   "] {

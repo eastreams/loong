@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
-use loongclaw_daemon::*;
+use loong_daemon::*;
 
 const DEBUG_TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOKIO_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
@@ -126,7 +126,7 @@ fn build_daemon_runtime(command: &Commands) -> CliResult<tokio::runtime::Runtime
 
     if let Some(stack_size) = tokio_worker_thread_stack_size(command)? {
         tracing::debug!(
-            target: "loongclaw.daemon",
+            target: "loong.daemon",
             thread_stack_size = stack_size,
             override_env = TOKIO_WORKER_STACK_ENV,
             command = %redacted_command_name(command),
@@ -169,7 +169,7 @@ fn main() {
     let _stdin_guard = StdinGuard;
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
-    loongclaw_daemon::make_env_compatible();
+    loong_daemon::make_env_compatible();
     check_legacy_home_migration();
     let cli = parse_cli();
     let command_source = if cli.command.is_some() {
@@ -181,7 +181,7 @@ fn main() {
     let command_kind = command.command_kind_for_logging();
     let redacted_command = redacted_command_name(&command);
     tracing::debug!(
-        target: "loongclaw.daemon",
+        target: "loong.daemon",
         command_source,
         command = %redacted_command,
         "resolved CLI command"
@@ -191,7 +191,7 @@ fn main() {
     if let Err(error) = result {
         let error_code = error_code(error.as_str());
         tracing::error!(
-            target: "loongclaw.daemon",
+            target: "loong.daemon",
             command_kind = %command_kind,
             error_code = %error_code,
             "CLI command failed"
@@ -211,7 +211,7 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::Demo => run_demo().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
         Commands::Turn { command } => match command {
-            loongclaw_daemon::TurnCommands::Run {
+            loong_daemon::TurnCommands::Run {
                 config,
                 session,
                 message,
@@ -1382,7 +1382,7 @@ mod tests {
         DEBUG_TOKIO_WORKER_STACK_BYTES, MAX_TOKIO_WORKER_STACK_BYTES, TOKIO_WORKER_STACK_ENV,
         error_code, redacted_command_name, resolve_tokio_worker_thread_stack_size,
     };
-    use loongclaw_daemon::{Commands, MultiChannelServeChannelAccount, TurnCommands};
+    use loong_daemon::{Commands, MultiChannelServeChannelAccount, TurnCommands};
 
     #[test]
     fn command_kind_uses_stable_snake_case_labels() {

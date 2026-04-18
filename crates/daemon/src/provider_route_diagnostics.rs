@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 #[cfg(not(test))]
 use std::collections::{BTreeMap, BTreeSet};

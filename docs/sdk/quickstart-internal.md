@@ -16,7 +16,7 @@ Read:
 |--------|-------------------|----------------------|
 | Channels | `crates/app/src/channel/sdk.rs`, `crates/app/src/channel/registry.rs` | [Internal Integration SDK Contract](../design-docs/internal-integration-sdk-contract.md) |
 | Tools | `crates/app/src/tools/catalog.rs`, `crates/app/src/tools/mod.rs` | [SDK Strategy](../design-docs/sdk-strategy.md) |
-| Providers | `crates/app/src/config/provider.rs`, `crates/app/src/provider/contracts.rs`, `crates/app/src/provider/mod.rs` | [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loongclaw/implementation-plans) |
+| Providers | `crates/app/src/config/provider.rs`, `crates/app/src/provider/contracts.rs`, `crates/app/src/provider/mod.rs` | [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loong/implementation-plans) |
 | Memory systems | `crates/app/src/memory/system_registry.rs` | [Internal Integration SDK Contract](../design-docs/internal-integration-sdk-contract.md) |
 
 ## Maintainer Flow
@@ -44,4 +44,4 @@ Read:
 ## See Also
 
 - [SDK Docs Index](index.md)
-- [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loongclaw/implementation-plans)
+- [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loong/implementation-plans)

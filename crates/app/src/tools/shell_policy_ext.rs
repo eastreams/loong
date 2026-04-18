@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use loongclaw_contracts::PolicyError;
-use loongclaw_kernel::{PolicyExtension, PolicyExtensionContext};
+use loong_contracts::PolicyError;
+use loong_kernel::{PolicyExtension, PolicyExtensionContext};
 
 pub(crate) const SHELL_EXEC_APPROVAL_RULE_ID: &str = "shell_exec_requires_approval";
 const SHELL_INTERNAL_APPROVAL_CONTEXT_KEY: &str = "shell_approval";
@@ -250,8 +250,8 @@ fn effective_shell_request(params: &serde_json::Value) -> (&str, Option<&serde_j
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loongclaw_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
-    use loongclaw_kernel::{PolicyExtensionContext, VerticalPackManifest};
+    use loong_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
+    use loong_kernel::{PolicyExtensionContext, VerticalPackManifest};
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -283,7 +283,7 @@ mod tests {
     }
 
     fn make_context<'a>(
-        pack: &'a loongclaw_kernel::VerticalPackManifest,
+        pack: &'a loong_kernel::VerticalPackManifest,
         token: &'a CapabilityToken,
         caps: &'a BTreeSet<Capability>,
         params: Option<&'a serde_json::Value>,
@@ -398,7 +398,7 @@ mod tests {
             "tool_name": "shell.exec",
             "payload": {
                 "command": "cargo",
-                "_loongclaw": shell_exec_internal_approval_context(approval_key.as_str()),
+                "_loong": shell_exec_internal_approval_context(approval_key.as_str()),
             }
         });
         let ctx = make_context(&pack, &token, &caps, Some(&params));
@@ -421,7 +421,7 @@ mod tests {
             "tool_name": "shell.exec",
             "payload": {
                 "command": "cargo",
-                "_loongclaw": shell_exec_internal_approval_context(approval_key.as_str()),
+                "_loong": shell_exec_internal_approval_context(approval_key.as_str()),
             }
         });
         let ctx = make_context(&pack, &token, &caps, Some(&params));

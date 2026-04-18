@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 use serde_json::Value;
 
 use super::types::{
@@ -59,13 +59,13 @@ const CHANNEL_CATALOG_ACTION_LABEL: &str = "channels";
 struct ChannelAdapter {
     id: &'static str,
     collect_preview:
-        fn(&mvp::config::LoongClawConfig, &ChannelImportReadiness, &str) -> Option<ChannelPreview>,
-    apply: fn(&mut mvp::config::LoongClawConfig, &mvp::config::LoongClawConfig) -> bool,
-    readiness_state: fn(&mvp::config::LoongClawConfig) -> ChannelCredentialState,
-    apply_import_readiness: fn(&mut mvp::config::LoongClawConfig, ChannelCredentialState),
-    collect_preflight_checks: fn(&mvp::config::LoongClawConfig) -> Vec<ChannelPreflightCheck>,
-    collect_doctor_checks: fn(&mvp::config::LoongClawConfig) -> Vec<ChannelDoctorCheck>,
-    apply_default_env_bindings: fn(&mut mvp::config::LoongClawConfig) -> Vec<String>,
+        fn(&mvp::config::LoongConfig, &ChannelImportReadiness, &str) -> Option<ChannelPreview>,
+    apply: fn(&mut mvp::config::LoongConfig, &mvp::config::LoongConfig) -> bool,
+    readiness_state: fn(&mvp::config::LoongConfig) -> ChannelCredentialState,
+    apply_import_readiness: fn(&mut mvp::config::LoongConfig, ChannelCredentialState),
+    collect_preflight_checks: fn(&mvp::config::LoongConfig) -> Vec<ChannelPreflightCheck>,
+    collect_doctor_checks: fn(&mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck>,
+    apply_default_env_bindings: fn(&mut mvp::config::LoongConfig) -> Vec<String>,
 }
 
 const REGISTRY: [ChannelAdapter; 7] = [
@@ -148,7 +148,7 @@ pub fn registered_channel_ids() -> Vec<&'static str> {
         .collect()
 }
 
-pub fn registered_enabled_channel_ids(config: &mvp::config::LoongClawConfig) -> Vec<&'static str> {
+pub fn registered_enabled_channel_ids(config: &mvp::config::LoongConfig) -> Vec<&'static str> {
     enabled_channel_adapters(config)
         .into_iter()
         .map(|adapter| adapter.id)
@@ -156,7 +156,7 @@ pub fn registered_enabled_channel_ids(config: &mvp::config::LoongClawConfig) -> 
 }
 
 pub fn collect_channel_previews(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
     source: &str,
 ) -> Vec<ChannelPreview> {
@@ -173,7 +173,7 @@ pub fn collect_channel_previews(
     previews
 }
 
-pub fn resolve_import_readiness(config: &mvp::config::LoongClawConfig) -> ChannelImportReadiness {
+pub fn resolve_import_readiness(config: &mvp::config::LoongConfig) -> ChannelImportReadiness {
     let mut readiness = ChannelImportReadiness::default();
     for adapter in ordered_channel_adapters() {
         readiness.set_state(adapter.id, (adapter.readiness_state)(config));
@@ -182,7 +182,7 @@ pub fn resolve_import_readiness(config: &mvp::config::LoongClawConfig) -> Channe
 }
 
 pub fn enabled_channels_have_blockers(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
 ) -> bool {
     let service_channel_blockers = registered_enabled_channel_ids(config)
@@ -203,7 +203,7 @@ pub fn enabled_channels_have_blockers(
 }
 
 pub fn apply_detected_import_readiness(
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
 ) {
     for adapter in ordered_channel_adapters() {
@@ -212,8 +212,8 @@ pub fn apply_detected_import_readiness(
 }
 
 pub fn apply_selected_channels(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
     channel_ids: &[&str],
 ) -> bool {
     let report = apply_selected_channels_with_report(target, source, channel_ids);
@@ -242,8 +242,8 @@ pub enum ChannelApplyConflictKind {
 }
 
 pub fn apply_selected_channels_with_report(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
     channel_ids: &[&str],
 ) -> ChannelApplyReport {
     let mut changed = false;
@@ -281,7 +281,7 @@ pub fn summarize_channel_apply_conflict(conflict: &ChannelApplyConflict) -> Stri
 }
 
 pub fn collect_channel_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<ChannelPreflightCheck> {
     let mut checks = enabled_channel_adapters(config)
         .into_iter()
@@ -296,9 +296,7 @@ pub fn collect_channel_preflight_checks(
     checks
 }
 
-pub fn collect_channel_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<ChannelDoctorCheck> {
+pub fn collect_channel_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck> {
     let mut checks = enabled_channel_adapters(config)
         .into_iter()
         .flat_map(|adapter| (adapter.collect_doctor_checks)(config))
@@ -312,9 +310,7 @@ pub fn collect_channel_doctor_checks(
     checks
 }
 
-pub fn apply_default_channel_env_bindings(
-    config: &mut mvp::config::LoongClawConfig,
-) -> Vec<String> {
+pub fn apply_default_channel_env_bindings(config: &mut mvp::config::LoongConfig) -> Vec<String> {
     ordered_channel_adapters()
         .into_iter()
         .flat_map(|adapter| (adapter.apply_default_env_bindings)(config))
@@ -322,7 +318,7 @@ pub fn apply_default_channel_env_bindings(
 }
 
 pub fn collect_channel_next_actions(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     config_path: &str,
 ) -> Vec<ChannelNextAction> {
     let mut actions = collect_configured_runtime_channel_next_actions(config, config_path);
@@ -338,7 +334,7 @@ pub fn collect_channel_next_actions(
 }
 
 fn collect_configured_runtime_channel_next_actions(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     config_path: &str,
 ) -> Vec<ChannelNextAction> {
     let enabled_channel_ids = collect_enabled_service_channel_ids(config);
@@ -373,12 +369,12 @@ fn collect_configured_runtime_channel_next_actions(
         .collect()
 }
 
-fn collect_enabled_service_channel_ids(config: &mvp::config::LoongClawConfig) -> BTreeSet<String> {
+fn collect_enabled_service_channel_ids(config: &mvp::config::LoongConfig) -> BTreeSet<String> {
     config.enabled_service_channel_ids().into_iter().collect()
 }
 
 fn collect_configured_non_runtime_channel_next_actions(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     config_path: &str,
 ) -> Vec<ChannelNextAction> {
     let enabled_channel_ids = config
@@ -557,7 +553,7 @@ fn configured_plugin_surface_needs_review(surface: &mvp::channel::ChannelSurface
     })
 }
 
-fn enabled_channel_adapters(config: &mvp::config::LoongClawConfig) -> Vec<&'static ChannelAdapter> {
+fn enabled_channel_adapters(config: &mvp::config::LoongConfig) -> Vec<&'static ChannelAdapter> {
     let enabled_ids = config
         .enabled_service_channel_ids()
         .into_iter()
@@ -581,8 +577,8 @@ fn find_adapter(channel_id: &str) -> Option<&'static ChannelAdapter> {
 }
 
 fn apply_fallback_channel_section(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
     channel_id: &str,
 ) -> FallbackChannelSectionOutcome {
     let install_root_conflict =
@@ -595,7 +591,7 @@ fn apply_fallback_channel_section(
         };
     }
 
-    let default_config = mvp::config::LoongClawConfig::default();
+    let default_config = mvp::config::LoongConfig::default();
     let mut target_value = match serde_json::to_value(&*target) {
         Ok(value) => value,
         Err(_) => return FallbackChannelSectionOutcome::unchanged(),
@@ -683,8 +679,8 @@ fn merge_channel_section_value(target: &mut Value, source: &Value, default: &Val
 }
 
 fn supplement_plugin_bridge_install_root(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
 ) -> bool {
     let target_install_root = normalized_plugin_bridge_install_root(target);
 
@@ -718,8 +714,8 @@ impl FallbackChannelSectionOutcome {
 }
 
 fn resolve_plugin_bridge_install_root_conflict(
-    target: &mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
     channel_id: &str,
 ) -> Option<ChannelApplyConflict> {
     if !channel_uses_plugin_bridge_contract(channel_id) {
@@ -753,7 +749,7 @@ fn channel_uses_plugin_bridge_contract(channel_id: &str) -> bool {
     catalog_entry.plugin_bridge_contract.is_some()
 }
 
-fn normalized_plugin_bridge_install_root(config: &mvp::config::LoongClawConfig) -> Option<String> {
+fn normalized_plugin_bridge_install_root(config: &mvp::config::LoongConfig) -> Option<String> {
     let install_root = config.external_skills.install_root.as_deref()?;
     let trimmed_install_root = install_root.trim();
 

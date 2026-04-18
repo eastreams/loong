@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 use serde_json::{Value, json};
 
 pub(crate) async fn load_session_safe_lane_payload(

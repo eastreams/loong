@@ -8,7 +8,7 @@ use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
-use super::super::config::LoongClawConfig;
+use super::super::config::LoongConfig;
 use super::ProviderErrorMode;
 use super::persistence::persist_reply_turns_with_mode;
 use super::runtime::{ConversationRuntime, load_default_conversation_runtime};
@@ -94,7 +94,7 @@ impl ConversationTurnLoop {
 
     pub async fn handle_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -109,7 +109,7 @@ impl ConversationTurnLoop {
 
     pub async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -284,7 +284,7 @@ fn build_round_limit_terminal_action(last_raw_reply: &str) -> TurnLoopTerminalAc
 
 async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session: &mut TurnLoopSessionState,
     user_input: &str,
     decision: RoundKernelDecision,
@@ -375,7 +375,7 @@ fn initialize_turn_loop_session(
 }
 
 async fn evaluate_round_kernel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     policy: &TurnLoopPolicy,
     turn: &ProviderTurn,
     session_context: &super::runtime::SessionContext,
@@ -735,7 +735,7 @@ struct TurnLoopPolicy {
 }
 
 impl TurnLoopPolicy {
-    fn from_config(config: &LoongClawConfig) -> Self {
+    fn from_config(config: &LoongConfig) -> Self {
         let turn_loop = &config.conversation.turn_loop;
         Self {
             max_rounds: turn_loop.max_rounds.max(1),

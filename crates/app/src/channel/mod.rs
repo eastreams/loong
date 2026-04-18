@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 
 pub(crate) mod access_policy;
 mod catalog;
@@ -280,7 +280,7 @@ mod tests {
 
     fn temp_runtime_dir(suffix: &str) -> PathBuf {
         let unique = format!(
-            "loongclaw-channel-mod-{suffix}-{}",
+            "loong-channel-mod-{suffix}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -316,7 +316,7 @@ mod tests {
     impl crate::conversation::ConversationRuntime for ChannelTraceRuntime {
         async fn build_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             include_system_prompt: bool,
             _tool_view: &crate::tools::ToolView,
@@ -343,7 +343,7 @@ mod tests {
 
         async fn request_completion(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _messages: &[Value],
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> CliResult<String> {
@@ -352,7 +352,7 @@ mod tests {
 
         async fn request_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -399,7 +399,7 @@ mod tests {
 
         async fn request_turn_streaming(
             &self,
-            config: &LoongClawConfig,
+            config: &LoongConfig,
             session_id: &str,
             turn_id: &str,
             messages: &[Value],
@@ -589,7 +589,7 @@ mod tests {
     ))]
     #[tokio::test]
     async fn process_inbound_with_runtime_and_feedback_appends_significant_trace() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.kind = crate::config::ProviderKind::Openai;
         config.telegram = serde_json::from_value(serde_json::json!({
             "default_account": "Work Bot",
@@ -657,7 +657,7 @@ mod tests {
     ))]
     #[tokio::test]
     async fn process_inbound_with_runtime_and_feedback_can_disable_trace_rendering() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.kind = crate::config::ProviderKind::Openai;
         config.telegram = serde_json::from_value(serde_json::json!({
             "default_account": "Work Bot",
@@ -746,7 +746,7 @@ mod tests {
     #[cfg(feature = "config-toml")]
     fn reload_channel_turn_config_refreshes_provider_state_without_mutating_channel_settings() {
         let path = std::env::temp_dir().join(format!(
-            "loongclaw-channel-provider-reload-{}.toml",
+            "loong-channel-provider-reload-{}.toml",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -754,7 +754,7 @@ mod tests {
         ));
         let path_string = path.display().to_string();
 
-        let mut in_memory = LoongClawConfig::default();
+        let mut in_memory = LoongConfig::default();
         in_memory.telegram.enabled = true;
         in_memory.telegram.allowed_chat_ids = vec![1001];
         let mut openai =
@@ -1123,7 +1123,7 @@ mod tests {
     #[cfg(feature = "channel-telegram")]
     #[test]
     fn telegram_command_context_preserves_route_metadata() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "accounts": {
@@ -1141,10 +1141,10 @@ mod tests {
         .expect("deserialize telegram context config");
 
         let context =
-            build_telegram_command_context(PathBuf::from("/tmp/loongclaw.toml"), config, None)
+            build_telegram_command_context(PathBuf::from("/tmp/loong.toml"), config, None)
                 .expect("build telegram command context");
 
-        assert_eq!(context.resolved_path, PathBuf::from("/tmp/loongclaw.toml"));
+        assert_eq!(context.resolved_path, PathBuf::from("/tmp/loong.toml"));
         assert_eq!(context.resolved.configured_account_id, "alerts");
         assert!(context.route.selected_by_default());
         assert!(context.route.uses_implicit_fallback_default());
@@ -1153,7 +1153,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn feishu_command_context_rejects_disabled_resolved_account() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "enabled": true,
                 "accounts": {
@@ -1167,12 +1167,9 @@ mod tests {
         }))
         .expect("deserialize feishu context config");
 
-        let error = build_feishu_command_context(
-            PathBuf::from("/tmp/loongclaw.toml"),
-            config,
-            Some("Primary"),
-        )
-        .expect_err("disabled feishu account should fail");
+        let error =
+            build_feishu_command_context(PathBuf::from("/tmp/loong.toml"), config, Some("Primary"))
+                .expect_err("disabled feishu account should fail");
 
         assert!(error.contains("disabled"));
         assert!(error.contains("primary"));
@@ -1181,7 +1178,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn feishu_command_context_accepts_unique_runtime_account_alias() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "enabled": true,
                 "accounts": {
@@ -1196,7 +1193,7 @@ mod tests {
         .expect("deserialize feishu context config");
 
         let context = build_feishu_command_context(
-            PathBuf::from("/tmp/loongclaw.toml"),
+            PathBuf::from("/tmp/loong.toml"),
             config,
             Some("feishu_shared"),
         )
@@ -1214,7 +1211,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn feishu_command_context_reports_ambiguous_runtime_account_alias() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "enabled": true,
                 "accounts": {
@@ -1234,7 +1231,7 @@ mod tests {
         .expect("deserialize feishu context config");
 
         let error = build_feishu_command_context(
-            PathBuf::from("/tmp/loongclaw.toml"),
+            PathBuf::from("/tmp/loong.toml"),
             config,
             Some("feishu_shared"),
         )
@@ -1541,7 +1538,7 @@ mod tests {
     #[cfg(feature = "channel-telegram")]
     #[test]
     fn telegram_security_validation_requires_allowlist() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let resolved = config
             .telegram
             .resolve_account(None)
@@ -1554,7 +1551,7 @@ mod tests {
     #[cfg(feature = "channel-telegram")]
     #[test]
     fn telegram_security_validation_accepts_configured_allowlist() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.allowed_chat_ids = vec![123_i64];
         let resolved = config
             .telegram
@@ -1566,7 +1563,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn feishu_security_validation_requires_secrets_and_allowlist() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let resolved = config
             .feishu
             .resolve_account(None)
@@ -1579,13 +1576,12 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn feishu_security_validation_accepts_complete_configuration() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
-        config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
-            "token-123".to_owned(),
-        ));
+        config.feishu.verification_token =
+            Some(loong_contracts::SecretRef::Inline("token-123".to_owned()));
         config.feishu.verification_token_env = None;
-        config.feishu.encrypt_key = Some(loongclaw_contracts::SecretRef::Inline(
+        config.feishu.encrypt_key = Some(loong_contracts::SecretRef::Inline(
             "encrypt-key-123".to_owned(),
         ));
         config.feishu.encrypt_key_env = None;
@@ -1600,7 +1596,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn feishu_security_validation_accepts_websocket_mode_without_webhook_secrets() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
         config.feishu.mode = Some(crate::config::FeishuChannelServeMode::Websocket);
 
@@ -1631,7 +1627,7 @@ mod tests {
     #[cfg(feature = "channel-matrix")]
     #[test]
     fn parse_known_channel_session_send_target_decodes_matrix_route_segments() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "matrix": {
                 "enabled": true,
                 "accounts": {
@@ -1672,7 +1668,7 @@ mod tests {
     #[cfg(feature = "channel-matrix")]
     #[test]
     fn parse_known_channel_session_send_target_accepts_legacy_matrix_account_aliases() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "matrix": {
                 "enabled": true,
                 "accounts": {
@@ -1705,7 +1701,7 @@ mod tests {
     #[cfg(feature = "channel-telegram")]
     #[test]
     fn parse_known_channel_session_send_target_matches_normalized_runtime_account_identity() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "accounts": {
@@ -1735,7 +1731,7 @@ mod tests {
     #[cfg(feature = "channel-telegram")]
     #[test]
     fn parse_known_channel_session_send_target_treats_single_segment_telegram_scope_as_chat_id() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "bot_token": "123456:telegram-test-token",
@@ -1760,7 +1756,7 @@ mod tests {
     #[cfg(feature = "channel-telegram")]
     #[test]
     fn parse_known_channel_session_send_target_honors_configured_account_marker() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "default_account": "work",
@@ -1795,7 +1791,7 @@ mod tests {
     #[cfg(feature = "channel-telegram")]
     #[test]
     fn resolve_known_channel_session_target_describes_telegram_thread_shape() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "accounts": {
@@ -1828,7 +1824,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn parse_known_channel_session_send_target_keeps_feishu_participant_and_thread_as_context() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "enabled": true,
                 "accounts": {
@@ -1865,7 +1861,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn parse_known_channel_session_send_target_keeps_feishu_thread_as_context() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "enabled": true,
                 "accounts": {
@@ -1904,7 +1900,7 @@ mod tests {
     #[cfg(feature = "channel-whatsapp")]
     #[test]
     fn parse_known_channel_session_send_target_decodes_whatsapp_route_segments() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "whatsapp": {
                 "enabled": true,
                 "accounts": {
@@ -1946,7 +1942,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn resolve_known_channel_session_target_describes_feishu_participant_scope() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "enabled": true,
                 "app_id": "cli_a1b2c3",
@@ -1976,7 +1972,7 @@ mod tests {
     #[cfg(feature = "channel-feishu")]
     #[test]
     fn resolve_known_channel_session_target_describes_feishu_thread_scope_without_reply_target() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "enabled": true,
                 "app_id": "cli_a1b2c3",
@@ -2006,7 +2002,7 @@ mod tests {
     #[cfg(feature = "channel-line")]
     #[test]
     fn parse_known_channel_session_send_target_decodes_line_route_segments() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "line": {
                 "enabled": true,
                 "accounts": {
@@ -2046,7 +2042,7 @@ mod tests {
     #[cfg(feature = "channel-matrix")]
     #[test]
     fn matrix_security_validation_requires_room_allowlist_and_transport() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let resolved = config
             .matrix
             .resolve_account(None)
@@ -2055,7 +2051,7 @@ mod tests {
             validate_matrix_security_config(&resolved).expect_err("empty config must be rejected");
         assert!(error.contains("allowed_room_ids"));
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.matrix.allowed_room_ids = vec!["!ops:example.org".to_owned()];
         let resolved = config
             .matrix
@@ -2069,10 +2065,10 @@ mod tests {
     #[cfg(feature = "channel-matrix")]
     #[test]
     fn matrix_security_validation_rejects_invalid_base_url() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.matrix.allowed_room_ids = vec!["!ops:example.org".to_owned()];
         config.matrix.user_id = Some("@ops-bot:example.org".to_owned());
-        config.matrix.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.matrix.access_token = Some(loong_contracts::SecretRef::Inline(
             "matrix-token".to_owned(),
         ));
         config.matrix.base_url = Some("not a url".to_owned());
@@ -2089,9 +2085,9 @@ mod tests {
     #[cfg(feature = "channel-matrix")]
     #[test]
     fn matrix_security_validation_requires_user_id_when_ignoring_self_messages() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.matrix.allowed_room_ids = vec!["!ops:example.org".to_owned()];
-        config.matrix.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.matrix.access_token = Some(loong_contracts::SecretRef::Inline(
             "matrix-token".to_owned(),
         ));
         config.matrix.base_url = Some("https://matrix.example.org".to_owned());

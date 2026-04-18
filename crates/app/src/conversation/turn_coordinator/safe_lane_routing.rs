@@ -228,7 +228,7 @@ pub(super) enum SafeLaneRoundDecision {
 }
 
 pub(super) fn decide_safe_lane_failure_route(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     failure: &TurnFailure,
     replan_budget: SafeLaneReplanBudget,
     metrics: SafeLaneExecutionMetrics,

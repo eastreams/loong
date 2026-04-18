@@ -2,13 +2,13 @@
 
 ## User Story
 
-As a LoongClaw operator, I want a task-shaped background work surface so that I
+As a Loong operator, I want a task-shaped background work surface so that I
 can launch, inspect, wait on, and control delegated async work without having
 to reason directly in raw session-runtime terms.
 
 ## Acceptance Criteria
 
-- [ ] LoongClaw exposes a task-shaped operator surface for background delegated
+- [ ] Loong exposes a task-shaped operator surface for background delegated
       work rather than requiring the operator to compose raw `delegate_async`
       and `session_*` calls manually.
 - [ ] The first slice supports:

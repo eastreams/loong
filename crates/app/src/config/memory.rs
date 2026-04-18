@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::shared::{
-    ConfigValidationIssue, DEFAULT_SQLITE_FILE, default_loongclaw_home, expand_path,
+    ConfigValidationIssue, DEFAULT_SQLITE_FILE, default_loong_home, expand_path,
     validate_numeric_range,
 };
 
@@ -484,7 +484,7 @@ fn personalization_prompt_state_is_pending(state: &PersonalizationPromptState) -
 }
 
 fn default_sqlite_path() -> String {
-    default_loongclaw_home()
+    default_loong_home()
         .join(DEFAULT_SQLITE_FILE)
         .display()
         .to_string()

@@ -601,7 +601,7 @@ mod tests {
         PluginDescriptor {
             path: format!("/tmp/{plugin_id}.plugin.json"),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp".to_owned(),

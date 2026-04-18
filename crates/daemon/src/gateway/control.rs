@@ -23,7 +23,7 @@ use tokio::{
 };
 
 use crate::mvp::acp::AcpSessionManager;
-use crate::mvp::config::LoongClawConfig;
+use crate::mvp::config::LoongConfig;
 use crate::{
     CliResult, build_channels_cli_json_payload,
     collect_runtime_snapshot_cli_state_from_loaded_config, mvp, supervisor::LoadedSupervisorConfig,
@@ -74,7 +74,7 @@ pub(crate) struct GatewayControlAppState {
     pub(crate) runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
     pub(crate) event_bus: Option<GatewayEventBus>,
     pub(crate) acp_manager: Option<Arc<AcpSessionManager>>,
-    pub(crate) config: Option<LoongClawConfig>,
+    pub(crate) config: Option<LoongConfig>,
 }
 
 impl GatewayControlAppState {
@@ -755,7 +755,7 @@ fn build_gateway_operator_summary_read_model(
     build_operator_summary_read_model(status, channel_inventory, runtime_snapshot)
 }
 
-fn gateway_control_config(app_state: &GatewayControlAppState) -> CliResult<&LoongClawConfig> {
+fn gateway_control_config(app_state: &GatewayControlAppState) -> CliResult<&LoongConfig> {
     let config = app_state
         .config
         .as_ref()
@@ -1011,7 +1011,7 @@ pub fn build_gateway_events_test_router(
 #[doc(hidden)]
 pub fn build_gateway_acp_test_router(
     bearer_token: String,
-    config: LoongClawConfig,
+    config: LoongConfig,
     acp_manager: Arc<AcpSessionManager>,
 ) -> Router {
     let mut state = GatewayControlAppState::test_minimal(bearer_token);

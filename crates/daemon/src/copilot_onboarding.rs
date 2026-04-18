@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 
 use crate::provider_credential_policy;
 use crate::{CliResult, mvp};
@@ -76,7 +76,7 @@ fn github_copilot_oauth_token_path(output_path: &Path) -> PathBuf {
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .map(Path::to_path_buf)
-        .unwrap_or_else(mvp::config::default_loongclaw_home);
+        .unwrap_or_else(mvp::config::default_loong_home);
 
     parent_dir
         .join("secrets")
@@ -188,9 +188,9 @@ mod tests {
             .expect("system clock should be after unix epoch")
             .as_nanos();
         let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-github-copilot-secret-{unique_suffix}"));
+            std::env::temp_dir().join(format!("loong-github-copilot-secret-{unique_suffix}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
-        let output_path = temp_dir.join("loongclaw.toml");
+        let output_path = temp_dir.join("loong.toml");
         let mut provider = mvp::config::ProviderConfig {
             kind: mvp::config::ProviderKind::GithubCopilot,
             api_key: Some(SecretRef::Inline("stale-api-key".to_owned())),

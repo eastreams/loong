@@ -315,7 +315,7 @@ fn validate_loaded_bridge_support_delta_artifact(
     }
     if loaded.delta != canonical.delta {
         return Err(format!(
-            "bridge support delta artifact {path} is not canonical for bundled profile `{}`; regenerate it with `loongclaw plugins bridge-template --delta-output`",
+            "bridge support delta artifact {path} is not canonical for bundled profile `{}`; regenerate it with `loong plugins bridge-template --delta-output`",
             canonical.base_profile_id
         ));
     }
@@ -1407,7 +1407,7 @@ mod tests {
             }),
         )
         .expect("delta artifact should materialize");
-        let path = unique_temp_path("loongclaw-bridge-delta", "json");
+        let path = unique_temp_path("loong-bridge-delta", "json");
         fs::write(
             &path,
             serde_json::to_string_pretty(&artifact).expect("serialize artifact"),
@@ -1461,7 +1461,7 @@ mod tests {
         )
         .expect("delta artifact should materialize");
         artifact.base_policy_version = Some("openclaw-ecosystem-balanced@0".to_owned());
-        let path = unique_temp_path("loongclaw-bridge-delta-stale", "json");
+        let path = unique_temp_path("loong-bridge-delta-stale", "json");
         fs::write(
             &path,
             serde_json::to_string_pretty(&artifact).expect("serialize artifact"),
@@ -1475,7 +1475,7 @@ mod tests {
 
     #[test]
     fn load_bridge_support_policy_rejects_unknown_fields() {
-        let path = unique_temp_path("loongclaw-bridge-support-unknown", "json");
+        let path = unique_temp_path("loong-bridge-support-unknown", "json");
         let value = serde_json::json!({
             "enabled": true,
             "supported_bridges": ["process_stdio"],
@@ -1528,7 +1528,7 @@ mod tests {
             }),
         )
         .expect("delta artifact should materialize");
-        let path = unique_temp_path("loongclaw-bridge-delta-unknown", "json");
+        let path = unique_temp_path("loong-bridge-delta-unknown", "json");
         let mut value = serde_json::to_value(&artifact).expect("encode delta artifact");
         value["delta"]["unexpected_field"] = serde_json::json!(true);
         fs::write(

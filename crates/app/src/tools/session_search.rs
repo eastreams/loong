@@ -1,7 +1,7 @@
 #[cfg(feature = "memory-sqlite")]
 use std::collections::{BTreeMap, BTreeSet};
 
-use loongclaw_contracts::ToolCoreOutcome;
+use loong_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
 use super::payload::{optional_payload_limit, optional_payload_string, required_payload_string};
@@ -316,7 +316,7 @@ mod tests {
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-session-search-{test_name}-{}",
+            "loong-session-search-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);

@@ -3,9 +3,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use loongclaw_app as mvp;
-use loongclaw_contracts::SecretRef;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_contracts::SecretRef;
+use loong_spec::CliResult;
 use serde::Serialize;
 use serde_json::json;
 
@@ -214,12 +214,10 @@ pub fn render_doctor_security_cli_text(execution: &DoctorSecurityAuditExecution)
 
 async fn build_doctor_security_execution(
     config_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> CliResult<DoctorSecurityAuditExecution> {
-    let runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        config,
-        Some(config_path),
-    );
+    let runtime =
+        mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, Some(config_path));
     let browser_companion_diagnostics =
         crate::browser_companion_diagnostics::collect_browser_companion_diagnostics(config).await;
 
@@ -266,7 +264,7 @@ async fn build_doctor_security_execution(
     })
 }
 
-fn assess_audit_retention(config: &mvp::config::LoongClawConfig) -> SecurityFinding {
+fn assess_audit_retention(config: &mvp::config::LoongConfig) -> SecurityFinding {
     let audit_mode = config.audit.mode;
     let audit_mode_name = audit_mode.as_str();
     let journal_path = config.audit.resolved_path();
@@ -336,7 +334,7 @@ fn assess_audit_retention(config: &mvp::config::LoongClawConfig) -> SecurityFind
 }
 
 fn assess_shell_execution(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
 ) -> SecurityFinding {
     let default_mode = runtime.shell_default_mode;
@@ -417,7 +415,7 @@ fn assess_shell_execution(
     )
 }
 
-fn assess_tool_file_root(config: &mvp::config::LoongClawConfig) -> SecurityFinding {
+fn assess_tool_file_root(config: &mvp::config::LoongConfig) -> SecurityFinding {
     let explicit_root = config.tools.file_root.as_deref();
     let file_root_resolution = config.tools.file_root_resolution();
     let effective_root = file_root_resolution.path().clone();
@@ -686,7 +684,7 @@ fn assess_external_skills_probe_failure(
 
 fn assess_secret_hygiene(
     config_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> CliResult<SecurityFinding> {
     let mut observations = collect_secret_observations(config);
     observations.sort_by(|left, right| left.field_path.cmp(&right.field_path));
@@ -947,7 +945,7 @@ fn summarize_findings(findings: &[SecurityFinding]) -> SecurityAuditSummary {
 }
 
 fn collect_env_pointer_diagnostics(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<mvp::config::ConfigValidationDiagnostic> {
     let diagnostics = config.validation_diagnostics();
     diagnostics
@@ -956,7 +954,7 @@ fn collect_env_pointer_diagnostics(
         .collect()
 }
 
-fn collect_secret_observations(config: &mvp::config::LoongClawConfig) -> Vec<SecretObservation> {
+fn collect_secret_observations(config: &mvp::config::LoongConfig) -> Vec<SecretObservation> {
     let mut observations = Vec::new();
 
     collect_provider_secret_observations(config, &mut observations);
@@ -967,7 +965,7 @@ fn collect_secret_observations(config: &mvp::config::LoongClawConfig) -> Vec<Sec
 }
 
 fn collect_provider_secret_observations(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     observations: &mut Vec<SecretObservation>,
 ) {
     collect_single_provider_secret_observations("provider", &config.provider, observations);
@@ -1022,7 +1020,7 @@ fn provider_header_may_contain_secret(header_name: &str) -> bool {
 }
 
 fn collect_web_search_secret_observations(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     observations: &mut Vec<SecretObservation>,
 ) {
     let brave_path = "tools.web_search.brave_api_key".to_owned();
@@ -1062,7 +1060,7 @@ fn collect_web_search_secret_observations(
 }
 
 fn collect_channel_secret_observations(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     observations: &mut Vec<SecretObservation>,
 ) {
     collect_telegram_secret_observations(&config.telegram, observations);
@@ -1634,7 +1632,7 @@ mod tests {
     use super::*;
 
     use crate::test_support::ScopedEnv;
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::MutexGuard;
@@ -1644,7 +1642,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let file_name = format!("loongclaw-doctor-security-{label}-{epoch}.toml");
+        let file_name = format!("loong-doctor-security-{label}-{epoch}.toml");
         std::env::temp_dir().join(file_name)
     }
 
@@ -1710,7 +1708,7 @@ mod tests {
         let path = temp_config_path("shell-covered");
         write_placeholder_config(&path);
 
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let execution = build_doctor_security_execution(&path, &config)
             .await
             .expect("build security execution");
@@ -1727,7 +1725,7 @@ mod tests {
 
     #[test]
     fn tool_file_root_finding_uses_explicit_and_effective_resolution_truth() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let finding = assess_tool_file_root(&config);
         let rendered_evidence = finding.evidence.join("\n");
         let effective_root = config.tools.resolved_file_root();
@@ -1751,7 +1749,7 @@ mod tests {
             fs::set_permissions(&path, permissions).expect("set config permissions");
         }
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("inline-secret".to_owned()));
 
         let execution = build_doctor_security_execution(&path, &config)
@@ -1776,7 +1774,7 @@ mod tests {
         let path = temp_config_path("provider-secret-headers");
         write_placeholder_config(&path);
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("legacy-inline-secret".to_owned()));
         config
             .provider
@@ -1807,7 +1805,7 @@ mod tests {
         let path = temp_config_path("external-skills");
         write_placeholder_config(&path);
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.external_skills.enabled = true;
         config.external_skills.require_download_approval = false;
         config.external_skills.auto_expose_installed = true;
@@ -1826,11 +1824,9 @@ mod tests {
         let path = temp_config_path("external-skills-override");
         write_placeholder_config(&path);
 
-        let config = mvp::config::LoongClawConfig::default();
-        let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-            &config,
-            Some(&path),
-        );
+        let config = mvp::config::LoongConfig::default();
+        let runtime_config =
+            mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, Some(&path));
         let _reset_guard = ExternalSkillsPolicyResetGuard::new(&runtime_config);
 
         let request = kernel::ToolCoreRequest {
@@ -1866,13 +1862,13 @@ mod tests {
 
         let (command_name, expected_version) = portable_browser_companion_probe();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(command_name);
         config.tools.browser_companion.expected_version = Some(expected_version);
 
         let mut env = ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
 
         let execution = build_doctor_security_execution(&path, &config)
             .await
@@ -1944,7 +1940,7 @@ mod tests {
         let path = temp_config_path("json-exposed");
         let path_string = path.display().to_string();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.audit.mode = mvp::config::AuditMode::InMemory;
         mvp::config::write(Some(path_string.as_str()), &config, true).expect("write config");
 

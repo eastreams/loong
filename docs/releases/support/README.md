@@ -100,4 +100,4 @@ This is enforced by `scripts/check-docs.sh`.
 
 - Local development default: release debug/trace artifacts under `.docs/` are warned but not blocking.
 - CI/release default: strict mode is enabled automatically (`CI=true` / `GITHUB_ACTIONS=true`), and missing `.docs/` artifacts fail the check.
-- Manual override: set `LOONGCLAW_RELEASE_DOCS_STRICT=1` for strict mode or `LOONGCLAW_RELEASE_DOCS_STRICT=0` for warn-only mode.
+- Manual override: set `LOONG_RELEASE_DOCS_STRICT=1` for strict mode or `LOONG_RELEASE_DOCS_STRICT=0` for warn-only mode.

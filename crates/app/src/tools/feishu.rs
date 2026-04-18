@@ -6,7 +6,7 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -553,7 +553,7 @@ impl FeishuInternalCallbackPayload {
 struct FeishuWhoamiPayload {
     account_id: Option<String>,
     open_id: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -567,7 +567,7 @@ struct FeishuDocCreatePayload {
     content: Option<String>,
     content_path: Option<String>,
     content_type: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -580,7 +580,7 @@ struct FeishuDocAppendPayload {
     content: Option<String>,
     content_path: Option<String>,
     content_type: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -591,7 +591,7 @@ struct FeishuDocReadPayload {
     selector: GrantSelectorPayload,
     url: String,
     lang: Option<u8>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -607,7 +607,7 @@ struct FeishuMessagesHistoryPayload {
     sort_type: Option<String>,
     page_size: Option<usize>,
     page_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -617,7 +617,7 @@ struct FeishuMessagesGetPayload {
     #[serde(flatten)]
     selector: GrantSelectorPayload,
     message_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -638,7 +638,7 @@ struct FeishuMessagesSearchPayload {
     chat_type: Option<String>,
     start_time: Option<String>,
     end_time: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -652,7 +652,7 @@ struct FeishuMessagesResourceGetPayload {
     #[serde(rename = "type")]
     resource_type: String,
     save_as: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -672,7 +672,7 @@ struct FeishuMessagesSendPayload {
     file_path: Option<String>,
     file_type: Option<String>,
     uuid: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -692,7 +692,7 @@ struct FeishuMessagesReplyPayload {
     file_type: Option<String>,
     reply_in_thread: Option<bool>,
     uuid: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -705,7 +705,7 @@ struct FeishuCardUpdatePayload {
     markdown: Option<String>,
     shared: bool,
     open_ids: Option<Vec<String>>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -766,7 +766,7 @@ struct FeishuCalendarListPayload {
     page_size: Option<usize>,
     page_token: Option<String>,
     sync_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -778,7 +778,7 @@ struct FeishuBitableListPayload {
     app_token: String,
     page_token: Option<String>,
     page_size: Option<usize>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -789,7 +789,7 @@ struct FeishuBitableAppCreatePayload {
     selector: GrantSelectorPayload,
     name: String,
     folder_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -799,7 +799,7 @@ struct FeishuBitableAppGetPayload {
     #[serde(flatten)]
     selector: GrantSelectorPayload,
     app_token: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -811,7 +811,7 @@ struct FeishuBitableAppListPayload {
     folder_token: Option<String>,
     page_token: Option<String>,
     page_size: Option<usize>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -823,7 +823,7 @@ struct FeishuBitableAppPatchPayload {
     app_token: String,
     name: Option<String>,
     is_advanced: Option<bool>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -835,7 +835,7 @@ struct FeishuBitableAppCopyPayload {
     app_token: String,
     name: String,
     folder_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -847,7 +847,7 @@ struct FeishuBitableRecordCreatePayload {
     app_token: String,
     table_id: String,
     fields: Value,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -860,7 +860,7 @@ struct FeishuBitableRecordUpdatePayload {
     table_id: String,
     record_id: String,
     fields: Value,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -872,7 +872,7 @@ struct FeishuBitableRecordDeletePayload {
     app_token: String,
     table_id: String,
     record_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -884,7 +884,7 @@ struct FeishuBitableRecordBatchCreatePayload {
     app_token: String,
     table_id: String,
     records: Vec<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -896,7 +896,7 @@ struct FeishuBitableRecordBatchUpdatePayload {
     app_token: String,
     table_id: String,
     records: Vec<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -908,7 +908,7 @@ struct FeishuBitableRecordBatchDeletePayload {
     app_token: String,
     table_id: String,
     records: Vec<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -923,7 +923,7 @@ struct FeishuBitableFieldCreatePayload {
     #[serde(rename = "type")]
     field_type: i64,
     property: Option<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -937,7 +937,7 @@ struct FeishuBitableFieldListPayload {
     view_id: Option<String>,
     page_size: Option<usize>,
     page_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -953,7 +953,7 @@ struct FeishuBitableFieldUpdatePayload {
     #[serde(rename = "type")]
     field_type: i64,
     property: Option<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -965,7 +965,7 @@ struct FeishuBitableFieldDeletePayload {
     app_token: String,
     table_id: String,
     field_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -978,7 +978,7 @@ struct FeishuBitableViewCreatePayload {
     table_id: String,
     view_name: String,
     view_type: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -990,7 +990,7 @@ struct FeishuBitableViewGetPayload {
     app_token: String,
     table_id: String,
     view_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1003,7 +1003,7 @@ struct FeishuBitableViewListPayload {
     table_id: String,
     page_size: Option<usize>,
     page_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1016,7 +1016,7 @@ struct FeishuBitableViewPatchPayload {
     table_id: String,
     view_id: String,
     view_name: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1029,7 +1029,7 @@ struct FeishuBitableTableCreatePayload {
     name: String,
     default_view_name: Option<String>,
     fields: Option<Vec<Value>>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1041,7 +1041,7 @@ struct FeishuBitableTablePatchPayload {
     app_token: String,
     table_id: String,
     name: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1052,7 +1052,7 @@ struct FeishuBitableTableBatchCreatePayload {
     selector: GrantSelectorPayload,
     app_token: String,
     tables: Vec<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1070,7 +1070,7 @@ struct FeishuBitableRecordSearchPayload {
     sort: Option<Value>,
     field_names: Option<Vec<String>>,
     automatic_fields: Option<bool>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1087,7 +1087,7 @@ struct FeishuCalendarFreebusyPayload {
     include_external_calendar: Option<bool>,
     only_busy: Option<bool>,
     need_rsvp_status: Option<bool>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 

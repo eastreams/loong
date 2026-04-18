@@ -427,7 +427,7 @@ mod tests {
             missing_selected_servers: Vec::new(),
         };
 
-        let rendered = render_mcp_servers_snapshot_text("/tmp/loongclaw.toml", &snapshot);
+        let rendered = render_mcp_servers_snapshot_text("/tmp/loong.toml", &snapshot);
 
         assert!(rendered.contains("status=failed"), "rendered={rendered}");
         assert!(

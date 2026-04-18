@@ -188,7 +188,7 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - Use community channels such as Discord and Telegram. If you are already active in Feishu or
   WeChat community spaces, those are also good places to ask.
 - If you want to introduce yourself directly or talk about where you could help most, email
-  [contact@loongclaw.ai](mailto:contact@loongclaw.ai).
+  [contact@loong.ai](mailto:contact@loong.ai).
 - Use the private security advisory flow for vulnerabilities instead of public issues.
 
 The public workflow in this guide is the contributor-facing source of truth.
@@ -216,7 +216,7 @@ care.
 - If your strengths are design, docs, docs-site editing, QA, operations, support, or community work,
   those are first-class contributions here, not second-tier work.
 - If you would rather start with a direct introduction, email
-  [contact@loongclaw.ai](mailto:contact@loongclaw.ai). A short note is enough. You do not need a
+  [contact@loong.ai](mailto:contact@loong.ai). A short note is enough. You do not need a
   formal application.
 - If you are unsure where to begin, open a Discussion or send that introduction email and we will
   help point you toward good starting areas.
@@ -267,10 +267,10 @@ for the shorter public contributor docs entrypoint.
 ./scripts/cargo-local-toolchain.sh test --workspace
 
 # Just the mvp crate
-./scripts/cargo-local-toolchain.sh test -p loongclaw-app
+./scripts/cargo-local-toolchain.sh test -p loong-app
 
 # Just kernel tests
-./scripts/cargo-local-toolchain.sh test -p loongclaw-kernel
+./scripts/cargo-local-toolchain.sh test -p loong-kernel
 
 # With all features (CI gate)
 ./scripts/cargo-local-toolchain.sh test --workspace --all-features
@@ -354,17 +354,17 @@ findings, start from the built-in observability surfaces instead of external
 skill setup:
 
 ```bash
-loong doctor --config ~/.loongclaw/config.toml
-loong doctor --config ~/.loongclaw/config.toml --json
-loong audit recent --config ~/.loongclaw/config.toml
-loong audit summary --config ~/.loongclaw/config.toml
-loong audit recent --config ~/.loongclaw/config.toml --json
-if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
+loong doctor --config ~/.loong/config.toml
+loong doctor --config ~/.loong/config.toml --json
+loong audit recent --config ~/.loong/config.toml
+loong audit summary --config ~/.loong/config.toml
+loong audit recent --config ~/.loong/config.toml --json
+if [ -f ~/.loong/audit/events.jsonl ]; then tail -n 20 ~/.loong/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
 ```
 
 The app runtime defaults to durable audit retention with
 `[audit].mode = "fanout"`, so security-critical audit events persist across
-restarts under `~/.loongclaw/audit/events.jsonl`. Use `doctor --fix` if you
+restarts under `~/.loong/audit/events.jsonl`. Use `doctor --fix` if you
 want Loong to pre-create the audit journal directory before a debugging
 session. Reach for `audit recent` when you need the latest bounded event window
 and `audit summary` when you need a quick rollup before diving into raw JSONL.

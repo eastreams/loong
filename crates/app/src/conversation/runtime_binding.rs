@@ -1,4 +1,4 @@
-use loongclaw_contracts::GovernedSessionMode;
+use loong_contracts::GovernedSessionMode;
 
 use crate::KernelContext;
 

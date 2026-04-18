@@ -13,12 +13,12 @@ from .commands import build_agent_run_command
 from .commands import sanitize_profile_id
 
 
-class LoongClawInstalledAgent(BaseInstalledAgent):
-    """Harbor adapter that installs and runs the local LoongClaw workspace."""
+class LoongInstalledAgent(BaseInstalledAgent):
+    """Harbor adapter that installs and runs the local Loong workspace."""
 
-    _OUTPUT_FILENAME = "loongclaw.txt"
-    _CONFIG_FILENAME = "loongclaw-config.toml"
-    _TRAJECTORY_FILENAME = "loongclaw-trajectory.json"
+    _OUTPUT_FILENAME = "loong.txt"
+    _CONFIG_FILENAME = "loong-config.toml"
+    _TRAJECTORY_FILENAME = "loong-trajectory.json"
 
     def __init__(
         self,
@@ -26,7 +26,7 @@ class LoongClawInstalledAgent(BaseInstalledAgent):
         reasoning_effort: str = "xhigh",
         api_key_env: str = "OPENAI_API_KEY",
         provider_kind: str = "openai",
-        source_mount: str = "/opt/loongclaw-src",
+        source_mount: str = "/opt/loong-src",
         session_name: str = "harbor",
         shell_default_mode: str = "allow",
         **kwargs,
@@ -41,7 +41,7 @@ class LoongClawInstalledAgent(BaseInstalledAgent):
 
     @staticmethod
     def name() -> str:
-        return "loongclaw"
+        return "loong"
 
     def get_version_command(self) -> str | None:
         command = 'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; loong --version'
@@ -59,7 +59,7 @@ class LoongClawInstalledAgent(BaseInstalledAgent):
     def _resolved_model_id(self) -> str:
         if not self.model_name:
             raise ValueError(
-                "LoongClawInstalledAgent requires Harbor model_name, for example openai/gpt-5.4"
+                "LoongInstalledAgent requires Harbor model_name, for example openai/gpt-5.4"
             )
 
         if "/" in self.model_name:
@@ -69,7 +69,7 @@ class LoongClawInstalledAgent(BaseInstalledAgent):
 
         stripped_model_id = self.model_name.strip()
         if not stripped_model_id:
-            raise ValueError("Harbor model_name resolved to an empty LoongClaw model id")
+            raise ValueError("Harbor model_name resolved to an empty Loong model id")
 
         return stripped_model_id
 

@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [lib]
-name = "loongclaw_protocol"
+name = "loong_protocol"
 
 [features]
 test-support = []

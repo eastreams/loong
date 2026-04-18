@@ -7,7 +7,7 @@ use std::{
 };
 
 // Re-export data types from contracts
-pub use loongclaw_contracts::{PolicyContext, PolicyDecision, PolicyRequest};
+pub use loong_contracts::{PolicyContext, PolicyDecision, PolicyRequest};
 
 use crate::{contracts::CapabilityToken, errors::PolicyError, pack::VerticalPackManifest};
 

@@ -64,18 +64,18 @@ fn render_stacked_domain_lines(domain: &super::DomainPreview, width: usize) -> V
         domain.status.label()
     )];
     if let Some(decision) = domain.decision {
-        lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+        lines.extend(loong_app::presentation::render_wrapped_text_line(
             "  action: ",
             decision.label(),
             width,
         ));
     }
-    lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+    lines.extend(loong_app::presentation::render_wrapped_text_line(
         "  source: ",
         &domain.source,
         width,
     ));
-    lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+    lines.extend(loong_app::presentation::render_wrapped_text_line(
         "  summary: ",
         &domain.summary,
         width,
@@ -106,12 +106,12 @@ fn render_stacked_channel_lines(channel: &super::ChannelCandidate, width: usize)
         channel.status.label(),
         channel_maturity_label(channel.id)
     )];
-    lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+    lines.extend(loong_app::presentation::render_wrapped_text_line(
         "  source: ",
         &channel.source,
         width,
     ));
-    lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+    lines.extend(loong_app::presentation::render_wrapped_text_line(
         "  summary: ",
         &channel.summary,
         width,
@@ -149,12 +149,12 @@ fn render_stacked_provider_choice_lines(
         crate::provider_presentation::provider_choice_label(&choice.profile_id, choice.kind),
         suffix
     )];
-    lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+    lines.extend(loong_app::presentation::render_wrapped_text_line(
         "  source: ",
         &choice.source,
         width,
     ));
-    lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+    lines.extend(loong_app::presentation::render_wrapped_text_line(
         "  summary: ",
         &choice.summary,
         width,
@@ -162,14 +162,14 @@ fn render_stacked_provider_choice_lines(
     if let Some(selector_detail) =
         super::provider_selection::selector_detail_line(plan, &choice.profile_id, width)
     {
-        lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+        lines.extend(loong_app::presentation::render_wrapped_text_line(
             "  ",
             &selector_detail,
             width,
         ));
     }
     if let Some(transport_summary) = choice.config.preview_transport_summary() {
-        lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+        lines.extend(loong_app::presentation::render_wrapped_text_line(
             "  transport: ",
             &transport_summary,
             width,
@@ -198,7 +198,7 @@ fn render_wide_provider_choice_line(
 
 pub fn render_candidate_preview_lines(candidate: &ImportCandidate, width: usize) -> Vec<String> {
     let mut lines =
-        loongclaw_app::presentation::render_wrapped_text_line("source: ", &candidate.source, width);
+        loong_app::presentation::render_wrapped_text_line("source: ", &candidate.source, width);
     lines.insert(0, "candidate snapshot".to_owned());
     let source_labels = candidate_source_rollup_labels(candidate);
     let should_render_source_rollup = if candidate.source_kind == ImportSourceKind::RecommendedPlan
@@ -208,7 +208,7 @@ pub fn render_candidate_preview_lines(candidate: &ImportCandidate, width: usize)
         source_labels.len() > 1
     };
     if should_render_source_rollup {
-        lines.extend(loongclaw_app::presentation::render_wrapped_segments(
+        lines.extend(loong_app::presentation::render_wrapped_segments(
             "derived from: ",
             "  ",
             &source_labels.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -217,7 +217,7 @@ pub fn render_candidate_preview_lines(candidate: &ImportCandidate, width: usize)
         ));
     }
     if let Some(transport_summary) = candidate.config.provider.preview_transport_summary() {
-        lines.extend(loongclaw_app::presentation::render_wrapped_text_line(
+        lines.extend(loong_app::presentation::render_wrapped_text_line(
             "provider transport: ",
             &transport_summary,
             width,
@@ -374,7 +374,7 @@ pub fn render_provider_selection_lines(plan: &ProviderSelectionPlan, width: usiz
     }
     if plan.requires_explicit_choice {
         let note_segments = super::unresolved_choice_note_segments(plan);
-        lines.extend(loongclaw_app::presentation::render_wrapped_segments(
+        lines.extend(loong_app::presentation::render_wrapped_segments(
             if use_stacked_choices {
                 "  note: "
             } else {

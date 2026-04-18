@@ -244,7 +244,7 @@ fn build_invalid_tlon_snapshot(
 
 pub(super) fn build_tlon_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {

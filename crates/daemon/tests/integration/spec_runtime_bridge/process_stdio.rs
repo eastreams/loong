@@ -1,5 +1,5 @@
 use super::*;
-use loongclaw_daemon::kernel::PluginCompatibilityMode;
+use loong_daemon::kernel::PluginCompatibilityMode;
 use std::sync::MutexGuard;
 
 struct ProcessStdioEnvironmentGuard {
@@ -23,14 +23,13 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-process-stdio-run-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-process-stdio-run-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-plugin",
 #   "provider_id": "stdio-provider",
@@ -45,7 +44,7 @@ async fn execute_spec_process_stdio_bridge_executes_when_enabled_and_allowed() {
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");
@@ -155,13 +154,13 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-process-stdio-block-{unique}"));
+        std::env::temp_dir().join(format!("loong-plugin-process-stdio-block-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-plugin",
 #   "provider_id": "stdio-provider",
@@ -176,7 +175,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_command_not_allowlisted()
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");
@@ -268,15 +267,14 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!(
-        "loongclaw-plugin-process-stdio-invalid-frame-{unique}"
-    ));
+    let plugin_root =
+        std::env::temp_dir().join(format!("loong-plugin-process-stdio-invalid-frame-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-invalid-frame-plugin",
 #   "provider_id": "stdio-invalid-frame-provider",
@@ -291,7 +289,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");
@@ -386,7 +384,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_invalid_json_line_response()
 async fn execute_spec_process_stdio_bridge_strips_high_risk_env_vars_from_child_process() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let mut env = loongclaw_daemon::test_support::ScopedEnv::new();
+    let mut env = loong_daemon::test_support::ScopedEnv::new();
     env.set("CC", "malicious-cc");
     env.set("PYTHONPATH", "/tmp/malicious-pythonpath");
     env.set("LC_CHILD_TEST", "keep-me");
@@ -395,15 +393,14 @@ async fn execute_spec_process_stdio_bridge_strips_high_risk_env_vars_from_child_
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!(
-        "loongclaw-plugin-process-stdio-env-sanitized-{unique}"
-    ));
+    let plugin_root =
+        std::env::temp_dir().join(format!("loong-plugin-process-stdio-env-sanitized-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-env-sanitized-plugin",
 #   "provider_id": "stdio-env-sanitized-provider",
@@ -419,7 +416,7 @@ async fn execute_spec_process_stdio_bridge_strips_high_risk_env_vars_from_child_
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");
@@ -510,15 +507,14 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!(
-        "loongclaw-plugin-process-stdio-mismatch-id-{unique}"
-    ));
+    let plugin_root =
+        std::env::temp_dir().join(format!("loong-plugin-process-stdio-mismatch-id-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-mismatch-id-plugin",
 #   "provider_id": "stdio-mismatch-id-provider",
@@ -534,7 +530,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_id_mismatch() {
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");
@@ -629,14 +625,14 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root = std::env::temp_dir().join(format!(
-        "loongclaw-plugin-process-stdio-mismatch-method-{unique}"
+        "loong-plugin-process-stdio-mismatch-method-{unique}"
     ));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-mismatch-method-plugin",
 #   "provider_id": "stdio-mismatch-method-provider",
@@ -652,7 +648,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_response_method_mismatch() {
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");
@@ -745,15 +741,14 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!(
-        "loongclaw-plugin-process-stdio-authz-block-{unique}"
-    ));
+    let plugin_root =
+        std::env::temp_dir().join(format!("loong-plugin-process-stdio-authz-block-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-authz-block-plugin",
 #   "provider_id": "stdio-authz-block-provider",
@@ -768,7 +763,7 @@ async fn execute_spec_process_stdio_bridge_blocks_when_protocol_authorization_fa
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");
@@ -878,13 +873,13 @@ async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-process-stdio-timeout-{unique}"));
+        std::env::temp_dir().join(format!("loong-plugin-process-stdio-timeout-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("stdio_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-timeout-plugin",
 #   "provider_id": "stdio-timeout-provider",
@@ -900,7 +895,7 @@ async fn execute_spec_process_stdio_bridge_fails_on_recv_timeout() {
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write stdio plugin");

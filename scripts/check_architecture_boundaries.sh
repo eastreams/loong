@@ -5,9 +5,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 . "$REPO_ROOT/scripts/architecture_budget_lib.sh"
 
-STRICT="${LOONGCLAW_ARCH_STRICT:-false}"
+STRICT="${LOONG_ARCH_STRICT:-false}"
 if [[ "$STRICT" != "true" && "$STRICT" != "false" ]]; then
-  echo "invalid LOONGCLAW_ARCH_STRICT: $STRICT (expected true|false)" >&2
+  echo "invalid LOONG_ARCH_STRICT: $STRICT (expected true|false)" >&2
   exit 2
 fi
 

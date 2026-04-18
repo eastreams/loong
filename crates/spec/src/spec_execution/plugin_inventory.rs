@@ -921,13 +921,13 @@ mod tests {
     #[test]
     fn execute_plugin_inventory_surfaces_blocked_plugins_with_setup_truth() {
         let descriptor = PluginDescriptor {
-            path: "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/tavily/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/tavily".to_owned(),
-            package_manifest_path: Some("/tmp/tavily/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/tavily/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -961,7 +961,7 @@ mod tests {
                     mode: PluginSlotMode::Exclusive,
                 }],
                 compatibility: Some(PluginCompatibility {
-                    host_api: Some("loongclaw-plugin/v1".to_owned()),
+                    host_api: Some("loong-plugin/v1".to_owned()),
                     host_version_req: Some(">=0.1.0-alpha.1".to_owned()),
                 }),
             },
@@ -1013,10 +1013,10 @@ mod tests {
             blocked_plugins: 1,
             candidates: vec![PluginActivationCandidate {
                 plugin_id: "tavily-search".to_owned(),
-                source_path: "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                source_path: "/tmp/tavily/loong.plugin.json".to_owned(),
                 source_kind: PluginSourceKind::PackageManifest,
                 package_root: "/tmp/tavily".to_owned(),
-                package_manifest_path: Some("/tmp/tavily/loongclaw.plugin.json".to_owned()),
+                package_manifest_path: Some("/tmp/tavily/loong.plugin.json".to_owned()),
                 trust_tier: kernel::PluginTrustTier::Unverified,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 compatibility_shim: None,
@@ -1035,7 +1035,7 @@ mod tests {
                     phase: PluginDiagnosticPhase::Activation,
                     blocking: true,
                     plugin_id: Some("tavily-search".to_owned()),
-                    source_path: Some("/tmp/tavily/loongclaw.plugin.json".to_owned()),
+                    source_path: Some("/tmp/tavily/loong.plugin.json".to_owned()),
                     source_kind: Some(PluginSourceKind::PackageManifest),
                     field_path: Some("slot_claims".to_owned()),
                     message: "slot claim `provider:web_search`:`tavily` conflicts with existing plugin `web-search`".to_owned(),
@@ -1058,7 +1058,7 @@ mod tests {
                 ("plugin_id".to_owned(), "tavily-search".to_owned()),
                 (
                     "plugin_source_path".to_owned(),
-                    "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                    "/tmp/tavily/loong.plugin.json".to_owned(),
                 ),
                 (
                     crate::spec_runtime::PLUGIN_RUNTIME_HEALTH_METADATA_KEY.to_owned(),
@@ -1093,7 +1093,7 @@ mod tests {
         assert_eq!(results[0].plugin_id, "tavily-search");
         assert_eq!(results[0].manifest_api_version.as_deref(), Some("v1alpha1"));
         assert_eq!(results[0].plugin_version.as_deref(), Some("0.3.0"));
-        assert_eq!(results[0].dialect, "loongclaw_package_manifest");
+        assert_eq!(results[0].dialect, "loong_package_manifest");
         assert_eq!(results[0].compatibility_mode, "native");
         assert!(results[0].compatibility_shim.is_none());
         assert_eq!(results[0].bridge_kind, "http_json");
@@ -1111,7 +1111,7 @@ mod tests {
                 .compatibility
                 .as_ref()
                 .and_then(|compatibility| compatibility.host_api.as_deref()),
-            Some("loongclaw-plugin/v1")
+            Some("loong-plugin/v1")
         );
         assert_eq!(
             results[0]
@@ -1355,13 +1355,13 @@ mod tests {
     #[test]
     fn execute_plugin_inventory_includes_deferred_entries_without_ready_results() {
         let descriptor = PluginDescriptor {
-            path: "/tmp/deferred/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/deferred/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/deferred".to_owned(),
-            package_manifest_path: Some("/tmp/deferred/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/deferred/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -1411,13 +1411,13 @@ mod tests {
     #[test]
     fn execute_plugin_inventory_falls_back_to_available_runtime_metadata() {
         let descriptor = PluginDescriptor {
-            path: "/tmp/fallback/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/fallback/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/fallback".to_owned(),
-            package_manifest_path: Some("/tmp/fallback/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/fallback/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -1447,10 +1447,10 @@ mod tests {
             blocked_plugins: 1,
             candidates: vec![PluginActivationCandidate {
                 plugin_id: "fallback-search".to_owned(),
-                source_path: "/tmp/fallback/loongclaw.plugin.json".to_owned(),
+                source_path: "/tmp/fallback/loong.plugin.json".to_owned(),
                 source_kind: PluginSourceKind::PackageManifest,
                 package_root: "/tmp/fallback".to_owned(),
-                package_manifest_path: Some("/tmp/fallback/loongclaw.plugin.json".to_owned()),
+                package_manifest_path: Some("/tmp/fallback/loong.plugin.json".to_owned()),
                 trust_tier: kernel::PluginTrustTier::Unverified,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 compatibility_shim: None,
@@ -1502,13 +1502,13 @@ mod tests {
     #[test]
     fn execute_plugin_inventory_keeps_setup_incomplete_entries_when_blocked_filter_is_off() {
         let descriptor = PluginDescriptor {
-            path: "/tmp/setup/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/setup/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/setup".to_owned(),
-            package_manifest_path: Some("/tmp/setup/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/setup/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -1538,10 +1538,10 @@ mod tests {
             blocked_plugins: 0,
             candidates: vec![PluginActivationCandidate {
                 plugin_id: "setup-search".to_owned(),
-                source_path: "/tmp/setup/loongclaw.plugin.json".to_owned(),
+                source_path: "/tmp/setup/loong.plugin.json".to_owned(),
                 source_kind: PluginSourceKind::PackageManifest,
                 package_root: "/tmp/setup".to_owned(),
-                package_manifest_path: Some("/tmp/setup/loongclaw.plugin.json".to_owned()),
+                package_manifest_path: Some("/tmp/setup/loong.plugin.json".to_owned()),
                 trust_tier: kernel::PluginTrustTier::Unverified,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 compatibility_shim: None,
@@ -1587,13 +1587,13 @@ mod tests {
     #[test]
     fn execute_plugin_inventory_ranks_ready_entries_before_blocked_entries() {
         let ready_descriptor = PluginDescriptor {
-            path: "/tmp/ready/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/ready/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/ready".to_owned(),
-            package_manifest_path: Some("/tmp/ready/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/ready/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -1617,13 +1617,13 @@ mod tests {
             },
         };
         let blocked_descriptor = PluginDescriptor {
-            path: "/tmp/blocked/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/blocked/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/blocked".to_owned(),
-            package_manifest_path: Some("/tmp/blocked/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/blocked/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -1654,10 +1654,10 @@ mod tests {
             candidates: vec![
                 PluginActivationCandidate {
                     plugin_id: "alpha-search".to_owned(),
-                    source_path: "/tmp/ready/loongclaw.plugin.json".to_owned(),
+                    source_path: "/tmp/ready/loong.plugin.json".to_owned(),
                     source_kind: PluginSourceKind::PackageManifest,
                     package_root: "/tmp/ready".to_owned(),
-                    package_manifest_path: Some("/tmp/ready/loongclaw.plugin.json".to_owned()),
+                    package_manifest_path: Some("/tmp/ready/loong.plugin.json".to_owned()),
                     trust_tier: kernel::PluginTrustTier::Unverified,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     compatibility_shim: None,
@@ -1675,10 +1675,10 @@ mod tests {
                 },
                 PluginActivationCandidate {
                     plugin_id: "beta-search".to_owned(),
-                    source_path: "/tmp/blocked/loongclaw.plugin.json".to_owned(),
+                    source_path: "/tmp/blocked/loong.plugin.json".to_owned(),
                     source_kind: PluginSourceKind::PackageManifest,
                     package_root: "/tmp/blocked".to_owned(),
-                    package_manifest_path: Some("/tmp/blocked/loongclaw.plugin.json".to_owned()),
+                    package_manifest_path: Some("/tmp/blocked/loong.plugin.json".to_owned()),
                     trust_tier: kernel::PluginTrustTier::Unverified,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     compatibility_shim: None,
@@ -1735,13 +1735,13 @@ mod tests {
     #[test]
     fn execute_plugin_inventory_ranks_setup_incomplete_before_blocked_entries() {
         let setup_descriptor = PluginDescriptor {
-            path: "/tmp/setup/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/setup/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/setup".to_owned(),
-            package_manifest_path: Some("/tmp/setup/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/setup/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -1765,13 +1765,13 @@ mod tests {
             },
         };
         let blocked_descriptor = PluginDescriptor {
-            path: "/tmp/blocked/loongclaw.plugin.json".to_owned(),
+            path: "/tmp/blocked/loong.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
-            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/blocked".to_owned(),
-            package_manifest_path: Some("/tmp/blocked/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/blocked/loong.plugin.json".to_owned()),
             language: "manifest".to_owned(),
             manifest: PluginManifest {
                 api_version: Some("v1alpha1".to_owned()),
@@ -1802,10 +1802,10 @@ mod tests {
             candidates: vec![
                 PluginActivationCandidate {
                     plugin_id: "zeta-setup".to_owned(),
-                    source_path: "/tmp/setup/loongclaw.plugin.json".to_owned(),
+                    source_path: "/tmp/setup/loong.plugin.json".to_owned(),
                     source_kind: PluginSourceKind::PackageManifest,
                     package_root: "/tmp/setup".to_owned(),
-                    package_manifest_path: Some("/tmp/setup/loongclaw.plugin.json".to_owned()),
+                    package_manifest_path: Some("/tmp/setup/loong.plugin.json".to_owned()),
                     trust_tier: kernel::PluginTrustTier::Unverified,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     compatibility_shim: None,
@@ -1823,10 +1823,10 @@ mod tests {
                 },
                 PluginActivationCandidate {
                     plugin_id: "alpha-blocked".to_owned(),
-                    source_path: "/tmp/blocked/loongclaw.plugin.json".to_owned(),
+                    source_path: "/tmp/blocked/loong.plugin.json".to_owned(),
                     source_kind: PluginSourceKind::PackageManifest,
                     package_root: "/tmp/blocked".to_owned(),
-                    package_manifest_path: Some("/tmp/blocked/loongclaw.plugin.json".to_owned()),
+                    package_manifest_path: Some("/tmp/blocked/loong.plugin.json".to_owned()),
                     trust_tier: kernel::PluginTrustTier::Unverified,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     compatibility_shim: None,

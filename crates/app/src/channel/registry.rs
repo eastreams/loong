@@ -12,24 +12,24 @@ use crate::config::{
     DISCORD_BOT_TOKEN_ENV, FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
     FEISHU_VERIFICATION_TOKEN_ENV, FeishuChannelServeMode, GOOGLE_CHAT_WEBHOOK_URL_ENV,
     IMESSAGE_BRIDGE_TOKEN_ENV, IMESSAGE_BRIDGE_URL_ENV, IRC_NICKNAME_ENV, IRC_SERVER_ENV,
-    LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, LoongClawConfig,
-    MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
-    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV,
-    NOSTR_RELAY_URLS_ENV, ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig,
-    ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig,
-    ResolvedImessageChannelConfig, ResolvedIrcChannelConfig, ResolvedLineChannelConfig,
-    ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
-    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
-    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
-    ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig,
-    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
-    SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
-    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
-    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV,
-    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
-    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat,
-    parse_email_smtp_endpoint, parse_irc_server_endpoint,
+    LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, LoongConfig, MATRIX_ACCESS_TOKEN_ENV,
+    MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV,
+    NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV, NOSTR_RELAY_URLS_ENV,
+    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
+    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
+    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
+    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
+    ResolvedNostrChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
+    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
+    ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
+    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV,
+    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
+    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
+    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, TWITCH_ACCESS_TOKEN_ENV,
+    WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
+    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
+    WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat, parse_email_smtp_endpoint,
+    parse_irc_server_endpoint,
 };
 
 use self::descriptors::CHANNEL_REGISTRY;
@@ -230,7 +230,7 @@ pub(crate) struct ChannelRegistryOperationDescriptor {
 }
 
 pub(crate) type ChannelSnapshotBuilder =
-    fn(&ChannelRegistryDescriptor, &LoongClawConfig, &Path, u64) -> Vec<ChannelStatusSnapshot>;
+    fn(&ChannelRegistryDescriptor, &LoongConfig, &Path, u64) -> Vec<ChannelStatusSnapshot>;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChannelRegistryDescriptor {
@@ -379,7 +379,7 @@ const TELEGRAM_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure telegram bot credentials, allowed chat ids, and optional mention gating in loongclaw.toml under telegram or telegram.accounts.<account>",
+    setup_hint: "configure telegram bot credentials, allowed chat ids, and optional mention gating in loong.toml under telegram or telegram.accounts.<account>",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -753,7 +753,7 @@ const MATRIX_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure matrix access tokens, homeserver base url, allowed room ids, and optional mention gating in loongclaw.toml under matrix or matrix.accounts.<account>",
+    setup_hint: "configure matrix access tokens, homeserver base url, allowed room ids, and optional mention gating in loong.toml under matrix or matrix.accounts.<account>",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -876,7 +876,7 @@ const DISCORD_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const DISCORD_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure discord bot credentials in loongclaw.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned",
+    setup_hint: "configure discord bot credentials in loong.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -987,7 +987,7 @@ const SLACK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const SLACK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure slack bot credentials in loongclaw.toml under slack or slack.accounts.<account>; outbound direct send is shipped, while Events API or Socket Mode serve support remains planned",
+    setup_hint: "configure slack bot credentials in loong.toml under slack or slack.accounts.<account>; outbound direct send is shipped, while Events API or Socket Mode serve support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1101,7 +1101,7 @@ const LINE_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const LINE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure LINE Messaging API credentials in loongclaw.toml under line or line.accounts.<account>; outbound push send and inbound webhook serve are shipped, and line-serve requires --bind plus an optional --path override at runtime",
+    setup_hint: "configure LINE Messaging API credentials in loong.toml under line or line.accounts.<account>; outbound push send and inbound webhook serve are shipped, and line-serve requires --bind plus an optional --path override at runtime",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1222,7 +1222,7 @@ const WECOM_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const WECOM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure wecom aibot long connection credentials, allowed conversation ids, and optional websocket overrides in loongclaw.toml under wecom or wecom.accounts.<account>; do not configure webhook callback mode for this surface",
+    setup_hint: "configure wecom aibot long connection credentials, allowed conversation ids, and optional websocket overrides in loong.toml under wecom or wecom.accounts.<account>; do not configure webhook callback mode for this surface",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1308,7 +1308,7 @@ const DINGTALK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const DINGTALK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure DingTalk custom robot webhook credentials in loongclaw.toml under dingtalk or dingtalk.accounts.<account>; outbound webhook send is shipped, while inbound outgoing-callback serve support remains planned",
+    setup_hint: "configure DingTalk custom robot webhook credentials in loong.toml under dingtalk or dingtalk.accounts.<account>; outbound webhook send is shipped, while inbound outgoing-callback serve support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1451,7 +1451,7 @@ const WHATSAPP_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const WHATSAPP_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure whatsapp cloud api credentials (access_token, phone_number_id, verify_token, app_secret) in loongclaw.toml under whatsapp or whatsapp.accounts.<account>; both outbound business send and inbound webhook serve are shipped",
+    setup_hint: "configure whatsapp cloud api credentials (access_token, phone_number_id, verify_token, app_secret) in loong.toml under whatsapp or whatsapp.accounts.<account>; both outbound business send and inbound webhook serve are shipped",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1713,7 +1713,7 @@ const WEBHOOK_CAPABILITIES: &[ChannelCapability] = &[
 ];
 const WEBHOOK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure generic webhook delivery in loongclaw.toml under webhook or webhook.accounts.<account>; outbound endpoint send and inbound signed webhook serve are shipped, and webhook-serve requires --bind plus an optional --path override at runtime",
+    setup_hint: "configure generic webhook delivery in loong.toml under webhook or webhook.accounts.<account>; outbound endpoint send and inbound signed webhook serve are shipped, and webhook-serve requires --bind plus an optional --path override at runtime",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -1791,7 +1791,7 @@ const GOOGLE_CHAT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const GOOGLE_CHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
-        setup_hint: "configure Google Chat incoming webhook credentials in loongclaw.toml under google_chat or google_chat.accounts.<account>; outbound webhook send is shipped, while interactive event serve support remains planned",
+        setup_hint: "configure Google Chat incoming webhook credentials in loong.toml under google_chat or google_chat.accounts.<account>; outbound webhook send is shipped, while interactive event serve support remains planned",
         status_command: "loong doctor",
         repair_command: Some("loong doctor --fix"),
     };
@@ -1890,7 +1890,7 @@ const SIGNAL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const SIGNAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure signal bridge connection details in loongclaw.toml under signal or signal.accounts.<account>; outbound direct send is shipped, while inbound listener support remains planned",
+    setup_hint: "configure signal bridge connection details in loong.toml under signal or signal.accounts.<account>; outbound direct send is shipped, while inbound listener support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -2006,7 +2006,7 @@ const TEAMS_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const TEAMS_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure Microsoft Teams webhook delivery in loongclaw.toml under teams or teams.accounts.<account>; outbound incoming-webhook send is shipped, while bot-framework serve support remains planned",
+    setup_hint: "configure Microsoft Teams webhook delivery in loong.toml under teams or teams.accounts.<account>; outbound incoming-webhook send is shipped, while bot-framework serve support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -2111,7 +2111,7 @@ const MATTERMOST_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const MATTERMOST_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure Mattermost server and bot credentials in loongclaw.toml under mattermost or mattermost.accounts.<account>; outbound post send is shipped, while inbound websocket serve support remains planned",
+    setup_hint: "configure Mattermost server and bot credentials in loong.toml under mattermost or mattermost.accounts.<account>; outbound post send is shipped, while inbound websocket serve support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -2205,7 +2205,7 @@ const NEXTCLOUD_TALK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const NEXTCLOUD_TALK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
-        setup_hint: "configure Nextcloud Talk bot credentials in loongclaw.toml under nextcloud_talk or nextcloud_talk.accounts.<account>; outbound room send is shipped, while inbound bot callback serve support remains planned",
+        setup_hint: "configure Nextcloud Talk bot credentials in loong.toml under nextcloud_talk or nextcloud_talk.accounts.<account>; outbound room send is shipped, while inbound bot callback serve support remains planned",
         status_command: "loong doctor",
         repair_command: Some("loong doctor --fix"),
     };
@@ -2310,7 +2310,7 @@ const SYNOLOGY_CHAT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const SYNOLOGY_CHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
-        setup_hint: "configure Synology Chat incoming webhook credentials in loongclaw.toml under synology_chat or synology_chat.accounts.<account>; outbound incoming-webhook send is shipped, while inbound outgoing-webhook serve support remains planned",
+        setup_hint: "configure Synology Chat incoming webhook credentials in loong.toml under synology_chat or synology_chat.accounts.<account>; outbound incoming-webhook send is shipped, while inbound outgoing-webhook serve support remains planned",
         status_command: "loong doctor",
         repair_command: Some("loong doctor --fix"),
     };
@@ -2397,7 +2397,7 @@ const IRC_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const IRC_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure IRC connection details in loongclaw.toml under irc or irc.accounts.<account>; outbound send is shipped, while long-lived relay-loop serve support remains planned",
+    setup_hint: "configure IRC connection details in loong.toml under irc or irc.accounts.<account>; outbound send is shipped, while long-lived relay-loop serve support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -2499,7 +2499,7 @@ const IMESSAGE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 const IMESSAGE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure BlueBubbles bridge credentials in loongclaw.toml under imessage or imessage.accounts.<account>; outbound chat send is shipped, while inbound bridge sync serve support remains planned",
+    setup_hint: "configure BlueBubbles bridge credentials in loong.toml under imessage or imessage.accounts.<account>; outbound chat send is shipped, while inbound bridge sync serve support remains planned",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -2562,7 +2562,7 @@ pub(super) fn channel_catalog_entry_from_descriptor(
     }
 }
 
-pub fn channel_inventory(config: &LoongClawConfig) -> ChannelInventory {
+pub fn channel_inventory(config: &LoongConfig) -> ChannelInventory {
     channel_inventory_with_now(
         config,
         state::default_channel_runtime_state_dir().as_path(),
@@ -2570,7 +2570,7 @@ pub fn channel_inventory(config: &LoongClawConfig) -> ChannelInventory {
     )
 }
 
-pub fn channel_status_snapshots(config: &LoongClawConfig) -> Vec<ChannelStatusSnapshot> {
+pub fn channel_status_snapshots(config: &LoongConfig) -> Vec<ChannelStatusSnapshot> {
     channel_status_snapshots_with_now(
         config,
         state::default_channel_runtime_state_dir().as_path(),
@@ -2579,7 +2579,7 @@ pub fn channel_status_snapshots(config: &LoongClawConfig) -> Vec<ChannelStatusSn
 }
 
 fn channel_inventory_with_now(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> ChannelInventory {
@@ -2601,7 +2601,7 @@ fn channel_inventory_with_now(
 }
 
 fn channel_status_snapshots_with_now(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -2617,7 +2617,7 @@ fn channel_status_snapshots_with_now(
 }
 
 fn build_channel_access_policies(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ChannelConfiguredAccountAccessPolicy> {
     let mut policies = Vec::new();
     extend_telegram_channel_access_policies(&mut policies, config);
@@ -2629,7 +2629,7 @@ fn build_channel_access_policies(
 
 fn extend_telegram_channel_access_policies(
     policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) {
     for configured_account_id in config.telegram.configured_account_ids() {
         let resolved = config
@@ -2656,7 +2656,7 @@ fn extend_telegram_channel_access_policies(
 
 fn extend_feishu_channel_access_policies(
     policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) {
     for configured_account_id in config.feishu.configured_account_ids() {
         let resolved = config
@@ -2683,7 +2683,7 @@ fn extend_feishu_channel_access_policies(
 
 fn extend_matrix_channel_access_policies(
     policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) {
     for configured_account_id in config.matrix.configured_account_ids() {
         let resolved = config
@@ -2711,7 +2711,7 @@ fn extend_matrix_channel_access_policies(
 
 fn extend_wecom_channel_access_policies(
     policies: &mut Vec<ChannelConfiguredAccountAccessPolicy>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) {
     for configured_account_id in config.wecom.configured_account_ids() {
         let resolved = config
@@ -2800,7 +2800,7 @@ fn runtime_backed_channel_registry_descriptors() -> Vec<&'static ChannelRegistry
 
 fn build_telegram_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -2980,7 +2980,7 @@ fn build_telegram_snapshot_for_account(
 
 fn build_feishu_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3022,7 +3022,7 @@ fn build_feishu_snapshots(
 
 fn build_matrix_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3064,7 +3064,7 @@ fn build_matrix_snapshots(
 
 fn build_wecom_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3106,7 +3106,7 @@ fn build_wecom_snapshots(
 
 fn build_discord_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3148,7 +3148,7 @@ fn build_discord_snapshots(
 
 fn build_slack_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3190,7 +3190,7 @@ fn build_slack_snapshots(
 
 fn build_line_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3236,7 +3236,7 @@ fn build_line_snapshots(
 
 fn build_dingtalk_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3278,7 +3278,7 @@ fn build_dingtalk_snapshots(
 
 fn build_whatsapp_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3322,7 +3322,7 @@ fn build_whatsapp_snapshots(
 
 fn build_email_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3362,7 +3362,7 @@ fn build_email_snapshots(
 
 fn build_webhook_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_dir: &Path,
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3408,7 +3408,7 @@ fn build_webhook_snapshots(
 
 fn build_google_chat_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3450,7 +3450,7 @@ fn build_google_chat_snapshots(
 
 fn build_signal_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3492,7 +3492,7 @@ fn build_signal_snapshots(
 
 fn build_teams_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3534,7 +3534,7 @@ fn build_teams_snapshots(
 
 fn build_mattermost_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3576,7 +3576,7 @@ fn build_mattermost_snapshots(
 
 fn build_nextcloud_talk_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3618,7 +3618,7 @@ fn build_nextcloud_talk_snapshots(
 
 fn build_synology_chat_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3660,7 +3660,7 @@ fn build_synology_chat_snapshots(
 
 fn build_irc_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -3700,7 +3700,7 @@ fn build_irc_snapshots(
 
 fn build_imessage_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -7204,7 +7204,7 @@ mod tests {
             telegram.onboarding.repair_command,
             Some("loong doctor --fix")
         );
-        assert!(telegram.onboarding.setup_hint.contains("loongclaw.toml"));
+        assert!(telegram.onboarding.setup_hint.contains("loong.toml"));
 
         assert_eq!(
             lark.onboarding.strategy,
@@ -8269,7 +8269,7 @@ mod tests {
 
     #[test]
     fn catalog_only_channel_entries_include_stub_surfaces_for_default_config() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let snapshots = channel_status_snapshots(&config);
         let catalog_only = catalog_only_channel_entries(&snapshots);
         let webchat = catalog_only
@@ -8314,7 +8314,7 @@ mod tests {
 
     #[test]
     fn channel_inventory_combines_runtime_and_catalog_surfaces() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let inventory = channel_inventory(&config);
 
         assert_eq!(
@@ -8548,7 +8548,7 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_redact_webhook_channel_status_urls() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "dingtalk": {
                 "enabled": true,
                 "webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=secret-token"
@@ -8606,7 +8606,7 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_redact_generic_webhook_path_segments() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "webhook": {
                 "enabled": true,
                 "endpoint_url": "https://hooks.example.test/customer/secret-token/send?trace=secret"
@@ -8627,13 +8627,13 @@ mod tests {
 
     #[test]
     fn email_channel_status_snapshot_reports_smtp_readiness() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "email": {
                 "enabled": true,
                 "smtp_host": "smtps://smtp.example.test:465?auth=plain",
                 "smtp_username": "mailer@example.test",
                 "smtp_password": "top-secret",
-                "from_address": "LoongClaw <ops@example.test>"
+                "from_address": "Loong <ops@example.test>"
             }
         }))
         .expect("deserialize email channel config");
@@ -8658,7 +8658,7 @@ mod tests {
             email
                 .notes
                 .iter()
-                .any(|note| note == "from_address=LoongClaw <ops@example.test>")
+                .any(|note| note == "from_address=Loong <ops@example.test>")
         );
         assert_eq!(send_operation.health, ChannelOperationHealth::Ready);
         assert_eq!(serve_operation.health, ChannelOperationHealth::Unsupported);
@@ -8666,7 +8666,7 @@ mod tests {
 
     #[test]
     fn webhook_status_snapshot_rejects_invalid_auth_header_values() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "webhook": {
                 "enabled": true,
                 "endpoint_url": "https://hooks.example.test/send",
@@ -8701,7 +8701,7 @@ mod tests {
 
     #[test]
     fn webhook_status_snapshot_requires_signing_secret_for_serve() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "webhook": {
                 "enabled": true,
                 "endpoint_url": "https://hooks.example.test/send"
@@ -8730,7 +8730,7 @@ mod tests {
 
     #[test]
     fn wecom_status_rejects_non_websocket_endpoint_schemes() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "wecom": {
                 "enabled": true,
                 "bot_id": "wx-bot-id",
@@ -8773,7 +8773,7 @@ mod tests {
         let mut env = crate::test_support::ScopedEnv::new();
         env.remove("TELEGRAM_BOT_TOKEN");
 
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let inventory = channel_inventory(&config);
 
         assert_eq!(
@@ -9192,9 +9192,9 @@ mod tests {
 
     #[test]
     fn telegram_status_reports_ready_when_token_and_allowlist_are_configured() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.enabled = true;
-        config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
             "123456:token".to_owned(),
         ));
         config.telegram.allowed_chat_ids = vec![123];
@@ -9219,9 +9219,9 @@ mod tests {
 
     #[test]
     fn telegram_status_splits_direct_send_and_reply_loop_readiness() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.enabled = true;
-        config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
             "123456:token".to_owned(),
         ));
 
@@ -9257,13 +9257,12 @@ mod tests {
 
     #[test]
     fn feishu_status_splits_direct_send_and_webhook_readiness() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.enabled = true;
         config.feishu.mode = Some(FeishuChannelServeMode::Webhook);
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline("app-id".to_owned()));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "app-secret".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("app-id".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
 
         let snapshots = channel_status_snapshots(&config);
         let feishu = snapshots
@@ -9305,9 +9304,9 @@ mod tests {
 
     #[test]
     fn matrix_status_requires_user_id_when_ignoring_self_messages() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.matrix.enabled = true;
-        config.matrix.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.matrix.access_token = Some(loong_contracts::SecretRef::Inline(
             "matrix-token".to_owned(),
         ));
         config.matrix.base_url = Some("https://matrix.example.org".to_owned());
@@ -9334,7 +9333,7 @@ mod tests {
     fn discord_status_splits_config_backed_send_and_stub_serve() {
         let mut env = crate::test_support::ScopedEnv::new();
         env.remove(DISCORD_BOT_TOKEN_ENV);
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.discord.enabled = true;
         config.discord.bot_token_env = None;
 
@@ -9369,9 +9368,9 @@ mod tests {
 
     #[test]
     fn discord_status_rejects_non_http_api_base_url() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.discord.enabled = true;
-        config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
             "discord-token".to_owned(),
         ));
         config.discord.api_base_url = Some("file:///tmp/discord-api".to_owned());
@@ -9394,9 +9393,9 @@ mod tests {
 
     #[test]
     fn discord_status_rejects_api_base_url_with_query_string() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.discord.enabled = true;
-        config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
             "discord-token".to_owned(),
         ));
         config.discord.api_base_url = Some("https://discord.com/api/v10?debug=1".to_owned());
@@ -9419,7 +9418,7 @@ mod tests {
 
     #[test]
     fn discord_status_notes_reserved_future_runtime_fields_when_present() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "discord": {
                 "enabled": true,
                 "bot_token": "discord-token",
@@ -9461,9 +9460,9 @@ mod tests {
 
     #[test]
     fn slack_status_reports_ready_send_and_stub_serve() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.slack.enabled = true;
-        config.slack.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.slack.bot_token = Some(loong_contracts::SecretRef::Inline(
             "xoxb-test-token".to_owned(),
         ));
 
@@ -9484,9 +9483,9 @@ mod tests {
 
     #[test]
     fn slack_status_rejects_api_base_url_with_fragment() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.slack.enabled = true;
-        config.slack.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.slack.bot_token = Some(loong_contracts::SecretRef::Inline(
             "xoxb-test-token".to_owned(),
         ));
         config.slack.api_base_url = Some("https://slack.com/api#fragment".to_owned());
@@ -9509,9 +9508,9 @@ mod tests {
 
     #[test]
     fn line_status_reports_ready_send_and_stub_serve() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.line.enabled = true;
-        config.line.channel_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.line.channel_access_token = Some(loong_contracts::SecretRef::Inline(
             "line-access-token".to_owned(),
         ));
 
@@ -9543,11 +9542,11 @@ mod tests {
 
     #[test]
     fn irc_status_reports_ready_send_and_planned_serve() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.irc.enabled = true;
         config.irc.server = Some("ircs://irc.example.test:6697".to_owned());
-        config.irc.nickname = Some("loongclaw".to_owned());
-        config.irc.username = Some("loongclaw".to_owned());
+        config.irc.nickname = Some("loong".to_owned());
+        config.irc.username = Some("loong".to_owned());
         config.irc.channel_names = vec!["#ops".to_owned()];
 
         let snapshots = channel_status_snapshots(&config);
@@ -9565,7 +9564,7 @@ mod tests {
             Some("ircs://irc.example.test:6697")
         );
         assert!(
-            irc.notes.iter().any(|note| note == "nickname=loongclaw"),
+            irc.notes.iter().any(|note| note == "nickname=loong"),
             "irc notes should include the resolved nickname"
         );
         assert!(
@@ -9582,10 +9581,10 @@ mod tests {
 
     #[test]
     fn irc_status_formats_ipv6_server_endpoint_with_brackets() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.irc.enabled = true;
         config.irc.server = Some("ircs://[2001:db8::42]:6697".to_owned());
-        config.irc.nickname = Some("loongclaw".to_owned());
+        config.irc.nickname = Some("loong".to_owned());
 
         let snapshots = channel_status_snapshots(&config);
         let irc = snapshots
@@ -9601,9 +9600,9 @@ mod tests {
 
     #[test]
     fn whatsapp_status_reports_ready_send_when_access_token_and_phone_number_id_are_configured() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.whatsapp.enabled = true;
-        config.whatsapp.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.whatsapp.access_token = Some(loong_contracts::SecretRef::Inline(
             "whatsapp-access-token".to_owned(),
         ));
         config.whatsapp.phone_number_id = Some("1234567890".to_owned());
@@ -9651,10 +9650,10 @@ mod tests {
 
     #[test]
     fn mattermost_status_reports_ready_send_and_stub_serve() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.mattermost.enabled = true;
         config.mattermost.server_url = Some("https://mattermost.example.test".to_owned());
-        config.mattermost.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.mattermost.bot_token = Some(loong_contracts::SecretRef::Inline(
             "mattermost-bot-token".to_owned(),
         ));
 
@@ -9682,12 +9681,11 @@ mod tests {
 
     #[test]
     fn feishu_websocket_status_uses_websocket_requirements() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.enabled = true;
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline("app-id".to_owned()));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "app-secret".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("app-id".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
         config.feishu.mode = Some(crate::config::FeishuChannelServeMode::Websocket);
         config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
 
@@ -9735,17 +9733,15 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_merge_runtime_activity_for_serve_operations() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.enabled = true;
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline("app-id".to_owned()));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "app-secret".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("app-id".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
         config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
         config.feishu.verification_token =
-            Some(loongclaw_contracts::SecretRef::Inline("token".to_owned()));
-        config.feishu.encrypt_key =
-            Some(loongclaw_contracts::SecretRef::Inline("encrypt".to_owned()));
+            Some(loong_contracts::SecretRef::Inline("token".to_owned()));
+        config.feishu.encrypt_key = Some(loong_contracts::SecretRef::Inline("encrypt".to_owned()));
 
         let runtime_dir = temp_runtime_dir("registry-runtime");
         let now = now_ms();
@@ -9779,9 +9775,9 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_report_resolved_account_identity_in_notes() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.enabled = true;
-        config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
             "123456:token".to_owned(),
         ));
         config.telegram.allowed_chat_ids = vec![123];
@@ -9803,9 +9799,9 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_report_telegram_acp_bootstrap_mcp_servers_in_notes() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.enabled = true;
-        config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
             "123456:token".to_owned(),
         ));
         config.telegram.allowed_chat_ids = vec![123];
@@ -9836,19 +9832,15 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_report_feishu_acp_bootstrap_mcp_servers_in_notes() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.enabled = true;
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "cli_a1b2c3".to_owned(),
-        ));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "app-secret".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
         config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
         config.feishu.verification_token =
-            Some(loongclaw_contracts::SecretRef::Inline("token".to_owned()));
-        config.feishu.encrypt_key =
-            Some(loongclaw_contracts::SecretRef::Inline("encrypt".to_owned()));
+            Some(loong_contracts::SecretRef::Inline("token".to_owned()));
+        config.feishu.encrypt_key = Some(loong_contracts::SecretRef::Inline("encrypt".to_owned()));
         config.feishu.acp.bootstrap_mcp_servers = vec!["search".to_owned()];
         config.feishu.acp.working_directory = Some("/workspace/feishu".to_owned());
 
@@ -9876,19 +9868,15 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_attach_account_identity_to_runtime_view() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.enabled = true;
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "cli_a1b2c3".to_owned(),
-        ));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "app-secret".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
         config.feishu.allowed_chat_ids = vec!["oc_123".to_owned()];
         config.feishu.verification_token =
-            Some(loongclaw_contracts::SecretRef::Inline("token".to_owned()));
-        config.feishu.encrypt_key =
-            Some(loongclaw_contracts::SecretRef::Inline("encrypt".to_owned()));
+            Some(loong_contracts::SecretRef::Inline("token".to_owned()));
+        config.feishu.encrypt_key = Some(loong_contracts::SecretRef::Inline("encrypt".to_owned()));
 
         let runtime_dir = temp_runtime_dir("registry-account-runtime");
         let now = now_ms();
@@ -9921,9 +9909,9 @@ mod tests {
 
     #[test]
     fn channel_status_snapshots_preserve_runtime_instance_counts() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.enabled = true;
-        config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
             "123456:token".to_owned(),
         ));
         config.telegram.allowed_chat_ids = vec![123];
@@ -9976,7 +9964,7 @@ mod tests {
 
     #[test]
     fn multi_account_registry_emits_one_snapshot_per_configured_account() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "default_account": "Work Bot",
@@ -10020,7 +10008,7 @@ mod tests {
 
     #[test]
     fn multi_account_registry_marks_default_configured_account() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "default_account": "Work Bot",
@@ -10074,7 +10062,7 @@ mod tests {
 
     #[test]
     fn multi_account_registry_records_fallback_default_account_source() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "accounts": {
@@ -10111,7 +10099,7 @@ mod tests {
 
     fn temp_runtime_dir(suffix: &str) -> std::path::PathBuf {
         let unique = format!(
-            "loongclaw-channel-registry-{suffix}-{}",
+            "loong-channel-registry-{suffix}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")

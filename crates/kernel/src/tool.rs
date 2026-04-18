@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 
 // Re-export data types from contracts
-pub use loongclaw_contracts::{
+pub use loong_contracts::{
     ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
 };
 

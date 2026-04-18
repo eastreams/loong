@@ -8,7 +8,7 @@ MATRIX_PATH="${1:-examples/benchmarks/programmatic-pressure-matrix.json}"
 BASELINE_PATH="${2:-examples/benchmarks/programmatic-pressure-baseline.json}"
 OUTPUT_PATH="${3:-target/benchmarks/programmatic-pressure-report.json}"
 PREFLIGHT_FAIL_ON_WARNINGS="${4:-false}"
-BENCH_PROFILE="${LOONG_BENCH_PROFILE:-${LOONGCLAW_BENCH_PROFILE:-release}}"
+BENCH_PROFILE="${LOONG_BENCH_PROFILE:-${LOONG_BENCH_PROFILE:-release}}"
 EXTRA_ARGS=()
 
 if [[ "$PREFLIGHT_FAIL_ON_WARNINGS" == "true" ]]; then
@@ -16,7 +16,7 @@ if [[ "$PREFLIGHT_FAIL_ON_WARNINGS" == "true" ]]; then
 fi
 
 if [[ "$BENCH_PROFILE" != "dev" && "$BENCH_PROFILE" != "release" ]]; then
-  echo "invalid LOONG_BENCH_PROFILE/LOONGCLAW_BENCH_PROFILE: $BENCH_PROFILE (expected dev|release)" >&2
+  echo "invalid LOONG_BENCH_PROFILE/LOONG_BENCH_PROFILE: $BENCH_PROFILE (expected dev|release)" >&2
   exit 2
 fi
 

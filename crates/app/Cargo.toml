@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [lib]
-name = "loongclaw_app"
+name = "loong_app"
 
 [features]
 default = ["channel-cli", "channel-plugin-bridge", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-http", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
@@ -53,8 +53,8 @@ tool-websearch = []
 test-support = []
 
 [dependencies]
-loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loong-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
+loong-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
 bytes = "1"
 async-trait.workspace = true
 console.workspace = true

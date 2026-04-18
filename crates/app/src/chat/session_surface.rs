@@ -3824,7 +3824,7 @@ fn render_surface_to_string(
 fn render_surface_header(render_data: &SurfaceRenderData, area: Rect, buffer: &mut Buffer) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" loongclaw / chat ");
+        .title(" loong / chat ");
     let inner = block.inner(area);
     block.render(area, buffer);
     if inner.height == 0 {
@@ -4826,7 +4826,7 @@ mod tests {
     fn sample_render_data() -> SurfaceRenderData {
         SurfaceRenderData {
             header_lines: vec![
-                "LOONGCLAW  v0.1.0-alpha.3".to_owned(),
+                "LOONG  v0.1.0-alpha.3".to_owned(),
                 "interactive chat".to_owned(),
             ],
             header_status_line:
@@ -5121,7 +5121,7 @@ mod tests {
             Rect::new(0, 0, 120, 32),
         );
 
-        assert!(rendered.contains("loongclaw / chat"), "{rendered}");
+        assert!(rendered.contains("loong / chat"), "{rendered}");
         assert!(rendered.contains("transcript"), "{rendered}");
         assert!(rendered.contains("control deck"), "{rendered}");
         assert!(rendered.contains("compose"), "{rendered}");

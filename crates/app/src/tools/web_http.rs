@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn build_ssrf_safe_client_allows_localhost_when_private_hosts_are_enabled() {
         let (url, request_rx, server_handle) = must(spawn_http_server(), "spawn http server");
-        let user_agent = "LoongClaw-WebHttp-Test/1.0";
+        let user_agent = "Loong-WebHttp-Test/1.0";
         let client = must(build_ssrf_safe_client(true, 5, user_agent), "build client");
 
         let response = must(
@@ -444,7 +444,7 @@ mod tests {
     fn build_ssrf_safe_client_blocks_localhost_when_private_hosts_are_disabled() {
         let (url, _request_rx, server_handle) = must(spawn_http_server(), "spawn http server");
         let client = must(
-            build_ssrf_safe_client(false, 5, "LoongClaw-WebHttp-Test/1.0"),
+            build_ssrf_safe_client(false, 5, "Loong-WebHttp-Test/1.0"),
             "build client",
         );
 

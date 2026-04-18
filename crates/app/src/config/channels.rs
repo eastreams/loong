@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
@@ -4067,7 +4067,7 @@ impl EmailChannelConfig {
                 let issue = build_email_invalid_value_issue(
                     "email.from_address",
                     "mailbox parse failed",
-                    "Use a valid RFC 5322 mailbox like `ops@example.com` or `LoongClaw <ops@example.com>`.",
+                    "Use a valid RFC 5322 mailbox like `ops@example.com` or `Loong <ops@example.com>`.",
                 );
                 issues.push(issue);
             }
@@ -4164,7 +4164,7 @@ impl EmailChannelConfig {
                     let issue = build_email_invalid_value_issue(
                         field_path.as_str(),
                         "mailbox parse failed",
-                        "Use a valid RFC 5322 mailbox like `ops@example.com` or `LoongClaw <ops@example.com>`.",
+                        "Use a valid RFC 5322 mailbox like `ops@example.com` or `Loong <ops@example.com>`.",
                     );
                     issues.push(issue);
                 }
@@ -7039,7 +7039,7 @@ mod tests {
     #[test]
     fn telegram_account_identity_derives_from_bot_token_prefix() {
         let config = TelegramChannelConfig {
-            bot_token: Some(loongclaw_contracts::SecretRef::Inline(
+            bot_token: Some(loong_contracts::SecretRef::Inline(
                 "987654:token-value".to_owned(),
             )),
             bot_token_env: None,
@@ -7068,9 +7068,7 @@ mod tests {
     #[test]
     fn feishu_account_identity_derives_from_domain_and_app_id() {
         let config = FeishuChannelConfig {
-            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                "cli_a1b2c3".to_owned(),
-            )),
+            app_id: Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned())),
             app_id_env: None,
             domain: FeishuDomain::Lark,
             ..FeishuChannelConfig::default()
@@ -7550,7 +7548,7 @@ mod tests {
     #[test]
     fn wecom_account_identity_derives_from_bot_id() {
         let config = WecomChannelConfig {
-            bot_id: Some(loongclaw_contracts::SecretRef::Inline("bot_123".to_owned())),
+            bot_id: Some(loong_contracts::SecretRef::Inline("bot_123".to_owned())),
             bot_id_env: None,
             ..WecomChannelConfig::default()
         };
@@ -7914,7 +7912,7 @@ mod tests {
             "account_id": "Webhook-Shared",
             "endpoint_url": "https://hooks.example.test/base",
             "auth_token": "base-token",
-            "auth_header_name": "X-LoongClaw-Token",
+            "auth_header_name": "X-Loong-Token",
             "auth_token_prefix": "Token ",
             "payload_format": "json_text",
             "payload_text_field": "message",
@@ -7957,7 +7955,7 @@ mod tests {
         );
         assert_eq!(ops_auth_token.as_deref(), Some("base-token"));
         assert_eq!(ops_signing_secret.as_deref(), Some("base-signing-secret"));
-        assert_eq!(ops.auth_header_name, "X-LoongClaw-Token");
+        assert_eq!(ops.auth_header_name, "X-Loong-Token");
         assert_eq!(ops.auth_token_prefix, "Token ");
         assert_eq!(ops.payload_format, WebhookPayloadFormat::PlainText);
         assert_eq!(ops.payload_text_field, "message");

@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use loongclaw_contracts::ToolCoreOutcome;
+use loong_contracts::ToolCoreOutcome;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn capture_frozen_result_uses_final_output_text_for_success() {
-        let outcome = loongclaw_contracts::ToolCoreOutcome {
+        let outcome = loong_contracts::ToolCoreOutcome {
             status: "ok".to_owned(),
             payload: json!({
                 "final_output": "delegate completed",
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn capture_frozen_result_truncates_utf8_text_without_splitting_codepoints() {
-        let outcome = loongclaw_contracts::ToolCoreOutcome {
+        let outcome = loong_contracts::ToolCoreOutcome {
             status: "ok".to_owned(),
             payload: json!({
                 "final_output": "你好世界",
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn capture_frozen_result_uses_error_variant_for_failures() {
-        let outcome = loongclaw_contracts::ToolCoreOutcome {
+        let outcome = loong_contracts::ToolCoreOutcome {
             status: "error".to_owned(),
             payload: json!({
                 "error": "delegate_panic",
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn capture_frozen_result_prefers_error_message_field_when_present() {
-        let outcome = loongclaw_contracts::ToolCoreOutcome {
+        let outcome = loong_contracts::ToolCoreOutcome {
             status: "error".to_owned(),
             payload: json!({
                 "error": "delegate_timeout",
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn capture_frozen_result_bounds_error_code_and_message() {
         let long_error = "delegate_panic_with_a_very_long_error_code";
-        let outcome = loongclaw_contracts::ToolCoreOutcome {
+        let outcome = loong_contracts::ToolCoreOutcome {
             status: "error".to_owned(),
             payload: json!({
                 "error": long_error,
@@ -304,7 +304,7 @@ mod tests {
         let payload = json!({
             "items": ["a", "b"],
         });
-        let outcome = loongclaw_contracts::ToolCoreOutcome {
+        let outcome = loong_contracts::ToolCoreOutcome {
             status: "ok".to_owned(),
             payload: payload.clone(),
         };

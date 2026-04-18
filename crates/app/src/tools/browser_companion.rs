@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wait_timeout::ChildExt;
@@ -14,7 +14,7 @@ use crate::process_launch::resolve_command_invocation;
 use crate::process_launch::retry_executable_file_busy_with_pause as retry_spawn_with_pause;
 
 const DEFAULT_BROWSER_COMPANION_SCOPE_ID: &str = "__global";
-const BROWSER_COMPANION_PROTOCOL: &str = "loongclaw.browser_companion.v1";
+const BROWSER_COMPANION_PROTOCOL: &str = "loong.browser_companion.v1";
 const BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS: usize = 20;
 const BROWSER_COMPANION_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -551,7 +551,7 @@ fn browser_companion_command(
     }
     if !policy.ready {
         return Err(
-            "browser_companion_not_ready: LOONGCLAW_BROWSER_COMPANION_READY is false".to_owned(),
+            "browser_companion_not_ready: LOONG_BROWSER_COMPANION_READY is false".to_owned(),
         );
     }
     policy.command.as_deref().ok_or_else(|| {
@@ -745,7 +745,7 @@ mod tests {
         time::Duration,
     };
 
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::{Value, json};
 
     struct BrokenWriter;

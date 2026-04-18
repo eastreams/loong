@@ -298,8 +298,7 @@ mod tests {
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let process_id = std::process::id();
         let temp_dir = std::env::temp_dir();
-        let directory_name =
-            format!("loongclaw-operator-approval-runtime-{test_name}-{process_id}");
+        let directory_name = format!("loong-operator-approval-runtime-{test_name}-{process_id}");
         let base_dir = temp_dir.join(directory_name);
         let _ = std::fs::create_dir_all(&base_dir);
 

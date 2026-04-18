@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const CANONICAL_MEMORY_RECORD_TYPE: &str = "canonical_memory_record";
-pub const INTERNAL_PERSISTED_RECORD_MARKER: &str = "_loongclaw_internal";
+pub const INTERNAL_PERSISTED_RECORD_MARKER: &str = "_loong_internal";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -269,7 +269,7 @@ mod tests {
     fn canonical_memory_record_preserves_optional_role_in_envelopes() {
         let content = json!({
             "type": CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "workspace",
             "kind": "imported_profile",
             "content": "Imported profile note",
@@ -293,7 +293,7 @@ mod tests {
     fn canonical_memory_record_rejects_unknown_envelope_scope() {
         let content = json!({
             "type": CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "tenant",
             "kind": "conversation_event",
             "content": "opaque canonical payload",

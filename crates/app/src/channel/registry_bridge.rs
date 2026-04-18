@@ -6,7 +6,7 @@ use crate::channel::{
     ManagedPluginBridgeRuntimeBinding, resolve_managed_plugin_bridge_runtime_binding,
 };
 use crate::config::{
-    ChannelDefaultAccountSelectionSource, LoongClawConfig, ONEBOT_ACCESS_TOKEN_ENV,
+    ChannelDefaultAccountSelectionSource, LoongConfig, ONEBOT_ACCESS_TOKEN_ENV,
     ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
     ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
     WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, normalize_channel_account_id,
@@ -138,7 +138,7 @@ const WEIXIN_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 
 const WEIXIN_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "plugin-bridge weixin surface; connect a compatible WeChat ClawBot or iLink bridge under weixin or weixin.accounts.<account> and let that bridge own the upstream login flow until a native LoongClaw adapter exists",
+    setup_hint: "plugin-bridge weixin surface; connect a compatible WeChat ClawBot or iLink bridge under weixin or weixin.accounts.<account> and let that bridge own the upstream login flow until a native Loong adapter exists",
     status_command: "loong doctor",
     repair_command: None,
 };
@@ -442,7 +442,7 @@ const MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION: &str = "complete_batch";
 
 #[cfg(not(feature = "channel-plugin-bridge"))]
 fn managed_bridge_operation_status(
-    _config: &LoongClawConfig,
+    _config: &LoongConfig,
     _channel_id: &str,
     _configured_account_id: &str,
     operation: ChannelCatalogOperation,
@@ -454,7 +454,7 @@ fn managed_bridge_operation_status(
 
 #[cfg(feature = "channel-plugin-bridge")]
 fn managed_bridge_operation_status(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     channel_id: &str,
     configured_account_id: &str,
     operation: ChannelCatalogOperation,
@@ -595,7 +595,7 @@ pub(super) fn plugin_bridge_account_scope_note_for_channel_id(
 
 fn build_weixin_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -642,7 +642,7 @@ fn build_weixin_snapshots(
 
 fn build_qqbot_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -687,7 +687,7 @@ fn build_qqbot_snapshots(
 
 fn build_onebot_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -731,7 +731,7 @@ fn build_onebot_snapshots(
 }
 
 fn build_weixin_snapshot_for_account(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
     resolved: ResolvedWeixinChannelConfig,
@@ -863,7 +863,7 @@ fn build_weixin_snapshot_for_account(
 }
 
 fn build_qqbot_snapshot_for_account(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
     resolved: ResolvedQqbotChannelConfig,
@@ -989,7 +989,7 @@ fn build_qqbot_snapshot_for_account(
 }
 
 fn build_onebot_snapshot_for_account(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
     resolved: ResolvedOnebotChannelConfig,
@@ -1116,10 +1116,7 @@ fn build_onebot_snapshot_for_account(
     }
 }
 
-fn configured_weixin_account_enabled(
-    config: &LoongClawConfig,
-    configured_account_id: &str,
-) -> bool {
+fn configured_weixin_account_enabled(config: &LoongConfig, configured_account_id: &str) -> bool {
     let account_enabled = config
         .weixin
         .accounts
@@ -1135,7 +1132,7 @@ fn configured_weixin_account_enabled(
     config.weixin.enabled && account_enabled
 }
 
-fn configured_qqbot_account_enabled(config: &LoongClawConfig, configured_account_id: &str) -> bool {
+fn configured_qqbot_account_enabled(config: &LoongConfig, configured_account_id: &str) -> bool {
     let account_enabled = config
         .qqbot
         .accounts
@@ -1151,10 +1148,7 @@ fn configured_qqbot_account_enabled(config: &LoongClawConfig, configured_account
     config.qqbot.enabled && account_enabled
 }
 
-fn configured_onebot_account_enabled(
-    config: &LoongClawConfig,
-    configured_account_id: &str,
-) -> bool {
+fn configured_onebot_account_enabled(config: &LoongConfig, configured_account_id: &str) -> bool {
     let account_enabled = config
         .onebot
         .accounts
@@ -1387,7 +1381,7 @@ mod tests {
                 runtime_operations_json,
             ),
         ]);
-        let manifest = loongclaw_kernel::PluginManifest {
+        let manifest = loong_kernel::PluginManifest {
             api_version: Some("v1alpha1".to_owned()),
             version: Some("1.0.0".to_owned()),
             plugin_id: "weixin-managed-runtime".to_owned(),
@@ -1396,15 +1390,15 @@ mod tests {
             channel_id: Some(channel_id.to_owned()),
             endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
             capabilities: BTreeSet::new(),
-            trust_tier: loongclaw_kernel::PluginTrustTier::Unverified,
+            trust_tier: loong_kernel::PluginTrustTier::Unverified,
             metadata,
             summary: None,
             tags: Vec::new(),
             input_examples: Vec::new(),
             output_examples: Vec::new(),
             defer_loading: false,
-            setup: Some(loongclaw_kernel::PluginSetup {
-                mode: loongclaw_kernel::PluginSetupMode::MetadataOnly,
+            setup: Some(loong_kernel::PluginSetup {
+                mode: loong_kernel::PluginSetupMode::MetadataOnly,
                 surface: Some("channel".to_owned()),
                 required_env_vars: Vec::new(),
                 recommended_env_vars: Vec::new(),
@@ -1417,7 +1411,7 @@ mod tests {
             compatibility: None,
         };
         let plugin_directory = root.join(directory_name);
-        let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+        let manifest_path = plugin_directory.join("loong.plugin.json");
         let encoded_manifest =
             serde_json::to_string_pretty(&manifest).expect("serialize runtime manifest");
 
@@ -1468,7 +1462,7 @@ mod tests {
 
     #[test]
     fn weixin_status_reports_configured_bridge_surface_without_native_runtime() {
-        let config: LoongClawConfig = serde_json::from_value(json!({
+        let config: LoongConfig = serde_json::from_value(json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/api?access_token=secret-token",
@@ -1528,7 +1522,7 @@ mod tests {
 
     #[test]
     fn qqbot_status_reports_configured_bridge_surface_without_native_runtime() {
-        let config: LoongClawConfig = serde_json::from_value(json!({
+        let config: LoongConfig = serde_json::from_value(json!({
             "qqbot": {
                 "enabled": true,
                 "app_id": "10001",
@@ -1599,7 +1593,7 @@ mod tests {
             ],
         );
 
-        let mut config: LoongClawConfig = serde_json::from_value(json!({
+        let mut config: LoongConfig = serde_json::from_value(json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/api",
@@ -1635,7 +1629,7 @@ mod tests {
 
     #[test]
     fn onebot_status_reports_configured_bridge_surface_without_native_runtime() {
-        let config: LoongClawConfig = serde_json::from_value(json!({
+        let config: LoongConfig = serde_json::from_value(json!({
             "onebot": {
                 "enabled": true,
                 "websocket_url": "ws://127.0.0.1:5700?access_token=secret-token",

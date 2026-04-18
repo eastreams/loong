@@ -17,7 +17,7 @@ use crate::KernelContext;
 use crate::channel::feishu::api::{FeishuClient, FeishuWsEndpointClientConfig};
 use crate::channel::{ChannelServeStopHandle, runtime::state::ChannelOperationRuntimeTracker};
 use crate::config::{
-    ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedFeishuChannelConfig,
+    ChannelDefaultAccountSelectionSource, LoongConfig, ResolvedFeishuChannelConfig,
 };
 
 use super::adapter::FeishuAdapter;
@@ -192,7 +192,7 @@ impl FeishuWsFragments {
 }
 
 pub(super) async fn run_feishu_websocket_channel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved: &ResolvedFeishuChannelConfig,
     resolved_path: &Path,
     selected_by_default: bool,
@@ -226,7 +226,7 @@ pub(super) async fn run_feishu_websocket_channel(
     }
 
     tracing::info!(
-        target: "loongclaw.channel.feishu",
+        target: "loong.channel.feishu",
         transport = "websocket",
         config_path = %resolved_path.display(),
         configured_account_id = %resolved.configured_account_id,
@@ -292,7 +292,7 @@ async fn run_feishu_websocket_session(
     let redacted_url = redact_feishu_websocket_log_url(url);
 
     tracing::info!(
-        target: "loongclaw.channel.feishu",
+        target: "loong.channel.feishu",
         transport = "websocket",
         configured_account_id = %state.configured_account_id(),
         account_id = %state.account_id(),
@@ -395,7 +395,7 @@ async fn run_feishu_websocket_session(
                             format!("decode Feishu websocket event payload failed: {error}")
                         })?;
                         tracing::info!(
-                            target: "loongclaw.channel.feishu",
+                            target: "loong.channel.feishu",
                             transport = "websocket",
                             configured_account_id = %state.configured_account_id(),
                             message_id = %message_id,
@@ -516,7 +516,7 @@ mod tests {
 
     const MOCK_PROVIDER_MARKDOWN_REPLY: &str = "## structured inbound ack\n\n- rendered";
     const FEISHU_WEBSOCKET_TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    use crate::config::{FeishuChannelServeMode, LoongClawConfig, ProviderConfig};
+    use crate::config::{FeishuChannelServeMode, LoongConfig, ProviderConfig};
     use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -550,7 +550,7 @@ mod tests {
 
     fn temp_websocket_test_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-feishu-websocket-{label}-{}",
+            "loong-feishu-websocket-{label}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -760,30 +760,27 @@ data: [DONE]\n\n",
         spawn_mock_http_server(router).await
     }
 
-    fn test_websocket_config(provider_base_url: &str, feishu_base_url: &str) -> LoongClawConfig {
+    fn test_websocket_config(provider_base_url: &str, feishu_base_url: &str) -> LoongConfig {
         let temp_dir = temp_websocket_test_dir("runtime");
         std::fs::create_dir_all(&temp_dir).expect("create websocket temp dir");
 
-        let mut config = LoongClawConfig {
+        let mut config = LoongConfig {
             provider: ProviderConfig {
                 base_url: provider_base_url.to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "test-provider-key".to_owned(),
                 )),
                 model: "test-model".to_owned(),
                 ..ProviderConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         config.memory.sqlite_path = temp_dir.join("memory.sqlite3").display().to_string();
         config.feishu.enabled = true;
         config.feishu.account_id = Some("feishu_main".to_owned());
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "cli_a1b2c3".to_owned(),
-        ));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "secret-123".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("secret-123".to_owned()));
         config.feishu.base_url = Some(feishu_base_url.to_owned());
         config.feishu.mode = Some(FeishuChannelServeMode::Websocket);
         config.feishu.receive_id_type = "chat_id".to_owned();

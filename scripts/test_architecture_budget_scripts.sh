@@ -131,7 +131,7 @@ run_check_fails_on_missing_hotspot_test() {
   local output_file="$fixture/check.out"
   if (
     cd "$fixture" &&
-      LOONGCLAW_ARCH_STRICT=true scripts/check_architecture_boundaries.sh >"$output_file" 2>&1
+      LOONG_ARCH_STRICT=true scripts/check_architecture_boundaries.sh >"$output_file" 2>&1
   ); then
     echo "expected architecture boundary check to fail when a tracked hotspot file is missing" >&2
     cat "$output_file" >&2
@@ -153,7 +153,7 @@ run_report_fails_on_missing_hotspot_test() {
   local output_file="$fixture/report.out"
   if (
     cd "$fixture" &&
-      LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      LOONG_ARCH_REPORT_MONTH="2099-01" \
         scripts/generate_architecture_drift_report.sh "$report_file" >"$output_file" 2>&1
   ); then
     echo "expected architecture drift report generation to fail when a tracked hotspot file is missing" >&2
@@ -175,7 +175,7 @@ run_check_fails_on_missing_boundary_file_test() {
   local output_file="$fixture/check-boundary.out"
   if (
     cd "$fixture" &&
-      LOONGCLAW_ARCH_STRICT=true scripts/check_architecture_boundaries.sh >"$output_file" 2>&1
+      LOONG_ARCH_STRICT=true scripts/check_architecture_boundaries.sh >"$output_file" 2>&1
   ); then
     echo "expected architecture boundary check to fail when a tracked boundary file is missing" >&2
     cat "$output_file" >&2
@@ -197,7 +197,7 @@ run_report_fails_on_missing_boundary_file_test() {
   local output_file="$fixture/report-boundary.out"
   if (
     cd "$fixture" &&
-      LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      LOONG_ARCH_REPORT_MONTH="2099-01" \
         scripts/generate_architecture_drift_report.sh "$report_file" >"$output_file" 2>&1
   ); then
     echo "expected architecture drift report generation to fail when a tracked boundary file is missing" >&2

@@ -84,7 +84,7 @@ write_release_fixture_asset() {
 set -euo pipefail
 if [[ "${1:-}" == "onboard" ]]; then
   shift
-  selected_provider="${LOONG_WEB_SEARCH_PROVIDER:-${LOONGCLAW_WEB_SEARCH_PROVIDER:-}}"
+  selected_provider="${LOONG_WEB_SEARCH_PROVIDER:-${LOONG_WEB_SEARCH_PROVIDER:-}}"
   while [[ "$#" -gt 0 ]]; do
     case "${1:-}" in
       --web-search-provider)
@@ -823,7 +823,7 @@ run_release_install_honors_legacy_release_base_env_test() {
 
   (
     cd "$REPO_ROOT"
-    LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+    LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
   )
 
@@ -846,7 +846,7 @@ run_release_override_install_and_onboard_honors_legacy_web_search_provider_env_t
     cd "$REPO_ROOT"
     ONBOARD_MARKER="$marker" \
       LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
-      LOONGCLAW_WEB_SEARCH_PROVIDER="brave" \
+      LOONG_WEB_SEARCH_PROVIDER="brave" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
   )
 

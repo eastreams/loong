@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OnboardingModelSelectionContext {
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn resolve_onboarding_model_prompt_default_prefers_explicit_override() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
 
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn resolve_onboarding_model_prompt_default_rejects_blank_override() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
 
         let error = resolve_onboarding_model_prompt_default(&config.provider, Some("   "))
             .expect_err("blank explicit override should fail");
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn resolve_onboarding_model_prompt_default_keeps_explicit_model() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "deepseek-chat".to_owned();
 
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn resolve_onboarding_model_prompt_default_uses_reviewed_default_for_auto() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
 
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn resolve_onboarding_model_prompt_default_uses_xiaomi_reviewed_default_for_auto() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Xiaomi;
         config.provider.model = "auto".to_owned();
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn resolve_onboarding_model_prompt_default_keeps_auto_for_unreviewed_provider() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Custom;
         config.provider.model = "auto".to_owned();
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn onboarding_model_selection_context_surfaces_preferred_fallback_hint() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
         config.provider.preferred_models = vec!["MiniMax-M2.5".to_owned()];
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn onboarding_model_selection_context_hides_duplicate_reviewed_model_note() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "deepseek-chat".to_owned();
 

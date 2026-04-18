@@ -24,7 +24,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 fn write_runtime_experiment_config(root: &Path) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.browser.enabled = true;
     config.tools.web.enabled = true;
@@ -50,15 +50,13 @@ fn write_runtime_experiment_config(root: &Path) -> PathBuf {
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
-                    "demo-token".to_owned(),
-                )),
+                api_key: Some(loong_contracts::SecretRef::Inline("demo-token".to_owned())),
                 ..Default::default()
             },
         },
     );
 
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     config_path
@@ -68,15 +66,14 @@ fn write_snapshot_artifact(
     root: &Path,
     config_path: &Path,
     relative: &str,
-    metadata: loongclaw_daemon::RuntimeSnapshotArtifactMetadata,
+    metadata: loong_daemon::RuntimeSnapshotArtifactMetadata,
 ) -> (PathBuf, Value) {
     let snapshot = collect_runtime_snapshot_cli_state(Some(
         config_path.to_str().expect("config path should be utf-8"),
     ))
     .expect("collect runtime snapshot");
-    let payload =
-        loongclaw_daemon::build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)
-            .expect("build runtime snapshot artifact");
+    let payload = loong_daemon::build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)
+        .expect("build runtime snapshot artifact");
     let artifact_path = root.join(relative);
     if let Some(parent) = artifact_path.parent() {
         fs::create_dir_all(parent).expect("create artifact directory");
@@ -177,11 +174,11 @@ fn start_runtime_experiment(
     experiment_id: Option<&str>,
 ) -> (
     PathBuf,
-    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+    loong_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
     let run_path = root.join("artifacts/runtime-experiment.json");
-    let run = loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_start_command(
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentStartCommandOptions {
+    let run = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_start_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentStartCommandOptions {
             snapshot: snapshot_path.display().to_string(),
             output: run_path.display().to_string(),
             mutation_summary: "enable browser preview skill".to_owned(),
@@ -200,13 +197,13 @@ fn finish_runtime_experiment(
     config_path: &Path,
 ) -> (
     PathBuf,
-    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+    loong_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         root,
         config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -219,7 +216,7 @@ fn finish_runtime_experiment(
         root,
         config_path,
         "artifacts/runtime-snapshot-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -227,20 +224,19 @@ fn finish_runtime_experiment(
         },
     );
 
-    let finished =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "task success improved".to_owned(),
-                metric: vec!["task_success=1".to_owned(), "token_delta=0".to_owned()],
-                warning: vec!["manual verification only".to_owned()],
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect("runtime experiment finish should succeed");
+    let finished = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "task success improved".to_owned(),
+            metric: vec!["task_success=1".to_owned(), "token_delta=0".to_owned()],
+            warning: vec!["manual verification only".to_owned()],
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect("runtime experiment finish should succeed");
     (run_path, finished)
 }
 
@@ -251,13 +247,13 @@ fn finish_runtime_experiment_with_compare_delta(
     PathBuf,
     PathBuf,
     PathBuf,
-    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+    loong_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         root,
         config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -273,7 +269,7 @@ fn finish_runtime_experiment_with_compare_delta(
         root,
         config_path,
         "artifacts/runtime-snapshot-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -281,20 +277,19 @@ fn finish_runtime_experiment_with_compare_delta(
         },
     );
 
-    let finished =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "provider and tool policy updated".to_owned(),
-                metric: vec!["task_success=1".to_owned(), "cost_delta=-0.2".to_owned()],
-                warning: vec!["manual verification only".to_owned()],
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect("runtime experiment finish should succeed");
+    let finished = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "provider and tool policy updated".to_owned(),
+            metric: vec!["task_success=1".to_owned(), "cost_delta=-0.2".to_owned()],
+            warning: vec!["manual verification only".to_owned()],
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect("runtime experiment finish should succeed");
 
     (
         run_path,
@@ -311,13 +306,13 @@ fn finish_runtime_experiment_with_missing_compare_sections(
     PathBuf,
     PathBuf,
     PathBuf,
-    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
+    loong_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         root,
         config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -344,27 +339,26 @@ fn finish_runtime_experiment_with_missing_compare_sections(
         root,
         config_path,
         "artifacts/runtime-snapshot-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
             parent_snapshot_id: Some(baseline_snapshot_id),
         },
     );
-    let finished =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "filled missing runtime sections".to_owned(),
-                metric: vec!["task_success=1".to_owned()],
-                warning: Vec::new(),
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect("runtime experiment finish should succeed");
+    let finished = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "filled missing runtime sections".to_owned(),
+            metric: vec!["task_success=1".to_owned()],
+            warning: Vec::new(),
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect("runtime experiment finish should succeed");
 
     (
         run_path,
@@ -376,13 +370,13 @@ fn finish_runtime_experiment_with_missing_compare_sections(
 
 #[test]
 fn runtime_experiment_start_creates_planned_run_and_inherits_baseline_lineage() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-start");
+    let root = unique_temp_dir("loong-runtime-experiment-start");
     let config_path = write_runtime_experiment_config(&root);
     let (snapshot_path, snapshot_payload) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -391,8 +385,8 @@ fn runtime_experiment_start_creates_planned_run_and_inherits_baseline_lineage() 
     );
     let run_path = root.join("artifacts/runtime-experiment.json");
 
-    let run = loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_start_command(
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentStartCommandOptions {
+    let run = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_start_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentStartCommandOptions {
             snapshot: snapshot_path.display().to_string(),
             output: run_path.display().to_string(),
             mutation_summary: "enable browser preview skill".to_owned(),
@@ -420,11 +414,11 @@ fn runtime_experiment_start_creates_planned_run_and_inherits_baseline_lineage() 
     );
     assert_eq!(
         run.status,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentStatus::Planned
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentStatus::Planned
     );
     assert_eq!(
         run.decision,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Undecided
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Undecided
     );
     assert_eq!(run.mutation.summary, "enable browser preview skill");
     assert_eq!(
@@ -443,13 +437,13 @@ fn runtime_experiment_start_creates_planned_run_and_inherits_baseline_lineage() 
 
 #[test]
 fn runtime_experiment_start_requires_explicit_experiment_id_when_baseline_is_missing_one() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-start-missing-id");
+    let root = unique_temp_dir("loong-runtime-experiment-start-missing-id");
     let config_path = write_runtime_experiment_config(&root);
     let (snapshot_path, _) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: None,
@@ -458,8 +452,8 @@ fn runtime_experiment_start_requires_explicit_experiment_id_when_baseline_is_mis
     );
     let run_path = root.join("artifacts/runtime-experiment.json");
 
-    let error = loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_start_command(
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentStartCommandOptions {
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_start_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentStartCommandOptions {
             snapshot: snapshot_path.display().to_string(),
             output: run_path.display().to_string(),
             mutation_summary: "enable browser preview skill".to_owned(),
@@ -478,13 +472,13 @@ fn runtime_experiment_start_requires_explicit_experiment_id_when_baseline_is_mis
 
 #[test]
 fn runtime_experiment_finish_persists_result_metrics_and_warnings() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-finish");
+    let root = unique_temp_dir("loong-runtime-experiment-finish");
     let config_path = write_runtime_experiment_config(&root);
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -497,7 +491,7 @@ fn runtime_experiment_finish_persists_result_metrics_and_warnings() {
         &root,
         &config_path,
         "artifacts/runtime-snapshot-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -505,28 +499,27 @@ fn runtime_experiment_finish_persists_result_metrics_and_warnings() {
         },
     );
 
-    let finished =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "task success improved".to_owned(),
-                metric: vec!["task_success=1".to_owned(), "token_delta=0".to_owned()],
-                warning: vec!["manual verification only".to_owned()],
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect("runtime experiment finish should succeed");
+    let finished = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "task success improved".to_owned(),
+            metric: vec!["task_success=1".to_owned(), "token_delta=0".to_owned()],
+            warning: vec!["manual verification only".to_owned()],
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect("runtime experiment finish should succeed");
 
     assert_eq!(
         finished.status,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentStatus::Completed
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentStatus::Completed
     );
     assert_eq!(
         finished.decision,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted
     );
     assert!(
         finished.finished_at.is_some(),
@@ -574,13 +567,13 @@ fn runtime_experiment_finish_persists_result_metrics_and_warnings() {
 
 #[test]
 fn runtime_experiment_finish_rejects_conflicting_result_snapshot_experiment_id() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-finish-conflict");
+    let root = unique_temp_dir("loong-runtime-experiment-finish-conflict");
     let config_path = write_runtime_experiment_config(&root);
     let (baseline_snapshot_path, _) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -592,7 +585,7 @@ fn runtime_experiment_finish_rejects_conflicting_result_snapshot_experiment_id()
         &root,
         &config_path,
         "artifacts/runtime-snapshot-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: Some("exp-other".to_owned()),
@@ -600,20 +593,19 @@ fn runtime_experiment_finish_rejects_conflicting_result_snapshot_experiment_id()
         },
     );
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "task success improved".to_owned(),
-                metric: vec!["task_success=1".to_owned()],
-                warning: Vec::new(),
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Rejected,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect_err("conflicting result snapshot experiment id must fail");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "task success improved".to_owned(),
+            metric: vec!["task_success=1".to_owned()],
+            warning: Vec::new(),
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Rejected,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect_err("conflicting result snapshot experiment id must fail");
 
     assert!(error.contains("experiment_id"));
 
@@ -622,13 +614,13 @@ fn runtime_experiment_finish_rejects_conflicting_result_snapshot_experiment_id()
 
 #[test]
 fn runtime_experiment_finish_warns_when_result_snapshot_has_no_experiment_id() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-finish-missing-id");
+    let root = unique_temp_dir("loong-runtime-experiment-finish-missing-id");
     let config_path = write_runtime_experiment_config(&root);
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -641,7 +633,7 @@ fn runtime_experiment_finish_warns_when_result_snapshot_has_no_experiment_id() {
         &root,
         &config_path,
         "artifacts/runtime-snapshot-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: None,
@@ -649,20 +641,19 @@ fn runtime_experiment_finish_warns_when_result_snapshot_has_no_experiment_id() {
         },
     );
 
-    let finished =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "task success improved".to_owned(),
-                metric: vec!["task_success=1".to_owned()],
-                warning: Vec::new(),
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Rejected,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect("missing result snapshot experiment id should downgrade to a warning");
+    let finished = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "task success improved".to_owned(),
+            metric: vec!["task_success=1".to_owned()],
+            warning: Vec::new(),
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Rejected,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect("missing result snapshot experiment id should downgrade to a warning");
 
     assert!(
         finished
@@ -680,13 +671,13 @@ fn runtime_experiment_finish_warns_when_result_snapshot_has_no_experiment_id() {
 
 #[test]
 fn runtime_experiment_finish_rejects_mutating_a_finalized_run() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-finish-finalized");
+    let root = unique_temp_dir("loong-runtime-experiment-finish-finalized");
     let config_path = write_runtime_experiment_config(&root);
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -699,7 +690,7 @@ fn runtime_experiment_finish_rejects_mutating_a_finalized_run() {
         &root,
         &config_path,
         "artifacts/runtime-snapshot-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -708,38 +699,38 @@ fn runtime_experiment_finish_rejects_mutating_a_finalized_run() {
     );
 
     let first_finish =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+        loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+            loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
                 run: run_path.display().to_string(),
                 result_snapshot: result_snapshot_path.display().to_string(),
                 evaluation_summary: "task success improved".to_owned(),
                 metric: vec!["task_success=1".to_owned()],
                 warning: Vec::new(),
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+                decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+                status:
+                    loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
                 json: false,
             },
         )
         .expect("first finish should succeed");
     assert_eq!(
         first_finish.status,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentStatus::Completed
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentStatus::Completed
     );
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "task success improved again".to_owned(),
-                metric: vec!["task_success=2".to_owned()],
-                warning: Vec::new(),
-                decision: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
-                status: loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect_err("finalized run should reject further mutation");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "task success improved again".to_owned(),
+            metric: vec!["task_success=2".to_owned()],
+            warning: Vec::new(),
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect_err("finalized run should reject further mutation");
 
     assert!(error.contains("completed"));
 
@@ -748,12 +739,12 @@ fn runtime_experiment_finish_rejects_mutating_a_finalized_run() {
 
 #[test]
 fn runtime_experiment_show_round_trips_the_persisted_artifact() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-show");
+    let root = unique_temp_dir("loong-runtime-experiment-show");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, finished) = finish_runtime_experiment(&root, &config_path);
 
-    let shown = loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_show_command(
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentShowCommandOptions {
+    let shown = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_show_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentShowCommandOptions {
             run: run_path.display().to_string(),
             json: true,
         },
@@ -767,16 +758,15 @@ fn runtime_experiment_show_round_trips_the_persisted_artifact() {
 
 #[test]
 fn runtime_experiment_show_text_surfaces_decision_fields_first() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-show-text");
+    let root = unique_temp_dir("loong-runtime-experiment-show-text");
     let config_path = write_runtime_experiment_config(&root);
     let (_, finished) = finish_runtime_experiment(&root, &config_path);
 
-    let rendered =
-        loongclaw_daemon::runtime_experiment_cli::render_runtime_experiment_text(&finished);
+    let rendered = loong_daemon::runtime_experiment_cli::render_runtime_experiment_text(&finished);
     assert!(
         rendered
             .lines()
-            .any(|line| line.starts_with("LOONGCLAW") || line.contains(" loongclaw ")),
+            .any(|line| line.starts_with("LOONG") || line.contains(" loong ")),
         "runtime experiment text should now use the shared ratatui operator shell header: {rendered}"
     );
     assert!(rendered.contains("experiment run"));
@@ -794,25 +784,24 @@ fn runtime_experiment_show_text_surfaces_decision_fields_first() {
 
 #[test]
 fn runtime_experiment_compare_record_only_surfaces_decision_summary() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-record-only");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-record-only");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, finished) = finish_runtime_experiment(&root, &config_path);
 
-    let report =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: None,
-                result_snapshot: None,
-                recorded_snapshots: false,
-                json: true,
-            },
-        )
-        .expect("record-only compare should succeed");
+    let report = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: None,
+            result_snapshot: None,
+            recorded_snapshots: false,
+            json: true,
+        },
+    )
+    .expect("record-only compare should succeed");
 
     assert_eq!(
         report.compare_mode,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareMode::RecordOnly
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareMode::RecordOnly
     );
     assert_eq!(report.run_id, finished.run_id);
     assert_eq!(report.status, finished.status);
@@ -828,7 +817,7 @@ fn runtime_experiment_compare_record_only_surfaces_decision_summary() {
     assert!(report.snapshot_delta.is_none());
 
     let rendered =
-        loongclaw_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
     assert!(rendered.contains("compare_mode=record_only"));
     assert!(rendered.contains("evaluation_summary=task success improved"));
 
@@ -837,26 +826,25 @@ fn runtime_experiment_compare_record_only_surfaces_decision_summary() {
 
 #[test]
 fn runtime_experiment_compare_with_snapshot_delta_reports_changed_runtime_surfaces() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-snapshot-delta");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-snapshot-delta");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, baseline_snapshot_path, result_snapshot_path, _) =
         finish_runtime_experiment_with_compare_delta(&root, &config_path);
 
-    let report =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
-                result_snapshot: Some(result_snapshot_path.display().to_string()),
-                recorded_snapshots: false,
-                json: true,
-            },
-        )
-        .expect("snapshot-delta compare should succeed");
+    let report = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
+            result_snapshot: Some(result_snapshot_path.display().to_string()),
+            recorded_snapshots: false,
+            json: true,
+        },
+    )
+    .expect("snapshot-delta compare should succeed");
 
     assert_eq!(
         report.compare_mode,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareMode::SnapshotDelta
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareMode::SnapshotDelta
     );
     let snapshot_delta = report
         .snapshot_delta
@@ -888,7 +876,7 @@ fn runtime_experiment_compare_with_snapshot_delta_reports_changed_runtime_surfac
     );
 
     let rendered =
-        loongclaw_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
     assert!(rendered.contains("compare_mode=snapshot_delta"));
     assert!(rendered.contains("provider_active_profile=deepseek-lab -> openai-main"));
     assert!(rendered.contains("provider_active_model=deepseek-chat -> gpt-4.1-mini"));
@@ -898,26 +886,25 @@ fn runtime_experiment_compare_with_snapshot_delta_reports_changed_runtime_surfac
 
 #[test]
 fn runtime_experiment_compare_with_recorded_snapshots_reports_changed_runtime_surfaces() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-snapshots");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-recorded-snapshots");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, _baseline_snapshot_path, _result_snapshot_path, _) =
         finish_runtime_experiment_with_compare_delta(&root, &config_path);
 
-    let report =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: None,
-                result_snapshot: None,
-                recorded_snapshots: true,
-                json: true,
-            },
-        )
-        .expect("recorded snapshot compare should succeed");
+    let report = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: None,
+            result_snapshot: None,
+            recorded_snapshots: true,
+            json: true,
+        },
+    )
+    .expect("recorded snapshot compare should succeed");
 
     assert_eq!(
         report.compare_mode,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareMode::SnapshotDelta
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareMode::SnapshotDelta
     );
     let snapshot_delta = report
         .snapshot_delta
@@ -937,7 +924,7 @@ fn runtime_experiment_compare_with_recorded_snapshots_reports_changed_runtime_su
     );
 
     let rendered =
-        loongclaw_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
     assert!(rendered.contains("compare_mode=snapshot_delta"));
 
     fs::remove_dir_all(&root).ok();
@@ -945,7 +932,7 @@ fn runtime_experiment_compare_with_recorded_snapshots_reports_changed_runtime_su
 
 #[test]
 fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-channel-taxonomy");
+    let root = unique_temp_dir("loong-runtime-experiment-channel-taxonomy");
     let config_path = write_runtime_experiment_config(&root);
     let (_, mut config) = mvp::config::load(Some(
         config_path
@@ -971,7 +958,7 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
         &root,
         &config_path,
         "artifacts/runtime-snapshot-channel-baseline.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-channel-taxonomy".to_owned()),
@@ -988,7 +975,7 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
         &root,
         &config_path,
         "artifacts/runtime-snapshot-channel-result.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:30:00Z".to_owned(),
             label: Some("candidate".to_owned()),
             experiment_id: Some("exp-channel-taxonomy".to_owned()),
@@ -996,34 +983,30 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
         },
     );
 
-    let finished =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
-                run: run_path.display().to_string(),
-                result_snapshot: result_snapshot_path.display().to_string(),
-                evaluation_summary: "channel taxonomy shifted".to_owned(),
-                metric: vec!["task_success=1".to_owned()],
-                warning: Vec::new(),
-                decision:
-                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
-                status:
-                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
-                json: false,
-            },
-        )
-        .expect("runtime experiment finish should succeed");
+    let finished = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_finish_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishCommandOptions {
+            run: run_path.display().to_string(),
+            result_snapshot: result_snapshot_path.display().to_string(),
+            evaluation_summary: "channel taxonomy shifted".to_owned(),
+            metric: vec!["task_success=1".to_owned()],
+            warning: Vec::new(),
+            decision: loong_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+            status: loong_daemon::runtime_experiment_cli::RuntimeExperimentFinishStatus::Completed,
+            json: false,
+        },
+    )
+    .expect("runtime experiment finish should succeed");
 
-    let report =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
-                result_snapshot: Some(result_snapshot_path.display().to_string()),
-                recorded_snapshots: false,
-                json: true,
-            },
-        )
-        .expect("snapshot-delta compare should succeed");
+    let report = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
+            result_snapshot: Some(result_snapshot_path.display().to_string()),
+            recorded_snapshots: false,
+            json: true,
+        },
+    )
+    .expect("snapshot-delta compare should succeed");
 
     let snapshot_delta = report
         .snapshot_delta
@@ -1071,7 +1054,7 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
     );
 
     let rendered =
-        loongclaw_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
+        loong_daemon::runtime_experiment_cli::render_runtime_experiment_compare_text(&report);
     assert!(rendered.contains("enabled_runtime_backed_channel_ids"));
     assert!(rendered.contains("enabled_plugin_backed_channel_ids"));
     assert!(rendered.contains("enabled_outbound_only_channel_ids"));
@@ -1082,22 +1065,21 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
 
 #[test]
 fn runtime_experiment_compare_requires_both_snapshot_paths_for_deep_compare() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-partial");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-partial");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, baseline_snapshot_path, _, _) =
         finish_runtime_experiment_with_compare_delta(&root, &config_path);
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
-                result_snapshot: None,
-                recorded_snapshots: false,
-                json: false,
-            },
-        )
-        .expect_err("partial snapshot input should be rejected");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
+            result_snapshot: None,
+            recorded_snapshots: false,
+            json: false,
+        },
+    )
+    .expect_err("partial snapshot input should be rejected");
 
     assert!(error.contains("requires --baseline-snapshot and --result-snapshot together"));
 
@@ -1106,7 +1088,7 @@ fn runtime_experiment_compare_requires_both_snapshot_paths_for_deep_compare() {
 
 #[test]
 fn runtime_experiment_compare_rejects_snapshot_identity_mismatch() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-mismatch");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-mismatch");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, baseline_snapshot_path, _, _) =
         finish_runtime_experiment_with_compare_delta(&root, &config_path);
@@ -1114,7 +1096,7 @@ fn runtime_experiment_compare_rejects_snapshot_identity_mismatch() {
         &root,
         &config_path,
         "artifacts/runtime-snapshot-other.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:45:00Z".to_owned(),
             label: Some("other".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -1122,17 +1104,16 @@ fn runtime_experiment_compare_rejects_snapshot_identity_mismatch() {
         },
     );
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
-                result_snapshot: Some(other_result_snapshot_path.display().to_string()),
-                recorded_snapshots: false,
-                json: false,
-            },
-        )
-        .expect_err("mismatched result snapshot should be rejected");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
+            result_snapshot: Some(other_result_snapshot_path.display().to_string()),
+            recorded_snapshots: false,
+            json: false,
+        },
+    )
+    .expect_err("mismatched result snapshot should be rejected");
 
     assert!(error.contains("result snapshot"));
     assert!(error.contains("snapshot_id"));
@@ -1142,22 +1123,21 @@ fn runtime_experiment_compare_rejects_snapshot_identity_mismatch() {
 
 #[test]
 fn runtime_experiment_compare_treats_missing_snapshot_sections_as_absent() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-missing-sections");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-missing-sections");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, baseline_snapshot_path, result_snapshot_path, _) =
         finish_runtime_experiment_with_missing_compare_sections(&root, &config_path);
 
-    let report =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
-                result_snapshot: Some(result_snapshot_path.display().to_string()),
-                recorded_snapshots: false,
-                json: true,
-            },
-        )
-        .expect("compare should tolerate missing snapshot sections");
+    let report = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: Some(baseline_snapshot_path.display().to_string()),
+            result_snapshot: Some(result_snapshot_path.display().to_string()),
+            recorded_snapshots: false,
+            json: true,
+        },
+    )
+    .expect("compare should tolerate missing snapshot sections");
 
     let snapshot_delta = report
         .snapshot_delta
@@ -1176,7 +1156,7 @@ fn runtime_experiment_compare_treats_missing_snapshot_sections_as_absent() {
 
 #[test]
 fn runtime_experiment_compare_recorded_snapshots_rejects_missing_recorded_result_path() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-missing-path");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-recorded-missing-path");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, _, _, _) = finish_runtime_experiment_with_compare_delta(&root, &config_path);
     rewrite_json_file(&run_path, |payload| {
@@ -1186,17 +1166,16 @@ fn runtime_experiment_compare_recorded_snapshots_rejects_missing_recorded_result
             .remove("artifact_path");
     });
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: None,
-                result_snapshot: None,
-                recorded_snapshots: true,
-                json: false,
-            },
-        )
-        .expect_err("recorded snapshot compare should reject missing recorded result path");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: None,
+            result_snapshot: None,
+            recorded_snapshots: true,
+            json: false,
+        },
+    )
+    .expect_err("recorded snapshot compare should reject missing recorded result path");
 
     assert!(error.contains("missing recorded result snapshot path"));
 
@@ -1205,23 +1184,22 @@ fn runtime_experiment_compare_recorded_snapshots_rejects_missing_recorded_result
 
 #[test]
 fn runtime_experiment_compare_recorded_snapshots_rejects_unresolvable_result_path() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-unresolvable-path");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-recorded-unresolvable-path");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, _, result_snapshot_path, _) =
         finish_runtime_experiment_with_compare_delta(&root, &config_path);
     fs::remove_file(&result_snapshot_path).expect("result snapshot fixture should be removable");
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: None,
-                result_snapshot: None,
-                recorded_snapshots: true,
-                json: false,
-            },
-        )
-        .expect_err("recorded snapshot compare should reject an unresolvable result path");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: None,
+            result_snapshot: None,
+            recorded_snapshots: true,
+            json: false,
+        },
+    )
+    .expect_err("recorded snapshot compare should reject an unresolvable result path");
 
     assert!(error.contains("recorded result snapshot path"));
     assert!(error.contains("cannot be resolved"));
@@ -1231,13 +1209,13 @@ fn runtime_experiment_compare_recorded_snapshots_rejects_unresolvable_result_pat
 
 #[test]
 fn runtime_experiment_compare_recorded_snapshots_rejects_unavailable_result_stage() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-compare-recorded-no-result");
+    let root = unique_temp_dir("loong-runtime-experiment-compare-recorded-no-result");
     let config_path = write_runtime_experiment_config(&root);
     let (baseline_snapshot_path, _) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -1246,17 +1224,16 @@ fn runtime_experiment_compare_recorded_snapshots_rejects_unavailable_result_stag
     );
     let (run_path, _) = start_runtime_experiment(&root, &baseline_snapshot_path, None);
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
-                run: run_path.display().to_string(),
-                baseline_snapshot: None,
-                result_snapshot: None,
-                recorded_snapshots: true,
-                json: false,
-            },
-        )
-        .expect_err("planned run should not deep-compare recorded snapshots");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_compare_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentCompareCommandOptions {
+            run: run_path.display().to_string(),
+            baseline_snapshot: None,
+            result_snapshot: None,
+            recorded_snapshots: true,
+            json: false,
+        },
+    )
+    .expect_err("planned run should not deep-compare recorded snapshots");
 
     assert!(error.contains("has no result snapshot"));
 
@@ -1265,17 +1242,16 @@ fn runtime_experiment_compare_recorded_snapshots_rejects_unavailable_result_stag
 
 #[test]
 fn runtime_experiment_restore_uses_recorded_result_snapshot_path() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-restore-stage-result");
+    let root = unique_temp_dir("loong-runtime-experiment-restore-stage-result");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, _, result_snapshot_path, finished) =
         finish_runtime_experiment_with_compare_delta(&root, &config_path);
 
     let execution =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
+        loong_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
+            loong_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
                 run: run_path.display().to_string(),
-                stage:
-                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
+                stage: loong_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
                 config: Some(config_path.display().to_string()),
                 json: false,
                 apply: false,
@@ -1285,7 +1261,7 @@ fn runtime_experiment_restore_uses_recorded_result_snapshot_path() {
 
     assert_eq!(
         execution.stage,
-        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result
     );
     assert_eq!(
         execution.snapshot_path,
@@ -1306,7 +1282,7 @@ fn runtime_experiment_restore_uses_recorded_result_snapshot_path() {
 
 #[test]
 fn runtime_experiment_restore_rejects_missing_recorded_stage_path() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-restore-stage-missing-path");
+    let root = unique_temp_dir("loong-runtime-experiment-restore-stage-missing-path");
     let config_path = write_runtime_experiment_config(&root);
     let (run_path, _, _, _) = finish_runtime_experiment_with_compare_delta(&root, &config_path);
     rewrite_json_file(&run_path, |payload| {
@@ -1316,18 +1292,16 @@ fn runtime_experiment_restore_rejects_missing_recorded_stage_path() {
             .remove("artifact_path");
     });
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
-                run: run_path.display().to_string(),
-                stage:
-                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
-                config: Some(config_path.display().to_string()),
-                json: false,
-                apply: false,
-            },
-        )
-        .expect_err("runtime experiment restore should reject old artifacts without a path");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
+            run: run_path.display().to_string(),
+            stage: loong_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
+            config: Some(config_path.display().to_string()),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect_err("runtime experiment restore should reject old artifacts without a path");
 
     assert!(error.contains("missing recorded result snapshot path"));
 
@@ -1336,13 +1310,13 @@ fn runtime_experiment_restore_rejects_missing_recorded_stage_path() {
 
 #[test]
 fn runtime_experiment_restore_rejects_unavailable_result_stage() {
-    let root = unique_temp_dir("loongclaw-runtime-experiment-restore-stage-unavailable");
+    let root = unique_temp_dir("loong-runtime-experiment-restore-stage-unavailable");
     let config_path = write_runtime_experiment_config(&root);
     let (baseline_snapshot_path, _) = write_snapshot_artifact(
         &root,
         &config_path,
         "artifacts/runtime-snapshot.json",
-        loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+        loong_daemon::RuntimeSnapshotArtifactMetadata {
             created_at: "2026-03-16T12:00:00Z".to_owned(),
             label: Some("baseline".to_owned()),
             experiment_id: Some("exp-42".to_owned()),
@@ -1351,18 +1325,16 @@ fn runtime_experiment_restore_rejects_unavailable_result_stage() {
     );
     let (run_path, _) = start_runtime_experiment(&root, &baseline_snapshot_path, None);
 
-    let error =
-        loongclaw_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
-            loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
-                run: run_path.display().to_string(),
-                stage:
-                    loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
-                config: Some(config_path.display().to_string()),
-                json: false,
-                apply: false,
-            },
-        )
-        .expect_err("planned runs should not expose a result stage restore");
+    let error = loong_daemon::runtime_experiment_cli::execute_runtime_experiment_restore_command(
+        loong_daemon::runtime_experiment_cli::RuntimeExperimentRestoreCommandOptions {
+            run: run_path.display().to_string(),
+            stage: loong_daemon::runtime_experiment_cli::RuntimeExperimentRestoreStage::Result,
+            config: Some(config_path.display().to_string()),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect_err("planned runs should not expose a result stage restore");
 
     assert!(error.contains("has no recorded result snapshot to restore"));
 

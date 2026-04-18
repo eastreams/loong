@@ -32,7 +32,7 @@ async fn json_body(response: axum::response::Response) -> Value {
 async fn gateway_acp_observability_rejects_missing_auth() {
     let (config, root_dir) = gateway_acp_test_config("gateway-acp-observability-auth", true);
     let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
-    let app = loongclaw_daemon::gateway::control::build_gateway_acp_test_router(
+    let app = loong_daemon::gateway::control::build_gateway_acp_test_router(
         "test-token".to_owned(),
         config,
         manager,
@@ -57,7 +57,7 @@ async fn gateway_acp_observability_rejects_missing_auth() {
 async fn gateway_acp_status_returns_service_unavailable_when_acp_disabled() {
     let (config, root_dir) = gateway_acp_test_config("gateway-acp-status-disabled", false);
     let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
-    let app = loongclaw_daemon::gateway::control::build_gateway_acp_test_router(
+    let app = loong_daemon::gateway::control::build_gateway_acp_test_router(
         "test-token".to_owned(),
         config,
         manager,
@@ -83,7 +83,7 @@ async fn gateway_acp_status_returns_service_unavailable_when_acp_disabled() {
 async fn gateway_acp_dispatch_returns_service_unavailable_when_acp_disabled() {
     let (config, root_dir) = gateway_acp_test_config("gateway-acp-dispatch-disabled", false);
     let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
-    let app = loongclaw_daemon::gateway::control::build_gateway_acp_test_router(
+    let app = loong_daemon::gateway::control::build_gateway_acp_test_router(
         "test-token".to_owned(),
         config,
         manager,
@@ -109,7 +109,7 @@ async fn gateway_acp_dispatch_returns_service_unavailable_when_acp_disabled() {
 async fn gateway_acp_status_returns_not_found_for_unregistered_session() {
     let (config, root_dir) = gateway_acp_test_config("gateway-acp-status-missing", true);
     let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
-    let app = loongclaw_daemon::gateway::control::build_gateway_acp_test_router(
+    let app = loong_daemon::gateway::control::build_gateway_acp_test_router(
         "test-token".to_owned(),
         config,
         manager,
@@ -141,7 +141,7 @@ async fn gateway_acp_status_returns_not_found_for_unregistered_session() {
 async fn gateway_acp_observability_returns_snapshot_json() {
     let (config, root_dir) = gateway_acp_test_config("gateway-acp-observability-ok", true);
     let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
-    let app = loongclaw_daemon::gateway::control::build_gateway_acp_test_router(
+    let app = loong_daemon::gateway::control::build_gateway_acp_test_router(
         "test-token".to_owned(),
         config,
         manager,
@@ -173,7 +173,7 @@ async fn gateway_acp_observability_returns_snapshot_json() {
 async fn gateway_acp_dispatch_returns_read_model_payload() {
     let (config, root_dir) = gateway_acp_test_config("gateway-acp-dispatch", true);
     let manager = mvp::acp::shared_acp_session_manager(&config).expect("shared ACP manager");
-    let app = loongclaw_daemon::gateway::control::build_gateway_acp_test_router(
+    let app = loong_daemon::gateway::control::build_gateway_acp_test_router(
         "test-token".to_owned(),
         config,
         manager,

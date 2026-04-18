@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -n "${LOONGCLAW_RELEASE_ARTIFACTS_REPO_ROOT:-}" ]]; then
-  REPO_ROOT="$LOONGCLAW_RELEASE_ARTIFACTS_REPO_ROOT"
+if [[ -n "${LOONG_RELEASE_ARTIFACTS_REPO_ROOT:-}" ]]; then
+  REPO_ROOT="$LOONG_RELEASE_ARTIFACTS_REPO_ROOT"
 else
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi

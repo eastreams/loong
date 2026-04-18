@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use kernel::ToolCoreRequest;
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde_json::{Value, json};
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]

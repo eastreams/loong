@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use loongclaw_app as mvp;
-use loongclaw_contracts::SecretRef;
+use loong_app as mvp;
+use loong_contracts::SecretRef;
 
 use mvp::tui_surface::{
     TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec, TuiHeaderStyle, TuiScreenSpec,
@@ -43,7 +43,7 @@ pub struct OnboardCheck {
 }
 
 pub(crate) async fn run_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     skip_model_probe: bool,
 ) -> Vec<OnboardCheck> {
     let mut checks = Vec::new();
@@ -178,7 +178,7 @@ pub(crate) fn is_explicitly_accepted_non_interactive_warning(
         )
 }
 
-pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
+pub fn provider_credential_check(config: &mvp::config::LoongConfig) -> OnboardCheck {
     let provider = &config.provider;
     let provider_prefix = provider_check_detail_prefix(config);
     let support_facts = provider.support_facts();
@@ -241,7 +241,7 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
     }
 }
 
-fn web_search_provider_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
+fn web_search_provider_check(config: &mvp::config::LoongConfig) -> OnboardCheck {
     let normalized_provider = mvp::config::normalize_web_search_provider(
         config.tools.web_search.default_provider.as_str(),
     );
@@ -342,9 +342,7 @@ pub fn directory_preflight_check(name: &'static str, target: &Path) -> OnboardCh
     }
 }
 
-pub fn collect_channel_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<OnboardCheck> {
+pub fn collect_channel_preflight_checks(config: &mvp::config::LoongConfig) -> Vec<OnboardCheck> {
     crate::migration::channels::collect_channel_preflight_checks(config)
         .into_iter()
         .map(|check| {
@@ -407,7 +405,7 @@ pub fn render_detected_setup_preflight_summary_screen_lines(
     render_preflight_summary_screen_lines_with_progress(checks, width, progress_line, false)
 }
 
-fn config_validation_check(config: &mvp::config::LoongClawConfig) -> Option<OnboardCheck> {
+fn config_validation_check(config: &mvp::config::LoongConfig) -> Option<OnboardCheck> {
     config.validate().err().map(|detail| OnboardCheck {
         name: "config validation",
         level: OnboardCheckLevel::Fail,
@@ -416,7 +414,7 @@ fn config_validation_check(config: &mvp::config::LoongClawConfig) -> Option<Onbo
     })
 }
 
-fn provider_check_detail_prefix(config: &mvp::config::LoongClawConfig) -> String {
+fn provider_check_detail_prefix(config: &mvp::config::LoongConfig) -> String {
     crate::provider_presentation::active_provider_detail_label(config)
 }
 
@@ -459,7 +457,7 @@ fn onboard_check_from_provider_model_probe_failure(
 
 #[cfg(test)]
 pub(crate) fn provider_model_probe_failure_check(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     error: String,
 ) -> OnboardCheck {
     let probe_failure =
@@ -468,7 +466,7 @@ pub(crate) fn provider_model_probe_failure_check(
 }
 
 async fn collect_browser_companion_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<OnboardCheck> {
     let Some(diagnostics) =
         crate::browser_companion_diagnostics::collect_browser_companion_diagnostics(config).await
@@ -497,7 +495,7 @@ async fn collect_browser_companion_preflight_checks(
     }]
 }
 
-fn provider_transport_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
+fn provider_transport_check(config: &mvp::config::LoongConfig) -> OnboardCheck {
     let readiness = config.provider.transport_readiness();
     let level = match readiness.level {
         mvp::config::ProviderTransportReadinessLevel::Ready => OnboardCheckLevel::Pass,

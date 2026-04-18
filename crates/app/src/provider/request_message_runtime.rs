@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 use serde_json::{Value, json};
 
 use super::runtime_binding::ProviderRuntimeBinding;
@@ -990,9 +990,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_base_messages_with_binding_skips_runtime_self_reads_when_disabled() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let agents_path = harness.temp_dir.join("AGENTS.md");
@@ -1015,8 +1015,8 @@ mod tests {
         let has_tool_plane_event = audit_events.iter().any(|event| {
             matches!(
                 &event.kind,
-                loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                    plane: loongclaw_contracts::ExecutionPlane::Tool,
+                loong_kernel::AuditEventKind::PlaneInvoked {
+                    plane: loong_contracts::ExecutionPlane::Tool,
                     ..
                 }
             )
@@ -1031,9 +1031,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_base_messages_with_binding_reads_only_existing_runtime_self_sources() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let agents_path = harness.temp_dir.join("AGENTS.md");
@@ -1056,8 +1056,8 @@ mod tests {
             .filter(|event| {
                 matches!(
                     &event.kind,
-                    loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                        plane: loongclaw_contracts::ExecutionPlane::Tool,
+                    loong_kernel::AuditEventKind::PlaneInvoked {
+                        plane: loong_contracts::ExecutionPlane::Tool,
                         ..
                     }
                 )
@@ -1073,9 +1073,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_base_messages_with_binding_prefers_runtime_workspace_root_over_file_root() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let decoy_tool_root = harness.temp_dir.join("tool-root-decoy");
@@ -1101,8 +1101,8 @@ mod tests {
             .filter(|event| {
                 matches!(
                     &event.kind,
-                    loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                        plane: loongclaw_contracts::ExecutionPlane::Tool,
+                    loong_kernel::AuditEventKind::PlaneInvoked {
+                        plane: loong_contracts::ExecutionPlane::Tool,
                         ..
                     }
                 )
@@ -1489,7 +1489,7 @@ mod tests {
     #[test]
     fn message_builder_includes_summary_block_for_window_plus_summary_profile() {
         let tmp =
-            std::env::temp_dir().join(format!("loongclaw-provider-summary-{}", std::process::id()));
+            std::env::temp_dir().join(format!("loong-provider-summary-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("provider-summary.sqlite3");
         let _ = std::fs::remove_file(&db_path);

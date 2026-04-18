@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
-use loongclaw_contracts::Capability;
+use loong_contracts::Capability;
 use serde_json::{Value, json};
 
 use crate::config::LoongConfig;
@@ -519,7 +519,7 @@ async fn load_memory_window_snapshot(
 ) -> CliResult<CompactionWindowSnapshot> {
     const MAX_COMPACTION_WINDOW_TURNS: usize = 512;
 
-    let request = loongclaw_contracts::MemoryCoreRequest {
+    let request = loong_contracts::MemoryCoreRequest {
         operation: memory::MEMORY_OP_WINDOW.to_owned(),
         payload: json!({
             "session_id": session_id,
@@ -723,10 +723,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_assembles_runtime_self_through_kernel_audit_path() {
         let harness = TurnTestHarness::with_capabilities(std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
-            loongclaw_contracts::Capability::MemoryRead,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::MemoryRead,
         ]));
         let agents_path = harness.temp_dir.join("AGENTS.md");
         let agents_text = "Keep runtime self reads on the audited path.";
@@ -754,8 +754,8 @@ mod tests {
         let has_tool_plane_event = audit_events.iter().any(|event| {
             matches!(
                 &event.kind,
-                loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                    plane: loongclaw_contracts::ExecutionPlane::Tool,
+                loong_kernel::AuditEventKind::PlaneInvoked {
+                    plane: loong_contracts::ExecutionPlane::Tool,
                     ..
                 }
             )
@@ -771,10 +771,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_summary_projection() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
-            loongclaw_contracts::Capability::MemoryRead,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let session_id = "kernel-summary-session";
@@ -827,10 +827,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_profile_projection() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
-            loongclaw_contracts::Capability::MemoryRead,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let session_id = "kernel-profile-session";
@@ -879,10 +879,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_durable_recall_projection() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
-            loongclaw_contracts::Capability::MemoryRead,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let session_id = "kernel-durable-recall-session";
@@ -929,10 +929,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_workspace_recall_system_reorders_retrieved_memory() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
-            loongclaw_contracts::Capability::MemoryRead,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let session_id = "kernel-workspace-recall-session";
@@ -1000,10 +1000,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_governed_profile_projection() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
-            loongclaw_contracts::Capability::MemoryRead,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::MemoryRead,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let session_id = "kernel-governed-profile-session";

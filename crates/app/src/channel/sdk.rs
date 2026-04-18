@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use crate::{
     CliResult,
-    config::{ConfigValidationIssue, LoongClawConfig},
+    config::{ConfigValidationIssue, LoongConfig},
 };
 
 use super::registry::{
@@ -43,9 +43,9 @@ pub struct ChannelDescriptor {
     pub serve_subcommand: Option<&'static str>,
 }
 
-type ChannelEnabledFn = fn(&LoongClawConfig) -> bool;
-type ChannelValidationFn = fn(&LoongClawConfig) -> Vec<ConfigValidationIssue>;
-type BackgroundSurfaceEnabledFn = fn(&LoongClawConfig, Option<&str>) -> CliResult<bool>;
+type ChannelEnabledFn = fn(&LoongConfig) -> bool;
+type ChannelValidationFn = fn(&LoongConfig) -> Vec<ConfigValidationIssue>;
+type BackgroundSurfaceEnabledFn = fn(&LoongConfig, Option<&str>) -> CliResult<bool>;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelIntegrationDescriptor {
@@ -539,7 +539,7 @@ fn leak_channel_descriptor(descriptor: ChannelDescriptor) -> &'static ChannelDes
 }
 
 pub(crate) fn enabled_channel_ids(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_kind: Option<ChannelRuntimeKind>,
 ) -> Vec<String> {
     ordered_channel_integrations()
@@ -559,7 +559,7 @@ pub(crate) fn enabled_channel_ids(
 }
 
 pub(crate) fn collect_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     ordered_channel_integrations()
         .into_iter()
@@ -576,7 +576,7 @@ pub fn background_channel_runtime_descriptors() -> Vec<ChannelRuntimeCommandDesc
 
 pub fn is_background_channel_surface_enabled(
     channel_id: &str,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     let integration = find_channel_integration(channel_id)
@@ -603,248 +603,224 @@ fn find_channel_integration(id: &str) -> Option<&'static ChannelIntegrationDescr
         .find(|integration| integration.channel_id == normalized_id)
 }
 
-fn cli_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn cli_channel_is_enabled(config: &LoongConfig) -> bool {
     config.cli.enabled
 }
 
-fn telegram_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn telegram_channel_is_enabled(config: &LoongConfig) -> bool {
     config.telegram.enabled
 }
 
-fn feishu_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn feishu_channel_is_enabled(config: &LoongConfig) -> bool {
     config.feishu.enabled
 }
 
-fn matrix_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn matrix_channel_is_enabled(config: &LoongConfig) -> bool {
     config.matrix.enabled
 }
 
-fn wecom_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn wecom_channel_is_enabled(config: &LoongConfig) -> bool {
     config.wecom.enabled
 }
 
-fn weixin_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn weixin_channel_is_enabled(config: &LoongConfig) -> bool {
     config.weixin.enabled
 }
 
-fn qqbot_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn qqbot_channel_is_enabled(config: &LoongConfig) -> bool {
     config.qqbot.enabled
 }
 
-fn onebot_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn onebot_channel_is_enabled(config: &LoongConfig) -> bool {
     config.onebot.enabled
 }
 
-fn discord_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn discord_channel_is_enabled(config: &LoongConfig) -> bool {
     config.discord.enabled
 }
 
-fn slack_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn slack_channel_is_enabled(config: &LoongConfig) -> bool {
     config.slack.enabled
 }
 
-fn line_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn line_channel_is_enabled(config: &LoongConfig) -> bool {
     config.line.enabled
 }
 
-fn dingtalk_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn dingtalk_channel_is_enabled(config: &LoongConfig) -> bool {
     config.dingtalk.enabled
 }
 
-fn whatsapp_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn whatsapp_channel_is_enabled(config: &LoongConfig) -> bool {
     config.whatsapp.enabled
 }
 
-fn email_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn email_channel_is_enabled(config: &LoongConfig) -> bool {
     config.email.enabled
 }
 
-fn webhook_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn webhook_channel_is_enabled(config: &LoongConfig) -> bool {
     config.webhook.enabled
 }
 
-fn google_chat_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn google_chat_channel_is_enabled(config: &LoongConfig) -> bool {
     config.google_chat.enabled
 }
 
-fn signal_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn signal_channel_is_enabled(config: &LoongConfig) -> bool {
     config.signal.enabled
 }
 
-fn twitch_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn twitch_channel_is_enabled(config: &LoongConfig) -> bool {
     config.twitch.enabled
 }
 
-fn teams_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn teams_channel_is_enabled(config: &LoongConfig) -> bool {
     config.teams.enabled
 }
 
-fn tlon_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn tlon_channel_is_enabled(config: &LoongConfig) -> bool {
     config.tlon.enabled
 }
 
-fn mattermost_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn mattermost_channel_is_enabled(config: &LoongConfig) -> bool {
     config.mattermost.enabled
 }
 
-fn nextcloud_talk_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn nextcloud_talk_channel_is_enabled(config: &LoongConfig) -> bool {
     config.nextcloud_talk.enabled
 }
 
-fn synology_chat_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn synology_chat_channel_is_enabled(config: &LoongConfig) -> bool {
     config.synology_chat.enabled
 }
 
-fn irc_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn irc_channel_is_enabled(config: &LoongConfig) -> bool {
     config.irc.enabled
 }
 
-fn imessage_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn imessage_channel_is_enabled(config: &LoongConfig) -> bool {
     config.imessage.enabled
 }
 
-fn nostr_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn nostr_channel_is_enabled(config: &LoongConfig) -> bool {
     config.nostr.enabled
 }
 
-fn collect_cli_channel_validation_issues(_config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_cli_channel_validation_issues(_config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     Vec::new()
 }
 
-fn collect_telegram_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_telegram_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.telegram.validate()
 }
 
-fn collect_feishu_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_feishu_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.feishu.validate()
 }
 
-fn collect_matrix_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_matrix_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.matrix.validate()
 }
 
-fn collect_wecom_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_wecom_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.wecom.validate()
 }
 
-fn collect_weixin_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_weixin_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.weixin.validate()
 }
 
-fn collect_qqbot_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_qqbot_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.qqbot.validate()
 }
 
-fn collect_onebot_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_onebot_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.onebot.validate()
 }
 
-fn collect_discord_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_discord_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.discord.validate()
 }
 
-fn collect_slack_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_slack_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.slack.validate()
 }
 
-fn collect_line_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_line_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.line.validate()
 }
 
-fn collect_dingtalk_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_dingtalk_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.dingtalk.validate()
 }
 
-fn collect_whatsapp_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_whatsapp_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.whatsapp.validate()
 }
 
-fn collect_email_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_email_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.email.validate()
 }
 
-fn collect_webhook_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_webhook_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.webhook.validate()
 }
 
 fn collect_google_chat_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.google_chat.validate()
 }
 
-fn collect_signal_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_signal_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.signal.validate()
 }
 
-fn collect_twitch_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_twitch_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.twitch.validate()
 }
 
-fn collect_teams_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_teams_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.teams.validate()
 }
 
-fn collect_tlon_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_tlon_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.tlon.validate()
 }
 
 fn collect_mattermost_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.mattermost.validate()
 }
 
 fn collect_nextcloud_talk_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.nextcloud_talk.validate()
 }
 
 fn collect_synology_chat_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.synology_chat.validate()
 }
 
-fn collect_irc_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_irc_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.irc.validate()
 }
 
-fn collect_imessage_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_imessage_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.imessage.validate()
 }
 
-fn collect_nostr_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_nostr_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.nostr.validate()
 }
 
 fn telegram_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.telegram.enabled {
@@ -856,7 +832,7 @@ fn telegram_background_surface_is_enabled(
 
 #[cfg(feature = "feishu-integration")]
 fn feishu_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.feishu.enabled {
@@ -873,7 +849,7 @@ fn feishu_background_surface_is_enabled(
 
 #[cfg(not(feature = "feishu-integration"))]
 fn feishu_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.feishu.enabled {
@@ -885,7 +861,7 @@ fn feishu_background_surface_is_enabled(
 }
 
 fn matrix_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.matrix.enabled {
@@ -896,7 +872,7 @@ fn matrix_background_surface_is_enabled(
 }
 
 fn wecom_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.wecom.enabled {
@@ -907,7 +883,7 @@ fn wecom_background_surface_is_enabled(
 }
 
 fn whatsapp_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.whatsapp.enabled {
@@ -921,7 +897,7 @@ fn whatsapp_background_surface_is_enabled(
 mod tests {
     use std::collections::BTreeMap;
 
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
 
     use super::*;
 
@@ -976,7 +952,7 @@ mod tests {
 
     #[test]
     fn unsupported_background_channels_are_rejected() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let error = is_background_channel_surface_enabled("cli", &config, None)
             .expect_err("cli should not be a background channel");
 
@@ -985,7 +961,7 @@ mod tests {
 
     #[test]
     fn background_channel_surface_enablement_normalizes_aliases() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let enabled = is_background_channel_surface_enabled(" LARK ", &config, None)
             .expect("feishu alias should normalize through the channel registry");
 
@@ -1076,9 +1052,9 @@ mod tests {
             accounts,
             ..crate::config::FeishuChannelConfig::default()
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             feishu,
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let enabled = is_background_channel_surface_enabled(

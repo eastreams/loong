@@ -1,4 +1,4 @@
-use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
+use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
 use crate::config::{MemoryMode, MemoryProfile, MemorySystemKind};
@@ -314,8 +314,7 @@ mod tests {
     fn window_plus_summary_includes_condensed_older_context() {
         use crate::config::{MemoryMode, MemoryProfile};
 
-        let tmp =
-            std::env::temp_dir().join(format!("loongclaw-summary-memory-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("loong-summary-memory-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("summary.sqlite3");
         let _ = std::fs::remove_file(&db_path);
@@ -400,8 +399,7 @@ mod tests {
     fn profile_plus_window_includes_profile_note_block() {
         use crate::config::{MemoryMode, MemoryProfile};
 
-        let tmp =
-            std::env::temp_dir().join(format!("loongclaw-profile-memory-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("loong-profile-memory-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("profile.sqlite3");
         let _ = std::fs::remove_file(&db_path);
@@ -465,7 +463,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-personalization-memory-{}",
+            "loong-personalization-memory-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -522,7 +520,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-window-only-personalization-{}",
+            "loong-window-only-personalization-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -579,7 +577,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-profile-memory-projection-{}",
+            "loong-profile-memory-projection-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -628,7 +626,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-profile-memory-identity-only-{}",
+            "loong-profile-memory-identity-only-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -671,10 +669,8 @@ mod tests {
     fn read_context_operation_serializes_prompt_context_entries() {
         use crate::config::{MemoryMode, MemoryProfile};
 
-        let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-read-context-memory-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("loong-read-context-memory-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("read-context.sqlite3");
         let _ = std::fs::remove_file(&db_path);
@@ -741,7 +737,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-read-stage-envelope-memory-{}",
+            "loong-read-stage-envelope-memory-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -801,7 +797,7 @@ mod tests {
     #[test]
     fn execute_memory_core_dispatches_read_stage_envelope_operation() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-dispatch-stage-envelope-memory-{}",
+            "loong-dispatch-stage-envelope-memory-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);

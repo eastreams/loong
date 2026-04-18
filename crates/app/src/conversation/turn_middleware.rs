@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 use crate::tools::ToolView;
 use crate::{CliResult, KernelContext};
 
@@ -121,7 +121,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
 
     async fn bootstrap(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
@@ -139,7 +139,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
 
     async fn transform_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _include_system_prompt: bool,
         assembled: AssembledConversationContext,
@@ -163,7 +163,7 @@ pub trait ConversationTurnMiddleware: Send + Sync {
 
     async fn compact_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         _messages: &[Value],
         _kernel_ctx: &KernelContext,
@@ -202,7 +202,7 @@ impl ConversationTurnMiddleware for SystemPromptAdditionTurnMiddleware {
 
     async fn transform_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         include_system_prompt: bool,
         mut assembled: AssembledConversationContext,
@@ -233,7 +233,7 @@ impl ConversationTurnMiddleware for SystemPromptToolViewTurnMiddleware {
 
     async fn transform_context(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session_id: &str,
         include_system_prompt: bool,
         mut assembled: AssembledConversationContext,
@@ -442,7 +442,7 @@ where
 
     async fn bootstrap(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
@@ -462,7 +462,7 @@ where
 
     async fn transform_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         include_system_prompt: bool,
         assembled: AssembledConversationContext,
@@ -504,7 +504,7 @@ where
 
     async fn compact_context(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         messages: &[Value],
         kernel_ctx: &KernelContext,
@@ -608,7 +608,7 @@ mod tests {
 
         let assembled = SystemPromptAdditionTurnMiddleware
             .transform_context(
-                &crate::config::LoongClawConfig::default(),
+                &crate::config::LoongConfig::default(),
                 "session-artifact-preservation",
                 true,
                 assembled,
@@ -620,7 +620,7 @@ mod tests {
             .expect("system prompt addition middleware should succeed");
         let transformed = SystemPromptToolViewTurnMiddleware
             .transform_context(
-                &crate::config::LoongClawConfig::default(),
+                &crate::config::LoongConfig::default(),
                 "session-artifact-preservation",
                 true,
                 assembled,
@@ -767,7 +767,7 @@ mod tests {
 
         let transformed = SystemPromptToolViewTurnMiddleware
             .transform_context(
-                &crate::config::LoongClawConfig::default(),
+                &crate::config::LoongConfig::default(),
                 "session-tool-discovery-filter",
                 true,
                 assembled,
@@ -818,7 +818,7 @@ mod tests {
 
         let transformed = SystemPromptAdditionTurnMiddleware
             .transform_context(
-                &crate::config::LoongClawConfig::default(),
+                &crate::config::LoongConfig::default(),
                 "session-no-system-prompt",
                 false,
                 assembled,
@@ -917,7 +917,7 @@ mod tests {
 
         let transformed = SystemPromptToolViewTurnMiddleware
             .transform_context(
-                &crate::config::LoongClawConfig::default(),
+                &crate::config::LoongConfig::default(),
                 "session-tool-discovery-duplicate-filter",
                 true,
                 assembled,
@@ -1023,7 +1023,7 @@ mod tests {
         let requested_tool_view = crate::tools::ToolView::from_tool_names(["file.read"]);
         let transformed = SystemPromptToolViewTurnMiddleware
             .transform_context(
-                &crate::config::LoongClawConfig::default(),
+                &crate::config::LoongConfig::default(),
                 "session-sanitized-tool-view-rerender",
                 true,
                 assembled,

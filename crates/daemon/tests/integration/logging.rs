@@ -3,17 +3,17 @@ use super::*;
 #[test]
 fn validate_config_logging_redacts_raw_config_path_from_tracing_fields() {
     let missing_path = std::env::temp_dir().join(format!(
-        "loongclaw-private-config-{}-missing.toml",
+        "loong-private-config-{}-missing.toml",
         std::process::id()
     ));
     let missing_path = missing_path.display().to_string();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args(["validate-config", "--config", missing_path.as_str()])
-        .env("LOONGCLAW_LOG", "debug")
-        .env("LOONGCLAW_LOG_FORMAT", "compact")
+        .env("LOONG_LOG", "debug")
+        .env("LOONG_LOG_FORMAT", "compact")
         .output()
-        .expect("run loongclaw validate-config");
+        .expect("run loong validate-config");
 
     assert_eq!(
         output.status.code(),

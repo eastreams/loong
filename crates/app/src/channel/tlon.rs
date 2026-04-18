@@ -626,7 +626,7 @@ mod tests {
         response::IntoResponse,
         routing::{post, put},
     };
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
     use tokio::net::TcpListener;
 
     use super::*;

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::json;
 
 use super::*;
@@ -38,11 +38,11 @@ fn execute_tool_core_with_test_context(
 #[test]
 fn file_read_uses_workspace_root_from_trusted_internal_payload() {
     let outer_root = std::env::temp_dir().join(format!(
-        "loongclaw-file-read-workspace-root-outer-{}",
+        "loong-file-read-workspace-root-outer-{}",
         std::process::id()
     ));
     let child_root = std::env::temp_dir().join(format!(
-        "loongclaw-file-read-workspace-root-child-{}",
+        "loong-file-read-workspace-root-child-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&outer_root).expect("create outer root");
@@ -56,7 +56,7 @@ fn file_read_uses_workspace_root_from_trusted_internal_payload() {
             tool_name: "file.read".to_owned(),
             payload: json!({
                 "path": "note.txt",
-                "_loongclaw": {
+                "_loong": {
                     "workspace_root": child_root.display().to_string()
                 }
             }),
@@ -79,7 +79,7 @@ fn file_read_uses_workspace_root_from_trusted_internal_payload() {
 #[test]
 fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
     let outer_root = std::env::temp_dir().join(format!(
-        "loongclaw-file-read-relative-workspace-root-outer-{}",
+        "loong-file-read-relative-workspace-root-outer-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&outer_root).expect("create outer root");
@@ -91,7 +91,7 @@ fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
             tool_name: "file.read".to_owned(),
             payload: json!({
                 "path": "note.txt",
-                "_loongclaw": {
+                "_loong": {
                     "workspace_root": "relative/path"
                 }
             }),
@@ -113,7 +113,7 @@ fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
 fn tool_invoke_preserves_combined_trusted_internal_context_for_inner_execution() {
     let _env = crate::test_support::ScopedEnv::new();
     let child_root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-invoke-workspace-root-child-{}",
+        "loong-tool-invoke-workspace-root-child-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&child_root).expect("create child fixture root");
@@ -129,10 +129,10 @@ fn tool_invoke_preserves_combined_trusted_internal_context_for_inner_execution()
     );
     let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
     payload_object.insert(
-        LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+        LOONG_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
         json!({
-            LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY: child_root.display().to_string(),
-            LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: {
+            LOONG_INTERNAL_WORKSPACE_ROOT_KEY: child_root.display().to_string(),
+            LOONG_INTERNAL_RUNTIME_NARROWING_KEY: {
                 "web_fetch": {
                     "allowed_domains": ["docs.example.com"],
                     "allow_private_hosts": false
@@ -149,12 +149,11 @@ fn tool_invoke_preserves_combined_trusted_internal_context_for_inner_execution()
         .as_object()
         .expect("inner arguments should keep trusted internal context");
     assert_eq!(
-        internal_context[LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY],
+        internal_context[LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
         child_root.display().to_string()
     );
     assert_eq!(
-        internal_context[LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["web_fetch"]["allowed_domains"]
-            [0],
+        internal_context[LOONG_INTERNAL_RUNTIME_NARROWING_KEY]["web_fetch"]["allowed_domains"][0],
         "docs.example.com"
     );
     assert_eq!(effective_request.payload["path"], "note.txt");

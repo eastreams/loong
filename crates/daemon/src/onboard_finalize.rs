@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
@@ -106,7 +106,7 @@ pub struct OnboardingAction {
 
 pub fn build_onboarding_success_summary(
     path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
 ) -> OnboardingSuccessSummary {
     build_onboarding_success_summary_with_memory(path, config, import_source, None, None, None)
@@ -114,7 +114,7 @@ pub fn build_onboarding_success_summary(
 
 pub(crate) fn build_onboarding_success_summary_with_memory(
     path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     review_candidate: Option<&crate::migration::ImportCandidate>,
     memory_path: Option<&str>,
@@ -359,7 +359,7 @@ fn collect_onboarding_domain_outcomes(
         .collect()
 }
 
-fn collect_onboarding_suggested_channels(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+fn collect_onboarding_suggested_channels(config: &mvp::config::LoongConfig) -> Vec<String> {
     let has_enabled_non_cli_channels = config
         .enabled_channel_ids()
         .into_iter()
@@ -402,7 +402,7 @@ fn collect_onboarding_suggested_channels(config: &mvp::config::LoongClawConfig) 
 }
 
 fn collect_onboarding_channel_surface_summary(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> OnboardingChannelSurfaceSummary {
     let inventory = mvp::channel::channel_inventory(config);
 

@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH},
 };
 
-use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
+use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -963,7 +963,7 @@ fn resolve_db_path(config: &MemoryRuntimeConfig) -> PathBuf {
     if let Some(path) = &config.sqlite_path {
         return path.clone();
     }
-    crate::config::default_loongclaw_home().join("memory.sqlite3")
+    crate::config::default_loong_home().join("memory.sqlite3")
 }
 
 fn absolutize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
@@ -4754,7 +4754,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-window-turn-count-payload-{}",
+            "loong-window-turn-count-payload-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -4842,7 +4842,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-replace-turns-fallback-count-{}",
+            "loong-replace-turns-fallback-count-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -4922,7 +4922,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-reuse-same-path-{}",
+            "loong-sqlite-runtime-reuse-same-path-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -4962,7 +4962,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-concurrent-bootstrap-{}",
+            "loong-sqlite-runtime-concurrent-bootstrap-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5027,7 +5027,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-reuse-distinct-paths-{}",
+            "loong-sqlite-runtime-reuse-distinct-paths-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -5081,7 +5081,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-reuse-reset-{}",
+            "loong-sqlite-runtime-reuse-reset-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -5123,7 +5123,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-drop-one-preserve-others-{}",
+            "loong-sqlite-runtime-drop-one-preserve-others-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5185,7 +5185,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-alias-relative-absolute-{}",
+            "loong-sqlite-runtime-alias-relative-absolute-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5238,7 +5238,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-alias-dotdot-{}",
+            "loong-sqlite-runtime-alias-dotdot-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5292,7 +5292,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-schema-version-{}",
+            "loong-sqlite-runtime-schema-version-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5334,7 +5334,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-session-terminal-outcome-frozen-column-{}",
+            "loong-session-terminal-outcome-frozen-column-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5395,7 +5395,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-session-tool-consent-mode-check-{}",
+            "loong-session-tool-consent-mode-check-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5507,7 +5507,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-alias-cache-{}",
+            "loong-sqlite-runtime-alias-cache-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5565,7 +5565,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-schema-repair-skip-{}",
+            "loong-sqlite-runtime-schema-repair-skip-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5613,7 +5613,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-schema-init-skip-{}",
+            "loong-sqlite-runtime-schema-init-skip-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5660,7 +5660,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-runtime-diagnostics-{}",
+            "loong-sqlite-runtime-diagnostics-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5707,7 +5707,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-prepared-window-cache-{}",
+            "loong-sqlite-prepared-window-cache-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5750,7 +5750,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-window-only-snapshot-query-shape-{}",
+            "loong-window-only-snapshot-query-shape-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5818,7 +5818,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-snapshot-window-query-shape-{}",
+            "loong-summary-snapshot-window-query-shape-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5922,7 +5922,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-sqlite-prepared-summary-cache-{}",
+            "loong-sqlite-prepared-summary-cache-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -5995,7 +5995,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-append-empty-delete-{}",
+            "loong-summary-append-empty-delete-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6051,7 +6051,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-append-pre-overflow-maintenance-skip-{}",
+            "loong-summary-append-pre-overflow-maintenance-skip-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6110,7 +6110,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-append-hot-boundary-{}",
+            "loong-summary-append-hot-boundary-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6214,7 +6214,7 @@ mod tests {
         reset_summary_materialization_metrics_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-append-cold-boundary-{}",
+            "loong-summary-append-cold-boundary-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6315,7 +6315,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-streaming-rebuild-{}",
+            "loong-summary-streaming-rebuild-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6397,7 +6397,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-streaming-catch-up-{}",
+            "loong-summary-streaming-catch-up-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6472,7 +6472,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-saturation-rebuild-{}",
+            "loong-summary-saturation-rebuild-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6572,7 +6572,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-frontier-fast-forward-rebuild-{}",
+            "loong-summary-frontier-fast-forward-rebuild-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6663,7 +6663,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-rebuild-diagnostics-{}",
+            "loong-summary-rebuild-diagnostics-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6759,7 +6759,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-saturation-catch-up-{}",
+            "loong-summary-saturation-catch-up-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6862,7 +6862,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-fused-append-rebuild-{}",
+            "loong-summary-fused-append-rebuild-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -6942,7 +6942,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-fused-append-catch-up-{}",
+            "loong-summary-fused-append-catch-up-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -7020,7 +7020,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp =
-            std::env::temp_dir().join(format!("loongclaw-context-snapshot-{}", std::process::id()));
+            std::env::temp_dir().join(format!("loong-context-snapshot-{}", std::process::id()));
         let _ = fs::create_dir_all(&tmp);
         let db_path = tmp.join("context-snapshot.sqlite3");
         let _ = fs::remove_file(&db_path);
@@ -7073,7 +7073,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-materialized-{}",
+            "loong-summary-checkpoint-materialized-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -7117,7 +7117,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-initial-summary-visible-overflow-{}",
+            "loong-initial-summary-visible-overflow-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -7214,7 +7214,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-window-rebuild-{}",
+            "loong-summary-checkpoint-window-rebuild-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -7293,7 +7293,7 @@ mod tests {
         reset_cached_prepare_metrics_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-window-metadata-only-{}",
+            "loong-summary-checkpoint-window-metadata-only-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -7398,7 +7398,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-compatible-fast-path-{}",
+            "loong-summary-checkpoint-compatible-fast-path-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -7473,7 +7473,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-window-shrink-catch-up-{}",
+            "loong-summary-checkpoint-window-shrink-catch-up-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -7578,7 +7578,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-window-shrink-saturated-catch-up-{}",
+            "loong-summary-window-shrink-saturated-catch-up-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -7694,7 +7694,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-window-boundary-query-{}",
+            "loong-window-boundary-query-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -7747,7 +7747,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-budget-rebuild-{}",
+            "loong-summary-checkpoint-budget-rebuild-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -7854,7 +7854,7 @@ mod tests {
         reset_summary_materialization_metrics_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-budget-metadata-only-{}",
+            "loong-summary-checkpoint-budget-metadata-only-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -7956,7 +7956,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-budget-load-diagnostics-{}",
+            "loong-summary-checkpoint-budget-load-diagnostics-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -8056,7 +8056,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-known-absent-checkpoint-meta-query-{}",
+            "loong-known-absent-checkpoint-meta-query-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8145,7 +8145,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-exact-window-query-diagnostics-{}",
+            "loong-exact-window-query-diagnostics-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8209,7 +8209,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-known-overflow-window-query-diagnostics-{}",
+            "loong-known-overflow-window-query-diagnostics-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8283,7 +8283,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-fallback-window-query-diagnostics-{}",
+            "loong-fallback-window-query-diagnostics-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8369,7 +8369,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-clear-session-{}",
+            "loong-summary-checkpoint-clear-session-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -8425,7 +8425,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-summary-checkpoint-legacy-migration-{}",
+            "loong-summary-checkpoint-legacy-migration-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8595,7 +8595,7 @@ mod tests {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-context-snapshot-short-{}",
+            "loong-context-snapshot-short-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&tmp);
@@ -8639,7 +8639,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-context-snapshot-exact-window-{}",
+            "loong-context-snapshot-exact-window-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8725,7 +8725,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-context-snapshot-missing-turn-count-{}",
+            "loong-context-snapshot-missing-turn-count-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8826,7 +8826,7 @@ mod tests {
         let _metrics = begin_sqlite_metric_capture_for_tests();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-context-snapshot-known-overflow-{}",
+            "loong-context-snapshot-known-overflow-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8909,7 +8909,7 @@ mod tests {
     #[test]
     fn canonical_memory_search_returns_prior_session_hits_and_excludes_current_session() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-canonical-memory-search-{}",
+            "loong-canonical-memory-search-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -8991,7 +8991,7 @@ mod tests {
     #[test]
     fn canonical_memory_search_preserves_structured_scope_and_kind_metadata() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-canonical-memory-structured-search-{}",
+            "loong-canonical-memory-structured-search-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9006,7 +9006,7 @@ mod tests {
 
         let payload = json!({
             "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "workspace",
             "kind": "imported_profile",
             "content": "Workspace release checklist includes rollback and smoke test steps.",
@@ -9034,7 +9034,7 @@ mod tests {
     #[test]
     fn canonical_memory_search_matches_metadata_only_queries() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-canonical-memory-metadata-only-search-{}",
+            "loong-canonical-memory-metadata-only-search-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9049,7 +9049,7 @@ mod tests {
 
         let payload = json!({
             "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "workspace",
             "kind": "imported_profile",
             "content": "release checklist",
@@ -9077,7 +9077,7 @@ mod tests {
     #[test]
     fn ensure_memory_db_ready_repairs_stale_canonical_fts_metadata_schema() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-canonical-memory-stale-fts-{}",
+            "loong-canonical-memory-stale-fts-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9128,7 +9128,7 @@ mod tests {
 
         let payload = json!({
             "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "workspace",
             "kind": "imported_profile",
             "content": "release checklist",
@@ -9160,7 +9160,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-cached-runtime-stale-fts-{}",
+            "loong-cached-runtime-stale-fts-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9215,7 +9215,7 @@ mod tests {
 
         let payload = json!({
             "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "workspace",
             "kind": "imported_profile",
             "content": "release checklist",
@@ -9256,7 +9256,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-cached-runtime-pairing-schema-{}",
+            "loong-cached-runtime-pairing-schema-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9331,7 +9331,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-future-sqlite-schema-version-{}",
+            "loong-future-sqlite-schema-version-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9388,7 +9388,7 @@ mod tests {
     #[test]
     fn ensure_memory_db_ready_backfills_canonical_records_for_legacy_turns() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-canonical-memory-migration-{}",
+            "loong-canonical-memory-migration-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9957,7 +9957,7 @@ mod test_support {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-prompt-window-mixed-overflow-{}",
+            "loong-prompt-window-mixed-overflow-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);

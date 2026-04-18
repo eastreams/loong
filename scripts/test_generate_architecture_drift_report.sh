@@ -52,7 +52,7 @@ run_no_baseline_test() {
   trap 'rm -rf "$tmp_dir"' RETURN
 
   local output_file="$tmp_dir/docs/releases/support/architecture-drift-2099-01.md"
-  LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+  LOONG_ARCH_REPORT_MONTH="2099-01" \
     "$SCRIPT_UNDER_TEST" "$output_file"
 
   [[ -f "$output_file" ]] || {
@@ -114,8 +114,8 @@ run_breach_baseline_test() {
 BASELINE
 
   local output_file="$tmp_dir/docs/releases/support/architecture-drift-2099-01.md"
-  LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
-    LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT="$baseline_file" \
+  LOONG_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_DRIFT_BASELINE_REPORT="$baseline_file" \
     "$SCRIPT_UNDER_TEST" "$output_file"
 
   [[ -f "$output_file" ]] || {
@@ -154,8 +154,8 @@ run_baseline_directory_override_test() {
 BASELINE
 
   local output_file="$generated_dir/architecture-drift-2099-01.md"
-  LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
-    LOONGCLAW_ARCH_DRIFT_BASELINE_DIR="$baseline_dir" \
+  LOONG_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_DRIFT_BASELINE_DIR="$baseline_dir" \
     "$SCRIPT_UNDER_TEST" "$output_file"
 
   [[ -f "$output_file" ]] || {

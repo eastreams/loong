@@ -14,7 +14,7 @@ use crate::acp::{
     shared_acp_session_manager,
 };
 #[cfg(feature = "memory-sqlite")]
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::config::ToolConfig;
 #[cfg(feature = "memory-sqlite")]
@@ -1959,13 +1959,13 @@ fn control_plane_session_workflow_view(
 ) -> ControlPlaneSessionWorkflowView {
     let phase = workflow
         .phase
-        .map(|value: loongclaw_contracts::GovernedWorkflowPhase| value.as_str().to_owned());
+        .map(|value: loong_contracts::GovernedWorkflowPhase| value.as_str().to_owned());
     let operation_kind = workflow
         .operation_kind
-        .map(|value: loongclaw_contracts::WorkflowOperationKind| value.as_str().to_owned());
+        .map(|value: loong_contracts::WorkflowOperationKind| value.as_str().to_owned());
     let operation_scope = workflow
         .operation_scope
-        .map(|value: loongclaw_contracts::WorkflowOperationScope| value.as_str().to_owned());
+        .map(|value: loong_contracts::WorkflowOperationScope| value.as_str().to_owned());
     let runtime_self_continuity = workflow
         .runtime_self_continuity
         .map(control_plane_session_workflow_continuity_view);
@@ -2048,13 +2048,13 @@ fn control_plane_effective_runtime_narrowing(tool_policy_payload: &Value) -> Val
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone)]
 pub struct ControlPlaneAcpView {
-    config: LoongClawConfig,
+    config: LoongConfig,
     current_session_id: String,
 }
 
 #[cfg(feature = "memory-sqlite")]
 impl ControlPlaneAcpView {
-    pub fn new(config: LoongClawConfig, current_session_id: impl Into<String>) -> Self {
+    pub fn new(config: LoongConfig, current_session_id: impl Into<String>) -> Self {
         Self {
             config,
             current_session_id: normalize_control_plane_session_id(&current_session_id.into()),
@@ -2218,7 +2218,7 @@ mod tests {
             AcpRoutingOrigin, AcpSessionBindingScope, AcpSessionMetadata, AcpSessionMode,
             AcpSessionState, AcpSessionStore, AcpSqliteSessionStore,
         },
-        config::LoongClawConfig,
+        config::LoongConfig,
     };
 
     use super::*;
@@ -2943,7 +2943,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-control-plane-view-{test_name}-{}",
+            "loong-control-plane-view-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);
@@ -2958,7 +2958,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     fn broken_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-control-plane-broken-{test_name}-{}",
+            "loong-control-plane-broken-{test_name}-{}",
             std::process::id()
         ));
         let sqlite_path = base.join("sqlite-dir");
@@ -3030,7 +3030,7 @@ mod tests {
                     "timeout_seconds": 90,
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["file.read"],
-                    "workspace_root": "/tmp/loongclaw/control-plane/child-session",
+                    "workspace_root": "/tmp/loong/control-plane/child-session",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
                 }
@@ -3117,7 +3117,7 @@ mod tests {
         })
         .expect("create hidden root session");
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let sqlite_path = memory_config
             .sqlite_path
             .as_ref()
@@ -3324,7 +3324,7 @@ mod tests {
                 .as_ref()
                 .expect("worktree binding")
                 .workspace_root,
-            "/tmp/loongclaw/control-plane/child-session"
+            "/tmp/loong/control-plane/child-session"
         );
         assert_eq!(task.delegate_mode.as_deref(), Some("async"));
         assert_eq!(task.session_state, "running");

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use loongclaw_contracts::MemoryPlaneError;
-use loongclaw_kernel::{CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest};
+use loong_contracts::MemoryPlaneError;
+use loong_kernel::{CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest};
 
 use super::runtime_config::MemoryRuntimeConfig;
 

@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 
-pub const DEFAULT_PROMPT_PACK_ID: &str = "loongclaw-core-v1";
+pub const DEFAULT_PROMPT_PACK_ID: &str = "loong-core-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PromptPersonality {
@@ -274,7 +274,7 @@ pub fn render_default_system_prompt() -> String {
 }
 
 fn base_prompt() -> &'static str {
-    r#"You are LoongClaw 🐉, an AI agent built by LoongClaw AI.
+    r#"You are Loong 🐉, an AI agent built by Loong AI.
 
 ## Core Identity
 - You are security-first, speed-focused, performance-aware, and memory-efficient.
@@ -454,13 +454,13 @@ mod tests {
     }
 
     #[test]
-    fn render_prompt_uses_loongclaw_base_and_selected_personality() {
+    fn render_prompt_uses_loong_base_and_selected_personality() {
         let rendered = render_system_prompt(PromptRenderInput {
             personality: PromptPersonality::Classicist,
             addendum: None,
         });
 
-        assert!(rendered.contains("You are LoongClaw"));
+        assert!(rendered.contains("You are Loong"));
         assert!(rendered.contains("## Safety Invariants"));
         assert!(rendered.contains("## Personality Overlay: Classicist"));
     }

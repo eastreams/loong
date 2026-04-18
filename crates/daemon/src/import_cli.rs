@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde::Serialize;
 
 use crate::migration::{self, ImportCandidate, ImportSourceKind, SetupDomainKind};
@@ -162,22 +162,22 @@ pub fn resolve_selected_domains(
 }
 
 pub fn apply_selected_domains_to_config(
-    base: &mvp::config::LoongClawConfig,
+    base: &mvp::config::LoongConfig,
     candidate: &ImportCandidate,
     selected: &[migration::SetupDomainKind],
-) -> mvp::config::LoongClawConfig {
+) -> mvp::config::LoongConfig {
     let result = apply_selected_domains_to_config_with_report(base, candidate, selected);
 
     result.config
 }
 
 struct SelectedDomainApplyResult {
-    config: mvp::config::LoongClawConfig,
+    config: mvp::config::LoongConfig,
     channel_conflicts: Vec<migration::channels::ChannelApplyConflict>,
 }
 
 fn apply_selected_domains_to_config_with_report(
-    base: &mvp::config::LoongClawConfig,
+    base: &mvp::config::LoongConfig,
     candidate: &ImportCandidate,
     selected: &[migration::SetupDomainKind],
 ) -> SelectedDomainApplyResult {
@@ -368,7 +368,7 @@ pub fn render_import_apply_summary_lines_for_width(
     output_path: &Path,
     candidate: &ImportCandidate,
     selected_domains: &[SetupDomainKind],
-    resolved_config: &mvp::config::LoongClawConfig,
+    resolved_config: &mvp::config::LoongConfig,
     supplemented_existing_config: bool,
     width: usize,
 ) -> Vec<String> {
@@ -387,7 +387,7 @@ pub fn render_import_apply_summary_shell_text_for_width(
     output_path: &Path,
     candidate: &ImportCandidate,
     selected_domains: &[SetupDomainKind],
-    resolved_config: &mvp::config::LoongClawConfig,
+    resolved_config: &mvp::config::LoongConfig,
     supplemented_existing_config: bool,
     width: usize,
 ) -> String {
@@ -411,7 +411,7 @@ fn render_import_apply_summary_lines_with_style(
     output_path: &Path,
     candidate: &ImportCandidate,
     selected_domains: &[SetupDomainKind],
-    resolved_config: &mvp::config::LoongClawConfig,
+    resolved_config: &mvp::config::LoongConfig,
     supplemented_existing_config: bool,
     width: usize,
     color_enabled: bool,
@@ -441,7 +441,7 @@ fn build_import_apply_summary_body_lines(
     output_path: &Path,
     candidate: &ImportCandidate,
     selected_domains: &[SetupDomainKind],
-    resolved_config: &mvp::config::LoongClawConfig,
+    resolved_config: &mvp::config::LoongConfig,
     supplemented_existing_config: bool,
     width: usize,
 ) -> Vec<String> {
@@ -840,8 +840,8 @@ fn insert_or_merge_provider_profile(
 }
 
 fn apply_provider_profiles_to_config(
-    base_config: &mvp::config::LoongClawConfig,
-    resolved_config: &mut mvp::config::LoongClawConfig,
+    base_config: &mvp::config::LoongConfig,
+    resolved_config: &mut mvp::config::LoongConfig,
     all_candidates: &[ImportCandidate],
     candidate: &ImportCandidate,
     provider: Option<&str>,
@@ -957,7 +957,7 @@ pub fn apply_import_candidate(
             }
         }
     } else {
-        mvp::config::LoongClawConfig::default()
+        mvp::config::LoongConfig::default()
     };
     let mut selected_domains = candidate
         .domains

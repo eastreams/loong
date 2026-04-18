@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, HarnessKind, InMemoryAuditSink,
-    Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongClawKernel,
-    StaticPolicyEngine, SystemClock, VerticalPackManifest,
+    Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongKernel, StaticPolicyEngine,
+    SystemClock, VerticalPackManifest,
 };
 
 use crate::DEFAULT_PACK_ID;
@@ -21,7 +21,7 @@ pub(crate) fn default_in_memory_audit_sink() -> Arc<InMemoryAuditSink> {
     Arc::new(InMemoryAuditSink::default())
 }
 
-/// Builder for constructing a fully configured `LoongClawKernel`.
+/// Builder for constructing a fully configured `LoongKernel`.
 ///
 /// By default the builder uses `SystemClock` and the spec layer's named
 /// in-memory audit helper. Override either with the corresponding setter before
@@ -53,7 +53,7 @@ impl KernelBuilder {
 
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
-    pub fn build(self) -> LoongClawKernel<StaticPolicyEngine> {
+    pub fn build(self) -> LoongKernel<StaticPolicyEngine> {
         configured_builder(self.clock, self.audit, self.native_tool_executor)
     }
 }
@@ -62,7 +62,7 @@ impl KernelBuilder {
 /// without breaking the legacy `KernelBuilder` API.
 ///
 /// The returned runtime handle dereferences to the legacy kernel surface so
-/// helper code typed against `&LoongClawKernel<_>` can continue to work while
+/// helper code typed against `&LoongKernel<_>` can continue to work while
 /// callers migrate toward the explicit `Kernel<P>` name.
 #[derive(Default)]
 pub struct BootstrapBuilder {
@@ -93,7 +93,7 @@ impl BootstrapBuilder {
 
     /// Return the additive migration builder surface.
     ///
-    /// This remains a compatibility alias over `LoongClawKernel`, so it keeps
+    /// This remains a compatibility alias over `LoongKernel`, so it keeps
     /// the legacy executable API while also supporting `.build()` into
     /// `Kernel<P>`.
     pub fn into_builder(self) -> RuntimeKernelBuilder<StaticPolicyEngine> {
@@ -219,7 +219,7 @@ pub fn default_pack_manifest() -> VerticalPackManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::{AuditEventKind, FixedClock, LoongClawKernel};
+    use kernel::{AuditEventKind, FixedClock, LoongKernel};
 
     #[test]
     fn builder_default_creates_kernel() {
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn bootstrap_builder_runtime_derefs_to_legacy_kernel_helpers() {
         fn issue_default_pack_token(
-            kernel: &LoongClawKernel<StaticPolicyEngine>,
+            kernel: &LoongKernel<StaticPolicyEngine>,
         ) -> kernel::CapabilityToken {
             kernel
                 .issue_token(DEFAULT_PACK_ID, "test-agent", 60)

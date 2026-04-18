@@ -1,6 +1,6 @@
 use clap::Args;
 use clap::Subcommand;
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 
 pub const ARTIFACT_MODE_EVENT_PAGE_LIMIT_DEFAULT: usize = 200;
 

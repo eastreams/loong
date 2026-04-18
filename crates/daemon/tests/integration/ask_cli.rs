@@ -1,6 +1,6 @@
 use super::latest_selector_process_support::LatestSelectorCliFixture;
-use loongclaw_app::config::ProviderKind;
-use loongclaw_contracts::SecretRef;
+use loong_app::config::ProviderKind;
+use loong_contracts::SecretRef;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;

@@ -1,9 +1,9 @@
 use crate::CliResult;
-use crate::config::{LoongClawConfig, ProviderConfig};
+use crate::config::{LoongConfig, ProviderConfig};
 
 use super::contracts::provider_runtime_contract;
 
-pub(super) fn validate_provider_feature_gate(config: &LoongClawConfig) -> CliResult<()> {
+pub(super) fn validate_provider_feature_gate(config: &LoongConfig) -> CliResult<()> {
     let support_facts = config.provider.support_facts();
     let feature_support = support_facts.feature;
     if !feature_support.enabled_in_build {
@@ -12,7 +12,7 @@ pub(super) fn validate_provider_feature_gate(config: &LoongClawConfig) -> CliRes
     Ok(())
 }
 
-pub(super) fn validate_provider_configuration(config: &LoongClawConfig) -> CliResult<()> {
+pub(super) fn validate_provider_configuration(config: &LoongConfig) -> CliResult<()> {
     let runtime_contract = provider_runtime_contract(&config.provider);
     if runtime_contract.validation.forbid_kimi_coding_endpoint
         && provider_uses_kimi_coding_endpoint(&config.provider)
@@ -37,7 +37,7 @@ pub(super) fn validate_provider_configuration(config: &LoongClawConfig) -> CliRe
     Ok(())
 }
 
-pub(super) async fn validate_provider_auth_readiness(config: &LoongClawConfig) -> CliResult<()> {
+pub(super) async fn validate_provider_auth_readiness(config: &LoongConfig) -> CliResult<()> {
     let support_facts = config.provider.support_facts();
     let auth_support = support_facts.auth;
     if !auth_support.requires_explicit_configuration {
@@ -75,10 +75,10 @@ mod tests {
     use super::*;
     use crate::config::ProviderKind;
 
-    fn build_config(provider: ProviderConfig) -> LoongClawConfig {
-        LoongClawConfig {
+    fn build_config(provider: ProviderConfig) -> LoongConfig {
+        LoongConfig {
             provider,
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         }
     }
 

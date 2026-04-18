@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 use serde_json::Value;
 
 use crate::CliResult;
@@ -389,7 +389,7 @@ async fn _init_registration(
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
-    if methods.iter().any(|method| *method == "client_secret") {
+    if methods.contains(&"client_secret") {
         return Ok(());
     }
     Err(format!(
@@ -477,7 +477,7 @@ async fn _poll_registration(
         poll_count = poll_count.saturating_add(1);
         if poll_count == 1 {
             print!("  Fetching configuration results...");
-        } else if poll_count % 6 == 0 {
+        } else if poll_count.is_multiple_of(6) {
             print!(".");
         }
 

@@ -97,7 +97,7 @@ impl Drop for RuntimeSnapshotPolicyResetGuard {
     }
 }
 
-fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongClawConfig) {
+fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongConfig) {
     fs::create_dir_all(root).expect("create fixture root");
     let workspace_root = root.join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace fixture root");
@@ -106,7 +106,7 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCla
         .display()
         .to_string();
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.shell_allow = vec!["git".to_owned(), "cargo".to_owned()];
     config.tools.browser.enabled = true;
@@ -163,31 +163,27 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCla
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
-                    "demo-token".to_owned(),
-                )),
+                api_key: Some(loong_contracts::SecretRef::Inline("demo-token".to_owned())),
                 ..Default::default()
             },
         },
     );
 
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     (config_path, config)
 }
 
-fn install_demo_skill(root: &Path, config: &mvp::config::LoongClawConfig, config_path: &Path) {
+fn install_demo_skill(root: &Path, config: &mvp::config::LoongConfig, config_path: &Path) {
     write_file(
         root,
         "source/demo-skill/SKILL.md",
         "# Demo Skill\n\nInstalled for runtime snapshot coverage.\n",
     );
 
-    let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        config,
-        Some(config_path),
-    );
+    let runtime_config =
+        mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, Some(config_path));
     mvp::tools::execute_tool_core_with_config(
         kernel::ToolCoreRequest {
             tool_name: "external_skills.install".to_owned(),
@@ -203,7 +199,7 @@ fn install_demo_skill(root: &Path, config: &mvp::config::LoongClawConfig, config
 fn install_demo_runtime_plugin_package(root: &Path, config_path: &Path) {
     write_file(
         root,
-        "runtime-plugins/search/loongclaw.plugin.json",
+        "runtime-plugins/search/loong.plugin.json",
         r#"{
   "api_version": "v1alpha1",
   "version": "1.0.0",
@@ -275,10 +271,10 @@ fn array_object_with_string_field<'a>(
 
 #[test]
 fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inventory() {
-    let root = unique_temp_dir("loongclaw-runtime-snapshot-json");
+    let root = unique_temp_dir("loong-runtime-snapshot-json");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("DEEPSEEK_API_KEY", None),
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
     ]);
     let (config_path, config) = write_runtime_snapshot_config(&root);
@@ -294,7 +290,7 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
 
     assert_eq!(
         payload["schema"]["version"],
-        loongclaw_daemon::RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION
+        loong_daemon::RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION
     );
     assert_eq!(payload["provider"]["active_profile_id"], "deepseek-lab");
     assert!(array_contains_string(
@@ -349,14 +345,14 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
 
 #[test]
 fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved() {
-    let root = unique_temp_dir("loongclaw-runtime-snapshot-x-api-key");
+    let root = unique_temp_dir("loong-runtime-snapshot-x-api-key");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
         (
             "RUNTIME_SNAPSHOT_ANTHROPIC_KEY",
             Some("anthropic-demo-token"),
         ),
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
     ]);
     let (config_path, mut config) = write_runtime_snapshot_config(&root);
     config.providers.insert(
@@ -366,7 +362,7 @@ fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Anthropic,
                 model: "claude-3-7-sonnet-latest".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "${RUNTIME_SNAPSHOT_ANTHROPIC_KEY}".to_owned(),
                 )),
                 ..Default::default()
@@ -412,10 +408,10 @@ fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved
 
 #[test]
 fn runtime_snapshot_json_payload_preserves_auth_optional_provider_descriptor_contract() {
-    let root = unique_temp_dir("loongclaw-runtime-snapshot-auth-optional");
+    let root = unique_temp_dir("loong-runtime-snapshot-auth-optional");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
     ]);
     let (config_path, mut config) = write_runtime_snapshot_config(&root);
     config.providers.insert(
@@ -468,10 +464,10 @@ fn runtime_snapshot_json_payload_preserves_auth_optional_provider_descriptor_con
 
 #[test]
 fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_override() {
-    let root = unique_temp_dir("loongclaw-runtime-snapshot-policy-override");
+    let root = unique_temp_dir("loong-runtime-snapshot-policy-override");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
     ]);
     let (config_path, config) = write_runtime_snapshot_config(&root);
     install_demo_skill(&root, &config, &config_path);
@@ -488,7 +484,7 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
         "external_skills.list"
     ));
 
-    let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &config,
         Some(config_path.as_path()),
     );
@@ -571,10 +567,10 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
 
 #[test]
 fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
-    let root = unique_temp_dir("loongclaw-runtime-snapshot-text");
+    let root = unique_temp_dir("loong-runtime-snapshot-text");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
     ]);
     let (config_path, config) = write_runtime_snapshot_config(&root);
     install_demo_skill(&root, &config, &config_path);
@@ -589,7 +585,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(
         rendered
             .lines()
-            .any(|line| line.starts_with("LOONGCLAW") || line.contains(" loongclaw ")),
+            .any(|line| line.starts_with("LOONG") || line.contains(" loong ")),
         "runtime snapshot text should now use the shared ratatui operator shell header: {rendered}"
     );
     assert!(rendered.contains("runtime snapshot"));

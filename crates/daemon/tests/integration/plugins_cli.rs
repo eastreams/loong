@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn plugins_bridge_profiles_cli_parses_selected_profile_and_json_flag() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "plugins",
         "bridge-profiles",
         "--profile",
@@ -16,20 +16,20 @@ fn plugins_bridge_profiles_cli_parses_selected_profile_and_json_flag() {
         Some(Commands::Plugins { json, command }) => {
             assert!(json);
             match command {
-                loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(command) => {
+                loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(command) => {
                     assert_eq!(
                         command.profiles,
                         vec![
-                            loongclaw_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
+                            loong_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
                         ]
                     );
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Preflight(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
             }
@@ -41,7 +41,7 @@ fn plugins_bridge_profiles_cli_parses_selected_profile_and_json_flag() {
 #[test]
 fn plugins_inventory_cli_parses_bridge_profile_and_examples_flag() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "plugins",
         "inventory",
         "--root",
@@ -59,14 +59,14 @@ fn plugins_inventory_cli_parses_bridge_profile_and_examples_flag() {
         Some(Commands::Plugins { json, command }) => {
             assert!(json);
             match command {
-                loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(command) => {
+                loong_daemon::plugins_cli::PluginsCommands::Inventory(command) => {
                     assert_eq!(command.source.roots, vec!["/tmp/plugins".to_owned()]);
                     assert_eq!(command.source.query, "weather-sdk");
                     assert_eq!(command.source.limit, None);
                     assert_eq!(
                         command.source.bridge_profile,
                         Some(
-                            loongclaw_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
+                            loong_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
                         )
                     );
                     assert!(command.include_ready);
@@ -74,12 +74,12 @@ fn plugins_inventory_cli_parses_bridge_profile_and_examples_flag() {
                     assert!(command.include_deferred);
                     assert!(command.include_examples);
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Preflight(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
             }
@@ -91,7 +91,7 @@ fn plugins_inventory_cli_parses_bridge_profile_and_examples_flag() {
 #[test]
 fn plugins_doctor_cli_defaults_to_sdk_release_profile() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "plugins",
         "doctor",
         "--root",
@@ -108,31 +108,31 @@ fn plugins_doctor_cli_defaults_to_sdk_release_profile() {
         Some(Commands::Plugins { json, command }) => {
             assert!(json);
             match command {
-                loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(command) => {
+                loong_daemon::plugins_cli::PluginsCommands::Doctor(command) => {
                     assert_eq!(command.source.scan.roots, vec!["/tmp/plugins".to_owned()]);
                     assert_eq!(command.source.scan.query, "weather-sdk");
                     assert_eq!(command.source.scan.limit, None);
                     assert_eq!(
                         command.source.scan.bridge_profile,
                         Some(
-                            loongclaw_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
+                            loong_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
                         )
                     );
                     assert_eq!(
                         command.source.profile,
-                        loongclaw_daemon::plugins_cli::PluginPreflightProfileArg::SdkRelease
+                        loong_daemon::plugins_cli::PluginPreflightProfileArg::SdkRelease
                     );
                     assert!(command.include_passed);
                     assert!(command.include_warned);
                     assert!(command.include_blocked);
                     assert!(command.include_deferred);
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Preflight(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
             }
@@ -144,7 +144,7 @@ fn plugins_doctor_cli_defaults_to_sdk_release_profile() {
 #[test]
 fn plugins_actions_cli_parses_filters_and_global_json_after_subcommand() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "plugins",
         "actions",
         "--root",
@@ -169,37 +169,37 @@ fn plugins_actions_cli_parses_filters_and_global_json_after_subcommand() {
         Some(Commands::Plugins { json, command }) => {
             assert!(json);
             match command {
-                loongclaw_daemon::plugins_cli::PluginsCommands::Actions(command) => {
+                loong_daemon::plugins_cli::PluginsCommands::Actions(command) => {
                     assert_eq!(
                         command.source.scan.roots,
                         vec!["/tmp/plugins-a".to_owned(), "/tmp/plugins-b".to_owned()]
                     );
                     assert_eq!(
                         command.source.profile,
-                        loongclaw_daemon::plugins_cli::PluginPreflightProfileArg::RuntimeActivation
+                        loong_daemon::plugins_cli::PluginPreflightProfileArg::RuntimeActivation
                     );
                     assert_eq!(
                         command.source.scan.bridge_profile,
                         Some(
-                            loongclaw_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
+                            loong_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
                         )
                     );
                     assert_eq!(
                         command.surface,
-                        vec![loongclaw_daemon::plugins_cli::PluginActionSurfaceArg::PluginPackage]
+                        vec![loong_daemon::plugins_cli::PluginActionSurfaceArg::PluginPackage]
                     );
                     assert_eq!(
                         command.kind,
-                        vec![loongclaw_daemon::plugins_cli::PluginActionKindArg::ResolveSlotOwnership]
+                        vec![loong_daemon::plugins_cli::PluginActionKindArg::ResolveSlotOwnership]
                     );
                     assert_eq!(command.requires_reload, Some(true));
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_) => {
+                other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Preflight(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
             }
@@ -211,7 +211,7 @@ fn plugins_actions_cli_parses_filters_and_global_json_after_subcommand() {
 #[test]
 fn plugins_bridge_template_cli_parses_output_and_bridge_profile() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "plugins",
         "bridge-template",
         "--root",
@@ -230,12 +230,12 @@ fn plugins_bridge_template_cli_parses_output_and_bridge_profile() {
         Some(Commands::Plugins { json, command }) => {
             assert!(json);
             match command {
-                loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(command) => {
+                loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(command) => {
                     assert_eq!(command.source.scan.roots, vec!["/tmp/plugins".to_owned()]);
                     assert_eq!(
                         command.source.scan.bridge_profile,
                         Some(
-                            loongclaw_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
+                            loong_daemon::plugins_cli::PluginBridgeProfileArg::OpenclawEcosystemBalanced
                         )
                     );
                     assert_eq!(command.output.as_deref(), Some("/tmp/bridge-support.json"));
@@ -244,12 +244,12 @@ fn plugins_bridge_template_cli_parses_output_and_bridge_profile() {
                         Some("/tmp/bridge-support.delta.json")
                     );
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Preflight(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
             }
@@ -261,7 +261,7 @@ fn plugins_bridge_template_cli_parses_output_and_bridge_profile() {
 #[test]
 fn plugins_preflight_cli_parses_bridge_support_delta_selector() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "plugins",
         "preflight",
         "--root",
@@ -278,7 +278,7 @@ fn plugins_preflight_cli_parses_bridge_support_delta_selector() {
         Some(Commands::Plugins { json, command }) => {
             assert!(json);
             match command {
-                loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(command) => {
+                loong_daemon::plugins_cli::PluginsCommands::Preflight(command) => {
                     assert_eq!(
                         command.source.scan.bridge_support_delta.as_deref(),
                         Some("/tmp/bridge-support.delta.json")
@@ -288,12 +288,12 @@ fn plugins_preflight_cli_parses_bridge_support_delta_selector() {
                         Some("abc123")
                     );
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
             }
@@ -305,7 +305,7 @@ fn plugins_preflight_cli_parses_bridge_support_delta_selector() {
 #[test]
 fn plugins_init_cli_parses_manifest_scaffold_request() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "plugins",
         "init",
         "/tmp/tavily-search",
@@ -329,14 +329,14 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
         Some(Commands::Plugins { json, command }) => {
             assert!(json);
             match command {
-                loongclaw_daemon::plugins_cli::PluginsCommands::Init(command) => {
+                loong_daemon::plugins_cli::PluginsCommands::Init(command) => {
                     assert_eq!(command.package_root, "/tmp/tavily-search");
                     assert_eq!(command.plugin_id, "tavily-search");
                     assert_eq!(command.provider_id.as_deref(), Some("tavily"));
                     assert_eq!(command.connector_name.as_deref(), Some("tavily-http"));
                     assert_eq!(
                         command.bridge_kind,
-                        loongclaw_daemon::plugins_cli::PluginInitBridgeKindArg::ProcessStdio
+                        loong_daemon::plugins_cli::PluginInitBridgeKindArg::ProcessStdio
                     );
                     assert_eq!(command.source_language.as_deref(), Some("python"));
                     assert_eq!(
@@ -344,12 +344,12 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                         Some("Tavily-backed search package")
                     );
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
-                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Preflight(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
             }

@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedProviderTransport {
