@@ -48,6 +48,7 @@ straight to the matching playbook.
 | WhatsApp should own a Cloud API reply loop | [WhatsApp](/use-loong/channel-guides/whatsapp) | direct sends and the webhook reply loop are both shipped |
 | WeCom should own the official enterprise AIBot lane | [WeCom](/use-loong/channel-guides/wecom) | it aligns with the shipped long-connection contract |
 | WeChat / QQ ecosystems should route through an external bridge | [Weixin](/use-loong/channel-guides/weixin), [QQ Bot](/use-loong/channel-guides/qqbot), or [OneBot](/use-loong/channel-guides/onebot) | plugin-backed surfaces keep bridge ownership explicit instead of pretending a native runtime exists |
+| one LINE or generic inbound webhook lane should run a built-in serve loop without gateway supervision | [LINE](/use-loong/channel-guides/line) or [Webhook](/use-loong/channel-guides/webhook) | standalone native-serve surfaces are real runtimes, but their owner is still the direct `*-serve` command |
 | outbound notifications without a reply loop | [Channel Guides](/use-loong/channel-guides/index) and [Channel Setup](/use-loong/channel-setup) | outbound-only surfaces stay visible without being overclaimed as runtimes |
 | one host supervising several runtime-backed channels | [Gateway And Supervision](/use-loong/gateway-and-supervision) | owner commands, selectors, and rollout order live there |
 
@@ -65,23 +66,26 @@ straight to the matching playbook.
 | --- | --- | --- |
 | Base assistant loop | local operator-first path | `onboard`, `ask`, `chat`, `doctor` |
 | Gateway owner contract | daemon-owned runtime control for longer-lived surfaces | `gateway run`, `gateway status`, `gateway stop` |
-| Runtime-backed service channels | shipped reply-loop runtimes | Feishu / Lark, Telegram, Matrix, WhatsApp, WeCom |
+| Gateway-supervised service channels | shipped reply-loop runtimes that can join `gateway run` or `multi-channel-serve` | Feishu / Lark, Telegram, Matrix, WhatsApp, WeCom |
+| Standalone native-serve channels | shipped send plus serve lanes whose runtime still stays on their own `*-serve` command instead of gateway supervision | LINE, Webhook |
 | Plugin-backed bridge surfaces | shipped channel contracts whose upstream session lifecycle stays in an external bridge or managed plugin | Weixin, QQ Bot, OneBot |
-| Config-backed outbound surfaces | shipped direct-send surfaces without a full reply-loop runtime | Discord, Slack, LINE, DingTalk, Webhook, Email, Teams, Google Chat, Signal, Twitch, and similar outbound integrations |
+| Config-backed outbound surfaces | shipped direct-send surfaces without a full reply-loop runtime | Discord, Slack, DingTalk, Email, Teams, Google Chat, Signal, Twitch, and similar outbound integrations |
 | Catalog or planned surfaces | inventory or future direction only | Zalo, Zalo Personal, WebChat |
 
 ## Gateway And Runtime Ownership
 
 - `gateway run`, `gateway status`, and `gateway stop` are the current explicit owner contract for longer-lived delivery surfaces.
-- `multi-channel-serve` is the compatibility wrapper that supervises the shipped runtime-backed service-channel subset.
-- Loong does not flatten gateway ownership, reply-loop runtimes, plugin-backed bridge surfaces, and outbound-only sends into one vague "channel support" story.
+- `multi-channel-serve` is the compatibility wrapper that supervises the shipped gateway-supervised service-channel subset.
+- LINE and Webhook have native serve commands, but they are still standalone native-serve lanes rather than gateway-supervised ones.
+- Loong does not flatten gateway ownership, standalone native serves, plugin-backed bridge surfaces, and outbound-only sends into one vague "channel support" story.
 - Use [Gateway And Supervision](/use-loong/gateway-and-supervision) when you
   need the command-by-command ownership model, selector syntax, and rollout
   order in one place.
 
-## Runtime-Backed Service Channels
+## Gateway-Supervised Service Channels
 
-These are the shipped reply-loop runtimes today.
+These are the shipped reply-loop runtimes that can currently join `gateway run`
+or `multi-channel-serve`.
 
 | Surface | Transport shape | Primary commands |
 | --- | --- | --- |
@@ -90,6 +94,16 @@ These are the shipped reply-loop runtimes today.
 | Matrix | Client-Server sync loop | `loong matrix-send`, `loong matrix-serve` |
 | WhatsApp | Cloud API plus verified webhook service | `loong whatsapp-send`, `loong whatsapp-serve` |
 | WeCom | official AIBot long connection | `loong wecom-send`, `loong wecom-serve` |
+
+## Standalone Native-Serve Channels
+
+These are shipped send plus serve lanes, but their runtime owner is still the
+individual `*-serve` command instead of gateway supervision.
+
+| Surface | Transport shape | Primary commands |
+| --- | --- | --- |
+| LINE | Messaging API push plus signed webhook reply loop | `loong line-send`, `loong line-serve` |
+| Webhook | outbound POST plus signed inbound webhook service | `loong webhook-send`, `loong webhook-serve` |
 
 ## Plugin-Backed Bridge Surfaces
 
@@ -111,15 +125,16 @@ short on purpose; the fuller field-level inventory remains in
 | Surface family | Current examples | Typical command shape |
 | --- | --- | --- |
 | workplace chat sinks | Slack, Discord, Microsoft Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat | `loong <surface>-send` |
-| messaging and bridge targets | LINE, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon | `loong <surface>-send` |
-| direct delivery and alerting lanes | Webhook, Email, Twitch | `loong <surface>-send` |
+| messaging and bridge targets | DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon | `loong <surface>-send` |
+| direct delivery and alerting lanes | Email, Twitch | `loong <surface>-send` |
 
 ## Public Documentation Rule
 
 Loong tries to keep the public channel story truthful:
 
 - the gateway contract is documented as the runtime owner contract
-- shipped runtime-backed surfaces are documented as shipped
+- shipped gateway-supervised surfaces are documented as gateway-supervised
+- shipped standalone native-serve surfaces are documented as native serve lanes without overclaiming gateway supervision
 - shipped plugin-backed surfaces are documented as bridge-owned rather than pretending the gateway already owns their listener lifecycle
 - outbound-only surfaces are documented as outbound-only
 - catalog entries are not overclaimed as runtime support
@@ -127,15 +142,16 @@ Loong tries to keep the public channel story truthful:
 ## Typical Progression
 
 1. Get the local assistant path healthy first.
-2. Add one shipped service channel if you need inbound or reply-loop automation.
-3. Reach for a plugin-backed bridge surface when the ecosystem is real but Loong intentionally delegates login and listener ownership to an external bridge.
-4. Use outbound-only surfaces when you need governed direct sends without pretending they are full runtime surfaces.
-5. Reach for `multi-channel-serve` only when you want multiple shipped service channels attached to the same CLI host.
+2. Add one gateway-supervised service channel if you need the shortest path into `gateway run` or `multi-channel-serve`.
+3. Use a standalone native-serve channel when you need a real built-in serve loop but do not need gateway supervision yet.
+4. Reach for a plugin-backed bridge surface when the ecosystem is real but Loong intentionally delegates login and listener ownership to an external bridge.
+5. Use outbound-only surfaces when you need governed direct sends without pretending they are full runtime surfaces.
+6. Reach for `multi-channel-serve` only when you want multiple gateway-supervised service channels attached to the same CLI host.
 
 ## Where To Go Next
 
 - Continue to [Channel Guides](/use-loong/channel-guides/index) for the full actionable channel matrix.
-- Continue to [Channel Recipes](/use-loong/channel-recipes) for representative runtime-backed and outbound rollout examples.
+- Continue to [Channel Recipes](/use-loong/channel-recipes) for representative gateway-supervised, standalone native-serve, and outbound rollout examples.
 - Continue to [Channel Setup](/use-loong/channel-setup) for the practical public setup guide.
 - Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision)
   for the longer-lived owner contract and channel-account selection rules.

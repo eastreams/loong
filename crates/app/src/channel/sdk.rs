@@ -35,11 +35,35 @@ pub enum ChannelRuntimeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelOperationalModel {
+    Interactive,
+    GatewaySupervised,
+    StandaloneRuntime,
+    PluginBacked,
+    OutboundOnly,
+    CatalogOnly,
+}
+
+impl ChannelOperationalModel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::GatewaySupervised => "gateway_supervised",
+            Self::StandaloneRuntime => "standalone_runtime",
+            Self::PluginBacked => "plugin_backed",
+            Self::OutboundOnly => "outbound_only",
+            Self::CatalogOnly => "catalog_only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelDescriptor {
     pub id: &'static str,
     pub label: &'static str,
     pub surface_label: &'static str,
     pub runtime_kind: ChannelRuntimeKind,
+    pub operational_model: ChannelOperationalModel,
     pub serve_subcommand: Option<&'static str>,
 }
 
@@ -360,12 +384,13 @@ fn build_channel_descriptors() -> Vec<ChannelDescriptor> {
 
 fn build_channel_descriptor(
     channel_id: &'static str,
-    _background_runtime: Option<ChannelRuntimeCommandDescriptor>,
+    background_runtime: Option<ChannelRuntimeCommandDescriptor>,
 ) -> ChannelDescriptor {
     let label = channel_display_label(channel_id);
     let surface_label_text = channel_surface_label_text(channel_id);
     let surface_label = leak_channel_string(surface_label_text);
     let runtime_kind = channel_runtime_kind(channel_id);
+    let operational_model = channel_operational_model(channel_id, runtime_kind, background_runtime);
     let serve_subcommand = channel_serve_subcommand(channel_id);
 
     ChannelDescriptor {
@@ -373,6 +398,7 @@ fn build_channel_descriptor(
         label,
         surface_label,
         runtime_kind,
+        operational_model,
         serve_subcommand,
     }
 }
@@ -428,6 +454,30 @@ fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
             ChannelRuntimeKind::OutboundOnly
         }
         crate::channel::ChannelCatalogImplementationStatus::Stub => ChannelRuntimeKind::CatalogOnly,
+    }
+}
+
+fn channel_operational_model(
+    channel_id: &str,
+    runtime_kind: ChannelRuntimeKind,
+    background_runtime: Option<ChannelRuntimeCommandDescriptor>,
+) -> ChannelOperationalModel {
+    if channel_id == "cli" {
+        return ChannelOperationalModel::Interactive;
+    }
+
+    match runtime_kind {
+        ChannelRuntimeKind::Interactive => ChannelOperationalModel::Interactive,
+        ChannelRuntimeKind::RuntimeBacked => {
+            if background_runtime.is_some() {
+                return ChannelOperationalModel::GatewaySupervised;
+            }
+
+            ChannelOperationalModel::StandaloneRuntime
+        }
+        ChannelRuntimeKind::PluginBacked => ChannelOperationalModel::PluginBacked,
+        ChannelRuntimeKind::OutboundOnly => ChannelOperationalModel::OutboundOnly,
+        ChannelRuntimeKind::CatalogOnly => ChannelOperationalModel::CatalogOnly,
     }
 }
 
@@ -496,6 +546,26 @@ pub fn runtime_backed_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
         .collect()
 }
 
+pub fn gateway_supervised_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| {
+            descriptor.operational_model == ChannelOperationalModel::GatewaySupervised
+        })
+        .collect()
+}
+
+pub fn standalone_runtime_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| {
+            descriptor.operational_model == ChannelOperationalModel::StandaloneRuntime
+        })
+        .collect()
+}
+
 pub fn plugin_backed_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
     ordered_channel_integrations()
         .into_iter()
@@ -527,6 +597,7 @@ pub fn catalog_only_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
                 label,
                 surface_label,
                 runtime_kind: ChannelRuntimeKind::CatalogOnly,
+                operational_model: ChannelOperationalModel::CatalogOnly,
                 serve_subcommand: None,
             }
         })
@@ -909,7 +980,8 @@ mod tests {
                 continue;
             }
 
-            let Some(descriptor) = channel_descriptor(integration.channel_id) else {
+            let maybe_descriptor = channel_descriptor(integration.channel_id);
+            let Some(descriptor) = maybe_descriptor else {
                 continue;
             };
             if descriptor.runtime_kind != ChannelRuntimeKind::RuntimeBacked {
@@ -920,6 +992,14 @@ mod tests {
         }
 
         channel_ids
+    }
+
+    fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
+        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+    }
+
+    fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
+        vec!["line", "webhook"]
     }
 
     #[test]
@@ -951,6 +1031,30 @@ mod tests {
     }
 
     #[test]
+    fn gateway_supervised_channel_descriptors_follow_background_runtime_contracts() {
+        let descriptors = gateway_supervised_channel_descriptors();
+        let ids = descriptors
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let expected_ids = expected_gateway_supervised_channel_ids();
+
+        assert_eq!(ids, expected_ids);
+    }
+
+    #[test]
+    fn standalone_runtime_channel_descriptors_track_native_serve_without_gateway_supervision() {
+        let descriptors = standalone_runtime_channel_descriptors();
+        let ids = descriptors
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let expected_ids = expected_standalone_runtime_channel_ids();
+
+        assert_eq!(ids, expected_ids);
+    }
+
+    #[test]
     fn unsupported_background_channels_are_rejected() {
         let config = LoongConfig::default();
         let error = is_background_channel_surface_enabled("cli", &config, None)
@@ -975,6 +1079,10 @@ mod tests {
         assert_eq!(weixin.label, "Weixin");
         assert_eq!(weixin.surface_label, "weixin channel");
         assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            weixin.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(weixin.serve_subcommand, None);
 
         let qqbot = channel_descriptor("qq").expect("qq alias should resolve");
@@ -982,6 +1090,10 @@ mod tests {
         assert_eq!(qqbot.label, "QQ Bot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
         assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            qqbot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(qqbot.serve_subcommand, None);
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
@@ -989,6 +1101,10 @@ mod tests {
         assert_eq!(onebot.label, "OneBot");
         assert_eq!(onebot.surface_label, "onebot channel");
         assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            onebot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(onebot.serve_subcommand, None);
     }
 
@@ -997,10 +1113,26 @@ mod tests {
         let feishu = channel_descriptor("feishu").expect("feishu descriptor");
         assert_eq!(feishu.label, "Feishu/Lark");
         assert_eq!(feishu.surface_label, "feishu channel");
+        assert_eq!(
+            feishu.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
+
+        let line = channel_descriptor("line").expect("line descriptor");
+        assert_eq!(line.label, "LINE");
+        assert_eq!(line.surface_label, "line channel");
+        assert_eq!(
+            line.operational_model,
+            ChannelOperationalModel::StandaloneRuntime
+        );
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.label, "Google Chat");
         assert_eq!(google_chat.surface_label, "google chat channel");
+        assert_eq!(
+            google_chat.operational_model,
+            ChannelOperationalModel::OutboundOnly
+        );
     }
 
     #[test]

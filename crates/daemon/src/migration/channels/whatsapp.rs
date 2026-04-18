@@ -13,6 +13,7 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     label: "whatsapp",
     surface_label: "whatsapp channel",
     runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
+    operational_model: mvp::config::ChannelOperationalModel::GatewaySupervised,
     serve_subcommand: Some("whatsapp-serve"),
 };
 

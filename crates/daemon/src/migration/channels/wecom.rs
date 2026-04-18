@@ -13,6 +13,7 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     label: "wecom",
     surface_label: "wecom channel",
     runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
+    operational_model: mvp::config::ChannelOperationalModel::GatewaySupervised,
     serve_subcommand: Some("wecom-serve"),
 };
 

@@ -40,7 +40,7 @@ release review. It is not part of the primary public release trail.
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10113 | 10500 | 387 | 78 | 90 | 12 | 96.3% | TIGHT | 9922 | 1.9% | PASS | 88 |
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 8917 | 9800 | 883 | 17 | 90 | 73 | 91.0% | WATCH | 9796 | -9.0% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6734 | 7300 | 566 | 95 | 160 | 65 | 92.2% | WATCH | 6936 | -2.9% | PASS | 146 |
-| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 2109 | 6400 | 4291 | 0 | 110 | 110 | 33.0% | HEALTHY | 1779 | 18.5% | BREACH | 0 |
+| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 2111 | 6400 | 4289 | 0 | 110 | 110 | 33.0% | HEALTHY | 1779 | 18.7% | BREACH | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10017 | 11200 | 1183 | 62 | 120 | 58 | 89.4% | WATCH | 10831 | -7.5% | PASS | 98 |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14366 | 15000 | 634 | 44 | 70 | 26 | 95.8% | TIGHT | 14472 | -0.7% | PASS | 54 |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5880 | 6500 | 620 | 176 | 210 | 34 | 90.5% | WATCH | 6324 | -7.0% | PASS | 210 |
@@ -94,7 +94,7 @@ release review. It is not part of the primary public release trail.
 <!-- arch-hotspot key=channel_registry lines=10113 functions=78 -->
 <!-- arch-hotspot key=channel_config lines=8917 functions=17 -->
 <!-- arch-hotspot key=chat_runtime lines=6734 functions=95 -->
-<!-- arch-hotspot key=channel_mod lines=2109 functions=0 -->
+<!-- arch-hotspot key=channel_mod lines=2111 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=10017 functions=62 -->
 <!-- arch-hotspot key=tools_mod lines=14366 functions=44 -->
 <!-- arch-hotspot key=daemon_lib lines=5880 functions=176 -->
