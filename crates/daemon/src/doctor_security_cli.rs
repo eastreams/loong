@@ -1051,6 +1051,13 @@ fn collect_web_search_secret_observations(
         config.tools.web_search.exa_api_key.as_deref(),
     );
 
+    let firecrawl_path = "tools.web_search.firecrawl_api_key".to_owned();
+    push_string_secret_observation(
+        observations,
+        firecrawl_path,
+        config.tools.web_search.firecrawl_api_key.as_deref(),
+    );
+
     let jina_path = "tools.web_search.jina_api_key".to_owned();
     push_string_secret_observation(
         observations,
@@ -1800,6 +1807,24 @@ mod tests {
         assert!(rendered_evidence.contains("provider.api_key"));
         assert!(rendered_evidence.contains("provider.headers.X-API-Key"));
         assert!(rendered_evidence.contains("providers.openai.headers.Authorization"));
+    }
+
+    #[tokio::test]
+    async fn secret_hygiene_scans_firecrawl_web_search_credentials() {
+        let path = temp_config_path("firecrawl-web-search-secret");
+        write_placeholder_config(&path);
+
+        let mut config = mvp::config::LoongConfig::default();
+        config.tools.web_search.firecrawl_api_key = Some("firecrawl-inline-secret".to_owned());
+
+        let execution = build_doctor_security_execution(&path, &config)
+            .await
+            .expect("build security execution");
+        let finding = finding_by_id(&execution.findings, "secret_hygiene");
+        let rendered_evidence = finding.evidence.join("\n");
+
+        assert_eq!(finding.status, SecurityFindingStatus::Exposed);
+        assert!(rendered_evidence.contains("tools.web_search.firecrawl_api_key"));
     }
 
     #[tokio::test]

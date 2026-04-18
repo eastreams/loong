@@ -78,8 +78,8 @@ fn tool_search_hides_bash_exec_when_governance_rules_failed_to_load() {
 
 #[cfg(feature = "tool-shell")]
 #[test]
-fn tool_search_includes_bash_exec_when_runtime_is_available() {
-    let root = unique_tool_temp_dir("loong-bash-tool-search-visible");
+fn tool_search_routes_bash_capabilities_to_exec_when_runtime_is_available() {
+    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-visible");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -97,16 +97,18 @@ fn tool_search_includes_bash_exec_when_runtime_is_available() {
     .expect("tool search should succeed");
 
     let results = outcome.payload["results"].as_array().expect("results");
-    assert!(
-        results.iter().any(|entry| entry["tool_id"] == "bash-exec"),
-        "runtime-ready bash-exec should appear in tool search results"
-    );
+    let exec_entry = results
+        .iter()
+        .find(|entry| entry["tool_id"] == "exec")
+        .expect("exec should absorb bash-oriented search queries");
+
+    assert!(exec_entry.get("lease").is_none());
 }
 
 #[cfg(feature = "tool-shell")]
 #[test]
-fn tool_search_exact_query_surfaces_bash_exec() {
-    let root = unique_tool_temp_dir("loong-bash-tool-search-exact-query");
+fn tool_search_exact_bash_query_surfaces_exec() {
+    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-exact-query");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -125,8 +127,8 @@ fn tool_search_exact_query_surfaces_bash_exec() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(
-        results.iter().any(|entry| entry["tool_id"] == "bash-exec"),
-        "exact tool-id query should surface bash-exec, got: {results:?}"
+        results.iter().any(|entry| entry["tool_id"] == "exec"),
+        "exact bash query should surface exec, got: {results:?}"
     );
 }
 
@@ -257,6 +259,20 @@ fn bash_exec_reports_failed_status_for_non_zero_exit() {
     assert_eq!(outcome.status, "failed");
     assert_eq!(outcome.payload["stdout"].as_str(), Some("hello"));
     assert_eq!(outcome.payload["exit_code"].as_i64(), Some(7));
+    assert_eq!(outcome.payload["details"]["truncated"], json!(false));
+    assert!(
+        outcome.payload["details"]["duration_ms"]
+            .as_u64()
+            .is_some_and(|duration_ms| duration_ms > 0)
+    );
+    assert_eq!(
+        outcome.payload["details"]["stdout"]["truncated"],
+        json!(false)
+    );
+    assert_eq!(
+        outcome.payload["details"]["stderr"]["truncated"],
+        json!(false)
+    );
 }
 
 #[cfg(feature = "tool-shell")]
@@ -743,41 +759,37 @@ fn bash_exec_times_out_when_timeout_ms_is_small() {
 
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
-fn tool_invoke_dispatches_bash_exec_with_trusted_internal_context() {
+fn direct_exec_routes_script_mode_to_bash_exec() {
+    assert_eq!(
+        route_direct_tool_name(
+            "exec",
+            &json!({
+                "script": "printf 'script-mode' | cat"
+            })
+        )
+        .expect("script mode should route through bash.exec"),
+        "bash.exec"
+    );
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn direct_exec_can_run_bash_through_the_collapsed_exec_surface() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loong-tool-invoke-bash-exec");
+    let root = unique_tool_temp_dir("loongclaw-direct-exec-bash");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let mut config = test_tool_runtime_config(root.clone());
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
     config.bash_exec = ready_bash_exec_runtime_policy();
 
-    let search = execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "tool.search".to_owned(),
-            payload: json!({"query": "bash command cwd timeout"}),
-        },
-        &config,
-    )
-    .expect("tool search should succeed");
-
-    let result = search.payload["results"]
-        .as_array()
-        .expect("results")
-        .iter()
-        .find(|entry| entry["tool_id"] == "bash-exec")
-        .expect("bash-exec search result");
-
     let outcome = execute_tool_core_with_test_context(
         ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
+            tool_name: "exec".to_owned(),
             payload: json!({
-                "tool_id": "bash-exec",
-                "lease": result["lease"].clone(),
-                "arguments": {
-                    "command": "printf 'invoke-bash'"
-                },
+                "command": "bash",
+                "args": ["-lc", "printf 'invoke-bash'"],
                 "_loong": {
                     LOONG_INTERNAL_RUNTIME_NARROWING_KEY: {}
                 }
@@ -785,7 +797,7 @@ fn tool_invoke_dispatches_bash_exec_with_trusted_internal_context() {
         },
         &config,
     )
-    .expect("tool.invoke should execute bash.exec with trusted internal context");
+    .expect("exec should execute bash commands through the collapsed surface");
 
     assert_eq!(outcome.status, "ok");
     assert_eq!(outcome.payload["stdout"].as_str(), Some("invoke-bash"));

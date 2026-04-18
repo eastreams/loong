@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
-use serde_json::{Value, json};
+use serde_json::Value;
 
 #[cfg(feature = "tool-shell")]
 use super::bash_governance::{FinalGovernanceDecision, evaluate_bash_command};
@@ -147,26 +147,18 @@ pub(super) fn execute_bash_tool_with_config(
                 timeout_ms,
                 "bash command",
                 runtime_event_sink.clone(),
+                config.file_root.as_deref(),
             ),
             "bash tool",
         )??;
 
-        Ok(ToolCoreOutcome {
-            status: if output.status.success() {
-                "ok".to_owned()
-            } else {
-                "failed".to_owned()
-            },
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "command": command,
-                "cwd": cwd.display().to_string(),
-                "exit_code": output.status.code(),
-                "stdout": String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }),
-        })
+        Ok(process_exec::build_process_tool_outcome(
+            request.tool_name.as_str(),
+            command,
+            None,
+            cwd.as_path(),
+            output,
+        ))
     }
 }
 

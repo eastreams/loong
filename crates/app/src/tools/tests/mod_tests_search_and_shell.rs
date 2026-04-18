@@ -590,6 +590,7 @@ fn shell_exec_succeeds_when_fast_command_receives_timeout_ms() {
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
 fn shell_exec_truncates_large_stdout_without_failing_command() {
+    use std::fs;
     use std::process::Command;
 
     const SHELL_STDOUT_TRUNCATION_LIMIT: usize = 1_048_576;
@@ -604,7 +605,12 @@ fn shell_exec_truncates_large_stdout_without_failing_command() {
         return;
     }
 
-    let mut config = test_tool_runtime_config(std::env::temp_dir());
+    let root = std::env::temp_dir().join(format!(
+        "loongclaw-shell-large-output-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create large output root");
+    let mut config = test_tool_runtime_config(root.clone());
     config.shell_allow.insert("perl".to_owned());
 
     let outcome = execute_tool_core_with_config(
@@ -628,6 +634,151 @@ fn shell_exec_truncates_large_stdout_without_failing_command() {
         .expect("stdout should be present");
     assert_eq!(stdout.len(), SHELL_STDOUT_TRUNCATION_LIMIT);
     assert!(stdout.bytes().all(|byte| byte == b'a'));
+
+    let details = outcome.payload["details"]
+        .as_object()
+        .expect("details object");
+    assert_eq!(details.get("truncated"), Some(&json!(true)));
+    assert_eq!(details["handoff"]["tool"], json!("read"));
+    assert_eq!(details["handoff"]["supports_offset"], json!(true));
+    assert_eq!(details["handoff"]["supports_limit"], json!(true));
+    assert_eq!(details["handoff"]["supports_max_bytes"], json!(true));
+    let stdout_details = details["stdout"].as_object().expect("stdout details");
+    assert_eq!(stdout_details.get("truncated"), Some(&json!(true)));
+    assert_eq!(stdout_details.get("truncated_by"), Some(&json!("bytes")));
+    assert_eq!(
+        stdout_details.get("output_bytes"),
+        Some(&json!(SHELL_STDOUT_TRUNCATION_LIMIT))
+    );
+    assert_eq!(
+        stdout_details.get("max_bytes"),
+        Some(&json!(SHELL_STDOUT_TRUNCATION_LIMIT))
+    );
+    assert_eq!(stdout_details.get("total_bytes"), Some(&json!(2_000_000)));
+    assert_eq!(stdout_details.get("total_lines"), Some(&json!(1)));
+    let full_output_path = stdout_details["full_output_path"]
+        .as_str()
+        .expect("stdout full output path");
+    assert!(
+        std::path::Path::new(full_output_path).starts_with(root.as_path()),
+        "expected saved output inside read-accessible file root, path={full_output_path} root={}",
+        root.display()
+    );
+
+    let stdout_recipes = details["handoff"]["recipes"]["stdout"]
+        .as_object()
+        .expect("stdout handoff recipes");
+    assert_eq!(details["handoff"]["recommended_stream"], json!("stdout"));
+    assert_eq!(
+        details["handoff"]["recommended_recipe"],
+        json!("wider_bytes")
+    );
+    assert_eq!(
+        details["handoff"]["recommended_payload"]["path"],
+        json!(full_output_path)
+    );
+    assert_eq!(
+        details["handoff"]["recommended_payload"]["max_bytes"],
+        json!(8 * SHELL_STDOUT_TRUNCATION_LIMIT)
+    );
+    assert_eq!(
+        stdout_recipes.get("recommended_recipe"),
+        Some(&json!("wider_bytes"))
+    );
+    assert_eq!(stdout_recipes["path"], json!(full_output_path));
+    assert_eq!(
+        stdout_recipes["first_page"]["path"],
+        json!(full_output_path)
+    );
+    assert_eq!(stdout_recipes["first_page"]["offset"], json!(1));
+    assert_eq!(stdout_recipes["first_page"]["limit"], json!(200));
+    assert_eq!(stdout_recipes["last_page"]["path"], json!(full_output_path));
+    assert_eq!(stdout_recipes["last_page"]["offset"], json!(1));
+    assert_eq!(stdout_recipes["last_page"]["limit"], json!(200));
+    assert_eq!(stdout_recipes["head"], stdout_recipes["first_page"]);
+    assert_eq!(stdout_recipes["tail"], stdout_recipes["last_page"]);
+    assert_eq!(
+        stdout_recipes["wider_bytes"]["path"],
+        json!(full_output_path)
+    );
+    assert_eq!(
+        stdout_recipes["wider_bytes"]["max_bytes"],
+        json!(8 * SHELL_STDOUT_TRUNCATION_LIMIT)
+    );
+
+    let saved_output = fs::read_to_string(full_output_path).expect("read saved stdout");
+    assert_eq!(saved_output.len(), 2_000_000);
+    assert!(saved_output.bytes().all(|byte| byte == b'a'));
+    fs::remove_file(full_output_path).ok();
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn shell_exec_failed_large_stderr_prefers_stderr_handoff_recipe() {
+    use std::fs;
+    use std::process::Command;
+
+    let perl_available = Command::new("perl")
+        .arg("-v")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !perl_available {
+        eprintln!("skipping large stderr shell test because perl is unavailable");
+        return;
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "loongclaw-shell-large-stderr-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create large stderr root");
+    let mut config = test_tool_runtime_config(root.clone());
+    config.shell_allow.insert("perl".to_owned());
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "perl",
+                "args": ["-e", "print STDERR chr(98) x 2000000; exit 9"],
+                "timeout_ms": 5_000,
+            }),
+        },
+        &config,
+    )
+    .expect("large-stderr command should still complete with a failed outcome");
+
+    assert_eq!(outcome.status, "failed");
+    assert_eq!(outcome.payload["exit_code"].as_i64(), Some(9));
+    let details = outcome.payload["details"]
+        .as_object()
+        .expect("details object");
+    assert_eq!(details["handoff"]["recommended_stream"], json!("stderr"));
+    assert_eq!(
+        details["handoff"]["recommended_recipe"],
+        json!("wider_bytes")
+    );
+    let stderr_full_output_path = details["stderr"]["full_output_path"]
+        .as_str()
+        .expect("stderr full output path");
+    assert_eq!(
+        details["handoff"]["recommended_payload"]["path"],
+        json!(stderr_full_output_path)
+    );
+    assert_eq!(
+        details["handoff"]["recipes"]["stderr"]["recommended_reason"],
+        json!(
+            "the saved output is effectively one long line, so a wider byte window is the best next read"
+        )
+    );
+
+    let saved_output = fs::read_to_string(stderr_full_output_path).expect("read saved stderr");
+    assert_eq!(saved_output.len(), 2_000_000);
+    assert!(saved_output.bytes().all(|byte| byte == b'b'));
+    fs::remove_file(stderr_full_output_path).ok();
+    std::fs::remove_dir_all(root).ok();
 }
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -648,9 +799,9 @@ fn tool_search_result_includes_compact_argument_hints() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(results.iter().any(|entry| {
-        entry["tool_id"] == "exec"
-            && entry["argument_hint"].as_str()
-                == Some("command:string,args?:string[],timeout_ms?:integer,cwd?:string")
+        let is_exec = entry["tool_id"] == "exec";
+        let argument_hint = entry["argument_hint"].as_str().unwrap_or_default();
+        is_exec && argument_hint.contains("command?:string")
     }));
 
     std::fs::remove_dir_all(&root).ok();
@@ -683,7 +834,7 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
     assert!(
         first["usage_guidance"]
             .as_str()
-            .is_some_and(|value| value.contains("direct read first"))
+            .is_some_and(|value| value.contains("normal repo inspection"))
     );
     assert!(first.get("lease").is_none());
 

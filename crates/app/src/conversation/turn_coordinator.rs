@@ -145,7 +145,8 @@ use super::turn_shared::{
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
     build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, effective_followup_tool_name,
-    format_approval_required_reply, next_conversation_turn_id, reduce_followup_payload_for_model,
+    effective_followup_visible_tool_name, format_approval_required_reply,
+    next_conversation_turn_id, reduce_followup_payload_for_model,
     request_completion_with_raw_fallback, summarize_provider_lane_tool_request,
     summarize_single_tool_followup_request, tool_driven_followup_payload,
     tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
@@ -2080,18 +2081,9 @@ impl ConversationTurnCoordinator {
             let payload = if canonical_tool_name == "provider.switch" {
                 intent.args_json.as_object()
             } else if canonical_tool_name == "tool.invoke" {
-                intent
-                    .args_json
-                    .as_object()
-                    .filter(|payload| {
-                        payload
-                            .get("tool_id")
-                            .and_then(Value::as_str)
-                            .map(crate::tools::canonical_tool_name)
-                            == Some("provider.switch")
-                    })
-                    .and_then(|payload| payload.get("arguments"))
-                    .and_then(Value::as_object)
+                crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+                    .filter(|(tool_name, _arguments)| *tool_name == "provider.switch")
+                    .and_then(|(_tool_name, arguments)| arguments.as_object())
             } else {
                 None
             };
@@ -5465,11 +5457,12 @@ fn build_safe_lane_plan_graph(
     let node_risk_tier = select_safe_lane_risk_tier(config, lane_decision);
     let normalized_start = start_tool_index.min(turn.tool_intents.len());
     for (index, intent) in turn.tool_intents.iter().enumerate().skip(normalized_start) {
+        let visible_tool_name = effective_followup_visible_tool_name(intent);
         nodes.push(PlanNode {
             id: format!("tool-{}", index + 1),
             kind: PlanNodeKind::Tool,
-            label: format!("invoke `{}`", intent.tool_name),
-            tool_name: Some(intent.tool_name.clone()),
+            label: format!("invoke `{visible_tool_name}`"),
+            tool_name: Some(visible_tool_name),
             timeout_ms: 3_000,
             max_attempts: tool_node_max_attempts,
             risk_tier: node_risk_tier,
@@ -6898,7 +6891,7 @@ mod tests {
     }
 
     #[test]
-    fn build_provider_turn_tool_terminal_events_attach_canonical_shell_request_summary() {
+    fn build_provider_turn_tool_terminal_events_attach_visible_shell_request_summary() {
         let turn = ProviderTurn {
             assistant_text: String::new(),
             tool_intents: vec![ToolIntent {
@@ -6928,7 +6921,7 @@ mod tests {
         assert_eq!(
             request_summary_json,
             json!({
-                "tool": "shell.exec",
+                "tool": "exec",
                 "request": {"command": "ls", "args_redacted": 1}
             })
         );
@@ -6972,8 +6965,8 @@ mod tests {
             .expect("multi-intent request summary should be an array");
 
         assert_eq!(request_entries.len(), 2);
-        assert_eq!(request_entries[0]["tool"], "file.read");
-        assert_eq!(request_entries[1]["tool"], "shell.exec");
+        assert_eq!(request_entries[0]["tool"], "read");
+        assert_eq!(request_entries[1]["tool"], "exec");
         assert_eq!(request_entries[1]["request"]["command"], "ls");
         assert_eq!(request_entries[1]["request"]["args_redacted"], 1);
     }
@@ -7811,6 +7804,46 @@ mod tests {
     }
 
     #[test]
+    fn build_safe_lane_plan_graph_uses_precise_visible_names_for_grouped_hidden_invokes() {
+        let config = LoongConfig::default();
+        let lane_decision = LaneDecision {
+            lane: ExecutionLane::Safe,
+            risk_score: 0,
+            complexity_score: 0,
+            reasons: Vec::new(),
+        };
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "tool.invoke".to_owned(),
+                args_json: json!({
+                    "tool_id": "agent",
+                    "lease": "lease-agent",
+                    "arguments": {
+                        "operation": "delegate-background",
+                        "task": "summarize the repo"
+                    }
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-a".to_owned(),
+                turn_id: "turn-a".to_owned(),
+                tool_call_id: "call-agent".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+
+        let plan = build_safe_lane_plan_graph(&config, &lane_decision, &turn, 2, 0);
+        let tool_node = plan
+            .nodes
+            .iter()
+            .find(|node| node.kind == PlanNodeKind::Tool)
+            .expect("plan should include a tool node");
+
+        assert_eq!(tool_node.label, "invoke `delegate_async`");
+        assert_eq!(tool_node.tool_name.as_deref(), Some("delegate_async"));
+    }
+
+    #[test]
     fn build_turn_reply_followup_messages_reduces_file_read_payload_summary() {
         let content = (0..96)
             .map(|index| format!("line {index}: {}", "x".repeat(48)))
@@ -7875,7 +7908,7 @@ mod tests {
         )
         .expect("file.read payload summary should stay valid json");
 
-        assert_eq!(envelope["tool"], "file.read");
+        assert_eq!(envelope["tool"], "read");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["path"], "/repo/README.md");
         assert_eq!(summary["bytes"], 8_192);
@@ -7928,7 +7961,7 @@ mod tests {
         let (envelope, summary) =
             crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
-        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["command"], "cargo");
         assert_eq!(summary["exit_code"], 0);
