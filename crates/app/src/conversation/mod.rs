@@ -20,7 +20,6 @@ mod runtime_binding;
 mod safe_lane_failure;
 mod session_address;
 mod session_history;
-mod session_state;
 mod subagent;
 mod tool_discovery_state;
 mod tool_input_contract;
@@ -107,7 +106,6 @@ pub use session_history::{
     load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
     load_turn_checkpoint_event_summary,
 };
-pub(crate) use session_state::{InterAgentMessage, mailbox_for_session};
 pub use subagent::{
     ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
     ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
