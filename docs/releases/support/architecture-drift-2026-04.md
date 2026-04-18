@@ -20,7 +20,7 @@ release review. It is not part of the primary public release trail.
   repository's current architecture boundaries
 
 ## Summary
-- Generated at: 2026-04-17T06:18:46Z
+- Generated at: 2026-04-18T12:39:28Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/support/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -37,13 +37,13 @@ release review. It is not part of the primary public release trail.
 | memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 456 | 650 | 194 | 16 | 16 | 0 | 100.0% | TIGHT | 356 | 28.1% | BREACH | 14 |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3096 | 3600 | 504 | 0 | 12 | 12 | 86.0% | WATCH | 3383 | -8.5% | PASS | 8 |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 1776 | 2800 | 1024 | 7 | 65 | 58 | 63.4% | HEALTHY | 2698 | -34.2% | PASS | 56 |
-| channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10123 | 10500 | 377 | 78 | 90 | 12 | 96.4% | TIGHT | 9922 | 2.0% | PASS | 88 |
+| channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10125 | 10500 | 375 | 78 | 90 | 12 | 96.4% | TIGHT | 9922 | 2.0% | PASS | 88 |
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 8919 | 9800 | 881 | 17 | 90 | 73 | 91.0% | WATCH | 9796 | -9.0% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6751 | 7300 | 549 | 95 | 160 | 65 | 92.5% | WATCH | 6936 | -2.7% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 2113 | 6400 | 4287 | 0 | 110 | 110 | 33.0% | HEALTHY | 1779 | 18.8% | BREACH | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 9988 | 11200 | 1212 | 61 | 120 | 59 | 89.2% | WATCH | 10831 | -7.8% | PASS | 98 |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14430 | 15000 | 570 | 45 | 70 | 25 | 96.2% | TIGHT | 14472 | -0.3% | PASS | 54 |
-| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5955 | 6500 | 545 | 178 | 210 | 32 | 91.6% | WATCH | 6324 | -5.8% | PASS | 210 |
+| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5956 | 6500 | 544 | 178 | 210 | 32 | 91.6% | WATCH | 6324 | -5.8% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9238 | 9800 | 562 | 206 | 250 | 44 | 94.3% | WATCH | 9519 | -3.0% | PASS | 228 |
 
 ## Prioritization Signals
@@ -91,13 +91,13 @@ release review. It is not part of the primary public release trail.
 <!-- arch-hotspot key=memory_mod lines=456 functions=16 -->
 <!-- arch-hotspot key=acp_manager lines=3096 functions=0 -->
 <!-- arch-hotspot key=acpx_runtime lines=1776 functions=7 -->
-<!-- arch-hotspot key=channel_registry lines=10123 functions=78 -->
+<!-- arch-hotspot key=channel_registry lines=10125 functions=78 -->
 <!-- arch-hotspot key=channel_config lines=8919 functions=17 -->
 <!-- arch-hotspot key=chat_runtime lines=6751 functions=95 -->
 <!-- arch-hotspot key=channel_mod lines=2113 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=9988 functions=61 -->
 <!-- arch-hotspot key=tools_mod lines=14430 functions=45 -->
-<!-- arch-hotspot key=daemon_lib lines=5955 functions=178 -->
+<!-- arch-hotspot key=daemon_lib lines=5956 functions=178 -->
 <!-- arch-hotspot key=onboard_cli lines=9238 functions=206 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
