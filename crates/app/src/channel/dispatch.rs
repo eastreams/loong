@@ -53,7 +53,7 @@ use crate::KernelContext;
     feature = "channel-imessage",
 ))]
 use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
@@ -322,7 +322,7 @@ enum EndpointBackedSendTargetSource {
 
 #[cfg(any(feature = "channel-telegram", feature = "channel-matrix"))]
 fn process_inbound_with_provider_future(
-    config: LoongClawConfig,
+    config: LoongConfig,
     resolved_path: PathBuf,
     message: ChannelInboundMessage,
     kernel_ctx: Arc<crate::KernelContext>,
@@ -404,7 +404,7 @@ fn load_discord_command_context(
 #[cfg(feature = "channel-discord")]
 fn build_discord_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedDiscordChannelConfig>> {
     let resolved = config.discord.resolve_account(account_id)?;
@@ -437,7 +437,7 @@ fn load_dingtalk_command_context(
 #[cfg(feature = "channel-dingtalk")]
 fn build_dingtalk_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedDingtalkChannelConfig>> {
     let resolved = config.dingtalk.resolve_account(account_id)?;
@@ -470,7 +470,7 @@ fn load_telegram_command_context(
 #[cfg(feature = "channel-telegram")]
 pub(super) fn build_telegram_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedTelegramChannelConfig>> {
     let resolved = config.telegram.resolve_account(account_id)?;
@@ -503,7 +503,7 @@ fn load_feishu_command_context(
 #[cfg(feature = "channel-feishu")]
 pub(super) fn build_feishu_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedFeishuChannelConfig>> {
     let resolved = crate::channel::feishu::api::resolve_requested_feishu_account(
@@ -540,7 +540,7 @@ fn load_matrix_command_context(
 #[cfg(feature = "channel-matrix")]
 fn build_matrix_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedMatrixChannelConfig>> {
     let resolved = config.matrix.resolve_account(account_id)?;
@@ -573,7 +573,7 @@ fn load_wecom_command_context(
 #[cfg(feature = "channel-wecom")]
 fn build_wecom_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedWecomChannelConfig>> {
     let resolved = config.wecom.resolve_account(account_id)?;
@@ -606,7 +606,7 @@ fn load_slack_command_context(
 #[cfg(feature = "channel-slack")]
 fn build_slack_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedSlackChannelConfig>> {
     let resolved = config.slack.resolve_account(account_id)?;
@@ -639,7 +639,7 @@ fn load_line_command_context(
 #[cfg(feature = "channel-line")]
 fn build_line_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedLineChannelConfig>> {
     let resolved = config.line.resolve_account(account_id)?;
@@ -672,7 +672,7 @@ fn load_whatsapp_command_context(
 #[cfg(feature = "channel-whatsapp")]
 pub(super) fn build_whatsapp_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedWhatsappChannelConfig>> {
     let resolved = config.whatsapp.resolve_account(account_id)?;
@@ -705,7 +705,7 @@ fn load_email_command_context(
 #[cfg(feature = "channel-email")]
 fn build_email_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedEmailChannelConfig>> {
     let resolved = config.email.resolve_account(account_id)?;
@@ -738,7 +738,7 @@ fn load_webhook_command_context(
 #[cfg(feature = "channel-webhook")]
 fn build_webhook_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedWebhookChannelConfig>> {
     let resolved = config.webhook.resolve_account(account_id)?;
@@ -771,7 +771,7 @@ fn load_google_chat_command_context(
 #[cfg(feature = "channel-google-chat")]
 fn build_google_chat_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedGoogleChatChannelConfig>> {
     let resolved = config.google_chat.resolve_account(account_id)?;
@@ -804,7 +804,7 @@ fn load_teams_command_context(
 #[cfg(feature = "channel-teams")]
 fn build_teams_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedTeamsChannelConfig>> {
     let resolved = config.teams.resolve_account(account_id)?;
@@ -837,7 +837,7 @@ fn load_mattermost_command_context(
 #[cfg(feature = "channel-mattermost")]
 fn build_mattermost_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedMattermostChannelConfig>> {
     let resolved = config.mattermost.resolve_account(account_id)?;
@@ -870,7 +870,7 @@ fn load_nextcloud_talk_command_context(
 #[cfg(feature = "channel-nextcloud-talk")]
 fn build_nextcloud_talk_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedNextcloudTalkChannelConfig>> {
     let resolved = config.nextcloud_talk.resolve_account(account_id)?;
@@ -903,7 +903,7 @@ fn load_synology_chat_command_context(
 #[cfg(feature = "channel-synology-chat")]
 fn build_synology_chat_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedSynologyChatChannelConfig>> {
     let resolved = config.synology_chat.resolve_account(account_id)?;
@@ -936,7 +936,7 @@ fn load_irc_command_context(
 #[cfg(feature = "channel-irc")]
 fn build_irc_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedIrcChannelConfig>> {
     let resolved = config.irc.resolve_account(account_id)?;
@@ -969,7 +969,7 @@ fn load_imessage_command_context(
 #[cfg(feature = "channel-imessage")]
 fn build_imessage_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedImessageChannelConfig>> {
     let resolved = config.imessage.resolve_account(account_id)?;
@@ -1002,7 +1002,7 @@ fn load_nostr_command_context(
 #[cfg(feature = "channel-nostr")]
 fn build_nostr_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedNostrChannelConfig>> {
     let resolved = config.nostr.resolve_account(account_id)?;
@@ -1124,7 +1124,7 @@ fn run_telegram_channel_with_context(
 #[cfg(feature = "channel-telegram")]
 pub fn run_telegram_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     once: bool,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
@@ -1443,7 +1443,7 @@ pub async fn run_line_channel(
 #[cfg(feature = "channel-line")]
 pub async fn run_line_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
     bind_override: Option<&str>,
     path_override: Option<&str>,
@@ -1617,7 +1617,7 @@ pub async fn run_whatsapp_channel(
 #[cfg(feature = "channel-whatsapp")]
 pub async fn run_whatsapp_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
@@ -2434,7 +2434,7 @@ fn run_feishu_channel_with_context(
 #[cfg(feature = "channel-feishu")]
 pub fn run_feishu_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
     bind_override: Option<&str>,
     path_override: Option<&str>,
@@ -2678,7 +2678,7 @@ fn run_matrix_channel_with_context(
 #[cfg(feature = "channel-matrix")]
 pub fn run_matrix_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     once: bool,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
@@ -2812,7 +2812,7 @@ fn run_wecom_channel_with_context(
 #[cfg(feature = "channel-wecom")]
 pub fn run_wecom_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
@@ -2833,7 +2833,7 @@ pub fn run_wecom_channel_with_stop(
 pub fn run_background_channel_with_stop(
     channel_id: &str,
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<String>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
@@ -3011,7 +3011,7 @@ pub fn run_background_channel_with_stop(
     feature = "channel-webhook"
 ))]
 pub(crate) async fn send_text_to_known_session(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     text: &str,
 ) -> CliResult<ChannelSendReceipt> {
@@ -3302,7 +3302,7 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-webhook"
 )))]
 pub(crate) async fn send_text_to_known_session(
-    _config: &crate::config::LoongClawConfig,
+    _config: &crate::config::LoongConfig,
     session_id: &str,
     _text: &str,
 ) -> CliResult<ChannelSendReceipt> {
@@ -3321,7 +3321,7 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-webhook"
 ))]
 pub async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     message: &ChannelInboundMessage,
     binding: ConversationRuntimeBinding<'_>,
@@ -3363,7 +3363,7 @@ pub async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + 
     feature = "channel-webhook"
 ))]
 pub async fn process_inbound_with_provider(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved_path: Option<&std::path::Path>,
     message: &ChannelInboundMessage,
     kernel_ctx: &KernelContext,
@@ -3411,7 +3411,7 @@ pub async fn process_inbound_with_provider(
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
             tracing::debug!(
-                target: "loongclaw.channel",
+                target: "loong.channel",
                 platform = %message.session.platform.as_str(),
                 has_conversation_id,
                 has_configured_account_id,
@@ -3447,7 +3447,7 @@ pub async fn process_inbound_with_provider(
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
             tracing::warn!(
-                target: "loongclaw.channel",
+                target: "loong.channel",
                 platform = %message.session.platform.as_str(),
                 has_conversation_id,
                 has_configured_account_id,
@@ -3480,9 +3480,9 @@ pub async fn process_inbound_with_provider(
     feature = "channel-webhook"
 ))]
 pub fn reload_channel_turn_config(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved_path: Option<&std::path::Path>,
-) -> CliResult<LoongClawConfig> {
+) -> CliResult<LoongConfig> {
     match resolved_path {
         Some(path) => config.reload_provider_runtime_state_from_path(path),
         None => Ok(config.clone()),
@@ -3500,7 +3500,7 @@ pub fn reload_channel_turn_config(
     feature = "channel-webhook"
 ))]
 fn resolve_channel_acp_turn_hints(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session: &ChannelSession,
 ) -> CliResult<ChannelResolvedAcpTurnHints> {
     match session.platform {
@@ -3886,15 +3886,15 @@ mod tests {
 #[cfg(test)]
 mod background_dispatch_tests {
     use super::run_background_channel_with_stop;
-    use crate::{channel::ChannelServeStopHandle, config::LoongClawConfig};
+    use crate::{channel::ChannelServeStopHandle, config::LoongConfig};
     use std::path::PathBuf;
 
     #[tokio::test]
     async fn run_background_channel_with_stop_rejects_unknown_channel() {
         let error = run_background_channel_with_stop(
             "unknown",
-            PathBuf::from("/tmp/loongclaw-channel-unknown.toml"),
-            LoongClawConfig::default(),
+            PathBuf::from("/tmp/loong-channel-unknown.toml"),
+            LoongConfig::default(),
             Some("account-1".to_owned()),
             ChannelServeStopHandle::new(),
             false,

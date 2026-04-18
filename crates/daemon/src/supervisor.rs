@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 use tokio::task::{Id, JoinSet};
 
 use crate::{MultiChannelServeChannelAccount, mvp};
@@ -92,7 +92,7 @@ fn collect_multi_channel_account_overrides(
 }
 
 pub fn collect_loaded_background_surfaces(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     channel_accounts: &[MultiChannelServeChannelAccount],
 ) -> Result<Vec<BackgroundChannelSurface>, String> {
     let account_overrides = collect_multi_channel_account_overrides(channel_accounts)?;
@@ -263,7 +263,7 @@ impl SupervisorSpec {
 
     pub fn from_loaded_multi_channel_serve(
         session: &str,
-        config: &mvp::config::LoongClawConfig,
+        config: &mvp::config::LoongConfig,
         channel_accounts: &[MultiChannelServeChannelAccount],
     ) -> Result<Self, String> {
         let surfaces = collect_loaded_background_surfaces(config, channel_accounts)?;
@@ -609,13 +609,13 @@ impl SupervisorState {
 #[derive(Debug, Clone)]
 pub struct LoadedSupervisorConfig {
     pub resolved_path: PathBuf,
-    pub config: mvp::config::LoongClawConfig,
+    pub config: mvp::config::LoongConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct BackgroundChannelRunnerRequest {
     pub resolved_path: PathBuf,
-    pub config: mvp::config::LoongClawConfig,
+    pub config: mvp::config::LoongConfig,
     pub account_id: Option<String>,
     pub stop: mvp::channel::ChannelServeStopHandle,
     pub initialize_runtime_environment: bool,
@@ -1013,7 +1013,7 @@ mod tests {
 
     #[tokio::test]
     async fn loaded_multi_channel_spec_includes_all_enabled_runtime_backed_service_channels() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.telegram.enabled = true;
         config.feishu.enabled = true;
         config.matrix.enabled = true;
@@ -1056,7 +1056,7 @@ mod tests {
 
     #[test]
     fn loaded_multi_channel_spec_rejects_duplicate_channel_account_overrides() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.telegram.enabled = true;
 
         let error = SupervisorSpec::from_loaded_multi_channel_serve(
@@ -1566,8 +1566,8 @@ mod tests {
             gateway_cli_host_thread_spawner,
         );
         let options = mvp::chat::ConcurrentCliHostOptions {
-            resolved_path: PathBuf::from("/tmp/loongclaw-test-config.toml"),
-            config: mvp::config::LoongClawConfig::default(),
+            resolved_path: PathBuf::from("/tmp/loong-test-config.toml"),
+            config: mvp::config::LoongConfig::default(),
             session_id: "cli-supervisor".to_owned(),
             shutdown: mvp::chat::ConcurrentCliShutdown::new(),
             initialize_runtime_environment: false,

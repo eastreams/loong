@@ -11,8 +11,8 @@ use hmac::{KeyInit, Mac};
 use serde_json::json;
 
 use crate::{
-    CliResult, KernelContext, config::ChannelDefaultAccountSelectionSource,
-    config::LoongClawConfig, config::ResolvedLineChannelConfig,
+    CliResult, KernelContext, config::ChannelDefaultAccountSelectionSource, config::LoongConfig,
+    config::ResolvedLineChannelConfig,
 };
 
 use super::dispatch::{
@@ -59,7 +59,7 @@ impl LineServeError {
 
 #[derive(Clone)]
 struct LineServeState {
-    config: LoongClawConfig,
+    config: LoongConfig,
     resolved_path: PathBuf,
     resolved: ResolvedLineChannelConfig,
     channel_secret: String,
@@ -69,7 +69,7 @@ struct LineServeState {
 
 impl LineServeState {
     fn new(
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         resolved_path: &Path,
         resolved: &ResolvedLineChannelConfig,
         kernel_ctx: KernelContext,
@@ -144,7 +144,7 @@ pub(super) async fn run_line_send(
 
 #[allow(clippy::print_stdout)] // CLI startup banner
 pub(super) async fn run_line_channel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved: &ResolvedLineChannelConfig,
     resolved_path: &Path,
     selected_by_default: bool,
@@ -627,7 +627,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        std::env::temp_dir().join(format!("loongclaw-line-test-{label}-{timestamp}"))
+        std::env::temp_dir().join(format!("loong-line-test-{label}-{timestamp}"))
     }
 
     async fn build_test_serve_state() -> LineServeState {
@@ -647,8 +647,8 @@ mod tests {
         let resolved = test_resolved_line_config();
 
         LineServeState::new(
-            &LoongClawConfig::default(),
-            Path::new("/tmp/loongclaw.toml"),
+            &LoongConfig::default(),
+            Path::new("/tmp/loong.toml"),
             &resolved,
             kernel_ctx,
             runtime.into(),

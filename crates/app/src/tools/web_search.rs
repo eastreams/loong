@@ -1,4 +1,4 @@
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
 #[cfg(feature = "tool-websearch")]
 use regex::Regex;
@@ -332,7 +332,7 @@ async fn search_brave(
     let client = super::web_http::build_ssrf_safe_client(
         false, // deny private hosts by default
         timeout_seconds,
-        "LoongClaw-WebSearch/0.1",
+        "Loong-WebSearch/0.1",
     )?;
 
     let response = client
@@ -402,7 +402,7 @@ async fn search_tavily(
     let client = super::web_http::build_ssrf_safe_client(
         false, // deny private hosts by default
         timeout_seconds,
-        "LoongClaw-WebSearch/0.1",
+        "Loong-WebSearch/0.1",
     )?;
 
     let response = client
@@ -475,7 +475,7 @@ async fn search_perplexity(
         })?;
 
     let client =
-        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "LoongClaw-WebSearch/0.1")?;
+        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "Loong-WebSearch/0.1")?;
 
     let response = client
         .post("https://api.perplexity.ai/search")
@@ -549,7 +549,7 @@ async fn search_exa(
         })?;
 
     let client =
-        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "LoongClaw-WebSearch/0.1")?;
+        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "Loong-WebSearch/0.1")?;
 
     let response = client
         .post("https://api.exa.ai/search")
@@ -649,7 +649,7 @@ async fn search_firecrawl(
     );
     let api_key = trimmed_api_key.ok_or(missing_api_key_message)?;
 
-    let user_agent = "LoongClaw-WebSearch/0.1";
+    let user_agent = "Loong-WebSearch/0.1";
     let private_hosts_allowed = false;
     let client = super::web_http::build_ssrf_safe_client(
         private_hosts_allowed,
@@ -842,7 +842,7 @@ async fn search_jina(
         .map_err(|e| format!("Failed to build Jina Search URL: {e}"))?;
 
     let client =
-        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "LoongClaw-WebSearch/0.1")?;
+        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "Loong-WebSearch/0.1")?;
 
     let response = client
         .get(url)

@@ -654,10 +654,7 @@ mod tests {
             return true;
         }
 
-        path_segments_contain_sequence(
-            path_segments,
-            &["loongclaw_app", "test_support", "ScopedEnv"],
-        )
+        path_segments_contain_sequence(path_segments, &["loong_app", "test_support", "ScopedEnv"])
     }
 
     fn path_ends_with_forbidden_scoped_env_path(path_segments: &[String]) -> bool {
@@ -668,10 +665,7 @@ mod tests {
             return true;
         }
 
-        path_segments_end_with_sequence(
-            path_segments,
-            &["loongclaw_app", "test_support", "ScopedEnv"],
-        )
+        path_segments_end_with_sequence(path_segments, &["loong_app", "test_support", "ScopedEnv"])
     }
 
     fn path_ends_with_forbidden_test_support_module(path_segments: &[String]) -> bool {
@@ -682,7 +676,7 @@ mod tests {
             return true;
         }
 
-        path_segments_end_with_sequence(path_segments, &["loongclaw_app", "test_support"])
+        path_segments_end_with_sequence(path_segments, &["loong_app", "test_support"])
     }
 
     fn path_segments_contain_sequence(path_segments: &[String], sequence: &[&str]) -> bool {
@@ -787,7 +781,7 @@ mod tests {
 
     #[test]
     fn scoped_env_remove_restores_original_value() {
-        let key = "LOONGCLAW_SCOPED_ENV_REMOVE_TEST_KEY";
+        let key = "LOONG_SCOPED_ENV_REMOVE_TEST_KEY";
         let sentinel_value = "scoped-env-sentinel";
         let mut env = ScopedEnv::new();
         let original_value = std::env::var_os(key);
@@ -827,8 +821,8 @@ mod tests {
     }
 
     #[test]
-    fn daemon_source_guard_flags_loongclaw_app_scoped_env_reference() {
-        let base_path = ["loongclaw_app", "::test_support"].concat();
+    fn daemon_source_guard_flags_loong_app_scoped_env_reference() {
+        let base_path = ["loong_app", "::test_support"].concat();
         let scoped_env_name = ["Scoped", "Env"].concat();
         let sample_source = format!(
             "fn build_guard() {{
@@ -839,7 +833,7 @@ mod tests {
 
         assert!(
             daemon_source_uses_forbidden_env_guard(&sample_source),
-            "daemon source guard should flag direct loongclaw_app scoped env references"
+            "daemon source guard should flag direct loong_app scoped env references"
         );
     }
 
@@ -907,7 +901,7 @@ mod tests {
     #[test]
     fn daemon_source_guard_flags_alias_to_forbidden_scoped_env_item() {
         let sample_source = r#"
-            use loongclaw_app::test_support::ScopedEnv as AppScopedEnv;
+            use loong_app::test_support::ScopedEnv as AppScopedEnv;
 
             fn build_guard() {
                 let mut env = AppScopedEnv::new();
@@ -941,7 +935,7 @@ mod tests {
     #[test]
     fn daemon_source_guard_flags_alias_to_forbidden_app_root_module() {
         let sample_source = r#"
-            use loongclaw_app as app_side;
+            use loong_app as app_side;
 
             fn build_guard() {
                 let mut env = app_side::test_support::ScopedEnv::new();

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use loongclaw_kernel::AuditEventKind;
+use loong_kernel::AuditEventKind;
 
 use crate::config::ProviderConfig;
 

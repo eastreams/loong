@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn signal_status_hides_blocked_private_service_url_without_override() {
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
     config.signal.enabled = true;
 
     let snapshots = channel_status_snapshots(&config);
@@ -36,7 +36,7 @@ fn signal_status_hides_blocked_private_service_url_without_override() {
 
 #[test]
 fn signal_status_rejects_non_http_service_url() {
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
     config.signal.enabled = true;
     config.signal.signal_account = Some("+15550001111".to_owned());
     config.signal.service_url = Some("file:///tmp/signal-api".to_owned());
@@ -59,7 +59,7 @@ fn signal_status_rejects_non_http_service_url() {
 
 #[test]
 fn signal_status_hides_credential_bearing_service_url() {
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
     config.signal.enabled = true;
     config.signal.signal_account = Some("+15550001111".to_owned());
     config.signal.service_url = Some("https://user:pass@signal.example.test/api".to_owned());
@@ -86,7 +86,7 @@ fn signal_status_hides_credential_bearing_service_url() {
 
 #[test]
 fn signal_status_allows_private_service_url_when_outbound_http_override_is_enabled() {
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
     config.signal.enabled = true;
     config.signal.signal_account = Some("+15550001111".to_owned());
     config.outbound_http.allow_private_hosts = true;
@@ -111,9 +111,9 @@ fn signal_status_allows_private_service_url_when_outbound_http_override_is_enabl
 
 #[test]
 fn google_chat_status_rejects_credential_bearing_webhook_url() {
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
     config.google_chat.enabled = true;
-    config.google_chat.webhook_url = Some(loongclaw_contracts::SecretRef::Inline(
+    config.google_chat.webhook_url = Some(loong_contracts::SecretRef::Inline(
         "https://user:pass@chat.googleapis.com/v1/spaces/AAAA/messages".to_owned(),
     ));
 

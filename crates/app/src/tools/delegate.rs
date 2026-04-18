@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use loongclaw_contracts::ToolCoreOutcome;
+use loong_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
 use crate::conversation::{ConstrainedSubagentIdentity, DelegateBuiltinProfile};

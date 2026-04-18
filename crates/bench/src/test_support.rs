@@ -1,4 +1,4 @@
-//! Test support utilities for loongclaw-bench integration tests.
+//! Test support utilities for loong-bench integration tests.
 //!
 //! Available when the `test-support` feature is enabled.
 
@@ -14,7 +14,7 @@ use serde_json::json;
 pub fn test_native_tool_executor(
     request: ToolCoreRequest,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if !loongclaw_spec::tool_name_requires_native_tool_executor(request.tool_name.as_str()) {
+    if !loong_spec::tool_name_requires_native_tool_executor(request.tool_name.as_str()) {
         return None;
     }
     Some(Ok(ToolCoreOutcome {
@@ -30,7 +30,7 @@ pub fn test_native_tool_executor(
 pub fn declining_native_tool_executor(
     request: ToolCoreRequest,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if loongclaw_spec::tool_name_requires_native_tool_executor(request.tool_name.as_str()) {
+    if loong_spec::tool_name_requires_native_tool_executor(request.tool_name.as_str()) {
         return None;
     }
     Some(Ok(ToolCoreOutcome {

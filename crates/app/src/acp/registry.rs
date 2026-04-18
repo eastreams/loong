@@ -9,7 +9,7 @@ use super::acpx::AcpxCliProbeBackend;
 use super::backend::{AcpBackendMetadata, AcpRuntimeBackend, PlanningStubAcpBackend};
 
 pub const DEFAULT_ACP_BACKEND_ID: &str = "planning_stub";
-pub const ACP_BACKEND_ENV: &str = "LOONGCLAW_ACP_BACKEND";
+pub const ACP_BACKEND_ENV: &str = "LOONG_ACP_BACKEND";
 
 type SharedAcpBackend = Arc<dyn AcpRuntimeBackend>;
 
@@ -135,7 +135,7 @@ mod tests {
         AcpTurnRequest, AcpTurnResult, AcpTurnStopReason,
     };
     use super::*;
-    use crate::config::LoongClawConfig;
+    use crate::config::LoongConfig;
 
     struct TestAcpBackend;
 
@@ -155,7 +155,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -171,7 +171,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -186,23 +186,19 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             Ok(())
         }
 
         async fn set_mode(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             _mode: AcpSessionMode,
         ) -> CliResult<()> {

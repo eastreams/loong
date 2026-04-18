@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use loongclaw_bridge_runtime::BridgeExecutionPolicy;
-use loongclaw_bridge_runtime::execute_http_json_bridge_call;
-use loongclaw_bridge_runtime::execute_process_stdio_bridge_call;
-use loongclaw_contracts::Capability;
-use loongclaw_spec::CliResult;
+use loong_bridge_runtime::BridgeExecutionPolicy;
+use loong_bridge_runtime::execute_http_json_bridge_call;
+use loong_bridge_runtime::execute_process_stdio_bridge_call;
+use loong_contracts::Capability;
+use loong_spec::CliResult;
 use serde_json::{Map, Value};
 
 use crate::mvp;
@@ -54,7 +54,7 @@ pub async fn run_managed_plugin_bridge_send(
     let runtime_evidence_is_null = invocation.runtime_evidence.is_null();
     if !runtime_evidence_is_null {
         tracing::debug!(
-            target: "loongclaw.managed_bridge",
+            target: "loong.managed_bridge",
             channel_id,
             plugin_id = %binding.plugin.plugin_id,
             bridge_kind = %binding.plugin.runtime.bridge_kind.as_str(),
@@ -137,12 +137,12 @@ pub async fn run_managed_plugin_bridge_channel(
 
 fn load_managed_bridge_runtime_config(
     config_path: Option<&str>,
-) -> CliResult<(PathBuf, mvp::config::LoongClawConfig)> {
+) -> CliResult<(PathBuf, mvp::config::LoongConfig)> {
     mvp::config::load(config_path)
 }
 
 fn bridge_execution_policy_from_config(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> CliResult<BridgeExecutionPolicy> {
     let supported_bridges = config
         .runtime_plugins
@@ -227,7 +227,7 @@ async fn invoke_managed_bridge_operation(
     let provider = provider_config_from_binding(binding);
     let channel = channel_config_from_binding(binding);
     let required_capabilities = BTreeSet::from([Capability::InvokeConnector]);
-    let command = loongclaw_contracts::ConnectorCommand {
+    let command = loong_contracts::ConnectorCommand {
         connector_name: provider.connector_name.clone(),
         operation: operation.to_owned(),
         required_capabilities,
@@ -432,7 +432,7 @@ impl mvp::channel::ChannelAdapter for ManagedPluginBridgeChannelAdapter {
 }
 
 async fn run_managed_plugin_bridge_loop(
-    config: Arc<mvp::config::LoongClawConfig>,
+    config: Arc<mvp::config::LoongConfig>,
     resolved_path: Option<PathBuf>,
     kernel_ctx: Arc<mvp::KernelContext>,
     stop: &mvp::channel::ChannelServeStopHandle,
@@ -720,7 +720,7 @@ mod tests {
             compatibility: None,
         };
         let plugin_directory = root.join("weixin-managed-runtime");
-        let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+        let manifest_path = plugin_directory.join("loong.plugin.json");
         let encoded_manifest =
             serde_json::to_string_pretty(&manifest).expect("serialize runtime manifest");
 
@@ -749,18 +749,18 @@ mod tests {
 
         write_runtime_manifest(runtime_root.path(), endpoint.as_str());
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.runtime_plugins.enabled = true;
         config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
         config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
         config.weixin.enabled = true;
         config.weixin.bridge_url = Some(endpoint.clone());
-        config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
             "bridge-token".to_owned(),
         ));
         config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
 
-        let config_path = config_root.path().join("loongclaw.toml");
+        let config_path = config_root.path().join("loong.toml");
         let encoded_config = toml::to_string(&config).expect("serialize config");
         fs::write(&config_path, encoded_config).expect("write config");
         let config_path_string = config_path.to_string_lossy().to_string();

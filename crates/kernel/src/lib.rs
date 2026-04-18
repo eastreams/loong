@@ -53,7 +53,7 @@ pub use integration::{
     AutoProvisionAgent, AutoProvisionRequest, ChannelConfig, IntegrationCatalog, IntegrationHotfix,
     ProviderConfig, ProviderTemplate, ProvisionAction, ProvisionPlan,
 };
-pub use kernel::{ConnectorDispatch, Kernel, KernelBuilder, KernelDispatch, LoongClawKernel};
+pub use kernel::{ConnectorDispatch, Kernel, KernelBuilder, KernelDispatch, LoongKernel};
 pub use memory::{
     CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
     MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane, MemoryTier,

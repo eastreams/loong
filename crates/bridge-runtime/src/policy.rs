@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use loongclaw_contracts::ExecutionSecurityTier;
-use loongclaw_kernel as kernel;
+use loong_contracts::ExecutionSecurityTier;
+use loong_kernel as kernel;
 
 #[derive(Debug, Clone, Default)]
 pub struct BridgeExecutionPolicy {

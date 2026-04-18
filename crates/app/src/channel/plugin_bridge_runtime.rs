@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use loongclaw_kernel::{
+use loong_kernel::{
     PluginActivationStatus, PluginBridgeKind, PluginIR, PluginScanReport, PluginScanner,
     PluginSetupReadinessContext, PluginTranslationReport, PluginTranslator,
 };
@@ -9,13 +9,13 @@ use serde_json::{Map, Value};
 
 use crate::CliResult;
 use crate::config::{
-    LoongClawConfig, ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig,
+    LoongConfig, ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig,
     ResolvedWeixinChannelConfig,
 };
 
 use super::{ChannelPlatform, normalize_channel_catalog_id};
 
-pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_CONTRACT_V1: &str = "loongclaw_channel_bridge_v1";
+pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_CONTRACT_V1: &str = "loong_channel_bridge_v1";
 pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION: &str = "send_message";
 pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION: &str = "receive_batch";
 pub const CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION: &str = "ack_inbound";
@@ -47,7 +47,7 @@ impl ManagedPluginBridgeRuntimeBinding {
 }
 
 pub fn resolve_managed_plugin_bridge_runtime_binding(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     raw_channel_id: &str,
     requested_account_id: Option<&str>,
 ) -> CliResult<ManagedPluginBridgeRuntimeBinding> {
@@ -170,7 +170,7 @@ fn merge_plugin_scan_report(target: &mut PluginScanReport, source: PluginScanRep
 }
 
 fn runtime_plugin_setup_readiness_context(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> CliResult<PluginSetupReadinessContext> {
     let mut verified_env_vars = BTreeSet::new();
 
@@ -229,9 +229,9 @@ fn collect_config_paths(value: &Value, prefix: Option<&str>, out: &mut BTreeSet<
 fn collect_runtime_candidates<'a>(
     channel_id: &str,
     translation: &'a PluginTranslationReport,
-    activation: &'a loongclaw_kernel::PluginActivationPlan,
+    activation: &'a loong_kernel::PluginActivationPlan,
     _requested_account_id: Option<&str>,
-    _config: &LoongClawConfig,
+    _config: &LoongConfig,
 ) -> Vec<ManagedPluginBridgeRuntimeCandidate<'a>> {
     let mut candidates = Vec::new();
 
@@ -271,7 +271,7 @@ fn collect_runtime_candidates<'a>(
 }
 
 fn filter_runnable_runtime_candidates<'a>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved_account: &ManagedPluginBridgeResolvedAccount,
     candidates: &'a [ManagedPluginBridgeRuntimeCandidate<'a>],
 ) -> ManagedPluginBridgeRunnableCandidates<'a> {
@@ -377,7 +377,7 @@ fn select_runtime_candidate<'a>(
     Ok(selected_candidate)
 }
 
-fn configured_plugin_id(config: &LoongClawConfig, channel_id: &str) -> Option<String> {
+fn configured_plugin_id(config: &LoongConfig, channel_id: &str) -> Option<String> {
     let raw_plugin_id = match channel_id {
         "weixin" => config.weixin.managed_bridge_plugin_id.as_deref(),
         "qqbot" => config.qqbot.managed_bridge_plugin_id.as_deref(),
@@ -396,7 +396,7 @@ fn configured_plugin_id(config: &LoongClawConfig, channel_id: &str) -> Option<St
 }
 
 fn resolve_runtime_account(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     channel_id: &str,
     requested_account_id: Option<&str>,
 ) -> CliResult<ManagedPluginBridgeResolvedAccount> {
@@ -659,7 +659,7 @@ fn platform_for_channel_id(channel_id: &str) -> Option<ChannelPlatform> {
 }
 
 fn validate_binding_execution_requirements(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     plugin: &PluginIR,
 ) -> CliResult<()> {
     let bridge_kind = plugin.runtime.bridge_kind;
@@ -765,7 +765,7 @@ mod tests {
         channel_id: &str,
         bridge_kind: &str,
         runtime_operations: Vec<&str>,
-    ) -> loongclaw_kernel::PluginManifest {
+    ) -> loong_kernel::PluginManifest {
         let runtime_operations = runtime_operations
             .into_iter()
             .map(str::to_owned)
@@ -791,7 +791,7 @@ mod tests {
             ("command".to_owned(), "node".to_owned()),
         ]);
 
-        loongclaw_kernel::PluginManifest {
+        loong_kernel::PluginManifest {
             api_version: Some("v1alpha1".to_owned()),
             version: Some("1.0.0".to_owned()),
             plugin_id: plugin_id.to_owned(),
@@ -800,15 +800,15 @@ mod tests {
             channel_id: Some(channel_id.to_owned()),
             endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
             capabilities: BTreeSet::new(),
-            trust_tier: loongclaw_kernel::PluginTrustTier::Unverified,
+            trust_tier: loong_kernel::PluginTrustTier::Unverified,
             metadata,
             summary: None,
             tags: Vec::new(),
             input_examples: Vec::new(),
             output_examples: Vec::new(),
             defer_loading: false,
-            setup: Some(loongclaw_kernel::PluginSetup {
-                mode: loongclaw_kernel::PluginSetupMode::MetadataOnly,
+            setup: Some(loong_kernel::PluginSetup {
+                mode: loong_kernel::PluginSetupMode::MetadataOnly,
                 surface: Some("channel".to_owned()),
                 required_env_vars: Vec::new(),
                 recommended_env_vars: Vec::new(),
@@ -822,13 +822,9 @@ mod tests {
         }
     }
 
-    fn write_manifest(
-        root: &Path,
-        directory_name: &str,
-        manifest: &loongclaw_kernel::PluginManifest,
-    ) {
+    fn write_manifest(root: &Path, directory_name: &str, manifest: &loong_kernel::PluginManifest) {
         let plugin_directory = root.join(directory_name);
-        let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+        let manifest_path = plugin_directory.join("loong.plugin.json");
         let encoded_manifest =
             serde_json::to_string_pretty(manifest).expect("serialize plugin manifest");
 
@@ -850,13 +846,13 @@ mod tests {
         );
         write_manifest(root.path(), "weixin-bridge-runtime", &manifest);
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.runtime_plugins.enabled = true;
         config.runtime_plugins.roots = vec![root.path().display().to_string()];
         config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
         config.weixin.enabled = true;
         config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
-        config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
             "bridge-token".to_owned(),
         ));
         config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
@@ -885,13 +881,13 @@ mod tests {
         );
         write_manifest(root.path(), "qqbot-bridge-runtime", &manifest);
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.runtime_plugins.enabled = true;
         config.runtime_plugins.roots = vec![root.path().display().to_string()];
         config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
         config.qqbot.enabled = true;
-        config.qqbot.app_id = Some(loongclaw_contracts::SecretRef::Inline("10001".to_owned()));
-        config.qqbot.client_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        config.qqbot.app_id = Some(loong_contracts::SecretRef::Inline("10001".to_owned()));
+        config.qqbot.client_secret = Some(loong_contracts::SecretRef::Inline(
             "client-secret".to_owned(),
         ));
 
@@ -916,14 +912,14 @@ mod tests {
             .insert("entrypoint".to_owned(), "node".to_owned());
         write_manifest(root.path(), "qqbot-bridge-runtime", &manifest);
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.runtime_plugins.enabled = true;
         config.runtime_plugins.roots = vec![root.path().display().to_string()];
         config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
         config.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
         config.qqbot.enabled = true;
-        config.qqbot.app_id = Some(loongclaw_contracts::SecretRef::Inline("10001".to_owned()));
-        config.qqbot.client_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        config.qqbot.app_id = Some(loong_contracts::SecretRef::Inline("10001".to_owned()));
+        config.qqbot.client_secret = Some(loong_contracts::SecretRef::Inline(
             "client-secret".to_owned(),
         ));
 

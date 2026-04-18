@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use loongclaw_contracts::{Capability, ToolCoreRequest};
+use loong_contracts::{Capability, ToolCoreRequest};
 use serde_json::Value;
 
 pub(crate) const TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: &str = "_granted_capabilities";

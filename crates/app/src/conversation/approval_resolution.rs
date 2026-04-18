@@ -5,13 +5,13 @@ use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_coordinator::{execute_delegate_async_tool, execute_delegate_tool};
 use super::turn_engine::{AppToolDispatcher, DefaultAppToolDispatcher};
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 use crate::session::repository::{ApprovalDecision, ApprovalRequestRecord};
 use crate::tools::ToolExecutionKind;
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
-    config: &'a LoongClawConfig,
+    config: &'a LoongConfig,
     runtime: &'a R,
     fallback: &'a DefaultAppToolDispatcher,
     binding: ConversationRuntimeBinding<'a>,
@@ -19,7 +19,7 @@ pub(super) struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
 
 #[cfg(feature = "memory-sqlite")]
 struct ApprovalReplayRequest {
-    request: loongclaw_contracts::ToolCoreRequest,
+    request: loong_contracts::ToolCoreRequest,
     execution_kind: crate::tools::ToolExecutionKind,
     trusted_internal_context: bool,
 }
@@ -30,7 +30,7 @@ where
     R: ConversationRuntime + ?Sized,
 {
     pub(super) fn new(
-        config: &'a LoongClawConfig,
+        config: &'a LoongConfig,
         runtime: &'a R,
         fallback: &'a DefaultAppToolDispatcher,
         binding: ConversationRuntimeBinding<'a>,
@@ -87,7 +87,7 @@ where
         )?;
 
         Ok(ApprovalReplayRequest {
-            request: loongclaw_contracts::ToolCoreRequest {
+            request: loong_contracts::ToolCoreRequest {
                 tool_name: crate::tools::SHELL_EXEC_TOOL_NAME.to_owned(),
                 payload,
             },
@@ -116,7 +116,7 @@ where
 
         match execution_kind {
             ToolExecutionKind::App => Ok(ApprovalReplayRequest {
-                request: loongclaw_contracts::ToolCoreRequest {
+                request: loong_contracts::ToolCoreRequest {
                     tool_name: tool_name.to_owned(),
                     payload,
                 },
@@ -130,7 +130,7 @@ where
                 }
 
                 Ok(ApprovalReplayRequest {
-                    request: loongclaw_contracts::ToolCoreRequest {
+                    request: loong_contracts::ToolCoreRequest {
                         tool_name: tool_name.to_owned(),
                         payload,
                     },
@@ -210,7 +210,7 @@ where
     pub(super) async fn replay_approved_request(
         &self,
         approval_request: &ApprovalRequestRecord,
-    ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    ) -> Result<loong_contracts::ToolCoreOutcome, String> {
         let replay_request = self.replay_request(approval_request)?;
 
         match replay_request.execution_kind {
@@ -297,7 +297,7 @@ where
     async fn replay_approved_request(
         &self,
         approval_request: &ApprovalRequestRecord,
-    ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    ) -> Result<loong_contracts::ToolCoreOutcome, String> {
         CoordinatorApprovalResolutionRuntime::replay_approved_request(self, approval_request).await
     }
 }

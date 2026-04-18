@@ -1,5 +1,5 @@
 use kernel::ConnectorCommand;
-use loongclaw_bridge_runtime::{BridgeExecutionFailure, execute_http_json_bridge_call};
+use loong_bridge_runtime::{BridgeExecutionFailure, execute_http_json_bridge_call};
 use serde_json::Value;
 
 #[allow(clippy::indexing_slicing)]

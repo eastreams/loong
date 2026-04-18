@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use loongclaw_kernel as kernel;
+use loong_kernel as kernel;
 use reqwest::Method;
 use serde_json::{Value, json};
 

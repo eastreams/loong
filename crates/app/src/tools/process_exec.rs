@@ -242,7 +242,7 @@ where
 {
     let started_at = Instant::now();
     let mut command = Command::new(program);
-    let sanitized_env = loongclaw_contracts::sanitized_child_process_env();
+    let sanitized_env = loong_contracts::sanitized_child_process_env();
 
     command.env_clear();
     command.envs(sanitized_env);

@@ -283,7 +283,7 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
 
 #[test]
 fn channel_inventory_combines_runtime_and_catalog_surfaces() {
-    let config = LoongClawConfig::default();
+    let config = LoongConfig::default();
     let inventory = channel_inventory(&config);
 
     assert_eq!(
@@ -397,7 +397,7 @@ fn channel_inventory_exposes_grouped_channel_surfaces() {
     let mut env = crate::test_support::ScopedEnv::new();
     env.remove("TELEGRAM_BOT_TOKEN");
 
-    let config = LoongClawConfig::default();
+    let config = LoongConfig::default();
     let inventory = channel_inventory(&config);
 
     assert_eq!(

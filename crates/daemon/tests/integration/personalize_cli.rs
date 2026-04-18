@@ -24,12 +24,12 @@ fn cli_personalize_help_mentions_operator_preferences() {
 
 #[test]
 fn personalize_cli_accepts_config_flag() {
-    let cli = try_parse_cli(["loong", "personalize", "--config", "/tmp/loongclaw.toml"])
+    let cli = try_parse_cli(["loong", "personalize", "--config", "/tmp/loong.toml"])
         .expect("`personalize --config` should parse");
 
     match cli.command {
         Some(Commands::Personalize { config }) => {
-            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert_eq!(config.as_deref(), Some("/tmp/loong.toml"));
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }

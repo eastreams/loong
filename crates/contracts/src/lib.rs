@@ -183,10 +183,10 @@ mod secret_contract_tests {
     #[test]
     fn secret_ref_explicit_env_name_supports_inline_compatibility_formats() {
         let cases = vec![
-            ("${LOONGCLAW_SECRET}", Some("LOONGCLAW_SECRET")),
-            ("$LOONGCLAW_SECRET", Some("LOONGCLAW_SECRET")),
-            ("env:LOONGCLAW_SECRET", Some("LOONGCLAW_SECRET")),
-            ("%LOONGCLAW_SECRET%", Some("LOONGCLAW_SECRET")),
+            ("${LOONG_SECRET}", Some("LOONG_SECRET")),
+            ("$LOONG_SECRET", Some("LOONG_SECRET")),
+            ("env:LOONG_SECRET", Some("LOONG_SECRET")),
+            ("%LOONG_SECRET%", Some("LOONG_SECRET")),
             ("sk-inline-secret", None),
         ];
 
@@ -200,7 +200,7 @@ mod secret_contract_tests {
     #[test]
     fn secret_ref_inline_literal_value_excludes_compatibility_env_references() {
         let literal_secret = SecretRef::Inline(" sk-inline-secret ".to_owned());
-        let env_reference = SecretRef::Inline("${LOONGCLAW_SECRET}".to_owned());
+        let env_reference = SecretRef::Inline("${LOONG_SECRET}".to_owned());
 
         assert_eq!(
             literal_secret.inline_literal_value(),

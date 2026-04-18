@@ -32,11 +32,11 @@ use super::{
     runtime::serve::ChannelServeStopHandle,
     runtime::state::ChannelOperationRuntimeTracker,
 };
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 
 const WEBHOOK_JSON_CONTENT_TYPE: &str = "application/json";
 const WEBHOOK_TEXT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
-const WEBHOOK_SIGNATURE_HEADER: &str = "x-loongclaw-signature-256";
+const WEBHOOK_SIGNATURE_HEADER: &str = "x-loong-signature-256";
 const WEBHOOK_SIGNATURE_PREFIX: &str = "sha256=";
 
 #[derive(Debug)]
@@ -64,7 +64,7 @@ struct WebhookRequestBody {
 
 #[derive(Clone)]
 struct WebhookServeState {
-    config: LoongClawConfig,
+    config: LoongConfig,
     resolved_path: PathBuf,
     resolved: ResolvedWebhookChannelConfig,
     expected_auth_header: Option<(HeaderName, HeaderValue)>,
@@ -75,7 +75,7 @@ struct WebhookServeState {
 
 impl WebhookServeState {
     fn new(
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         resolved_path: &Path,
         resolved: &ResolvedWebhookChannelConfig,
         kernel_ctx: KernelContext,
@@ -229,7 +229,7 @@ async fn ensure_webhook_success(response: reqwest::Response) -> CliResult<()> {
 
 #[allow(clippy::print_stdout)] // CLI startup banner
 pub(super) async fn run_webhook_channel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved: &ResolvedWebhookChannelConfig,
     resolved_path: &Path,
     selected_by_default: bool,
@@ -673,7 +673,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        std::env::temp_dir().join(format!("loongclaw-webhook-test-{label}-{timestamp}"))
+        std::env::temp_dir().join(format!("loong-webhook-test-{label}-{timestamp}"))
     }
 
     async fn build_test_serve_state(
@@ -706,8 +706,8 @@ mod tests {
         }
 
         WebhookServeState::new(
-            &LoongClawConfig::default(),
-            std::path::Path::new("/tmp/loongclaw.toml"),
+            &LoongConfig::default(),
+            std::path::Path::new("/tmp/loong.toml"),
             &resolved,
             kernel_ctx,
             runtime.into(),

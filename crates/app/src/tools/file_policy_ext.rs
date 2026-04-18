@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loongclaw_contracts::{Capability, PolicyError};
-use loongclaw_kernel::{PolicyExtension, PolicyExtensionContext};
+use loong_contracts::{Capability, PolicyError};
+use loong_kernel::{PolicyExtension, PolicyExtensionContext};
 
 pub struct FilePolicyExtension {
     file_root: Option<PathBuf>,
@@ -291,8 +291,8 @@ impl PolicyExtension for FilePolicyExtension {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loongclaw_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
-    use loongclaw_kernel::{PolicyExtensionContext, VerticalPackManifest};
+    use loong_contracts::{Capability, CapabilityToken, ExecutionRoute, HarnessKind};
+    use loong_kernel::{PolicyExtensionContext, VerticalPackManifest};
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -735,7 +735,7 @@ mod tests {
             "payload": {
                 "mode": "apply",
                 "input_path": "config.toml",
-                "output_path": "loongclaw.toml"
+                "output_path": "loong.toml"
             }
         });
         let ctx = make_context(&pack, &token, &caps, Some(&params));
@@ -751,7 +751,7 @@ mod tests {
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
 
         assert!(
-            !ext.path_escapes_root("nested/generated/loongclaw.toml"),
+            !ext.path_escapes_root("nested/generated/loong.toml"),
             "nested new path under the file root should stay allowed"
         );
     }

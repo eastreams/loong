@@ -954,7 +954,7 @@ mod tests {
 
         let provider = ProviderConfig {
             kind: ProviderKind::Bedrock,
-            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+            api_key: Some(loong_contracts::SecretRef::Inline(
                 "bedrock-bearer-token".to_owned(),
             )),
             ..ProviderConfig::default()

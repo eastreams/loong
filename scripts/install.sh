@@ -201,10 +201,10 @@ detect_release_host_platform() {
 prefix="${HOME}/.local/bin"
 run_onboard=0
 install_source=0
-release_version="${LOONG_INSTALL_VERSION:-${LOONGCLAW_INSTALL_VERSION:-latest}}"
-release_repo="${LOONG_INSTALL_REPO:-${LOONGCLAW_INSTALL_REPO:-eastreams/loong}}"
-release_base_url="${LOONG_INSTALL_RELEASE_BASE_URL:-${LOONGCLAW_INSTALL_RELEASE_BASE_URL:-https://github.com/${release_repo}/releases}}"
-target_libc="${LOONG_INSTALL_TARGET_LIBC:-${LOONGCLAW_INSTALL_TARGET_LIBC:-auto}}"
+release_version="${LOONG_INSTALL_VERSION:-${LOONG_INSTALL_VERSION:-latest}}"
+release_repo="${LOONG_INSTALL_REPO:-${LOONG_INSTALL_REPO:-eastreams/loong}}"
+release_base_url="${LOONG_INSTALL_RELEASE_BASE_URL:-${LOONG_INSTALL_RELEASE_BASE_URL:-https://github.com/${release_repo}/releases}}"
+target_libc="${LOONG_INSTALL_TARGET_LIBC:-${LOONG_INSTALL_TARGET_LIBC:-auto}}"
 package_name="loong"
 bin_name="loong"
 
@@ -559,8 +559,8 @@ run_guided_onboarding() {
   if [[ -n "${LOONG_WEB_SEARCH_PROVIDER:-}" ]]; then
     selected_provider="${LOONG_WEB_SEARCH_PROVIDER}"
     provider_source="preconfigured"
-  elif [[ -n "${LOONGCLAW_WEB_SEARCH_PROVIDER:-}" ]]; then
-    selected_provider="${LOONGCLAW_WEB_SEARCH_PROVIDER}"
+  elif [[ -n "${LOONG_WEB_SEARCH_PROVIDER:-}" ]]; then
+    selected_provider="${LOONG_WEB_SEARCH_PROVIDER}"
     provider_source="preconfigured"
   else
     recommendation="$(recommend_onboard_web_search_provider)"
@@ -780,7 +780,7 @@ install_from_source() {
   printf '==> Building loong from source (release)\n'
   (
     cd "${repo_root}"
-    LOONG_RELEASE_BUILD="${LOONG_RELEASE_BUILD:-${LOONGCLAW_RELEASE_BUILD:-1}}" \
+    LOONG_RELEASE_BUILD="${LOONG_RELEASE_BUILD:-${LOONG_RELEASE_BUILD:-1}}" \
       cargo build -p loong --bin "${bin_name}" --release --locked
   )
 

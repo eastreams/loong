@@ -2848,11 +2848,11 @@ dependencies = [
  "libc",
  "loong-app",
  "loong-bench",
+ "loong-bridge-runtime",
  "loong-contracts",
  "loong-kernel",
  "loong-protocol",
  "loong-spec",
- "loongclaw-bridge-runtime",
  "rand 0.10.1",
  "reqwest",
  "rusqlite",
@@ -2949,6 +2949,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "loong-bridge-runtime"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "loong-contracts",
+ "loong-kernel",
+ "loong-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "loong-contracts"
 version = "0.1.0-alpha.3"
 dependencies = [
@@ -2996,10 +3009,10 @@ dependencies = [
  "base64",
  "ed25519-dalek",
  "futures-util",
+ "loong-bridge-runtime",
  "loong-contracts",
  "loong-kernel",
  "loong-protocol",
- "loongclaw-bridge-runtime",
  "reqwest",
  "semver",
  "serde",
@@ -3010,19 +3023,6 @@ dependencies = [
  "wasmparser 0.246.2",
  "wasmtime",
  "wat",
-]
-
-[[package]]
-name = "loongclaw-bridge-runtime"
-version = "0.1.0-alpha.3"
-dependencies = [
- "loong-contracts",
- "loong-kernel",
- "loong-protocol",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

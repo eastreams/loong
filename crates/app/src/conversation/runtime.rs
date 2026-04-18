@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loongclaw_contracts::Capability;
+use loong_contracts::Capability;
 use serde_json::Value;
 
 use crate::CliResult;

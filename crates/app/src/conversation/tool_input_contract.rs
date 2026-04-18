@@ -1,4 +1,4 @@
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 use serde_json::Value;
 
 use crate::tools;
@@ -406,7 +406,7 @@ mod tests {
         render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
     };
     use crate::tools;
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::json;
 
     #[test]

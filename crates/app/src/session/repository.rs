@@ -3940,7 +3940,7 @@ mod tests {
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-session-repository-{test_name}-{}",
+            "loong-session-repository-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);

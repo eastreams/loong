@@ -560,7 +560,7 @@ fn build_recommended_actions(
                         .as_str()
                         .to_owned(),
                 ),
-                Some("loongclaw.plugin.json".to_owned()),
+                Some("loong.plugin.json".to_owned()),
                 false,
                 default_remediation_summary(
                     PluginPreflightRemediationClass::MigrateToPackageManifest,
@@ -926,13 +926,13 @@ fn remediation_class_for_diagnostic(
 fn default_remediation_summary(remediation_class: PluginPreflightRemediationClass) -> String {
     match remediation_class {
         PluginPreflightRemediationClass::MigrateToPackageManifest => {
-            "publish a `loongclaw.plugin.json` package manifest and keep embedded source markers only as a migration bridge".to_owned()
+            "publish a `loong.plugin.json` package manifest and keep embedded source markers only as a migration bridge".to_owned()
         }
         PluginPreflightRemediationClass::MigrateForeignDialect => {
-            "keep foreign plugin dialect intake at the compatibility boundary, or publish a native `loongclaw.plugin.json` contract for first-class LoongClaw SDK support".to_owned()
+            "keep foreign plugin dialect intake at the compatibility boundary, or publish a native `loong.plugin.json` contract for first-class Loong SDK support".to_owned()
         }
         PluginPreflightRemediationClass::ModernizeLegacyOpenClawContract => {
-            "replace `package.json#openclaw.extensions` with a modern `openclaw.plugin.json` contract, or migrate fully to native `loongclaw.plugin.json` packaging".to_owned()
+            "replace `package.json#openclaw.extensions` with a modern `openclaw.plugin.json` contract, or migrate fully to native `loong.plugin.json` packaging".to_owned()
         }
         PluginPreflightRemediationClass::EnableCompatibilityShim => {
             "enable the runtime compatibility shim for this foreign plugin dialect explicitly, or migrate the plugin to a native contract before activation".to_owned()
@@ -954,7 +954,7 @@ fn default_remediation_summary(remediation_class: PluginPreflightRemediationClas
                 .to_owned()
         }
         PluginPreflightRemediationClass::ResolveHostCompatibility => {
-            "align `compatibility.host_api` / `compatibility.host_version_req` with the current host or upgrade LoongClaw before activation".to_owned()
+            "align `compatibility.host_api` / `compatibility.host_version_req` with the current host or upgrade Loong before activation".to_owned()
         }
         PluginPreflightRemediationClass::SwitchSupportedBridge => {
             "switch the plugin to a bridge kind supported by the current runtime matrix or widen bridge support intentionally before activation".to_owned()
@@ -2134,7 +2134,7 @@ mod tests {
         PluginInventoryResult {
             manifest_api_version: Some("v1alpha1".to_owned()),
             plugin_version: Some("0.3.0".to_owned()),
-            dialect: "loongclaw_package_manifest".to_owned(),
+            dialect: "loong_package_manifest".to_owned(),
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: "native".to_owned(),
             compatibility_shim: None,
@@ -2143,10 +2143,10 @@ mod tests {
             plugin_id: "sample-plugin".to_owned(),
             connector_name: "sample-http".to_owned(),
             provider_id: "sample".to_owned(),
-            source_path: "/tmp/sample/loongclaw.plugin.json".to_owned(),
+            source_path: "/tmp/sample/loong.plugin.json".to_owned(),
             source_kind: "package_manifest".to_owned(),
             package_root: "/tmp/sample".to_owned(),
-            package_manifest_path: Some("/tmp/sample/loongclaw.plugin.json".to_owned()),
+            package_manifest_path: Some("/tmp/sample/loong.plugin.json".to_owned()),
             bridge_kind: "http_json".to_owned(),
             adapter_family: Some("http-adapter".to_owned()),
             entrypoint_hint: Some("https://example.com/invoke".to_owned()),
@@ -2341,7 +2341,7 @@ mod tests {
         assert_eq!(
             summary
                 .dialect_distribution
-                .get("loongclaw_package_manifest")
+                .get("loong_package_manifest")
                 .copied(),
             Some(1)
         );
@@ -2415,7 +2415,7 @@ mod tests {
             source_kind: None,
             field_path: None,
             message: "embedded source manifests remain migration-only".to_owned(),
-            remediation: Some("add loongclaw.plugin.json".to_owned()),
+            remediation: Some("add loong.plugin.json".to_owned()),
         }];
 
         let result =
@@ -2736,9 +2736,9 @@ mod tests {
             plugin_id: Some(plugin.plugin_id.clone()),
             source_path: Some(plugin.source_path.clone()),
             source_kind: None,
-            field_path: Some("loongclaw.plugin.json".to_owned()),
+            field_path: Some("loong.plugin.json".to_owned()),
             message: "embedded source manifests remain migration-only".to_owned(),
-            remediation: Some("add loongclaw.plugin.json".to_owned()),
+            remediation: Some("add loong.plugin.json".to_owned()),
         }];
 
         let result =
@@ -2844,9 +2844,9 @@ mod tests {
             plugin_id: Some(plugin.plugin_id.clone()),
             source_path: Some(plugin.source_path.clone()),
             source_kind: None,
-            field_path: Some("loongclaw.plugin.json".to_owned()),
+            field_path: Some("loong.plugin.json".to_owned()),
             message: "embedded source manifests remain migration-only".to_owned(),
-            remediation: Some("add loongclaw.plugin.json".to_owned()),
+            remediation: Some("add loong.plugin.json".to_owned()),
         }];
 
         let result =
@@ -2948,9 +2948,9 @@ mod tests {
                 plugin_id: Some(plugin.plugin_id.clone()),
                 source_path: Some(plugin.source_path.clone()),
                 source_kind: None,
-                field_path: Some("loongclaw.plugin.json".to_owned()),
+                field_path: Some("loong.plugin.json".to_owned()),
                 message: "embedded source manifests remain migration-only".to_owned(),
-                remediation: Some("add loongclaw.plugin.json".to_owned()),
+                remediation: Some("add loong.plugin.json".to_owned()),
             },
             PluginDiagnosticFinding {
                 code: PluginDiagnosticCode::LegacyMetadataVersion,

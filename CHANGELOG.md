@@ -28,7 +28,7 @@ The format follows Keep a Changelog and semantic versioning intent.
 
 ### Added
 
-- Introduced the fresh `0.1.0-alpha.1` prerelease line for LoongClaw as a secure Rust base for vertical AI agents.
+- Introduced the fresh `0.1.0-alpha.1` prerelease line for Loong as a secure Rust base for vertical AI agents.
 - Preserved the baseline CLI path around guided onboarding, ask or chat flows, doctor repair, and multi-surface delivery for early team evaluation.
 
 ### Changed

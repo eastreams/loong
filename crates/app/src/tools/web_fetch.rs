@@ -1,4 +1,4 @@
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-webfetch")]
 use serde_json::{Map, Value, json};
 
@@ -54,7 +54,7 @@ fn execute_web_fetch_tool_enabled(
         .dns_resolver(Arc::new(resolver))
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(config.web_fetch.timeout_seconds))
-        .user_agent("LoongClaw-WebFetch/0.1")
+        .user_agent("Loong-WebFetch/0.1")
         .build()
         .map_err(|error| format!("failed to build HTTP client for web.fetch: {error}"))?;
 
@@ -601,7 +601,7 @@ mod tests {
         let url = spawn_http_server(|_request| {
             ok_response(
                 "text/html; charset=utf-8",
-                "<html><head><title>Demo Page</title><style>.hidden{display:none}</style><script>window.alert('x')</script></head><body><h1>Hello world</h1><p>LoongClaw fetches docs.</p></body></html>",
+                "<html><head><title>Demo Page</title><style>.hidden{display:none}</style><script>window.alert('x')</script></head><body><h1>Hello world</h1><p>Loong fetches docs.</p></body></html>",
             )
         });
 
@@ -619,7 +619,7 @@ mod tests {
             .as_str()
             .expect("content should be string");
         assert!(content.contains("Hello world"));
-        assert!(content.contains("LoongClaw fetches docs."));
+        assert!(content.contains("Loong fetches docs."));
         assert!(!content.contains("window.alert"));
     }
 

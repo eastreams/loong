@@ -1,4 +1,4 @@
-use super::super::config::LoongClawConfig;
+use super::super::config::LoongConfig;
 use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
@@ -712,7 +712,7 @@ impl ApprovalPromptView {
             ApprovalPromptLocale::En => self
                 .tool_name
                 .as_ref()
-                .map(|tool_name| format!("LoongClaw wants to call {tool_name}"))
+                .map(|tool_name| format!("Loong wants to call {tool_name}"))
                 .or_else(|| Some("Tool call needs confirmation".to_owned())),
         }
     }
@@ -2037,7 +2037,7 @@ where
 
 pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     binding: ConversationRuntimeBinding<'_>,
     raw_reply: &str,

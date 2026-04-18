@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [lib]
-name = "loongclaw_contracts"
+name = "loong_contracts"
 
 [dependencies]
 serde.workspace = true

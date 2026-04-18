@@ -4,16 +4,16 @@ import json
 import shlex
 from collections.abc import Sequence
 
-DEFAULT_CARGO_TARGET_DIR = "/tmp/loongclaw-harbor-target"
+DEFAULT_CARGO_TARGET_DIR = "/tmp/loong-harbor-target"
 LOCAL_BIN_DIR = "$HOME/.local/bin"
 LOCAL_CARGO_BIN_DIR = "$HOME/.cargo/bin"
 LOCAL_INSTALL_ROOT = "$HOME/.local"
 LOCAL_CARGO_ENV_PATH = "$HOME/.cargo/env"
 PRIMARY_BIN_NAME = "loong"
-LEGACY_BIN_NAME = "loongclaw"
+LEGACY_BIN_NAME = "loong"
 TASK_CWD_ENV_NAME = "TASK_CWD"
 TASK_CWD_ENV_EXPR = f"${TASK_CWD_ENV_NAME}"
-RUNTIME_CONFIG_HEREDOC_DELIMITER = "LOONGCLAW_HARBOR_CONFIG_EOF"
+RUNTIME_CONFIG_HEREDOC_DELIMITER = "LOONG_HARBOR_CONFIG_EOF"
 
 
 def join_shell_lines(lines: Sequence[str]) -> str:

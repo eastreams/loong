@@ -3,7 +3,7 @@ use crate::{
     sha2::{self, Digest},
 };
 use clap::{Args, Subcommand, ValueEnum};
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

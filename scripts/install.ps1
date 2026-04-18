@@ -11,8 +11,8 @@ Set-StrictMode -Version Latest
 $Prefix = [IO.Path]::GetFullPath(($Prefix -replace '^~', $HOME))
 $ReleaseBaseUrl = if ($env:LOONG_INSTALL_RELEASE_BASE_URL) {
     $env:LOONG_INSTALL_RELEASE_BASE_URL
-} elseif ($env:LOONGCLAW_INSTALL_RELEASE_BASE_URL) {
-    $env:LOONGCLAW_INSTALL_RELEASE_BASE_URL
+} elseif ($env:LOONG_INSTALL_RELEASE_BASE_URL) {
+    $env:LOONG_INSTALL_RELEASE_BASE_URL
 } else {
     "https://github.com/$Repository/releases"
 }

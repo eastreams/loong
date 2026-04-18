@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn child_process_env_keeps_loongclaw_prefixed_variables() {
+    fn child_process_env_keeps_loong_prefixed_variables() {
         assert!(child_process_env_var_is_allowed(OsStr::new("LC_TEST_FLAG")));
         assert!(child_process_env_var_is_allowed(OsStr::new("lc_test_flag")));
     }

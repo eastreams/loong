@@ -88,16 +88,16 @@ pub struct BuildVersionInfo {
 impl BuildVersionInfo {
     pub fn current() -> Self {
         let release_build = option_env!("LOONG_RELEASE_BUILD")
-            .or(option_env!("LOONGCLAW_RELEASE_BUILD"))
+            .or(option_env!("LOONG_RELEASE_BUILD"))
             .map(|raw| raw.trim())
             .is_some_and(is_truthy_env_value);
         let short_sha = option_env!("LOONG_GIT_SHA")
-            .or(option_env!("LOONGCLAW_GIT_SHA"))
+            .or(option_env!("LOONG_GIT_SHA"))
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(short_sha);
         let channel = option_env!("LOONG_BUILD_CHANNEL")
-            .or(option_env!("LOONGCLAW_BUILD_CHANNEL"))
+            .or(option_env!("LOONG_BUILD_CHANNEL"))
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(Cow::Borrowed)
@@ -585,7 +585,7 @@ mod tests {
     #[test]
     fn presentation_current_build_surfaces_embedded_git_trace_metadata_when_available() {
         let release_build = option_env!("LOONG_RELEASE_BUILD")
-            .or(option_env!("LOONGCLAW_RELEASE_BUILD"))
+            .or(option_env!("LOONG_RELEASE_BUILD"))
             .map(str::trim)
             .is_some_and(is_truthy_env_value);
         if release_build {
@@ -595,7 +595,7 @@ mod tests {
         let version_line = BuildVersionInfo::current().render_version_line();
 
         if let Some(short_sha) = option_env!("LOONG_GIT_SHA")
-            .or(option_env!("LOONGCLAW_GIT_SHA"))
+            .or(option_env!("LOONG_GIT_SHA"))
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
@@ -606,7 +606,7 @@ mod tests {
         }
 
         if let Some(channel) = option_env!("LOONG_BUILD_CHANNEL")
-            .or(option_env!("LOONGCLAW_BUILD_CHANNEL"))
+            .or(option_env!("LOONG_BUILD_CHANNEL"))
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {

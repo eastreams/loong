@@ -228,9 +228,9 @@ architecture_provider_mod_helper_definition_hits() {
 architecture_spec_app_dependency_hits() {
   local file="crates/spec/Cargo.toml"
   if have_rg; then
-    rg -n '^loongclaw-app[[:space:]]*=' "$file" || true
+    rg -n '^loong-app[[:space:]]*=' "$file" || true
   else
-    grep -En '^loongclaw-app[[:space:]]*=' "$file" || true
+    grep -En '^loong-app[[:space:]]*=' "$file" || true
   fi
 }
 

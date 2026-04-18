@@ -6,8 +6,8 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn gateway_sse_stream_returns_event_stream_content_type() {
-    let event_bus = loongclaw_daemon::gateway::event_bus::GatewayEventBus::new(64);
-    let app = loongclaw_daemon::gateway::control::build_gateway_events_test_router(
+    let event_bus = loong_daemon::gateway::event_bus::GatewayEventBus::new(64);
+    let app = loong_daemon::gateway::control::build_gateway_events_test_router(
         "test-token".to_string(),
         event_bus,
     );
@@ -35,8 +35,8 @@ async fn gateway_sse_stream_returns_event_stream_content_type() {
 
 #[tokio::test]
 async fn gateway_sse_rejects_missing_auth() {
-    let event_bus = loongclaw_daemon::gateway::event_bus::GatewayEventBus::new(64);
-    let app = loongclaw_daemon::gateway::control::build_gateway_events_test_router(
+    let event_bus = loong_daemon::gateway::event_bus::GatewayEventBus::new(64);
+    let app = loong_daemon::gateway::control::build_gateway_events_test_router(
         "test-token".to_string(),
         event_bus,
     );

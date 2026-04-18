@@ -325,7 +325,7 @@ pub async fn run_acp_observability_cli(config_path: Option<&str>, as_json: bool)
 }
 
 pub fn resolve_acp_status_session_key(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     session_key: Option<&str>,
     conversation_id: Option<&str>,
     route_session_id: Option<&str>,

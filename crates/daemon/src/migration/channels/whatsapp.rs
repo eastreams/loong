@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use super::ChannelDoctorCheck;
 use super::ensure_default_env_binding;
@@ -17,7 +17,7 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
 };
 
 pub(super) fn collect_preview(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
     source: &str,
 ) -> Option<ChannelPreview> {
@@ -56,13 +56,13 @@ pub(super) fn collect_preview(
 }
 
 pub(super) fn apply(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
 ) -> bool {
     merge_whatsapp_config(&mut target.whatsapp, &source.whatsapp)
 }
 
-pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelCredentialState {
+pub(super) fn readiness_state(config: &mvp::config::LoongConfig) -> ChannelCredentialState {
     let send_ready = whatsapp_send_credentials_ready(config);
     let webhook_ready = whatsapp_webhook_credentials_ready(config);
     let has_any_credential = whatsapp_has_any_runtime_credential(config);
@@ -78,7 +78,7 @@ pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelC
 }
 
 pub(super) fn apply_import_readiness(
-    target: &mut mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
     state: ChannelCredentialState,
 ) {
     if state.is_ready() {
@@ -87,7 +87,7 @@ pub(super) fn apply_import_readiness(
 }
 
 pub(super) fn collect_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<ChannelPreflightCheck> {
     let send_ready = whatsapp_send_credentials_ready(config);
     let webhook_ready = whatsapp_webhook_credentials_ready(config);
@@ -118,9 +118,7 @@ pub(super) fn collect_preflight_checks(
     ]
 }
 
-pub(super) fn collect_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<ChannelDoctorCheck> {
+pub(super) fn collect_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck> {
     let send_ready = whatsapp_send_credentials_ready(config);
     let webhook_ready = whatsapp_webhook_credentials_ready(config);
     let send_level = if send_ready {
@@ -150,7 +148,7 @@ pub(super) fn collect_doctor_checks(
     ]
 }
 
-pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConfig) -> Vec<String> {
+pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongConfig) -> Vec<String> {
     let mut fixes = Vec::new();
     let default = mvp::config::WhatsappChannelConfig::default();
 
@@ -183,7 +181,7 @@ pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConf
 }
 
 fn preview_detail(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     credential_state: ChannelCredentialState,
 ) -> String {
     match (config.whatsapp.enabled, credential_state) {
@@ -209,21 +207,21 @@ fn preview_detail(
     }
 }
 
-fn whatsapp_send_credentials_ready(config: &mvp::config::LoongClawConfig) -> bool {
+fn whatsapp_send_credentials_ready(config: &mvp::config::LoongConfig) -> bool {
     let has_access_token = config.whatsapp.access_token().is_some();
     let has_phone_number_id = config.whatsapp.phone_number_id().is_some();
 
     has_access_token && has_phone_number_id
 }
 
-fn whatsapp_webhook_credentials_ready(config: &mvp::config::LoongClawConfig) -> bool {
+fn whatsapp_webhook_credentials_ready(config: &mvp::config::LoongConfig) -> bool {
     let has_verify_token = config.whatsapp.verify_token().is_some();
     let has_app_secret = config.whatsapp.app_secret().is_some();
 
     has_verify_token && has_app_secret
 }
 
-fn whatsapp_has_any_runtime_credential(config: &mvp::config::LoongClawConfig) -> bool {
+fn whatsapp_has_any_runtime_credential(config: &mvp::config::LoongConfig) -> bool {
     let has_access_token = config.whatsapp.access_token().is_some();
     let has_phone_number_id = config.whatsapp.phone_number_id().is_some();
     let has_verify_token = config.whatsapp.verify_token().is_some();

@@ -6,7 +6,7 @@ use serde::Serialize;
 use tokio::runtime::Handle;
 use tokio::time::{Duration, sleep};
 
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::session::frozen_result::FrozenResult;
 use crate::session::repository::{NewSessionEvent, SessionRepository};
@@ -20,7 +20,7 @@ pub(crate) struct DelegateAnnounceSettings {
 }
 
 impl DelegateAnnounceSettings {
-    pub(crate) fn from_config(config: &LoongClawConfig) -> Self {
+    pub(crate) fn from_config(config: &LoongConfig) -> Self {
         let delegate_config = &config.tools.delegate;
 
         Self {
@@ -510,10 +510,8 @@ mod tests {
     const DELEGATE_ANNOUNCE_EVENT_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
-        let base = std::env::temp_dir().join(format!(
-            "loongclaw-announce-{test_name}-{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("loong-announce-{test_name}-{}", std::process::id()));
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);

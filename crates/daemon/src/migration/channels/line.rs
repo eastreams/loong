@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use super::ChannelDoctorCheck;
 use super::ensure_default_env_binding;
@@ -17,7 +17,7 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
 };
 
 pub(super) fn collect_preview(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
     source: &str,
 ) -> Option<ChannelPreview> {
@@ -55,13 +55,13 @@ pub(super) fn collect_preview(
 }
 
 pub(super) fn apply(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
 ) -> bool {
     merge_line_config(&mut target.line, &source.line)
 }
 
-pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelCredentialState {
+pub(super) fn readiness_state(config: &mvp::config::LoongConfig) -> ChannelCredentialState {
     let send_ready = line_send_credentials_ready(config);
     let serve_ready = line_serve_credentials_ready(config);
     let has_any_credential = line_has_any_runtime_credential(config);
@@ -77,7 +77,7 @@ pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelC
 }
 
 pub(super) fn apply_import_readiness(
-    target: &mut mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
     state: ChannelCredentialState,
 ) {
     if state.is_ready() {
@@ -86,7 +86,7 @@ pub(super) fn apply_import_readiness(
 }
 
 pub(super) fn collect_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<ChannelPreflightCheck> {
     let send_ready = line_send_credentials_ready(config);
     let serve_ready = line_serve_credentials_ready(config);
@@ -117,9 +117,7 @@ pub(super) fn collect_preflight_checks(
     ]
 }
 
-pub(super) fn collect_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<ChannelDoctorCheck> {
+pub(super) fn collect_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck> {
     let send_ready = line_send_credentials_ready(config);
     let serve_ready = line_serve_credentials_ready(config);
     let send_level = if send_ready {
@@ -149,7 +147,7 @@ pub(super) fn collect_doctor_checks(
     ]
 }
 
-pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConfig) -> Vec<String> {
+pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongConfig) -> Vec<String> {
     let mut fixes = Vec::new();
     let default = mvp::config::LineChannelConfig::default();
 
@@ -170,7 +168,7 @@ pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConf
 }
 
 fn preview_detail(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     credential_state: ChannelCredentialState,
 ) -> String {
     match (config.line.enabled, credential_state) {
@@ -193,18 +191,18 @@ fn preview_detail(
     }
 }
 
-fn line_send_credentials_ready(config: &mvp::config::LoongClawConfig) -> bool {
+fn line_send_credentials_ready(config: &mvp::config::LoongConfig) -> bool {
     config.line.channel_access_token().is_some()
 }
 
-fn line_serve_credentials_ready(config: &mvp::config::LoongClawConfig) -> bool {
+fn line_serve_credentials_ready(config: &mvp::config::LoongConfig) -> bool {
     let has_channel_access_token = config.line.channel_access_token().is_some();
     let has_channel_secret = config.line.channel_secret().is_some();
 
     has_channel_access_token && has_channel_secret
 }
 
-fn line_has_any_runtime_credential(config: &mvp::config::LoongClawConfig) -> bool {
+fn line_has_any_runtime_credential(config: &mvp::config::LoongConfig) -> bool {
     let has_channel_access_token = config.line.channel_access_token().is_some();
     let has_channel_secret = config.line.channel_secret().is_some();
 

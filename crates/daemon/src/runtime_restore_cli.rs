@@ -4,8 +4,8 @@ use crate::{
 };
 use clap::Parser;
 use kernel::ToolCoreRequest;
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -178,9 +178,9 @@ fn load_runtime_restore_artifact(path: &Path) -> CliResult<RuntimeRestoreArtifac
 }
 
 fn build_restored_config(
-    current_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
     artifact: &RuntimeSnapshotArtifactDocument,
-) -> CliResult<mvp::config::LoongClawConfig> {
+) -> CliResult<mvp::config::LoongConfig> {
     let mut restored = current_config.clone();
     restored.conversation = artifact.restore_spec.conversation.clone();
     restored.memory = artifact.restore_spec.memory.clone();
@@ -213,8 +213,8 @@ fn build_restored_config(
 
 fn build_runtime_restore_plan(
     resolved_path: &Path,
-    current_config: &mvp::config::LoongClawConfig,
-    target_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
+    target_config: &mvp::config::LoongConfig,
     artifact: &RuntimeRestoreArtifactInput,
 ) -> CliResult<RuntimeRestorePlan> {
     let current_managed_skills = collect_managed_skill_inventory(
@@ -285,8 +285,8 @@ fn build_runtime_restore_plan(
 }
 
 fn provider_runtime_changed(
-    current_config: &mvp::config::LoongClawConfig,
-    target_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
+    target_config: &mvp::config::LoongConfig,
 ) -> bool {
     current_config.provider != target_config.provider
         || current_config.providers != target_config.providers
@@ -296,7 +296,7 @@ fn provider_runtime_changed(
 
 fn collect_managed_skill_inventory(
     resolved_path: &Path,
-    base_config: &mvp::config::LoongClawConfig,
+    base_config: &mvp::config::LoongConfig,
     install_root: Option<PathBuf>,
 ) -> CliResult<ManagedSkillInventorySnapshot> {
     let mut inventory_config = base_config.clone();
@@ -309,7 +309,7 @@ fn collect_managed_skill_inventory(
         .external_skills
         .resolved_install_root()
         .map(|path| path.display().to_string());
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &inventory_config,
         Some(resolved_path),
     );
@@ -496,8 +496,8 @@ fn validate_managed_skill_action(
 
 fn apply_runtime_restore(
     resolved_path: &Path,
-    current_config: &mvp::config::LoongClawConfig,
-    target_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
+    target_config: &mvp::config::LoongConfig,
     plan: &RuntimeRestorePlan,
     artifact: &RuntimeRestoreArtifactInput,
 ) -> CliResult<RuntimeRestoreVerification> {
@@ -542,8 +542,8 @@ fn apply_runtime_restore(
 
 fn apply_managed_skill_actions(
     resolved_path: &Path,
-    current_config: &mvp::config::LoongClawConfig,
-    target_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
+    target_config: &mvp::config::LoongConfig,
     actions: &[RuntimeRestoreManagedSkillAction],
 ) -> CliResult<Vec<RuntimeRestoreManagedSkillAction>> {
     let mut rollback_actions = Vec::new();
@@ -572,8 +572,8 @@ fn apply_managed_skill_actions(
 
 fn rollback_managed_skill_actions(
     resolved_path: &Path,
-    current_config: &mvp::config::LoongClawConfig,
-    target_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
+    target_config: &mvp::config::LoongConfig,
     rollback_actions: &[RuntimeRestoreManagedSkillAction],
 ) -> CliResult<()> {
     let mut rollback_errors = Vec::new();
@@ -629,8 +629,8 @@ fn rollback_action_for_success(
 
 fn apply_single_managed_skill_action(
     resolved_path: &Path,
-    current_config: &mvp::config::LoongClawConfig,
-    target_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
+    target_config: &mvp::config::LoongConfig,
     action: &RuntimeRestoreManagedSkillAction,
 ) -> CliResult<()> {
     let tool_runtime =
@@ -687,8 +687,8 @@ fn apply_single_managed_skill_action(
 
 fn build_action_tool_runtime(
     resolved_path: &Path,
-    current_config: &mvp::config::LoongClawConfig,
-    target_config: &mvp::config::LoongClawConfig,
+    current_config: &mvp::config::LoongConfig,
+    target_config: &mvp::config::LoongConfig,
     action: &RuntimeRestoreManagedSkillAction,
 ) -> mvp::tools::runtime_config::ToolRuntimeConfig {
     let mut config = if action.use_target_config {
@@ -700,10 +700,7 @@ fn build_action_tool_runtime(
     if let Some(install_root) = action.apply_install_root.as_ref() {
         config.external_skills.install_root = Some(install_root.clone());
     }
-    mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        &config,
-        Some(resolved_path),
-    )
+    mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, Some(resolved_path))
 }
 
 fn bundled_skill_id_for_action(action: &RuntimeRestoreManagedSkillAction) -> CliResult<String> {
@@ -856,7 +853,7 @@ mod tests {
     #[test]
     fn render_runtime_restore_text_uses_operator_surface_header() {
         let rendered = render_runtime_restore_text(&RuntimeRestoreExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             snapshot_path: "/tmp/snapshot.json".to_owned(),
             lineage: RuntimeRestoreLineageSummary {
                 snapshot_id: "snap-1".to_owned(),
@@ -878,7 +875,7 @@ mod tests {
         assert!(
             rendered
                 .lines()
-                .any(|line| line.starts_with("LOONGCLAW") || line.contains(" loongclaw ")),
+                .any(|line| line.starts_with("LOONG") || line.contains(" loong ")),
             "runtime restore text should use the shared ratatui operator shell header: {rendered}"
         );
         assert!(rendered.contains("runtime restore"));

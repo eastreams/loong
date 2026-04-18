@@ -8,7 +8,7 @@ async fn execute_spec_allows_execution_with_clean_architecture_guard() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-guard-clean-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-guard-clean-{unique}"));
     fs::create_dir_all(&root).expect("create awareness root");
     fs::write(root.join("pack.md"), "# awareness\n").expect("write awareness file");
 
@@ -74,7 +74,7 @@ async fn execute_spec_blocks_when_architecture_guard_detects_core_mutation() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-guard-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-guard-{unique}"));
     fs::create_dir_all(&root).expect("create awareness root");
     fs::write(root.join("notes.md"), "# guard demo\n").expect("write awareness file");
 
@@ -141,13 +141,13 @@ async fn execute_spec_self_awareness_surfaces_plugin_activation_inventory() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-awareness-plugins-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-awareness-plugins-{unique}"));
     fs::create_dir_all(&root).expect("create awareness root");
     fs::write(root.join("pack.md"), "# awareness plugins\n").expect("write awareness file");
     fs::write(
         root.join("search_a.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "api_version": "v1alpha1",
 #   "version": "1.0.0",
@@ -160,14 +160,14 @@ async fn execute_spec_self_awareness_surfaces_plugin_activation_inventory() {
 #   "slot_claims": [{"slot":"provider:web_search","key":"default","mode":"exclusive"}],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write first plugin");
     fs::write(
         root.join("search_b.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-b",
 #   "provider_id": "search-b",
@@ -178,7 +178,7 @@ async fn execute_spec_self_awareness_surfaces_plugin_activation_inventory() {
 #   "slot_claims": [{"slot":"provider:web_search","key":"default","mode":"exclusive"}],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write second plugin");

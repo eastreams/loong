@@ -16,10 +16,10 @@ use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::stream::{self, Stream};
 use kernel::{
-    Capability, CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongClawKernel, PlaneTier,
+    Capability, CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, PlaneTier,
     StaticPolicyEngine, VerticalPackManifest,
 };
-use loongclaw_protocol::{
+use loong_protocol::{
     CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneAcpBindingScope, ControlPlaneAcpRoutingOrigin,
     ControlPlaneAcpSessionListResponse, ControlPlaneAcpSessionMetadata, ControlPlaneAcpSessionMode,
     ControlPlaneAcpSessionReadResponse, ControlPlaneAcpSessionState, ControlPlaneAcpSessionStatus,
@@ -52,7 +52,7 @@ use axum::http::Request;
 #[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey};
 #[cfg(test)]
-use loongclaw_protocol::{ControlPlaneClientIdentity, ControlPlaneRole};
+use loong_protocol::{ControlPlaneClientIdentity, ControlPlaneRole};
 #[cfg(test)]
 use tower::ServiceExt;
 
@@ -94,7 +94,7 @@ fn default_loopback_exposure_policy() -> ControlPlaneExposurePolicy {
 }
 
 struct ControlPlaneKernelAuthority {
-    kernel: LoongClawKernel<StaticPolicyEngine>,
+    kernel: LoongKernel<StaticPolicyEngine>,
     _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
@@ -232,7 +232,7 @@ struct ControlPlaneTurnStreamState {
 /// to materialize `AgentRuntime` turns on demand.
 struct ControlPlaneTurnRuntime {
     resolved_path: std::path::PathBuf,
-    config: mvp::config::LoongClawConfig,
+    config: mvp::config::LoongConfig,
     acp_manager: Arc<mvp::acp::AcpSessionManager>,
     registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
 }
@@ -246,7 +246,7 @@ struct ControlPlaneTurnEventForwarder {
 impl ControlPlaneKernelAuthority {
     fn new() -> Result<Self, String> {
         let kernel_with_audit =
-            LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+            LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
         let mut kernel = kernel_with_audit.0;
         let audit = kernel_with_audit.1;
         let pack = control_plane_pack();
@@ -360,7 +360,7 @@ fn resolve_control_plane_bind_addr(
 
 fn build_control_plane_exposure_policy(
     bind_addr: SocketAddr,
-    config: Option<&mvp::config::LoongClawConfig>,
+    config: Option<&mvp::config::LoongConfig>,
 ) -> Result<ControlPlaneExposurePolicy, String> {
     let is_loopback = bind_addr.ip().is_loopback();
     if is_loopback {
@@ -857,8 +857,8 @@ fn map_pairing_request(
         client_id: request.client_id,
         public_key: request.public_key,
         role: match request.role.as_str() {
-            "operator" => loongclaw_protocol::ControlPlaneRole::Operator,
-            _ => loongclaw_protocol::ControlPlaneRole::Node,
+            "operator" => loong_protocol::ControlPlaneRole::Operator,
+            _ => loong_protocol::ControlPlaneRole::Node,
         },
         requested_scopes: request
             .requested_scopes
@@ -1044,7 +1044,7 @@ impl ControlPlaneTurnRuntime {
     /// ACP manager that should back all HTTP-triggered turns for that process.
     fn new(
         resolved_path: std::path::PathBuf,
-        config: mvp::config::LoongClawConfig,
+        config: mvp::config::LoongConfig,
     ) -> Result<Self, String> {
         let acp_manager = mvp::acp::shared_acp_session_manager(&config)?;
         Ok(Self::with_manager(resolved_path, config, acp_manager))
@@ -1054,7 +1054,7 @@ impl ControlPlaneTurnRuntime {
     /// while still allocating a fresh turn registry for this runtime shell.
     fn with_manager(
         resolved_path: std::path::PathBuf,
-        config: mvp::config::LoongClawConfig,
+        config: mvp::config::LoongConfig,
         acp_manager: Arc<mvp::acp::AcpSessionManager>,
     ) -> Self {
         Self {
@@ -1290,7 +1290,7 @@ fn extract_connection_token(headers: &HeaderMap) -> Option<String> {
         .map(ToOwned::to_owned)
         .or_else(|| {
             headers
-                .get("x-loongclaw-control-token")
+                .get("x-loong-control-token")
                 .and_then(|value| value.to_str().ok())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -1335,7 +1335,7 @@ fn connection_scoped_capabilities(
 }
 
 fn required_capabilities_for_route(
-    resolved: &loongclaw_protocol::ResolvedRoute,
+    resolved: &loong_protocol::ResolvedRoute,
 ) -> Result<std::collections::BTreeSet<Capability>, String> {
     let mut capabilities = std::collections::BTreeSet::new();
     if let Some(required_capability) = resolved.policy.required_capability.as_deref() {
@@ -1441,7 +1441,7 @@ fn current_time_ms() -> u64 {
 
 fn control_plane_device_signature_message(
     request: &ControlPlaneConnectRequest,
-    device: &loongclaw_protocol::ControlPlaneDeviceIdentity,
+    device: &loong_protocol::ControlPlaneDeviceIdentity,
 ) -> Vec<u8> {
     let scopes = request
         .scopes
@@ -1450,7 +1450,7 @@ fn control_plane_device_signature_message(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "loongclaw-control-plane-connect-v1\nnonce={}\ndevice_id={}\nclient_id={}\nrole={}\nscopes={}\nsigned_at_ms={}",
+        "loong-control-plane-connect-v1\nnonce={}\ndevice_id={}\nclient_id={}\nrole={}\nscopes={}\nsigned_at_ms={}",
         device.nonce,
         device.device_id,
         request.client.id,
@@ -2400,7 +2400,7 @@ async fn turn_submit(
             }
             Err(error) => {
                 tracing::warn!(
-                    target: "loongclaw.control-plane",
+                    target: "loong.control-plane",
                     turn_id = %spawned_turn_id,
                     session_id = %session_id,
                     error = %crate::observability::summarize_error(error.as_str()),
@@ -2678,7 +2678,7 @@ pub async fn run_control_plane_serve_cli(
                 );
             let session_id = current_session_id.unwrap_or("default");
             println!(
-                "loongclaw control plane session view rooted at `{session_id}` from {}",
+                "loong control plane session view rooted at `{session_id}` from {}",
                 resolved_path.display()
             );
             (
@@ -2731,7 +2731,7 @@ pub async fn run_control_plane_serve_cli(
         .local_addr()
         .map_err(|error| format!("read control-plane local address failed: {error}"))?;
 
-    println!("loongclaw control plane listening on http://{local_addr}");
+    println!("loong control plane listening on http://{local_addr}");
     axum::serve(listener, router)
         .await
         .map_err(|error| format!("control-plane listener failed: {error}"))
@@ -2741,7 +2741,7 @@ pub async fn run_control_plane_serve_cli(
 mod tests {
     use super::*;
     use futures_util::StreamExt;
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
 
     fn build_control_plane_router(manager: Arc<mvp::control_plane::ControlPlaneManager>) -> Router {
         super::build_control_plane_router(manager).expect("router")
@@ -2823,7 +2823,7 @@ mod tests {
 
         fn ensure_session<'life0, 'life1, 'life2, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             request: &'life2 mvp::acp::AcpSessionBootstrap,
         ) -> std::pin::Pin<
             Box<
@@ -2853,7 +2853,7 @@ mod tests {
 
         fn run_turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
             request: &'life3 mvp::acp::AcpTurnRequest,
         ) -> std::pin::Pin<
@@ -2883,7 +2883,7 @@ mod tests {
 
         fn run_turn_with_sink<'life0, 'life1, 'life2, 'life3, 'life5, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
             request: &'life3 mvp::acp::AcpTurnRequest,
             _abort: Option<mvp::acp::AcpAbortSignal>,
@@ -2931,7 +2931,7 @@ mod tests {
 
         fn cancel<'life0, 'life1, 'life2, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
         where
@@ -2945,7 +2945,7 @@ mod tests {
 
         fn close<'life0, 'life1, 'life2, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
         where
@@ -2958,8 +2958,8 @@ mod tests {
         }
     }
 
-    fn turn_runtime_test_config(backend_id: &str) -> mvp::config::LoongClawConfig {
-        let mut config = mvp::config::LoongClawConfig::default();
+    fn turn_runtime_test_config(backend_id: &str) -> mvp::config::LoongConfig {
+        let mut config = mvp::config::LoongConfig::default();
         config.acp.enabled = true;
         config.acp.backend = Some(backend_id.to_owned());
         config.audit.mode = mvp::config::AuditMode::InMemory;
@@ -2981,7 +2981,7 @@ mod tests {
         .expect("register control-plane turn backend");
         let config = turn_runtime_test_config(backend_id);
         let temp_root = std::env::temp_dir().join(format!(
-            "loongclaw-control-plane-turn-runtime-{}-{}",
+            "loong-control-plane-turn-runtime-{}-{}",
             backend_id,
             current_time_ms()
         ));
@@ -3001,8 +3001,8 @@ mod tests {
         ))
     }
 
-    fn remote_control_plane_config(shared_token: &str) -> mvp::config::LoongClawConfig {
-        let mut config = mvp::config::LoongClawConfig::default();
+    fn remote_control_plane_config(shared_token: &str) -> mvp::config::LoongConfig {
+        let mut config = mvp::config::LoongConfig::default();
         config.control_plane.allow_remote = true;
         config.control_plane.shared_token = Some(SecretRef::Inline(shared_token.to_owned()));
         config
@@ -3044,7 +3044,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
@@ -3111,9 +3111,9 @@ mod tests {
         role: ControlPlaneRole,
         scopes: std::collections::BTreeSet<ControlPlaneScope>,
         challenge: &ControlPlaneChallengeResponse,
-    ) -> loongclaw_protocol::ControlPlaneDeviceIdentity {
+    ) -> loong_protocol::ControlPlaneDeviceIdentity {
         let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
-        let device_template = loongclaw_protocol::ControlPlaneDeviceIdentity {
+        let device_template = loong_protocol::ControlPlaneDeviceIdentity {
             device_id: "device-1".to_owned(),
             public_key: String::new(),
             signature: String::new(),
@@ -3128,7 +3128,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role,
             scopes,
@@ -3140,7 +3140,7 @@ mod tests {
         };
         let message = control_plane_device_signature_message(&request, &device_template);
         let signature = signing_key.sign(&message);
-        loongclaw_protocol::ControlPlaneDeviceIdentity {
+        loong_protocol::ControlPlaneDeviceIdentity {
             device_id: "device-1".to_owned(),
             public_key: base64::engine::general_purpose::STANDARD
                 .encode(signing_key.verifying_key().to_bytes()),
@@ -3157,7 +3157,7 @@ mod tests {
         static NEXT_ISOLATED_MEMORY_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
         let nonce = NEXT_ISOLATED_MEMORY_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-control-plane-server-{test_name}-{}-{nonce}",
+            "loong-control-plane-server-{test_name}-{}-{nonce}",
             std::process::id(),
         ));
         let _ = std::fs::create_dir_all(&base);
@@ -3209,7 +3209,7 @@ mod tests {
                     "timeout_seconds": 90,
                     "allow_shell_in_child": false,
                     "child_tool_allowlist": ["file.read"],
-                    "workspace_root": "/tmp/loongclaw/control-plane/child-session",
+                    "workspace_root": "/tmp/loong/control-plane/child-session",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
                 }
@@ -3346,7 +3346,7 @@ mod tests {
         })
         .expect("create hidden approval");
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let sqlite_path = memory_config
             .sqlite_path
             .as_ref()
@@ -3440,7 +3440,7 @@ mod tests {
 
     #[test]
     fn non_loopback_exposure_requires_explicit_remote_opt_in() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let error = build_control_plane_exposure_policy(non_loopback_bind_addr(), Some(&config))
             .expect_err("remote bind should require explicit opt-in");
         assert!(error.contains("control_plane.allow_remote=true"));
@@ -3448,7 +3448,7 @@ mod tests {
 
     #[test]
     fn non_loopback_exposure_requires_shared_token() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.control_plane.allow_remote = true;
         let error = build_control_plane_exposure_policy(non_loopback_bind_addr(), Some(&config))
             .expect_err("remote bind should require shared token");
@@ -3526,7 +3526,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
@@ -3581,7 +3581,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
@@ -3630,14 +3630,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: Some("wrong-token".to_owned()),
                 device_token: None,
                 bootstrap_token: None,
@@ -3681,14 +3681,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: Some("bootstrap-token".to_owned()),
                 device_token: None,
                 bootstrap_token: None,
@@ -3732,7 +3732,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([
@@ -3743,7 +3743,7 @@ mod tests {
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: Some("bootstrap-token".to_owned()),
                 device_token: None,
                 bootstrap_token: None,
@@ -3851,7 +3851,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
@@ -3906,7 +3906,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
@@ -3971,7 +3971,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: scopes.clone(),
@@ -4053,14 +4053,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: None,
                 device_token: Some(device_token),
                 bootstrap_token: None,
@@ -4107,7 +4107,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: initial_scopes.clone(),
@@ -4191,14 +4191,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: upgraded_scopes,
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: None,
                 device_token: Some(device_token),
                 bootstrap_token: None,
@@ -4255,7 +4255,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,

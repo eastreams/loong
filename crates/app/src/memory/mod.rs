@@ -6,7 +6,7 @@ use std::{
     thread::ThreadId,
 };
 
-use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
+use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::json;
 
 use crate::config::MemoryBackendKind;

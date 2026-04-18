@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn scan_external_skill_tree_detects_high_signal_findings() {
-        let root = std::env::temp_dir().join("loongclaw-ext-skill-scan-detect");
+        let root = std::env::temp_dir().join("loong-ext-skill-scan-detect");
         fs::create_dir_all(root.join("scripts")).expect("create scan fixture");
         fs::write(
             root.join("SKILL.md"),

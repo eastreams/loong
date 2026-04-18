@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn memory_context_benchmark_rejects_history_not_exceeding_window() {
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-memory-context-benchmark-invalid-{}",
+        "loong-memory-context-benchmark-invalid-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&tmp);
@@ -35,7 +35,7 @@ fn memory_context_benchmark_rejects_history_not_exceeding_window() {
 #[test]
 fn memory_context_benchmark_rejects_history_without_shrink_catch_up_headroom() {
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-memory-context-benchmark-shrink-invalid-{}",
+        "loong-memory-context-benchmark-shrink-invalid-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&tmp);
@@ -67,7 +67,7 @@ fn memory_context_benchmark_rejects_history_without_shrink_catch_up_headroom() {
 #[test]
 fn memory_context_benchmark_writes_report_with_all_scenarios() {
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-memory-context-benchmark-report-{}",
+        "loong-memory-context-benchmark-report-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&tmp);

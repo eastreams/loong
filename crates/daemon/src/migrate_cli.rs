@@ -6,8 +6,8 @@ use std::{
 
 use clap::ValueEnum;
 use kernel::{ToolCoreOutcome, ToolCoreRequest};
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -133,14 +133,14 @@ where
 
 fn load_migrate_cli_runtime_config(
     options: &MigrateCommandOptions,
-) -> CliResult<mvp::config::LoongClawConfig> {
+) -> CliResult<mvp::config::LoongConfig> {
     let config_path = mvp::config::default_config_path();
     let mut config = if config_path.exists() {
         let config_path_string = config_path.display().to_string();
         let (_, config) = mvp::config::load(Some(&config_path_string))?;
         config
     } else {
-        mvp::config::LoongClawConfig::default()
+        mvp::config::LoongConfig::default()
     };
 
     if config.tools.file_root.is_none()
@@ -854,7 +854,7 @@ mod tests {
         assert!(
             rendered
                 .lines()
-                .any(|line| line.starts_with("LOONGCLAW") || line.contains(" loongclaw ")),
+                .any(|line| line.starts_with("LOONG") || line.contains(" loong ")),
             "migrate text should use the shared ratatui operator shell header: {rendered}"
         );
         assert!(rendered.contains("migration plan"));

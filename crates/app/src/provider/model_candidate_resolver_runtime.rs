@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::{
     CliResult,
-    config::{LoongClawConfig, ProviderConfig},
+    config::{LoongConfig, ProviderConfig},
 };
 
 use super::auth_profile_runtime::ProviderAuthProfile;
@@ -18,7 +18,7 @@ use super::policy;
 use super::provider_keyspace::build_model_catalog_cache_key;
 
 pub(super) async fn resolve_request_models(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     headers: &reqwest::header::HeaderMap,
     request_policy: &policy::ProviderRequestPolicy,
     model_candidate_cooldown_policy: Option<&ModelCandidateCooldownPolicy>,

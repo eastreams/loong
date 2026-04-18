@@ -49,7 +49,7 @@ pub type CliResult<T> = Result<T, String>;
 mod secret_runtime_tests {
     use std::fs;
 
-    use loongclaw_contracts::{SecretRef, SecretResolver};
+    use loong_contracts::{SecretRef, SecretResolver};
 
     use crate::test_support::unique_temp_dir;
 

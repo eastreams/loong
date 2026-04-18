@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn tool_search_hides_filesystem_tools_without_filesystem_capabilities() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-cap-filter-{}",
+        "loong-tool-search-cap-filter-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -39,7 +39,7 @@ fn tool_search_hides_filesystem_tools_without_filesystem_capabilities() {
 #[test]
 fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-shell-filter-{}",
+        "loong-tool-search-shell-filter-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -96,8 +96,8 @@ fn shell_exec_rejects_path_qualified_commands() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_rejects_cwd_outside_file_root() {
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-root");
-    let outside_root = unique_tool_temp_dir("loongclaw-shell-cwd-outside");
+    let root = unique_tool_temp_dir("loong-shell-cwd-root");
+    let outside_root = unique_tool_temp_dir("loong-shell-cwd-outside");
     std::fs::create_dir_all(&root).expect("create root");
     std::fs::create_dir_all(&outside_root).expect("create outside root");
 
@@ -127,7 +127,7 @@ fn shell_exec_rejects_cwd_outside_file_root() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_rejects_cwd_that_is_not_directory() {
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-file");
+    let root = unique_tool_temp_dir("loong-shell-cwd-file");
     std::fs::create_dir_all(&root).expect("create root");
     let file_path = root.join("note.txt");
     std::fs::write(&file_path, "hello").expect("write file");
@@ -158,8 +158,8 @@ fn shell_exec_rejects_cwd_that_is_not_directory() {
 fn shell_exec_rejects_cwd_symlink_outside_file_root() {
     use std::os::unix::fs::symlink;
 
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-symlink-root");
-    let outside_root = unique_tool_temp_dir("loongclaw-shell-cwd-symlink-outside");
+    let root = unique_tool_temp_dir("loong-shell-cwd-symlink-root");
+    let outside_root = unique_tool_temp_dir("loong-shell-cwd-symlink-outside");
     std::fs::create_dir_all(&root).expect("create root");
     std::fs::create_dir_all(&outside_root).expect("create outside root");
 
@@ -191,7 +191,7 @@ fn shell_exec_rejects_cwd_symlink_outside_file_root() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_rejects_missing_cwd_directory() {
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-missing");
+    let root = unique_tool_temp_dir("loong-shell-cwd-missing");
     std::fs::create_dir_all(&root).expect("create root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -333,7 +333,7 @@ async fn framework_timeout_supports_async_core_tool_calls() {
         }),
     };
 
-    let result = loongclaw_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
+    let result = loong_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
 
     assert!(
         result.is_ok(),
@@ -445,7 +445,7 @@ fn shell_exec_rejects_non_lowercase_command_names_before_execution() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    let root = unique_tool_temp_dir("loongclaw-shell-mixed-case");
+    let root = unique_tool_temp_dir("loong-shell-mixed-case");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let script = root.join("MiXeDCmd");
@@ -636,10 +636,7 @@ fn shell_exec_truncates_large_stdout_without_failing_command() {
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn tool_search_result_includes_compact_argument_hints() {
-    let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-hints-{}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("loong-tool-search-hints-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -665,7 +662,7 @@ fn tool_search_result_includes_compact_argument_hints() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh");
+    let root = unique_tool_temp_dir("loong-tool-search-exact-refresh");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -694,7 +691,7 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
 #[test]
 fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_with_fallback_results()
  {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh-fallback");
+    let root = unique_tool_temp_dir("loong-tool-search-exact-refresh-fallback");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -704,7 +701,7 @@ fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_w
             payload: json!({
                 "exact_tool_id": "file_read",
                 "query": "run shell command",
-                "_loongclaw": {
+                "_loong": {
                     "tool_search": {
                         "visible_tool_ids": ["tool.search", "tool.invoke", "shell.exec"],
                     }

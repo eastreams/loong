@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde_json::{Value, json};
 
 use crate::feishu_onboarding::{
@@ -32,7 +32,7 @@ pub enum FeishuCommand {
         #[command(subcommand)]
         command: FeishuAuthCommand,
     },
-    /// Create or update Feishu/Lark bot channel credentials in loongclaw.toml
+    /// Create or update Feishu/Lark bot channel credentials in loong.toml
     Onboard(FeishuOnboardArgs),
     /// Resolve the selected user grant and print Feishu profile details
     Whoami(FeishuGrantArgs),
@@ -1202,7 +1202,7 @@ pub async fn execute_feishu_onboard(args: &FeishuOnboardArgs) -> CliResult<Value
     }
     if result.credential_source == FeishuOnboardCredentialSource::QrRegistration {
         notes.push(
-            "QR registration writes the generated bot app_id/app_secret directly into loongclaw.toml and defaults the channel to websocket mode"
+            "QR registration writes the generated bot app_id/app_secret directly into loong.toml and defaults the channel to websocket mode"
                 .to_owned(),
         );
     }
@@ -1984,7 +1984,7 @@ pub async fn execute_feishu_bitable_list_tables(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:table:read"],
-        "loongclaw feishu bitable list-tables",
+        "loong feishu bitable list-tables",
     )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::list_bitable_tables(
@@ -2014,7 +2014,7 @@ pub async fn execute_feishu_bitable_app_create(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable app-create",
+        "loong feishu bitable app-create",
     )?;
     let client = context.build_client()?;
     let app = mvp::channel::feishu::api::resources::bitable::create_bitable_app(
@@ -2039,7 +2039,7 @@ pub async fn execute_feishu_bitable_app_get(args: &FeishuBitableAppGetArgs) -> C
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable app-get",
+        "loong feishu bitable app-get",
     )?;
     let client = context.build_client()?;
     let app = mvp::channel::feishu::api::resources::bitable::get_bitable_app(
@@ -2063,7 +2063,7 @@ pub async fn execute_feishu_bitable_app_list(args: &FeishuBitableAppListArgs) ->
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["drive:drive:readonly"],
-        "loongclaw feishu bitable app-list",
+        "loong feishu bitable app-list",
     )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::list_bitable_apps(
@@ -2095,7 +2095,7 @@ pub async fn execute_feishu_bitable_app_patch(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable app-patch",
+        "loong feishu bitable app-patch",
     )?;
     let client = context.build_client()?;
     let app = mvp::channel::feishu::api::resources::bitable::patch_bitable_app(
@@ -2121,7 +2121,7 @@ pub async fn execute_feishu_bitable_app_copy(args: &FeishuBitableAppCopyArgs) ->
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable app-copy",
+        "loong feishu bitable app-copy",
     )?;
     let client = context.build_client()?;
     let app = mvp::channel::feishu::api::resources::bitable::copy_bitable_app(
@@ -2149,7 +2149,7 @@ pub async fn execute_feishu_bitable_create_record(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:record:create"],
-        "loongclaw feishu bitable create-record",
+        "loong feishu bitable create-record",
     )?;
     let client = context.build_client()?;
     let fields = serde_json::from_str::<Value>(&args.fields)
@@ -2182,7 +2182,7 @@ pub async fn execute_feishu_bitable_create_table(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable create-table",
+        "loong feishu bitable create-table",
     )?;
     let client = context.build_client()?;
     let fields = args
@@ -2222,7 +2222,7 @@ pub async fn execute_feishu_bitable_patch_table(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable patch-table",
+        "loong feishu bitable patch-table",
     )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::patch_bitable_table(
@@ -2250,7 +2250,7 @@ pub async fn execute_feishu_bitable_batch_create_tables(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable batch-create-tables",
+        "loong feishu bitable batch-create-tables",
     )?;
     let client = context.build_client()?;
     let tables = serde_json::from_str::<Value>(&args.tables)
@@ -2285,7 +2285,7 @@ pub async fn execute_feishu_bitable_search_records(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:record:retrieve"],
-        "loongclaw feishu bitable search-records",
+        "loong feishu bitable search-records",
     )?;
     let client = context.build_client()?;
     let filter = args
@@ -2333,7 +2333,7 @@ pub async fn execute_feishu_bitable_update_record(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:record:write"],
-        "loongclaw feishu bitable update-record",
+        "loong feishu bitable update-record",
     )?;
     let client = context.build_client()?;
     let fields = serde_json::from_str::<Value>(&args.fields)
@@ -2367,7 +2367,7 @@ pub async fn execute_feishu_bitable_delete_record(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:record:write"],
-        "loongclaw feishu bitable delete-record",
+        "loong feishu bitable delete-record",
     )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::delete_bitable_record(
@@ -2396,7 +2396,7 @@ pub async fn execute_feishu_bitable_batch_create_records(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:record:write"],
-        "loongclaw feishu bitable batch-create-records",
+        "loong feishu bitable batch-create-records",
     )?;
     let client = context.build_client()?;
     let records = serde_json::from_str::<Value>(&args.records)
@@ -2438,7 +2438,7 @@ pub async fn execute_feishu_bitable_batch_update_records(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:record:write"],
-        "loongclaw feishu bitable batch-update-records",
+        "loong feishu bitable batch-update-records",
     )?;
     let client = context.build_client()?;
     let records = serde_json::from_str::<Value>(&args.records)
@@ -2480,7 +2480,7 @@ pub async fn execute_feishu_bitable_batch_delete_records(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["base:record:write"],
-        "loongclaw feishu bitable batch-delete-records",
+        "loong feishu bitable batch-delete-records",
     )?;
     let client = context.build_client()?;
     let records = serde_json::from_str::<Value>(&args.records)
@@ -2529,7 +2529,7 @@ pub async fn execute_feishu_bitable_create_field(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable create-field",
+        "loong feishu bitable create-field",
     )?;
     let client = context.build_client()?;
     let property = args
@@ -2565,7 +2565,7 @@ pub async fn execute_feishu_bitable_list_fields(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable list-fields",
+        "loong feishu bitable list-fields",
     )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::list_bitable_fields(
@@ -2608,7 +2608,7 @@ pub async fn execute_feishu_bitable_update_field(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable update-field",
+        "loong feishu bitable update-field",
     )?;
     let client = context.build_client()?;
     let property = args
@@ -2645,7 +2645,7 @@ pub async fn execute_feishu_bitable_delete_field(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable delete-field",
+        "loong feishu bitable delete-field",
     )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::delete_bitable_field(
@@ -2674,7 +2674,7 @@ pub async fn execute_feishu_bitable_create_view(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable create-view",
+        "loong feishu bitable create-view",
     )?;
     let client = context.build_client()?;
     let view = mvp::channel::feishu::api::resources::bitable::create_bitable_view(
@@ -2701,7 +2701,7 @@ pub async fn execute_feishu_bitable_get_view(args: &FeishuBitableGetViewArgs) ->
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable get-view",
+        "loong feishu bitable get-view",
     )?;
     let client = context.build_client()?;
     let view = mvp::channel::feishu::api::resources::bitable::get_bitable_view(
@@ -2729,7 +2729,7 @@ pub async fn execute_feishu_bitable_list_views(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable list-views",
+        "loong feishu bitable list-views",
     )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::list_bitable_views(
@@ -2763,7 +2763,7 @@ pub async fn execute_feishu_bitable_patch_view(
         &grant,
         context.resolved.configured_account_id.as_str(),
         &["bitable:app"],
-        "loongclaw feishu bitable patch-view",
+        "loong feishu bitable patch-view",
     )?;
     let client = context.build_client()?;
     let view = mvp::channel::feishu::api::resources::bitable::patch_bitable_view(
@@ -4711,7 +4711,7 @@ mod render_tests {
         let payload = json!({
             "account_id": "feishu_main",
             "configured_account": "work",
-            "config": "/tmp/loongclaw.toml",
+            "config": "/tmp/loong.toml",
             "credential_source": "qr_registration",
             "domain": "lark",
             "mode": "websocket",

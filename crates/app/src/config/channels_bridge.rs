@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
 
 use super::{

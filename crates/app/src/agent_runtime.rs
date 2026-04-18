@@ -15,7 +15,7 @@ use crate::conversation::{
     PromptFrameEventSummary, load_prompt_frame_event_summary,
 };
 use crate::tools;
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,7 +77,7 @@ pub struct AgentTurnResult {
     pub session_id: String,
     pub output_text: String,
     pub turn_mode: AgentTurnMode,
-    pub governed_session_mode: loongclaw_contracts::GovernedSessionMode,
+    pub governed_session_mode: loong_contracts::GovernedSessionMode,
     pub state: Option<String>,
     pub stop_reason: Option<String>,
     pub usage: Option<Value>,
@@ -337,7 +337,7 @@ impl AgentRuntime {
     pub async fn run_turn_with_loaded_config(
         &self,
         resolved_path: PathBuf,
-        config: crate::config::LoongClawConfig,
+        config: crate::config::LoongConfig,
         session_hint: Option<&str>,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
@@ -364,7 +364,7 @@ impl AgentRuntime {
     pub async fn run_turn_with_loaded_config_and_observer_and_error_mode(
         &self,
         resolved_path: PathBuf,
-        config: crate::config::LoongClawConfig,
+        config: crate::config::LoongConfig,
         session_hint: Option<&str>,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
@@ -407,7 +407,7 @@ impl AgentRuntime {
     pub async fn run_turn_with_loaded_config_and_acp_manager(
         &self,
         resolved_path: PathBuf,
-        config: crate::config::LoongClawConfig,
+        config: crate::config::LoongConfig,
         session_hint: Option<&str>,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
@@ -665,7 +665,7 @@ async fn load_runtime_prompt_frame_summary(
 /// the existing config is reused as-is.
 fn load_runtime_turn_config(
     runtime: &crate::chat::CliTurnRuntime,
-) -> CliResult<crate::config::LoongClawConfig> {
+) -> CliResult<crate::config::LoongConfig> {
     if runtime.resolved_path.as_os_str().is_empty() {
         return Ok(runtime.config.clone());
     }
@@ -725,7 +725,7 @@ fn parse_agent_runtime_events(payload: &Value) -> CliResult<Vec<AgentRuntimeEven
 pub async fn load_agent_runtime(
     config_path: Option<&str>,
     session_hint: Option<&str>,
-) -> CliResult<(std::path::PathBuf, crate::config::LoongClawConfig, String)> {
+) -> CliResult<(std::path::PathBuf, crate::config::LoongConfig, String)> {
     let (resolved_path, config) = load_config(config_path)?;
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         resolved_path.clone(),

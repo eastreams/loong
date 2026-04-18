@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn awareness_snapshot_captures_languages_plugins_and_guard() {
-        let root = unique_tmp_dir("loongclaw-awareness");
+        let root = unique_tmp_dir("loong-awareness");
         fs::create_dir_all(&root).expect("create temp root");
 
         fs::write(root.join("runtime.rs"), "pub fn run() {}\n").expect("write rust file");
@@ -269,7 +269,7 @@ mod tests {
         fs::write(
             root.join("plugin.rs"),
             r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "openrouter-rs",
 //   "provider_id": "openrouter",
@@ -279,7 +279,7 @@ mod tests {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"version":"0.5.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
         )
         .expect("write plugin file");
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn awareness_snapshot_detects_guard_violations() {
-        let root = unique_tmp_dir("loongclaw-awareness-guard");
+        let root = unique_tmp_dir("loong-awareness-guard");
         fs::create_dir_all(&root).expect("create temp root");
         fs::write(root.join("main.rs"), "fn main() {}\n").expect("write rust file");
 
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn awareness_snapshot_skips_target_directory_noise() {
-        let root = unique_tmp_dir("loongclaw-awareness-skip");
+        let root = unique_tmp_dir("loong-awareness-skip");
         fs::create_dir_all(root.join("target")).expect("create target directory");
         fs::write(root.join("target").join("build.bin"), [0_u8, 159, 146, 150])
             .expect("write binary");
@@ -373,13 +373,13 @@ mod tests {
 
     #[test]
     fn awareness_snapshot_projects_plugin_activation_inventory_with_slot_conflicts() {
-        let root = unique_tmp_dir("loongclaw-awareness-slots");
+        let root = unique_tmp_dir("loong-awareness-slots");
         fs::create_dir_all(&root).expect("create temp root");
 
         fs::write(
             root.join("first.py"),
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-a",
 #   "provider_id": "search-a",
@@ -390,14 +390,14 @@ mod tests {
 #   "slot_claims": [{"slot":"provider:web_search","key":"default","mode":"exclusive"}],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write first plugin");
         fs::write(
             root.join("second.py"),
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-b",
 #   "provider_id": "search-b",
@@ -408,7 +408,7 @@ mod tests {
 #   "slot_claims": [{"slot":"provider:web_search","key":"default","mode":"exclusive"}],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write second plugin");

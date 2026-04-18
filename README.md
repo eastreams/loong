@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loongclaw-logo-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loongclaw-logo-light.png" />
-    <img src="./assets/logo/loongclaw-logo-light.png" alt="Loong" width="280" />
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loong-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loong-logo-light.png" />
+    <img src="./assets/logo/loong-logo-light.png" alt="Loong" width="280" />
   </picture>
 </p>
 <p align="center"><strong><em>"Originated from the East, here to benefit the world"</em></strong></p>
@@ -15,14 +15,14 @@
   <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg?style=flat-square" alt="Rust Edition 2024" />
   <a href="https://github.com/eastreams/loong/releases"><img src="https://img.shields.io/github/v/release/eastreams/loong?label=version&color=yellow&include_prereleases&style=flat-square" alt="Version" /></a>
   <br/>
-  <a href="https://x.com/loongclawai"><img src="https://img.shields.io/badge/Follow-loongclawai-000000?logo=x&logoColor=white&style=flat-square" alt="X" /></a>
-  <a href="https://t.me/loongclaw"><img src="https://img.shields.io/badge/Telegram-loongclaw-26A5E4?logo=telegram&logoColor=white&style=flat-square" alt="Telegram" /></a>
+  <a href="https://x.com/loongai"><img src="https://img.shields.io/badge/Follow-loongai-000000?logo=x&logoColor=white&style=flat-square" alt="X" /></a>
+  <a href="https://t.me/loong"><img src="https://img.shields.io/badge/Telegram-loong-26A5E4?logo=telegram&logoColor=white&style=flat-square" alt="Telegram" /></a>
   <a href="https://discord.gg/7kSTX9mca"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white&style=flat-square" alt="Discord" /></a>
-  <a href="https://www.reddit.com/r/LoongClaw"><img src="https://img.shields.io/badge/Reddit-r%2Floongclaw-FF4500?logo=reddit&logoColor=white&style=flat-square" alt="Reddit" /></a>
+  <a href="https://www.reddit.com/r/Loong"><img src="https://img.shields.io/badge/Reddit-r%2Floong-FF4500?logo=reddit&logoColor=white&style=flat-square" alt="Reddit" /></a>
   <br/>
   <a href="https://xhslink.com/m/1dqFqF1IKDk"><img src="https://img.shields.io/badge/Xiaohongshu-follow-FF2442?logo=xiaohongshu&logoColor=white&style=flat-square" alt="Xiaohongshu" /></a>
-  <a href="https://loongclaw.ai/feishu.jpg"><img src="https://img.shields.io/badge/Feishu-QR-3370FF?logo=lark&logoColor=white&style=flat-square" alt="Feishu QR" /></a>
-  <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
+  <a href="https://loong.ai/feishu.jpg"><img src="https://img.shields.io/badge/Feishu-QR-3370FF?logo=lark&logoColor=white&style=flat-square" alt="Feishu QR" /></a>
+  <a href="https://loong.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
 ***Secure, extensible, and sustainably evolvable*** — Loong is an agent base for vertical AI agents, built in Rust. On a secure and controlled base, it supports longer-horizon workflow construction, compound task execution, and closed-loop improvement — enabling people and AI to collaborate in real-world scenarios.
@@ -178,7 +178,7 @@ Recommended first-run setup:
 loong feishu onboard --domain lark
 ```
 
-That flow shows an in-terminal QR code, creates the bot app through the official Lark/Feishu registration API, and writes the generated credentials into `loongclaw.toml`. Manual fallback is still available through `loong feishu onboard --manual --app-id ... --app-secret ...`.
+That flow shows an in-terminal QR code, creates the bot app through the official Lark/Feishu registration API, and writes the generated credentials into `loong.toml`. Manual fallback is still available through `loong feishu onboard --manual --app-id ... --app-secret ...`.
 
 ```toml
 [feishu]

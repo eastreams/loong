@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::control::{GatewayControlAppState, authorize_request_from_state};
-use crate::mvp::config::{LoongClawConfig, ProviderProfileConfig};
+use crate::mvp::config::{LoongConfig, ProviderProfileConfig};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChatCompletionRequest {
@@ -72,7 +72,7 @@ struct OpenAiCompatGatewayTurnSeed {
     request_id: String,
     session_id: String,
     model: String,
-    run_config: LoongClawConfig,
+    run_config: LoongConfig,
     input: String,
 }
 
@@ -239,7 +239,7 @@ pub(crate) async fn handle_chat_completions(
         )
 }
 
-fn configured_openai_models(config: &LoongClawConfig) -> Vec<ModelObject> {
+fn configured_openai_models(config: &LoongConfig) -> Vec<ModelObject> {
     configured_model_bindings(config)
         .into_iter()
         .map(|binding| ModelObject {
@@ -251,13 +251,13 @@ fn configured_openai_models(config: &LoongClawConfig) -> Vec<ModelObject> {
         .collect()
 }
 
-fn resolve_model_binding(config: &LoongClawConfig, model: &str) -> Option<ConfiguredModelBinding> {
+fn resolve_model_binding(config: &LoongConfig, model: &str) -> Option<ConfiguredModelBinding> {
     configured_model_bindings(config)
         .into_iter()
         .find(|binding| binding.request_model_id == model)
 }
 
-fn configured_provider_profiles(config: &LoongClawConfig) -> Vec<(String, ProviderProfileConfig)> {
+fn configured_provider_profiles(config: &LoongConfig) -> Vec<(String, ProviderProfileConfig)> {
     if config.providers.is_empty() {
         return vec![(
             config
@@ -277,7 +277,7 @@ fn configured_provider_profiles(config: &LoongClawConfig) -> Vec<(String, Provid
         .collect()
 }
 
-fn configured_model_bindings(config: &LoongClawConfig) -> Vec<ConfiguredModelBinding> {
+fn configured_model_bindings(config: &LoongConfig) -> Vec<ConfiguredModelBinding> {
     let provider_profiles = configured_provider_profiles(config);
     let mut raw_model_counts = std::collections::BTreeMap::new();
     for (_profile_id, profile) in &provider_profiles {
@@ -326,7 +326,7 @@ fn configured_provider_model_ids(provider: &crate::mvp::config::ProviderConfig) 
 }
 
 fn configured_provider_for_request(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     request: &ChatCompletionRequest,
 ) -> Result<ConfiguredModelBinding, String> {
     let mut binding = resolve_model_binding(config, request.model.as_str())
@@ -425,7 +425,7 @@ fn chat_message_to_window_turn(
 }
 
 fn build_gateway_turn_seed(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     request: &ChatCompletionRequest,
 ) -> Result<OpenAiCompatGatewayTurnSeed, String> {
     let Some((last_message, history)) = request.messages.split_last() else {
@@ -492,7 +492,7 @@ async fn run_gateway_turn_for_seed(
 
 async fn complete_chat_completion(
     app_state: &GatewayControlAppState,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     request: &ChatCompletionRequest,
 ) -> Result<Value, String> {
     let seed = build_gateway_turn_seed(config, request)?;
@@ -521,7 +521,7 @@ async fn complete_chat_completion(
 
 async fn stream_chat_completion(
     app_state: &GatewayControlAppState,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     request: &ChatCompletionRequest,
 ) -> Response {
     let seed = match build_gateway_turn_seed(config, request) {
@@ -633,7 +633,7 @@ fn json_response(status: StatusCode, payload: Value) -> Response {
 
 #[doc(hidden)]
 pub fn build_openai_compat_test_router_no_backend(
-    config: LoongClawConfig,
+    config: LoongConfig,
     bearer_token: String,
 ) -> Router {
     let mut app_state = GatewayControlAppState::test_minimal(bearer_token);
@@ -661,7 +661,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::mvp::config::{
-        LoongClawConfig, ProviderConfig, ProviderKind, ProviderProfileConfig, ProviderWireApi,
+        LoongConfig, ProviderConfig, ProviderKind, ProviderProfileConfig, ProviderWireApi,
     };
 
     use super::build_openai_compat_test_router_no_backend;
@@ -690,8 +690,8 @@ mod tests {
         }
     }
 
-    fn openai_compat_test_config() -> LoongClawConfig {
-        LoongClawConfig {
+    fn openai_compat_test_config() -> LoongConfig {
+        LoongConfig {
             providers: BTreeMap::from([
                 (
                     "openai-main".to_owned(),
@@ -718,12 +718,12 @@ mod tests {
                 ),
             ]),
             active_provider: Some("openai-main".to_owned()),
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         }
     }
 
-    fn openai_compat_provider_config(base_url: String) -> LoongClawConfig {
-        LoongClawConfig {
+    fn openai_compat_provider_config(base_url: String) -> LoongConfig {
+        LoongConfig {
             providers: BTreeMap::from([
                 (
                     "openai-main".to_owned(),
@@ -733,7 +733,7 @@ mod tests {
                             kind: ProviderKind::Openai,
                             model: "gpt-5".to_owned(),
                             base_url: base_url.clone(),
-                            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                            api_key: Some(loong_contracts::SecretRef::Inline(
                                 "test-key".to_owned(),
                             )),
                             api_key_env: None,
@@ -752,7 +752,7 @@ mod tests {
                             kind: ProviderKind::Anthropic,
                             model: "claude-sonnet-4-5".to_owned(),
                             base_url,
-                            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                            api_key: Some(loong_contracts::SecretRef::Inline(
                                 "test-key".to_owned(),
                             )),
                             api_key_env: None,
@@ -764,13 +764,13 @@ mod tests {
                 ),
             ]),
             active_provider: Some("openai-main".to_owned()),
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         }
     }
 
     fn next_openai_compat_test_sqlite_path(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-openai-compat-{label}-{}",
+            "loong-openai-compat-{label}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -778,8 +778,8 @@ mod tests {
         ))
     }
 
-    fn openai_compat_unsupported_stream_config() -> LoongClawConfig {
-        LoongClawConfig {
+    fn openai_compat_unsupported_stream_config() -> LoongConfig {
+        LoongConfig {
             providers: BTreeMap::from([(
                 "bedrock-main".to_owned(),
                 ProviderProfileConfig {
@@ -792,12 +792,12 @@ mod tests {
                 },
             )]),
             active_provider: Some("bedrock-main".to_owned()),
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         }
     }
 
-    fn openai_compat_duplicate_model_config(base_url: String) -> LoongClawConfig {
-        LoongClawConfig {
+    fn openai_compat_duplicate_model_config(base_url: String) -> LoongConfig {
+        LoongConfig {
             providers: BTreeMap::from([
                 (
                     "openai-main".to_owned(),
@@ -807,7 +807,7 @@ mod tests {
                             kind: ProviderKind::Openai,
                             model: "gpt-5".to_owned(),
                             base_url: base_url.clone(),
-                            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                            api_key: Some(loong_contracts::SecretRef::Inline(
                                 "primary-key".to_owned(),
                             )),
                             api_key_env: None,
@@ -826,7 +826,7 @@ mod tests {
                             kind: ProviderKind::Openai,
                             model: "gpt-5".to_owned(),
                             base_url,
-                            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                            api_key: Some(loong_contracts::SecretRef::Inline(
                                 "backup-key".to_owned(),
                             )),
                             api_key_env: None,
@@ -839,7 +839,7 @@ mod tests {
                 ),
             ]),
             active_provider: Some("openai-main".to_owned()),
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         }
     }
 
@@ -1042,10 +1042,8 @@ mod tests {
 
     #[tokio::test]
     async fn gateway_openai_models_exposes_default_configured_model_value() {
-        let app = build_openai_compat_test_router_no_backend(
-            LoongClawConfig::default(),
-            "tok".to_owned(),
-        );
+        let app =
+            build_openai_compat_test_router_no_backend(LoongConfig::default(), "tok".to_owned());
         let response = app
             .oneshot(
                 Request::builder()

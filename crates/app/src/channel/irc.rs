@@ -309,7 +309,7 @@ async fn run_irc_send_session(
         send_irc_command(&mut write_half, privmsg_command.as_str(), "irc privmsg").await?;
     }
 
-    send_irc_command(&mut write_half, "QUIT :loongclaw send complete", "irc quit").await?;
+    send_irc_command(&mut write_half, "QUIT :loong send complete", "irc quit").await?;
     Ok(())
 }
 
@@ -681,8 +681,8 @@ mod tests {
         let config = IrcChannelConfig {
             enabled: true,
             server: Some("irc://irc.example.test".to_owned()),
-            nickname: Some("loongclaw_bot".to_owned()),
-            password: Some(loongclaw_contracts::SecretRef::Inline(
+            nickname: Some("loong_bot".to_owned()),
+            password: Some(loong_contracts::SecretRef::Inline(
                 "server-password".to_owned(),
             )),
             ..IrcChannelConfig::default()
@@ -710,9 +710,9 @@ mod tests {
         let config = IrcChannelConfig {
             enabled: true,
             server: Some(server),
-            nickname: Some("loongclaw_bot".to_owned()),
-            username: Some("loongclaw".to_owned()),
-            realname: Some("LoongClaw Bot".to_owned()),
+            nickname: Some("loong_bot".to_owned()),
+            username: Some("loong".to_owned()),
+            realname: Some("Loong Bot".to_owned()),
             ..IrcChannelConfig::default()
         };
         let resolved = config.resolve_account(None).expect("resolve irc config");
@@ -730,11 +730,11 @@ mod tests {
             .await
             .expect("join irc server")
             .expect("irc server result");
-        assert_eq!(frames[0], "NICK loongclaw_bot");
-        assert_eq!(frames[1], "USER loongclaw 0 * :LoongClaw Bot");
+        assert_eq!(frames[0], "NICK loong_bot");
+        assert_eq!(frames[1], "USER loong 0 * :Loong Bot");
         assert_eq!(frames[2], "JOIN #ops");
         assert_eq!(frames[3], "PRIVMSG #ops :hello from irc");
-        assert_eq!(frames[4], "QUIT :loongclaw send complete");
+        assert_eq!(frames[4], "QUIT :loong send complete");
     }
 
     #[tokio::test]
@@ -753,9 +753,9 @@ mod tests {
         let config = IrcChannelConfig {
             enabled: true,
             server: Some(format!("irc://{address}")),
-            nickname: Some("loongclaw_bot".to_owned()),
-            username: Some("loongclaw".to_owned()),
-            realname: Some("LoongClaw Bot".to_owned()),
+            nickname: Some("loong_bot".to_owned()),
+            username: Some("loong".to_owned()),
+            realname: Some("Loong Bot".to_owned()),
             ..IrcChannelConfig::default()
         };
         let resolved = config.resolve_account(None).expect("resolve irc config");
@@ -802,7 +802,7 @@ mod tests {
             frames.push(user);
 
             write_half
-                .write_all(b":server 001 loongclaw_bot :welcome\r\n")
+                .write_all(b":server 001 loong_bot :welcome\r\n")
                 .await
                 .map_err(|error| format!("write irc welcome failed: {error}"))?;
 
@@ -811,11 +811,11 @@ mod tests {
                 frames.push(join);
 
                 write_half
-                    .write_all(b":loongclaw_bot!user@example JOIN #ops\r\n")
+                    .write_all(b":loong_bot!user@example JOIN #ops\r\n")
                     .await
                     .map_err(|error| format!("write irc join event failed: {error}"))?;
                 write_half
-                    .write_all(b":server 366 loongclaw_bot #ops :End of /NAMES list.\r\n")
+                    .write_all(b":server 366 loong_bot #ops :End of /NAMES list.\r\n")
                     .await
                     .map_err(|error| format!("write irc names end failed: {error}"))?;
             }

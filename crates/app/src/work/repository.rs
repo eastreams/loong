@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use loongclaw_contracts::{
+use loong_contracts::{
     WorkRuntimeHealthSnapshot, WorkUnitEventRecord, WorkUnitKind, WorkUnitLeaseRecord,
     WorkUnitPriority, WorkUnitRecord, WorkUnitRetryPolicy, WorkUnitSnapshot, WorkUnitSourceRef,
     WorkUnitStatus,
@@ -2311,14 +2311,14 @@ mod tests {
         WORK_UNIT_UPDATED_EVENT_KIND, WorkUnitCompletionDisposition, WorkUnitHeartbeatRequest,
         WorkUnitListQuery, WorkUnitRepository,
     };
-    use loongclaw_contracts::{
+    use loong_contracts::{
         WorkSourceKind, WorkUnitKind, WorkUnitPriority, WorkUnitRetryPolicy, WorkUnitSourceRef,
         WorkUnitStatus,
     };
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-work-unit-repository-{test_name}-{}",
+            "loong-work-unit-repository-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);
@@ -2333,7 +2333,7 @@ mod tests {
     fn sample_source_ref() -> WorkUnitSourceRef {
         WorkUnitSourceRef {
             source_kind: WorkSourceKind::Discord,
-            project_id: Some("loongclaw-ai/server".to_owned()),
+            project_id: Some("loong-ai/server".to_owned()),
             channel_id: Some("feature".to_owned()),
             thread_id: Some("thread-42".to_owned()),
             message_id: Some("msg-7".to_owned()),

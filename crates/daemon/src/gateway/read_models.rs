@@ -1150,7 +1150,7 @@ mod tests {
 
     #[test]
     fn operator_channel_surface_read_model_keeps_plugin_backed_summary_context() {
-        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "default_account": "ops",
@@ -1197,9 +1197,9 @@ mod tests {
 
     #[test]
     fn operator_channel_surface_read_model_keeps_non_plugin_backed_summary_empty() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.telegram.enabled = true;
-        config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
             "123456:test-token".to_owned(),
         ));
         config.telegram.allowed_chat_ids = vec![1];
@@ -1225,18 +1225,15 @@ mod tests {
 
     #[test]
     fn channel_inventory_read_model_includes_structured_channel_access_policies() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.feishu.enabled = true;
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "cli_a1b2c3".to_owned(),
-        ));
-        config.feishu.app_secret =
-            Some(loongclaw_contracts::SecretRef::Inline("secret".to_owned()));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret = Some(loong_contracts::SecretRef::Inline("secret".to_owned()));
         config.feishu.allowed_chat_ids = vec!["*".to_owned()];
         config.feishu.allowed_sender_ids = vec!["ou_admin".to_owned()];
 
         let inventory = mvp::channel::channel_inventory(&config);
-        let read_model = build_channel_inventory_read_model("/tmp/loongclaw.toml", &inventory);
+        let read_model = build_channel_inventory_read_model("/tmp/loong.toml", &inventory);
         let access_policy = read_model
             .channel_access_policies
             .iter()

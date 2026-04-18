@@ -10,7 +10,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use loongclaw_daemon::{
+use loong_daemon::{
     gateway::{
         client::{GatewayLocalClient, GatewayStopResponseOutcome},
         service::{
@@ -50,31 +50,30 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
-    let runtime_dir = std::env::temp_dir().join(format!(
-        "loongclaw-daemon-gateway-owner-state-{label}-{suffix}"
-    ));
+    let runtime_dir =
+        std::env::temp_dir().join(format!("loong-daemon-gateway-owner-state-{label}-{suffix}"));
     std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
     runtime_dir
 }
 
 fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
 
     LoadedSupervisorConfig {
-        resolved_path: runtime_dir.join("loongclaw.toml"),
+        resolved_path: runtime_dir.join("loong.toml"),
         config,
     }
 }
 
 fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
     LoadedSupervisorConfig {
-        resolved_path: runtime_dir.join("loongclaw.toml"),
+        resolved_path: runtime_dir.join("loong.toml"),
         config,
     }
 }
@@ -85,7 +84,7 @@ fn plugin_backed_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedS
     config.memory.sqlite_path = sqlite_path.display().to_string();
 
     LoadedSupervisorConfig {
-        resolved_path: runtime_dir.join("loongclaw.toml"),
+        resolved_path: runtime_dir.join("loong.toml"),
         config,
     }
 }
@@ -127,7 +126,7 @@ async fn wait_until(description: &str, predicate: impl Fn() -> bool) {
 
 async fn wait_for_gateway_control_surface(
     runtime_dir: &std::path::Path,
-) -> loongclaw_daemon::gateway::state::GatewayOwnerStatus {
+) -> loong_daemon::gateway::state::GatewayOwnerStatus {
     wait_until("gateway control surface binding", || {
         let status = load_gateway_owner_status(runtime_dir);
         let Some(status) = status else {

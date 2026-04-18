@@ -1,17 +1,17 @@
 [package]
-name = "loongclaw-bridge-runtime"
+name = "loong-bridge-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Internal support crate for LoongClaw: reusable managed bridge execution primitives"
+description = "Internal support crate for Loong: reusable managed bridge execution primitives"
 repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
-loongclaw-protocol = { package = "loong-protocol", version = "0.1.0-alpha.3", path = "../protocol" }
+loong-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
+loong-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loong-protocol = { package = "loong-protocol", version = "0.1.0-alpha.3", path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true

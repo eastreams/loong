@@ -114,7 +114,6 @@ use crate::tools::runtime_events::{ToolFileChangeKind, ToolRuntimeEvent, ToolRun
 
 pub const DEFAULT_FIRST_PROMPT: &str = "Summarize this repository and suggest the best next step.";
 const TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONG_TEST_ONBOARD_EXECUTABLE";
-const LEGACY_TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONGCLAW_TEST_ONBOARD_EXECUTABLE";
 const CLI_CHAT_HELP_COMMAND: &str = "/help";
 const CLI_CHAT_COMPACT_COMMAND: &str = "/compact";
 const CLI_CHAT_STATUS_COMMAND: &str = "/status";
@@ -213,7 +212,6 @@ fn append_onboard_target_args(
 fn resolve_onboard_executable_path() -> CliResult<PathBuf> {
     if cfg!(debug_assertions)
         && let Some(executable_path) = std::env::var_os(TEST_ONBOARD_EXECUTABLE_ENV)
-            .or_else(|| std::env::var_os(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV))
     {
         return Ok(PathBuf::from(executable_path));
     }
@@ -3509,10 +3507,10 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     use async_trait::async_trait;
     #[cfg(feature = "memory-sqlite")]
-    use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError};
+    use loong_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError};
     #[cfg(feature = "memory-sqlite")]
-    use loongclaw_kernel::{
-        CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongClawKernel, MemoryCoreOutcome,
+    use loong_kernel::{
+        CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,
         MemoryCoreRequest, StaticPolicyEngine, VerticalPackManifest,
     };
     #[cfg(feature = "memory-sqlite")]
@@ -3533,7 +3531,7 @@ mod tests {
     ) -> crate::KernelContext {
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let audit = Arc::new(InMemoryAuditSink::default());
-        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+        let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack-memory".to_owned(),
@@ -3605,7 +3603,7 @@ mod tests {
     fn build_onboard_command_defaults_to_current_executable() {
         let expected_executable = std::env::current_exe().expect("current executable");
         let command =
-            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
+            build_onboard_command(None, Path::new("/tmp/loong.toml")).expect("onboard command");
 
         assert_eq!(command.get_program(), expected_executable.as_os_str());
         assert_eq!(
@@ -3621,38 +3619,23 @@ mod tests {
     fn build_onboard_command_prefers_loong_test_override() {
         let mut env = ScopedEnv::new();
         env.remove(TEST_ONBOARD_EXECUTABLE_ENV);
-        env.remove(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV);
         env.set(TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/loong-onboard");
-        env.set(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/legacy-onboard");
 
         let command =
-            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
+            build_onboard_command(None, Path::new("/tmp/loong.toml")).expect("onboard command");
 
         assert_eq!(command.get_program(), OsStr::new("/tmp/loong-onboard"));
     }
 
     #[test]
-    fn build_onboard_command_falls_back_to_legacy_override() {
-        let mut env = ScopedEnv::new();
-        env.remove(TEST_ONBOARD_EXECUTABLE_ENV);
-        env.remove(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV);
-        env.set(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/legacy-onboard");
-
-        let command =
-            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
-
-        assert_eq!(command.get_program(), OsStr::new("/tmp/legacy-onboard"));
-    }
-
-    #[test]
     fn build_onboard_command_forwards_explicit_config_path_to_output() {
         let command = build_onboard_command_for_executable(
-            PathBuf::from("/tmp/loongclaw"),
+            PathBuf::from("/tmp/loong"),
             Some("custom.toml"),
             Path::new("/tmp/custom.toml"),
         );
 
-        assert_eq!(command.get_program(), OsStr::new("/tmp/loongclaw"));
+        assert_eq!(command.get_program(), OsStr::new("/tmp/loong"));
         assert_eq!(
             command
                 .get_args()
@@ -3676,7 +3659,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     fn unique_chat_sqlite_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-chat-binding-{label}-{}.sqlite3",
+            "loong-chat-binding-{label}-{}.sqlite3",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
@@ -3771,7 +3754,7 @@ mod tests {
     ) -> (crate::KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+        let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
         let pack = VerticalPackManifest {
             pack_id: "chat-test-pack".to_owned(),
@@ -4016,7 +3999,7 @@ mod tests {
     fn concurrent_cli_host_requires_explicit_session_id() {
         let shutdown = ConcurrentCliShutdown::new();
         let error = run_concurrent_cli_host(&ConcurrentCliHostOptions {
-            resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+            resolved_path: PathBuf::from("/tmp/loong.toml"),
             config: LoongConfig::default(),
             session_id: "   ".to_owned(),
             shutdown,
@@ -4037,7 +4020,7 @@ mod tests {
         config.audit.mode = crate::config::AuditMode::InMemory;
         let options = CliChatOptions::default();
         let runtime = initialize_cli_turn_runtime_with_loaded_config(
-            PathBuf::from("/tmp/loongclaw.toml"),
+            PathBuf::from("/tmp/loong.toml"),
             config,
             Some("cli-supervisor"),
             &options,
@@ -4471,8 +4454,8 @@ mod tests {
     fn render_cli_chat_startup_lines_prioritize_first_turn_guidance() {
         let lines = render_cli_chat_startup_lines_with_width(
             &CliChatStartupSummary {
-                config_path: "/tmp/loongclaw.toml".to_owned(),
-                memory_label: "/tmp/loongclaw.db".to_owned(),
+                config_path: "/tmp/loong.toml".to_owned(),
+                memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "default".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "config".to_owned(),
@@ -4542,8 +4525,8 @@ mod tests {
     fn render_cli_chat_startup_lines_surface_explicit_acp_overrides() {
         let lines = render_cli_chat_startup_lines_with_width(
             &CliChatStartupSummary {
-                config_path: "/tmp/loongclaw.toml".to_owned(),
-                memory_label: "/tmp/loongclaw.db".to_owned(),
+                config_path: "/tmp/loong.toml".to_owned(),
+                memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "thread-42".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "env".to_owned(),
@@ -4590,8 +4573,8 @@ mod tests {
     fn render_cli_chat_status_lines_focus_on_runtime_state_without_start_here() {
         let lines = render_cli_chat_status_lines_with_width(
             &CliChatStartupSummary {
-                config_path: "/tmp/loongclaw.toml".to_owned(),
-                memory_label: "/tmp/loongclaw.db".to_owned(),
+                config_path: "/tmp/loong.toml".to_owned(),
+                memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "default".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "config".to_owned(),
@@ -4649,7 +4632,7 @@ mod tests {
 
     #[test]
     fn render_cli_chat_missing_config_lines_wrap_setup_prompt_in_surface() {
-        let command = "loong onboard --output /tmp/loongclaw.toml";
+        let command = "loong onboard --output /tmp/loong.toml";
         let lines = render_cli_chat_missing_config_lines_with_width(command, 80);
 
         assert!(
@@ -4663,7 +4646,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "setup command: loong onboard --output /tmp/loongclaw.toml"),
+                .any(|line| line == "setup command: loong onboard --output /tmp/loong.toml"),
             "missing-config setup prompt should surface the setup command block: {lines:#?}"
         );
         assert!(
@@ -5104,7 +5087,7 @@ mod tests {
     #[test]
     fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
         let summary = CliChatStartupSummary {
-            config_path: "/tmp/loongclaw.toml".to_owned(),
+            config_path: "/tmp/loong.toml".to_owned(),
             memory_label: "window_plus_summary".to_owned(),
             session_id: "session-status".to_owned(),
             context_engine_id: "default".to_owned(),
@@ -5835,7 +5818,7 @@ allowed_decisions: yes / auto / full / esc";
     #[cfg(feature = "config-toml")]
     fn reload_cli_turn_config_refreshes_provider_state_without_mutating_cli_settings() {
         let path = std::env::temp_dir().join(format!(
-            "loongclaw-chat-provider-reload-{}.toml",
+            "loong-chat-provider-reload-{}.toml",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")

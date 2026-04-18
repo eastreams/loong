@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn assert_compact_loongclaw_header(lines: &[String], context: &str) {
+fn assert_compact_loong_header(lines: &[String], context: &str) {
     assert!(
         lines.first().is_some_and(|line| line.starts_with("LOONG")),
         "{context} should start with the compact LOONG header: {lines:#?}"
@@ -32,6 +32,14 @@ fn assert_compact_loongclaw_header(lines: &[String], context: &str) {
     );
 }
 
+fn collapse_wrapped_lines(lines: &[String]) -> String {
+    lines
+        .iter()
+        .flat_map(|line| line.split_whitespace())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn unique_temp_path(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -41,7 +49,7 @@ fn unique_temp_path(label: &str) -> PathBuf {
     let temp_dir = std::env::temp_dir();
     let canonical_temp_dir = dunce::canonicalize(&temp_dir).unwrap_or(temp_dir);
     canonical_temp_dir.join(format!(
-        "loongclaw-onboard-{label}-{}-{nanos}-{counter}",
+        "loong-onboard-{label}-{}-{nanos}-{counter}",
         std::process::id(),
     ))
 }
@@ -63,9 +71,8 @@ fn provider_choice_input(kind: mvp::config::ProviderKind) -> String {
                 && *candidate != mvp::config::ProviderKind::StepPlan
         })
         .map(|candidate| {
-            let label =
-                loongclaw_daemon::onboard_cli::provider_kind_display_name(candidate).to_owned();
-            let slug = loongclaw_daemon::onboard_cli::provider_kind_id(candidate).to_owned();
+            let label = loong_daemon::onboard_cli::provider_kind_display_name(candidate).to_owned();
+            let slug = loong_daemon::onboard_cli::provider_kind_id(candidate).to_owned();
             (label, slug)
         })
         .collect::<Vec<_>>();
@@ -84,7 +91,7 @@ fn provider_choice_input(kind: mvp::config::ProviderKind) -> String {
     ) {
         "stepfun"
     } else {
-        loongclaw_daemon::onboard_cli::provider_kind_id(kind)
+        loong_daemon::onboard_cli::provider_kind_id(kind)
     };
     let index = options
         .iter()
@@ -93,7 +100,7 @@ fn provider_choice_input(kind: mvp::config::ProviderKind) -> String {
     (index + 1).to_string()
 }
 
-fn scripted_input_not_cancelled(raw: String) -> loongclaw_daemon::CliResult<String> {
+fn scripted_input_not_cancelled(raw: String) -> loong_daemon::CliResult<String> {
     if raw.trim() == "\u{1b}" {
         return Err("onboarding cancelled: escape input received".to_owned());
     }
@@ -117,9 +124,9 @@ struct DetectedEnvironmentGuard {
     saved: Vec<(String, Option<OsString>)>,
 }
 
-fn isolated_loongclaw_home(label: &str) -> PathBuf {
+fn isolated_loong_home(label: &str) -> PathBuf {
     let home = unique_temp_path(label);
-    std::fs::create_dir_all(&home).expect("create isolated loongclaw home");
+    std::fs::create_dir_all(&home).expect("create isolated loong home");
     home
 }
 
@@ -131,7 +138,7 @@ impl DetectedEnvironmentGuard {
     fn without_detected_environment() -> Self {
         let lock = super::lock_daemon_test_environment();
         let mut keys = std::collections::BTreeSet::new();
-        let default_config = mvp::config::LoongClawConfig::default();
+        let default_config = mvp::config::LoongConfig::default();
 
         for provider_kind in mvp::config::ProviderKind::all_sorted() {
             if let Some(key) = provider_kind.default_api_key_env() {
@@ -161,7 +168,7 @@ impl DetectedEnvironmentGuard {
                 keys.insert((*env_name).to_owned());
             }
         }
-        keys.insert("LOONGCLAW_SQLITE_PATH".to_owned());
+        keys.insert("LOONG_SQLITE_PATH".to_owned());
 
         let saved = keys
             .into_iter()
@@ -173,22 +180,19 @@ impl DetectedEnvironmentGuard {
                 (key, value)
             })
             .collect::<Vec<_>>();
-        let isolated_home = isolated_loongclaw_home("detected-env-home");
-        let saved_loongclaw_home = std::env::var_os("LOONG_HOME");
+        let isolated_home = isolated_loong_home("detected-env-home");
+        let saved_loong_home = std::env::var_os("LOONG_HOME");
         unsafe {
             std::env::set_var("LOONG_HOME", &isolated_home);
         }
         let isolated_sqlite = isolated_sqlite_path("detected-env-memory");
-        let saved_loongclaw_sqlite_path = std::env::var_os("LOONGCLAW_SQLITE_PATH");
+        let saved_loong_sqlite_path = std::env::var_os("LOONG_SQLITE_PATH");
         unsafe {
-            std::env::set_var("LOONGCLAW_SQLITE_PATH", &isolated_sqlite);
+            std::env::set_var("LOONG_SQLITE_PATH", &isolated_sqlite);
         }
         let mut saved = saved;
-        saved.push(("LOONG_HOME".to_owned(), saved_loongclaw_home));
-        saved.push((
-            "LOONGCLAW_SQLITE_PATH".to_owned(),
-            saved_loongclaw_sqlite_path,
-        ));
+        saved.push(("LOONG_HOME".to_owned(), saved_loong_home));
+        saved.push(("LOONG_SQLITE_PATH".to_owned(), saved_loong_sqlite_path));
 
         Self { _lock: lock, saved }
     }
@@ -258,13 +262,13 @@ impl Drop for EnvVarGuard {
 }
 
 fn import_candidate_with_kind(
-    source_kind: loongclaw_daemon::migration::types::ImportSourceKind,
+    source_kind: loong_daemon::migration::types::ImportSourceKind,
     source: &str,
-) -> loongclaw_daemon::onboard_cli::ImportCandidate {
-    loongclaw_daemon::onboard_cli::ImportCandidate {
+) -> loong_daemon::onboard_cli::ImportCandidate {
+    loong_daemon::onboard_cli::ImportCandidate {
         source_kind,
         source: source.to_owned(),
-        config: mvp::config::LoongClawConfig::default(),
+        config: mvp::config::LoongConfig::default(),
         surfaces: Vec::new(),
         domains: Vec::new(),
         channel_candidates: Vec::new(),
@@ -273,12 +277,12 @@ fn import_candidate_with_kind(
 }
 
 fn import_candidate_with_provider(
-    source_kind: loongclaw_daemon::migration::types::ImportSourceKind,
+    source_kind: loong_daemon::migration::types::ImportSourceKind,
     source: &str,
     kind: mvp::config::ProviderKind,
     model: &str,
     credential_env: &str,
-) -> loongclaw_daemon::onboard_cli::ImportCandidate {
+) -> loong_daemon::onboard_cli::ImportCandidate {
     let mut candidate = import_candidate_with_kind(source_kind, source);
     let profile = kind.profile();
     candidate.config.provider.kind = kind;
@@ -291,12 +295,12 @@ fn import_candidate_with_provider(
         .set_api_key_env_binding(Some(credential_env.to_owned()));
     candidate
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::Provider,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::UseDetected),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::Provider,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::UseDetected),
             source: source.to_owned(),
-            summary: loongclaw_daemon::provider_presentation::provider_identity_summary(
+            summary: loong_daemon::provider_presentation::provider_identity_summary(
                 &candidate.config.provider,
             ),
         });
@@ -320,7 +324,7 @@ impl ScriptedOnboardUi {
         self.outputs
     }
 
-    fn next_input(&mut self, label: &str) -> loongclaw_daemon::CliResult<String> {
+    fn next_input(&mut self, label: &str) -> loong_daemon::CliResult<String> {
         self.inputs.pop_front().ok_or_else(|| {
             format!(
                 "missing scripted input for {label}; transcript so far:\n{}",
@@ -330,8 +334,8 @@ impl ScriptedOnboardUi {
     }
 }
 
-impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
-    fn print_line(&mut self, line: &str) -> loongclaw_daemon::CliResult<()> {
+impl loong_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
+    fn print_line(&mut self, line: &str) -> loong_daemon::CliResult<()> {
         self.outputs.push(line.to_owned());
         Ok(())
     }
@@ -340,7 +344,7 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         &mut self,
         label: &str,
         default: &str,
-    ) -> loongclaw_daemon::CliResult<String> {
+    ) -> loong_daemon::CliResult<String> {
         self.outputs
             .push(format!("PROMPT {label} (default: {default})"));
         let value = self.next_input(label)?;
@@ -350,12 +354,12 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         Ok(value)
     }
 
-    fn prompt_required(&mut self, label: &str) -> loongclaw_daemon::CliResult<String> {
+    fn prompt_required(&mut self, label: &str) -> loong_daemon::CliResult<String> {
         self.outputs.push(format!("PROMPT {label}"));
         self.next_input(label)
     }
 
-    fn prompt_allow_empty(&mut self, label: &str) -> loongclaw_daemon::CliResult<String> {
+    fn prompt_allow_empty(&mut self, label: &str) -> loong_daemon::CliResult<String> {
         self.outputs.push(format!("PROMPT {label}"));
         match self.inputs.front() {
             Some(value)
@@ -378,11 +382,7 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         }
     }
 
-    fn prompt_confirm(
-        &mut self,
-        message: &str,
-        default: bool,
-    ) -> loongclaw_daemon::CliResult<bool> {
+    fn prompt_confirm(&mut self, message: &str, default: bool) -> loong_daemon::CliResult<bool> {
         self.outputs.push(format!(
             "PROMPT {message} {}",
             if default { "[Y/n]" } else { "[y/N]" }
@@ -398,10 +398,10 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
     fn select_one(
         &mut self,
         label: &str,
-        options: &[loongclaw_daemon::onboard_cli::SelectOption],
+        options: &[loong_daemon::onboard_cli::SelectOption],
         default: Option<usize>,
-        _interaction_mode: loongclaw_daemon::onboard_cli::SelectInteractionMode,
-    ) -> loongclaw_daemon::CliResult<usize> {
+        _interaction_mode: loong_daemon::onboard_cli::SelectInteractionMode,
+    ) -> loong_daemon::CliResult<usize> {
         if options.is_empty() {
             return Err("no selection options available".to_owned());
         }
@@ -436,10 +436,10 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
             return Ok(index);
         }
 
-        let parsed_personality = loongclaw_daemon::onboard_cli::parse_prompt_personality(trimmed);
+        let parsed_personality = loong_daemon::onboard_cli::parse_prompt_personality(trimmed);
 
         if let Some(personality) = parsed_personality {
-            let canonical_slug = loongclaw_daemon::onboard_cli::prompt_personality_id(personality);
+            let canonical_slug = loong_daemon::onboard_cli::prompt_personality_id(personality);
             let canonical_match = options
                 .iter()
                 .position(|option| option.slug.eq_ignore_ascii_case(canonical_slug));
@@ -454,15 +454,15 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
 }
 
 async fn run_scripted_onboard_flow(
-    options: loongclaw_daemon::onboard_cli::OnboardCommandOptions,
+    options: loong_daemon::onboard_cli::OnboardCommandOptions,
     inputs: impl IntoIterator<Item = impl Into<String>>,
     workspace_root: Option<PathBuf>,
     codex_config_path: Option<PathBuf>,
-) -> loongclaw_daemon::CliResult<Vec<String>> {
+) -> loong_daemon::CliResult<Vec<String>> {
     run_scripted_onboard_flow_with_context(
         options,
         inputs,
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(
+        loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(
             80,
             workspace_root,
             codex_config_path,
@@ -472,11 +472,11 @@ async fn run_scripted_onboard_flow(
 }
 
 async fn run_scripted_onboard_flow_with_context(
-    options: loongclaw_daemon::onboard_cli::OnboardCommandOptions,
+    options: loong_daemon::onboard_cli::OnboardCommandOptions,
     inputs: impl IntoIterator<Item = impl Into<String>>,
-    context: loongclaw_daemon::onboard_cli::OnboardRuntimeContext,
-) -> loongclaw_daemon::CliResult<Vec<String>> {
-    let sqlite_override_guard = if std::env::var_os("LOONGCLAW_SQLITE_PATH").is_some() {
+    context: loong_daemon::onboard_cli::OnboardRuntimeContext,
+) -> loong_daemon::CliResult<Vec<String>> {
+    let sqlite_override_guard = if std::env::var_os("LOONG_SQLITE_PATH").is_some() {
         None
     } else {
         let sqlite_path = options
@@ -487,12 +487,12 @@ async fn run_scripted_onboard_flow_with_context(
             .unwrap_or_else(|| isolated_sqlite_path("scripted-onboard-memory"));
         let sqlite_path_text = sqlite_path.display().to_string();
         Some(EnvVarGuard::set(
-            "LOONGCLAW_SQLITE_PATH",
+            "LOONG_SQLITE_PATH",
             sqlite_path_text.as_str(),
         ))
     };
     let mut ui = ScriptedOnboardUi::new(inputs);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context).await?;
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context).await?;
     drop(sqlite_override_guard);
     Ok(ui.transcript())
 }
@@ -571,8 +571,8 @@ fn start_local_model_probe_server_with_models_response(
 
 fn default_non_interactive_onboard_options(
     output: &std::path::Path,
-) -> loongclaw_daemon::onboard_cli::OnboardCommandOptions {
-    loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+) -> loong_daemon::onboard_cli::OnboardCommandOptions {
+    loong_daemon::onboard_cli::OnboardCommandOptions {
         output: Some(output.display().to_string()),
         force: false,
         non_interactive: true,
@@ -593,13 +593,13 @@ fn default_non_interactive_onboard_options(
 fn scripted_onboard_ui_select_one_accepts_slug_input() {
     let mut ui = ScriptedOnboardUi::new(["hermit"]);
     let options = vec![
-        loongclaw_daemon::onboard_cli::SelectOption {
+        loong_daemon::onboard_cli::SelectOption {
             label: "classicist".to_owned(),
             slug: "classicist".to_owned(),
             description: String::new(),
             recommended: true,
         },
-        loongclaw_daemon::onboard_cli::SelectOption {
+        loong_daemon::onboard_cli::SelectOption {
             label: "hermit".to_owned(),
             slug: "hermit".to_owned(),
             description: String::new(),
@@ -607,12 +607,12 @@ fn scripted_onboard_ui_select_one_accepts_slug_input() {
         },
     ];
 
-    let index = loongclaw_daemon::onboard_cli::OnboardUi::select_one(
+    let index = loong_daemon::onboard_cli::OnboardUi::select_one(
         &mut ui,
         "Personality",
         &options,
         Some(0),
-        loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
+        loong_daemon::onboard_cli::SelectInteractionMode::List,
     )
     .expect("scripted selection should accept slug input so integration tests stay aligned");
 
@@ -624,13 +624,13 @@ fn scripted_onboard_ui_select_one_accepts_slug_input() {
 fn scripted_onboard_ui_select_one_accepts_legacy_personality_alias_input() {
     let mut ui = ScriptedOnboardUi::new(["friendly_collab"]);
     let options = vec![
-        loongclaw_daemon::onboard_cli::SelectOption {
+        loong_daemon::onboard_cli::SelectOption {
             label: "classicist".to_owned(),
             slug: "classicist".to_owned(),
             description: String::new(),
             recommended: true,
         },
-        loongclaw_daemon::onboard_cli::SelectOption {
+        loong_daemon::onboard_cli::SelectOption {
             label: "hermit".to_owned(),
             slug: "hermit".to_owned(),
             description: String::new(),
@@ -638,12 +638,12 @@ fn scripted_onboard_ui_select_one_accepts_legacy_personality_alias_input() {
         },
     ];
 
-    let index = loongclaw_daemon::onboard_cli::OnboardUi::select_one(
+    let index = loong_daemon::onboard_cli::OnboardUi::select_one(
         &mut ui,
         "Personality",
         &options,
         Some(0),
-        loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
+        loong_daemon::onboard_cli::SelectInteractionMode::List,
     )
     .expect("legacy personality aliases should stay accepted in scripted selection");
 
@@ -654,47 +654,47 @@ fn scripted_onboard_ui_select_one_accepts_legacy_personality_alias_input() {
 #[test]
 fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("openai"),
+        loong_daemon::onboard_cli::parse_provider_kind("openai"),
         Some(mvp::config::ProviderKind::Openai)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("bedrock"),
+        loong_daemon::onboard_cli::parse_provider_kind("bedrock"),
         Some(mvp::config::ProviderKind::Bedrock)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("byteplus"),
+        loong_daemon::onboard_cli::parse_provider_kind("byteplus"),
         Some(mvp::config::ProviderKind::Byteplus)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("byteplus_coding_compatible"),
+        loong_daemon::onboard_cli::parse_provider_kind("byteplus_coding_compatible"),
         Some(mvp::config::ProviderKind::ByteplusCoding)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("custom"),
+        loong_daemon::onboard_cli::parse_provider_kind("custom"),
         Some(mvp::config::ProviderKind::Custom)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("openrouter_compatible"),
+        loong_daemon::onboard_cli::parse_provider_kind("openrouter_compatible"),
         Some(mvp::config::ProviderKind::Openrouter)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("volcengine_custom"),
+        loong_daemon::onboard_cli::parse_provider_kind("volcengine_custom"),
         Some(mvp::config::ProviderKind::Volcengine)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("kimi_coding"),
+        loong_daemon::onboard_cli::parse_provider_kind("kimi_coding"),
         Some(mvp::config::ProviderKind::KimiCoding)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("kimi_coding_compatible"),
+        loong_daemon::onboard_cli::parse_provider_kind("kimi_coding_compatible"),
         Some(mvp::config::ProviderKind::KimiCoding)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("volcengine_coding"),
+        loong_daemon::onboard_cli::parse_provider_kind("volcengine_coding"),
         Some(mvp::config::ProviderKind::VolcengineCoding)
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::parse_provider_kind("unsupported"),
+        loong_daemon::onboard_cli::parse_provider_kind("unsupported"),
         None
     );
 }
@@ -702,61 +702,55 @@ fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
 #[test]
 fn provider_default_env_mapping_is_stable() {
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
-            mvp::config::ProviderKind::Openai
-        ),
+        loong_daemon::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Openai),
         Some("OPENAI_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+        loong_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::Anthropic
         ),
         Some("ANTHROPIC_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
-            mvp::config::ProviderKind::Bedrock
-        ),
+        loong_daemon::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Bedrock),
         Some("AWS_BEARER_TOKEN_BEDROCK")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+        loong_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::Byteplus
         ),
         Some("BYTEPLUS_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+        loong_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::ByteplusCoding
         ),
         Some("BYTEPLUS_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
-            mvp::config::ProviderKind::Custom
-        ),
+        loong_daemon::onboard_cli::provider_default_api_key_env(mvp::config::ProviderKind::Custom),
         Some("CUSTOM_PROVIDER_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+        loong_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::Openrouter
         ),
         Some("OPENROUTER_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+        loong_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::OpencodeZen
         ),
         Some("OPENCODE_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+        loong_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::OpencodeGo
         ),
         Some("OPENCODE_API_KEY")
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_default_api_key_env(
+        loong_daemon::onboard_cli::provider_default_api_key_env(
             mvp::config::ProviderKind::KimiCoding
         ),
         Some("KIMI_CODING_API_KEY")
@@ -766,37 +760,35 @@ fn provider_default_env_mapping_is_stable() {
 #[test]
 fn provider_kind_id_mapping_includes_kimi_coding() {
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::KimiCoding),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::KimiCoding),
         "kimi_coding"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Byteplus),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Byteplus),
         "byteplus"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::ByteplusCoding),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::ByteplusCoding),
         "byteplus_coding"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(
-            mvp::config::ProviderKind::VolcengineCoding
-        ),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::VolcengineCoding),
         "volcengine_coding"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Bedrock),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Bedrock),
         "bedrock"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeZen),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeZen),
         "opencode_zen"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeGo),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::OpencodeGo),
         "opencode_go"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Custom),
+        loong_daemon::onboard_cli::provider_kind_id(mvp::config::ProviderKind::Custom),
         "custom"
     );
 }
@@ -875,20 +867,20 @@ fn supported_provider_list_matches_canonical_provider_catalog() {
         .join(", ");
 
     assert_eq!(
-        loongclaw_daemon::onboard_cli::supported_provider_list(),
+        loong_daemon::onboard_cli::supported_provider_list(),
         expected
     );
 }
 
 #[test]
 fn non_interactive_requires_explicit_risk_acknowledgement() {
-    let denied = loongclaw_daemon::onboard_cli::validate_non_interactive_risk_gate(true, false)
+    let denied = loong_daemon::onboard_cli::validate_non_interactive_risk_gate(true, false)
         .expect_err("risk gate should reject non-interactive without acknowledgement");
     assert!(denied.contains("--accept-risk"));
 
-    loongclaw_daemon::onboard_cli::validate_non_interactive_risk_gate(true, true)
+    loong_daemon::onboard_cli::validate_non_interactive_risk_gate(true, true)
         .expect("risk gate should pass after acknowledgement");
-    loongclaw_daemon::onboard_cli::validate_non_interactive_risk_gate(false, false)
+    loong_daemon::onboard_cli::validate_non_interactive_risk_gate(false, false)
         .expect("interactive mode should not require explicit flag");
 }
 
@@ -1058,15 +1050,15 @@ async fn non_interactive_onboard_rejects_unresolved_preflight_warnings() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-warning-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
 
     let (addr, server) = start_local_model_probe_server(1);
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.base_url = format!("http://{addr}");
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
     config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "test-openai-key".to_owned(),
     ));
     mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
@@ -1075,9 +1067,8 @@ async fn non_interactive_onboard_rejects_unresolved_preflight_warnings() {
     let mut options = default_non_interactive_onboard_options(&output);
     options.system_prompt = Some("force a pending write".to_owned());
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    let error = loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    let error = loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect_err("non-interactive onboarding should stop on unresolved warnings");
 
@@ -1145,12 +1136,12 @@ async fn non_interactive_onboard_keeps_matching_existing_config_despite_persiste
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-warning-noop-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
     unsafe {
         std::env::set_var("DEEPSEEK_API_KEY", "test-deepseek-key");
     }
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Deepseek;
     config.provider.model = "deepseek-chat".to_owned();
     config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
@@ -1170,9 +1161,8 @@ async fn non_interactive_onboard_keeps_matching_existing_config_despite_persiste
     options.skip_model_probe = true;
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("matching existing config should stay a successful no-op even when persistent warnings remain");
 
@@ -1196,7 +1186,7 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-skip-model-probe-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
     unsafe {
         std::env::set_var("OPENAI_API_KEY", "test-openai-key");
     }
@@ -1206,9 +1196,8 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
     options.model = Some("openai/gpt-5.1-codex".to_owned());
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("explicitly skipped model probe should not block non-interactive onboarding");
 
@@ -1232,7 +1221,7 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
     assert_eq!(config.provider.model, "openai/gpt-5.1-codex");
     assert_eq!(
         config.provider.oauth_access_token,
-        Some(loongclaw_contracts::SecretRef::Env {
+        Some(loong_contracts::SecretRef::Env {
             env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
         }),
         "reloaded config should keep the routed oauth env binding in the canonical oauth_access_token field"
@@ -1253,7 +1242,7 @@ async fn non_interactive_onboard_persists_github_copilot_oauth_env_binding() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-github-copilot-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
     unsafe {
         std::env::set_var(
             "GITHUB_COPILOT_OAUTH_TOKEN",
@@ -1267,9 +1256,8 @@ async fn non_interactive_onboard_persists_github_copilot_oauth_env_binding() {
     options.skip_model_probe = true;
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("GitHub Copilot onboarding should reuse an existing OAuth token env in non-interactive mode");
 
@@ -1293,7 +1281,7 @@ async fn non_interactive_onboard_persists_github_copilot_oauth_env_binding() {
     assert_eq!(config.provider.model, "copilot-test-model");
     assert_eq!(
         config.provider.oauth_access_token,
-        Some(loongclaw_contracts::SecretRef::Env {
+        Some(loong_contracts::SecretRef::Env {
             env: "GITHUB_COPILOT_OAUTH_TOKEN".to_owned(),
         }),
         "reloaded config should keep the routed OAuth env binding in the canonical oauth_access_token field"
@@ -1306,7 +1294,7 @@ async fn non_interactive_onboard_rejects_github_copilot_without_oauth_token() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-github-copilot-missing-token-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
 
     let mut options = default_non_interactive_onboard_options(&output);
     options.provider = Some("github-copilot".to_owned());
@@ -1314,9 +1302,8 @@ async fn non_interactive_onboard_rejects_github_copilot_without_oauth_token() {
     options.skip_model_probe = true;
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    let error = loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    let error = loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect_err("GitHub Copilot onboarding should fail without a reusable OAuth token in non-interactive mode");
 
@@ -1335,7 +1322,7 @@ async fn non_interactive_onboard_applies_reviewed_default_when_probe_is_skipped(
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-reviewed-auto-skip-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
     unsafe {
         std::env::set_var("DEEPSEEK_API_KEY", "test-deepseek-key");
     }
@@ -1345,9 +1332,8 @@ async fn non_interactive_onboard_applies_reviewed_default_when_probe_is_skipped(
     options.skip_model_probe = true;
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("skip-model-probe should allow non-interactive onboarding to materialize the reviewed default model");
 
@@ -1370,7 +1356,7 @@ async fn non_interactive_onboard_allows_explicit_model_probe_warning() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-explicit-model-warning-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
 
     let (addr, server) = start_local_model_probe_server_with_models_response(
         1,
@@ -1378,10 +1364,10 @@ async fn non_interactive_onboard_allows_explicit_model_probe_warning() {
         r#"{"error":{"message":"No cookie auth credentials found"}}"#,
     );
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.base_url = format!("http://{addr}");
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "test-openai-key".to_owned(),
     ));
     mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
@@ -1413,7 +1399,7 @@ async fn non_interactive_onboard_applies_reviewed_default_when_probe_fails() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-reviewed-auto-failure-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
 
     let (addr, server) = start_local_model_probe_server_with_models_response(
         1,
@@ -1421,11 +1407,11 @@ async fn non_interactive_onboard_applies_reviewed_default_when_probe_fails() {
         r#"{"error":{"message":"No cookie auth credentials found"}}"#,
     );
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Deepseek;
     config.provider.base_url = format!("http://{addr}");
     config.provider.model = "auto".to_owned();
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "test-deepseek-key".to_owned(),
     ));
     mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
@@ -1466,14 +1452,14 @@ async fn non_interactive_api_key_env_override_clears_existing_oauth_credentials(
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-api-key-env-override-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
     unsafe {
         std::env::set_var("OPENAI_API_KEY", "test-openai-key");
     }
 
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "openai/gpt-5.1-codex".to_owned();
-    existing.provider.oauth_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.oauth_access_token = Some(loong_contracts::SecretRef::Inline(
         "${OPENAI_CODEX_OAUTH_TOKEN}".to_owned(),
     ));
     mvp::config::write(Some(output.to_string_lossy().as_ref()), &existing, true)
@@ -1486,9 +1472,8 @@ async fn non_interactive_api_key_env_override_clears_existing_oauth_credentials(
     options.model = Some("openai/gpt-5.1-codex".to_owned());
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("explicit api key env override should succeed");
 
@@ -1508,7 +1493,7 @@ async fn non_interactive_api_key_env_override_clears_existing_oauth_credentials(
     assert_eq!(config.provider.oauth_access_token_env, None);
     assert_eq!(
         config.provider.api_key,
-        Some(loongclaw_contracts::SecretRef::Env {
+        Some(loong_contracts::SecretRef::Env {
             env: "OPENAI_API_KEY".to_owned(),
         }),
         "reloaded config should keep only the selected api key env binding in the canonical api_key field"
@@ -1524,14 +1509,14 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-inline-api-key-override-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
     unsafe {
         std::env::set_var("OPENAI_API_KEY", "test-openai-key");
     }
 
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "openai/gpt-5.1-codex".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     mvp::config::write(Some(output.to_string_lossy().as_ref()), &existing, true)
@@ -1544,9 +1529,8 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
     options.model = Some("openai/gpt-5.1-codex".to_owned());
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("explicit api key env override should succeed");
 
@@ -1564,7 +1548,7 @@ async fn non_interactive_api_key_env_override_clears_existing_inline_api_key() {
         .expect("load written onboarding config");
     assert_eq!(
         config.provider.api_key,
-        Some(loongclaw_contracts::SecretRef::Env {
+        Some(loong_contracts::SecretRef::Env {
             env: "OPENAI_API_KEY".to_owned(),
         }),
         "reloaded config should keep only the selected api key env binding in the canonical api_key field"
@@ -1580,11 +1564,11 @@ async fn non_interactive_api_key_env_clear_keeps_existing_inline_credential() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-api-key-env-clear-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
 
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "openai/gpt-5.1-codex".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
@@ -1598,9 +1582,8 @@ async fn non_interactive_api_key_env_clear_keeps_existing_inline_credential() {
     options.api_key_env = Some(":clear".to_owned());
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("explicit clear token should keep the existing inline credential");
 
@@ -1629,11 +1612,11 @@ async fn non_interactive_system_prompt_clear_restores_builtin_prompt() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-system-prompt-clear-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
 
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "openai/gpt-5.1-codex".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     existing.cli.system_prompt = "custom review prompt".to_owned();
@@ -1647,9 +1630,8 @@ async fn non_interactive_system_prompt_clear_restores_builtin_prompt() {
     options.system_prompt = Some(":clear".to_owned());
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect("explicit clear token should restore the built-in system prompt");
 
@@ -1666,16 +1648,16 @@ async fn non_interactive_system_prompt_clear_restores_builtin_prompt() {
 async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let output_path = unique_temp_path("interactive-clear-inline-credential.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -1744,9 +1726,9 @@ async fn interactive_onboard_clear_token_keeps_inline_provider_credential() {
 async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let output_path = unique_temp_path("interactive-clear-system-prompt.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     existing.cli.system_prompt = "custom review prompt".to_owned();
@@ -1764,10 +1746,9 @@ async fn interactive_onboard_clear_token_restores_builtin_system_prompt() {
         "y".to_owned(),
         "o".to_owned(),
     ]);
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -1808,13 +1789,13 @@ async fn interactive_onboard_web_search_custom_env_persists_explicit_env_referen
     let _openai_env = unsafe { EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token") };
     let _tavily_env = unsafe { EnvVarGuard::set_unlocked("TEAM_TAVILY_KEY", "tavily-test-token") };
     let output_path = unique_temp_path("interactive-web-search-env.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
     existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -1876,14 +1857,14 @@ async fn interactive_onboard_firecrawl_web_search_custom_env_persists_explicit_e
     let _firecrawl_env =
         unsafe { EnvVarGuard::set_unlocked("TEAM_FIRECRAWL_KEY", "firecrawl-test-token") };
     let output_path = unique_temp_path("interactive-firecrawl-web-search-env.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
 
     existing.provider.model = "gpt-4.1".to_owned();
     existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -1943,7 +1924,7 @@ async fn interactive_onboard_web_search_blank_input_keeps_inline_credential() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let _openai_env = unsafe { EnvVarGuard::set_unlocked("OPENAI_API_KEY", "openai-test-token") };
     let output_path = unique_temp_path("interactive-web-search-inline.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
     existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     existing.tools.web_search.default_provider = mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
@@ -1951,7 +1932,7 @@ async fn interactive_onboard_web_search_blank_input_keeps_inline_credential() {
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -2010,7 +1991,7 @@ async fn interactive_onboard_only_shows_large_logo_on_the_initial_screen() {
     }
 
     let output_path = unique_temp_path("interactive-single-banner.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
     existing.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
@@ -2111,13 +2092,13 @@ requires_openai_auth = true
     .expect("write deepseek codex config");
 
     let codex_paths = vec![z_openai_codex.clone(), a_deepseek_codex.clone()];
-    let interactive_context = loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(
+    let interactive_context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(
         80,
         None,
         codex_paths.clone(),
     );
     let interactive_transcript = run_scripted_onboard_flow_with_context(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: Some(interactive_output.display().to_string()),
             force: false,
             non_interactive: false,
@@ -2157,10 +2138,10 @@ requires_openai_auth = true
     assert_eq!(interactive_config.provider.model, "deepseek-chat");
 
     let non_interactive_context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, codex_paths);
+        loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, codex_paths);
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    loong_daemon::onboard_cli::run_onboard_cli_with_ui(
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: Some(non_interactive_output.display().to_string()),
             force: false,
             non_interactive: true,
@@ -2212,16 +2193,16 @@ async fn onboard_restores_original_config_when_memory_bootstrap_fails_after_writ
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("memory-bootstrap-rollback-root");
     std::fs::create_dir_all(&root).expect("create test root");
-    let output = root.join("loongclaw.toml");
+    let output = root.join("loong.toml");
     let invalid_sqlite_dir = root.join("memory-dir");
     std::fs::create_dir_all(&invalid_sqlite_dir).expect("create invalid sqlite directory");
 
     let (addr, server) = start_local_model_probe_server(1);
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.base_url = format!("http://{addr}");
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "test-openai-key".to_owned(),
     ));
     config.memory.sqlite_path = invalid_sqlite_dir.display().to_string();
@@ -2234,9 +2215,8 @@ async fn onboard_restores_original_config_when_memory_bootstrap_fails_after_writ
     options.model = Some("gpt-4.1-mini".to_owned());
 
     let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
-    let context =
-        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
-    let error = loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+    let context = loong_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    let error = loong_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
         .await
         .expect_err("memory bootstrap failure should abort onboarding");
 
@@ -2261,17 +2241,17 @@ async fn onboard_restores_original_config_when_memory_bootstrap_fails_after_writ
 
 #[test]
 fn provider_credential_check_accepts_inline_api_key() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    let mut config = mvp::config::LoongConfig::default();
+    config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     config.provider.api_key_env = None;
 
-    let check = loongclaw_daemon::onboard_cli::provider_credential_check(&config);
+    let check = loong_daemon::onboard_cli::provider_credential_check(&config);
 
     assert_eq!(
         check.level,
-        loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+        loong_daemon::onboard_cli::OnboardCheckLevel::Pass
     );
     assert!(
         check.detail.contains("inline api key"),
@@ -2281,7 +2261,7 @@ fn provider_credential_check_accepts_inline_api_key() {
 
 #[test]
 fn provider_credential_check_mentions_active_profile_id_when_saved_profiles_exist() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.set_active_provider_profile(
         "volcengine-coding",
         mvp::config::ProviderProfileConfig {
@@ -2289,7 +2269,7 @@ fn provider_credential_check_mentions_active_profile_id_when_saved_profiles_exis
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::VolcengineCoding,
                 model: "doubao-seed-2.0-code".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "inline-secret".to_owned(),
                 )),
                 base_url: "https://ark.cn-beijing.volces.com/api/coding/v3".to_owned(),
@@ -2321,13 +2301,13 @@ fn provider_credential_check_mentions_active_profile_id_when_saved_profiles_exis
 
 #[test]
 fn preferred_api_key_env_default_stays_blank_for_inline_credentials() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    let mut config = mvp::config::LoongConfig::default();
+    config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     config.provider.api_key_env = None;
 
-    let value = loongclaw_daemon::onboard_cli::preferred_api_key_env_default(&config);
+    let value = loong_daemon::onboard_cli::preferred_api_key_env_default(&config);
 
     assert!(
         value.is_empty(),
@@ -2337,14 +2317,14 @@ fn preferred_api_key_env_default_stays_blank_for_inline_credentials() {
 
 #[test]
 fn preferred_api_key_env_default_stays_blank_when_provider_has_no_default_env() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Ollama;
     config.provider.api_key = None;
     config.provider.api_key_env = None;
     config.provider.oauth_access_token = None;
     config.provider.oauth_access_token_env = None;
 
-    let value = loongclaw_daemon::onboard_cli::preferred_api_key_env_default(&config);
+    let value = loong_daemon::onboard_cli::preferred_api_key_env_default(&config);
 
     assert!(
         value.is_empty(),
@@ -2354,14 +2334,14 @@ fn preferred_api_key_env_default_stays_blank_when_provider_has_no_default_env() 
 
 #[test]
 fn preferred_api_key_env_default_prefers_oauth_default_for_fresh_openai() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.api_key = None;
     config.provider.api_key_env = None;
     config.provider.oauth_access_token = None;
     config.provider.oauth_access_token_env = None;
 
-    let value = loongclaw_daemon::onboard_cli::preferred_api_key_env_default(&config);
+    let value = loong_daemon::onboard_cli::preferred_api_key_env_default(&config);
 
     assert_eq!(
         value, "OPENAI_CODEX_OAUTH_TOKEN",
@@ -2375,11 +2355,11 @@ fn directory_preflight_check_has_no_filesystem_side_effects() {
     let target = base.join("nested").join("tool-root");
     std::fs::create_dir_all(&base).expect("create existing ancestor");
 
-    let check = loongclaw_daemon::onboard_cli::directory_preflight_check("tool file root", &target);
+    let check = loong_daemon::onboard_cli::directory_preflight_check("tool file root", &target);
 
     assert_eq!(
         check.level,
-        loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+        loong_daemon::onboard_cli::OnboardCheckLevel::Pass
     );
     assert!(
         !target.exists(),
@@ -2397,7 +2377,7 @@ fn backup_existing_config_copies_without_removing_original() {
     let backup = unique_temp_path("backup-config.toml");
     std::fs::write(&original, "provider = \"openai\"\n").expect("write original config");
 
-    loongclaw_daemon::onboard_cli::backup_existing_config(&original, &backup)
+    loong_daemon::onboard_cli::backup_existing_config(&original, &backup)
         .expect("backup copy should succeed");
 
     assert!(
@@ -2412,11 +2392,11 @@ fn backup_existing_config_copies_without_removing_original() {
 
 #[test]
 fn onboard_risk_screen_uses_brand_header_and_continue_cancel_options() {
-    let lines = loongclaw_daemon::onboard_cli::render_onboarding_risk_screen_lines(80);
+    let lines = loong_daemon::onboard_cli::render_onboarding_risk_screen_lines(80);
 
     assert!(
         lines[0].starts_with("██╗"),
-        "risk screen should keep the oversized LOONGCLAW brand banner on the initial guard screen: {lines:#?}"
+        "risk screen should keep the oversized LOONG brand banner on the initial guard screen: {lines:#?}"
     );
     assert!(
         lines
@@ -2455,37 +2435,35 @@ fn onboard_risk_screen_uses_brand_header_and_continue_cancel_options() {
 
 #[test]
 fn import_surfaces_include_ready_provider_and_channels() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    let mut config = mvp::config::LoongConfig::default();
+    config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "provider-secret".to_owned(),
     ));
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:test-token".to_owned(),
     ));
     config.telegram.allowed_chat_ids = vec![42];
     config.feishu.enabled = true;
-    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-        "cli_a1b2c3".to_owned(),
-    ));
-    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+    config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+    config.feishu.app_secret = Some(loong_contracts::SecretRef::Inline(
         "feishu-secret".to_owned(),
     ));
-    config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.feishu.verification_token = Some(loong_contracts::SecretRef::Inline(
         "verify-token".to_owned(),
     ));
 
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces(&config);
     assert!(
         surfaces.iter().any(|surface| surface.name == "provider"
-            && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready),
+            && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Ready),
         "provider import surface should be ready: {surfaces:#?}"
     );
     assert!(
         surfaces
             .iter()
             .any(|surface| surface.name == "telegram channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Ready
                 && surface.detail.contains("runtime-backed")),
         "telegram import surface should be ready: {surfaces:#?}"
     );
@@ -2493,7 +2471,7 @@ fn import_surfaces_include_ready_provider_and_channels() {
         surfaces
             .iter()
             .any(|surface| surface.name == "feishu channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Ready
                 && surface.detail.contains("runtime-backed")),
         "feishu import surface should be ready: {surfaces:#?}"
     );
@@ -2501,16 +2479,16 @@ fn import_surfaces_include_ready_provider_and_channels() {
 
 #[test]
 fn import_surfaces_mark_missing_channel_secret_for_review() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.telegram.bot_token = None;
-    config.telegram.bot_token_env = Some("LOONGCLAW_TEST_MISSING_TELEGRAM_TOKEN".to_owned());
+    config.telegram.bot_token_env = Some("LOONG_TEST_MISSING_TELEGRAM_TOKEN".to_owned());
 
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces(&config);
     assert!(
         surfaces.iter().any(|surface| {
             surface.name == "telegram channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Review
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Review
                 && surface.detail.contains("token missing")
         }),
         "telegram import surface should require review when the token is missing: {surfaces:#?}"
@@ -2519,27 +2497,25 @@ fn import_surfaces_mark_missing_channel_secret_for_review() {
 
 #[test]
 fn channel_preflight_checks_report_enabled_channels() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:test-token".to_owned(),
     ));
     config.feishu.enabled = true;
-    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-        "cli_a1b2c3".to_owned(),
-    ));
-    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+    config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+    config.feishu.app_secret = Some(loong_contracts::SecretRef::Inline(
         "feishu-secret".to_owned(),
     ));
-    config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.feishu.verification_token = Some(loong_contracts::SecretRef::Inline(
         "verify-token".to_owned(),
     ));
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
     assert!(
         checks.iter().any(|check| {
             check.name == "telegram channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Pass
                 && check.detail.contains("bot token resolved")
         }),
         "telegram preflight should pass when token is resolved: {checks:#?}"
@@ -2547,7 +2523,7 @@ fn channel_preflight_checks_report_enabled_channels() {
     assert!(
         checks.iter().any(|check| {
             check.name == "feishu channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Pass
                 && check.detail.contains("app credentials resolved")
         }),
         "feishu credentials should pass when app credentials are present: {checks:#?}"
@@ -2555,7 +2531,7 @@ fn channel_preflight_checks_report_enabled_channels() {
     assert!(
         checks.iter().any(|check| {
             check.name == "feishu inbound transport"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Pass
         }),
         "feishu inbound transport should pass when a supported transport is configured: {checks:#?}"
     );
@@ -2563,17 +2539,17 @@ fn channel_preflight_checks_report_enabled_channels() {
 
 #[test]
 fn channel_preflight_checks_report_configured_outbound_channels() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.discord.enabled = true;
-    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
         "discord-token".to_owned(),
     ));
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
     assert!(
         checks.iter().any(|check| {
             check.name == "discord channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Pass
                 && check.detail.contains("direct send ready on 1 account(s)")
         }),
         "configured outbound channels should now participate in channel preflight checks: {checks:#?}"
@@ -2582,7 +2558,7 @@ fn channel_preflight_checks_report_configured_outbound_channels() {
 
 #[test]
 fn channel_preflight_checks_summarize_outbound_multi_account_state_and_reserved_runtime_fields() {
-    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "discord": {
             "enabled": true,
             "accounts": {
@@ -2597,18 +2573,19 @@ fn channel_preflight_checks_summarize_outbound_multi_account_state_and_reserved_
     }))
     .expect("deserialize discord config");
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
     assert!(
         checks.iter().any(|check| {
             check.name == "discord channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
-                && check.detail.contains("direct send ready on 1/2 account(s)")
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.detail.contains("direct send ready on 2 account(s)")
                 && check.detail.contains("ops ready")
-                && check.detail.contains("alerts needs review")
-                && check.detail.contains("reserved future runtime fields")
-                && check.detail.contains("application_id")
-                && check.detail.contains("allowed_guild_ids:2")
+                && check.detail.contains("alerts ready")
+                && check.detail.contains(
+                    "reserved future runtime fields: ops [application_id, allowed_guild_ids:2]",
+                )
+                && check.detail.contains("outbound-only surface")
         }),
         "configured outbound multi-account channels should surface per-account readiness and reserved future runtime fields in preflight detail: {checks:#?}"
     );
@@ -2616,30 +2593,30 @@ fn channel_preflight_checks_summarize_outbound_multi_account_state_and_reserved_
 
 #[test]
 fn import_surfaces_detect_ready_channels_from_environment_only() {
-    let config = mvp::config::LoongClawConfig::default();
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces_with_channel_readiness(
+    let config = mvp::config::LoongConfig::default();
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces_with_channel_readiness(
         &config,
-        loongclaw_daemon::onboard_cli::ChannelImportReadiness::default()
+        loong_daemon::onboard_cli::ChannelImportReadiness::default()
             .with_state(
                 "telegram",
-                loongclaw_daemon::migration::ChannelCredentialState::Ready,
+                loong_daemon::migration::ChannelCredentialState::Ready,
             )
             .with_state(
                 "feishu",
-                loongclaw_daemon::migration::ChannelCredentialState::Ready,
+                loong_daemon::migration::ChannelCredentialState::Ready,
             ),
     );
     assert!(
         surfaces.iter().any(|surface| {
             surface.name == "telegram channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Ready
         }),
         "telegram env should surface as import-ready even without an existing config: {surfaces:#?}"
     );
     assert!(
         surfaces.iter().any(|surface| {
             surface.name == "feishu channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Ready
         }),
         "feishu env should surface as import-ready even without an existing config: {surfaces:#?}"
     );
@@ -2648,7 +2625,7 @@ fn import_surfaces_detect_ready_channels_from_environment_only() {
 #[test]
 fn import_surfaces_detect_configured_plugin_backed_channels_for_review_when_managed_bridge_install_root_is_missing()
  {
-    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_url": "https://bridge.example.test/weixin",
@@ -2658,12 +2635,12 @@ fn import_surfaces_detect_configured_plugin_backed_channels_for_review_when_mana
     }))
     .expect("deserialize weixin config");
 
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces(&config);
 
     assert!(
         surfaces.iter().any(|surface| {
             surface.name == "weixin channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Review
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Review
                 && surface.detail.contains("plugin-backed")
                 && surface.detail.contains("external_skills.install_root")
         }),
@@ -2683,7 +2660,7 @@ fn import_surfaces_detect_configured_plugin_backed_channels_as_ready_when_single
             "weixin_reply_loop",
         ),
     );
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_url": "https://bridge.example.test/weixin",
@@ -2701,12 +2678,12 @@ fn import_surfaces_detect_configured_plugin_backed_channels_as_ready_when_single
     );
     config.external_skills.install_root = Some(install_root.display().to_string());
 
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces(&config);
 
     assert!(
         surfaces.iter().any(|surface| {
             surface.name == "weixin channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Ready
                 && surface.detail.contains("plugin-backed")
                 && surface.detail.contains("weixin-managed-bridge")
         }),
@@ -2726,7 +2703,7 @@ fn import_surfaces_ignore_unconfigured_plugin_backed_channels_even_when_managed_
             "weixin_reply_loop",
         ),
     );
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
 
     std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
     super::write_managed_bridge_manifest(
@@ -2736,7 +2713,7 @@ fn import_surfaces_ignore_unconfigured_plugin_backed_channels_even_when_managed_
     );
     config.external_skills.install_root = Some(install_root.display().to_string());
 
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces(&config);
 
     assert!(
         surfaces
@@ -2748,18 +2725,18 @@ fn import_surfaces_ignore_unconfigured_plugin_backed_channels_even_when_managed_
 
 #[test]
 fn import_surfaces_detect_configured_discord_channel_as_ready_when_send_contract_is_satisfied() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.discord.enabled = true;
-    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
         "discord-token".to_owned(),
     ));
 
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces(&config);
 
     assert!(
         surfaces.iter().any(|surface| {
             surface.name == "discord channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Ready
                 && surface.detail.contains("outbound-only")
                 && surface.detail.contains("direct send ready on 1 account(s)")
         }),
@@ -2769,17 +2746,17 @@ fn import_surfaces_detect_configured_discord_channel_as_ready_when_send_contract
 
 #[test]
 fn import_surfaces_detect_configured_discord_channel_for_review_when_send_contract_is_blocked() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.discord.enabled = true;
     config.discord.bot_token_env = None;
     config.discord.bot_token = None;
 
-    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+    let surfaces = loong_daemon::onboard_cli::collect_import_surfaces(&config);
 
     assert!(
         surfaces.iter().any(|surface| {
             surface.name == "discord channel"
-                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Review
+                && surface.level == loong_daemon::onboard_cli::ImportSurfaceLevel::Review
                 && surface.detail.contains("outbound-only")
                 && surface.detail.contains("bot_token")
         }),
@@ -2789,7 +2766,7 @@ fn import_surfaces_detect_configured_discord_channel_for_review_when_send_contra
 
 #[test]
 fn managed_bridge_onboard_preflight_warns_when_install_root_is_missing() {
-    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_url": "https://bridge.example.test/weixin",
@@ -2799,12 +2776,12 @@ fn managed_bridge_onboard_preflight_warns_when_install_root_is_missing() {
     }))
     .expect("deserialize weixin config");
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
     assert!(
         checks.iter().any(|check| {
             check.name == "weixin channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Warn
                 && check.detail.contains("external_skills.install_root")
         }),
         "onboard preflight should surface managed bridge discovery guidance when install_root is missing: {checks:#?}"
@@ -2827,7 +2804,7 @@ fn managed_bridge_onboard_preflight_warns_when_managed_bridge_setup_is_incomplet
         Some("Run the QQ bridge setup flow before enabling this bridge."),
     );
     let manifest = super::managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "qqbot": {
             "enabled": true,
             "app_id": "10001",
@@ -2846,12 +2823,12 @@ fn managed_bridge_onboard_preflight_warns_when_managed_bridge_setup_is_incomplet
     super::write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
     config.external_skills.install_root = Some(install_root.display().to_string());
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
     assert!(
         checks.iter().any(|check| {
             check.name == "qq bot channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Warn
                 && check.detail.contains("QQBOT_BRIDGE_URL")
                 && check.detail.contains("qqbot.bridge_url")
         }),
@@ -2892,7 +2869,7 @@ fn managed_bridge_onboard_preflight_warns_when_managed_bridge_discovery_is_ambig
             None,
         )),
     );
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_url": "https://bridge.example.test/weixin",
@@ -2915,12 +2892,12 @@ fn managed_bridge_onboard_preflight_warns_when_managed_bridge_discovery_is_ambig
     );
     config.external_skills.install_root = Some(install_root.display().to_string());
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
     assert!(
         checks.iter().any(|check| {
             check.name == "weixin channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Warn
                 && check.detail.contains("weixin-bridge-a")
                 && check.detail.contains("weixin-bridge-b")
         }),
@@ -2939,7 +2916,7 @@ fn managed_bridge_onboard_preflight_passes_when_single_compatible_plugin_is_avai
             "weixin_reply_loop",
         ),
     );
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_url": "https://bridge.example.test/weixin",
@@ -2957,12 +2934,12 @@ fn managed_bridge_onboard_preflight_passes_when_single_compatible_plugin_is_avai
     );
     config.external_skills.install_root = Some(install_root.display().to_string());
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
     assert!(
         checks.iter().any(|check| {
             check.name == "weixin channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Pass
                 && check.detail.contains("weixin-managed-bridge")
         }),
         "onboard preflight should pass when exactly one compatible managed bridge is ready: {checks:#?}"
@@ -2981,7 +2958,7 @@ fn managed_bridge_onboard_preflight_warns_when_bridge_contract_is_misconfigured_
             "weixin_reply_loop",
         ),
     );
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_access_token": "weixin-token",
@@ -2998,12 +2975,12 @@ fn managed_bridge_onboard_preflight_warns_when_bridge_contract_is_misconfigured_
     );
     config.external_skills.install_root = Some(install_root.display().to_string());
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
     assert!(
         checks.iter().any(|check| {
             check.name == "weixin channel"
-                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Warn
                 && check.detail.contains("bridge_url is missing")
         }),
         "onboard preflight should keep bridge contract issues visible even when managed bridge discovery is ready: {checks:#?}"
@@ -3018,7 +2995,7 @@ fn managed_bridge_onboard_preflight_summarizes_mixed_multi_account_detail() {
     super::install_ready_weixin_managed_bridge(install_root.as_path());
     config.external_skills.install_root = Some(install_root.display().to_string());
 
-    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
     let weixin_check = checks
         .iter()
         .find(|check| check.name == "weixin channel")
@@ -3027,7 +3004,7 @@ fn managed_bridge_onboard_preflight_summarizes_mixed_multi_account_detail() {
 
     assert_eq!(
         weixin_check.level,
-        loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+        loong_daemon::onboard_cli::OnboardCheckLevel::Warn
     );
     assert!(
         detail.contains("weixin-managed-bridge"),
@@ -3057,18 +3034,17 @@ fn managed_bridge_onboard_preflight_summarizes_mixed_multi_account_detail() {
 
 #[test]
 fn detect_env_import_starting_config_enables_ready_channels() {
-    let imported =
-        loongclaw_daemon::onboard_cli::detect_import_starting_config_with_channel_readiness(
-            loongclaw_daemon::onboard_cli::ChannelImportReadiness::default()
-                .with_state(
-                    "telegram",
-                    loongclaw_daemon::migration::ChannelCredentialState::Ready,
-                )
-                .with_state(
-                    "feishu",
-                    loongclaw_daemon::migration::ChannelCredentialState::Ready,
-                ),
-        );
+    let imported = loong_daemon::onboard_cli::detect_import_starting_config_with_channel_readiness(
+        loong_daemon::onboard_cli::ChannelImportReadiness::default()
+            .with_state(
+                "telegram",
+                loong_daemon::migration::ChannelCredentialState::Ready,
+            )
+            .with_state(
+                "feishu",
+                loong_daemon::migration::ChannelCredentialState::Ready,
+            ),
+    );
     assert!(
         imported.telegram.enabled,
         "telegram should be enabled when onboarding can reuse TELEGRAM_BOT_TOKEN"
@@ -3090,18 +3066,17 @@ fn detect_env_import_starting_config_enables_ready_channels() {
 
 #[test]
 fn detect_env_import_starting_config_only_enables_ready_channels() {
-    let imported =
-        loongclaw_daemon::onboard_cli::detect_import_starting_config_with_channel_readiness(
-            loongclaw_daemon::onboard_cli::ChannelImportReadiness::default()
-                .with_state(
-                    "telegram",
-                    loongclaw_daemon::migration::ChannelCredentialState::Ready,
-                )
-                .with_state(
-                    "feishu",
-                    loongclaw_daemon::migration::ChannelCredentialState::Partial,
-                ),
-        );
+    let imported = loong_daemon::onboard_cli::detect_import_starting_config_with_channel_readiness(
+        loong_daemon::onboard_cli::ChannelImportReadiness::default()
+            .with_state(
+                "telegram",
+                loong_daemon::migration::ChannelCredentialState::Ready,
+            )
+            .with_state(
+                "feishu",
+                loong_daemon::migration::ChannelCredentialState::Partial,
+            ),
+    );
 
     assert!(
         imported.telegram.enabled,
@@ -3133,17 +3108,17 @@ requires_openai_auth = true
     )
     .expect("write codex config");
 
-    let candidates = loongclaw_daemon::onboard_cli::collect_import_candidates_with_paths(
+    let candidates = loong_daemon::onboard_cli::collect_import_candidates_with_paths(
         &output_path,
         Some(&codex_path),
-        loongclaw_daemon::onboard_cli::ChannelImportReadiness::default()
+        loong_daemon::onboard_cli::ChannelImportReadiness::default()
             .with_state(
                 "telegram",
-                loongclaw_daemon::migration::ChannelCredentialState::Ready,
+                loong_daemon::migration::ChannelCredentialState::Ready,
             )
             .with_state(
                 "feishu",
-                loongclaw_daemon::migration::ChannelCredentialState::Ready,
+                loong_daemon::migration::ChannelCredentialState::Ready,
             ),
     )
     .expect("collect import candidates");
@@ -3194,10 +3169,10 @@ base_url = "https://kimi-coding.example.com/v1"
     )
     .expect("write codex config");
 
-    let candidates = loongclaw_daemon::onboard_cli::collect_import_candidates_with_paths(
+    let candidates = loong_daemon::onboard_cli::collect_import_candidates_with_paths(
         &output_path,
         Some(&codex_path),
-        loongclaw_daemon::onboard_cli::ChannelImportReadiness::default(),
+        loong_daemon::onboard_cli::ChannelImportReadiness::default(),
     )
     .expect("collect import candidates");
 
@@ -3229,10 +3204,10 @@ requires_openai_auth = true
     )
     .expect("write codex config");
 
-    let candidates = loongclaw_daemon::onboard_cli::collect_import_candidates_with_paths(
+    let candidates = loong_daemon::onboard_cli::collect_import_candidates_with_paths(
         &output_path,
         Some(&codex_path),
-        loongclaw_daemon::onboard_cli::ChannelImportReadiness::default(),
+        loong_daemon::onboard_cli::ChannelImportReadiness::default(),
     )
     .expect("collect import candidates");
 
@@ -3246,7 +3221,7 @@ requires_openai_auth = true
     );
     assert_eq!(
         codex_candidate.config.provider.api_key,
-        Some(loongclaw_contracts::SecretRef::Env {
+        Some(loong_contracts::SecretRef::Env {
             env: "KIMI_CODING_API_KEY".to_owned(),
         })
     );
@@ -3258,8 +3233,8 @@ fn collect_import_candidates_prepend_recommended_plan_before_detected_sources() 
     let output_path = unique_temp_path("existing-config.toml");
     let codex_path = unique_temp_path("codex-config.toml");
 
-    let mut existing = mvp::config::LoongClawConfig::default();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    let mut existing = mvp::config::LoongConfig::default();
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "provider-secret".to_owned(),
     ));
     let output_str = output_path
@@ -3282,12 +3257,12 @@ requires_openai_auth = true
     )
     .expect("write codex config");
 
-    let candidates = loongclaw_daemon::onboard_cli::collect_import_candidates_with_paths(
+    let candidates = loong_daemon::onboard_cli::collect_import_candidates_with_paths(
         &output_path,
         Some(&codex_path),
-        loongclaw_daemon::onboard_cli::ChannelImportReadiness::default().with_state(
+        loong_daemon::onboard_cli::ChannelImportReadiness::default().with_state(
             "telegram",
-            loongclaw_daemon::migration::ChannelCredentialState::Ready,
+            loong_daemon::migration::ChannelCredentialState::Ready,
         ),
     )
     .expect("collect import candidates");
@@ -3298,12 +3273,12 @@ requires_openai_auth = true
     );
     assert_eq!(
         candidates[0].source_kind,
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended composed plan should be the first import option: {candidates:#?}"
     );
     assert!(
         candidates[1].source.contains("existing config"),
-        "existing loongclaw config should remain the first detected source after the recommended plan: {candidates:#?}"
+        "existing loong config should remain the first detected source after the recommended plan: {candidates:#?}"
     );
     assert!(
         candidates[2].source.contains("Codex config"),
@@ -3317,15 +3292,15 @@ requires_openai_auth = true
 
 #[test]
 fn onboard_entry_prefers_current_setup_when_it_is_healthy() {
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Healthy,
         &[
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
-                "existing config at ~/.config/loongclaw/config.toml",
+                loong_daemon::migration::types::ImportSourceKind::ExistingLoongConfig,
+                "existing config at ~/.config/loong/config.toml",
             ),
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+                loong_daemon::migration::types::ImportSourceKind::CodexConfig,
                 "Codex config at ~/.codex/config.toml",
             ),
         ],
@@ -3333,34 +3308,33 @@ fn onboard_entry_prefers_current_setup_when_it_is_healthy() {
 
     assert_eq!(
         options[0].choice,
-        loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup
+        loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup
     );
     assert!(
         options[0].recommended,
         "healthy current setup should be the recommended first choice: {options:#?}"
     );
     assert!(
-        options
-            .iter()
-            .any(|option| option.choice
-                == loongclaw_daemon::onboard_cli::OnboardEntryChoice::StartFresh),
+        options.iter().any(
+            |option| option.choice == loong_daemon::onboard_cli::OnboardEntryChoice::StartFresh
+        ),
         "start fresh should remain available: {options:#?}"
     );
 }
 
 #[test]
 fn onboard_entry_prefers_import_when_current_setup_is_absent() {
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Absent,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Absent,
         &[import_candidate_with_kind(
-            loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+            loong_daemon::migration::types::ImportSourceKind::Environment,
             "your current environment",
         )],
     );
 
     assert_eq!(
         options[0].choice,
-        loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
+        loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
     );
     assert!(
         options[0].recommended,
@@ -3368,33 +3342,32 @@ fn onboard_entry_prefers_import_when_current_setup_is_absent() {
     );
     assert!(
         options.iter().all(|option| option.choice
-            != loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup),
+            != loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup),
         "continue current setup should not appear when no current setup exists: {options:#?}"
     );
     assert!(
-        options
-            .iter()
-            .any(|option| option.choice
-                == loongclaw_daemon::onboard_cli::OnboardEntryChoice::StartFresh),
+        options.iter().any(
+            |option| option.choice == loong_daemon::onboard_cli::OnboardEntryChoice::StartFresh
+        ),
         "start fresh should remain available: {options:#?}"
     );
 }
 
 #[test]
 fn onboard_entry_prefers_import_when_current_setup_is_repairable_and_sources_exist() {
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Repairable,
         &[
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
-                "existing config at ~/.config/loongclaw/config.toml",
+                loong_daemon::migration::types::ImportSourceKind::ExistingLoongConfig,
+                "existing config at ~/.config/loong/config.toml",
             ),
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+                loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
                 "recommended import plan",
             ),
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+                loong_daemon::migration::types::ImportSourceKind::Environment,
                 "your current environment",
             ),
         ],
@@ -3403,7 +3376,7 @@ fn onboard_entry_prefers_import_when_current_setup_is_repairable_and_sources_exi
     let import_option = options
         .iter()
         .find(|option| {
-            option.choice == loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
+            option.choice == loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
         })
         .expect("import option");
 
@@ -3420,20 +3393,20 @@ fn onboard_entry_prefers_import_when_current_setup_is_repairable_and_sources_exi
 
 #[test]
 fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
-    let guided = loongclaw_daemon::onboard_presentation::review_flow_copy(
-        loongclaw_daemon::onboard_presentation::ReviewFlowKind::Guided,
+    let guided = loong_daemon::onboard_presentation::review_flow_copy(
+        loong_daemon::onboard_presentation::ReviewFlowKind::Guided,
     );
     assert_eq!(guided.progress_line, "step 8 of 8 · review");
     assert_eq!(guided.header_subtitle, "review setup");
 
-    let quick_current = loongclaw_daemon::onboard_presentation::review_flow_copy(
-        loongclaw_daemon::onboard_presentation::ReviewFlowKind::QuickCurrentSetup,
+    let quick_current = loong_daemon::onboard_presentation::review_flow_copy(
+        loong_daemon::onboard_presentation::ReviewFlowKind::QuickCurrentSetup,
     );
     assert_eq!(quick_current.progress_line, "quick review · current setup");
     assert_eq!(quick_current.header_subtitle, "review current setup");
 
-    let quick_detected = loongclaw_daemon::onboard_presentation::review_flow_copy(
-        loongclaw_daemon::onboard_presentation::ReviewFlowKind::QuickDetectedSetup,
+    let quick_detected = loong_daemon::onboard_presentation::review_flow_copy(
+        loong_daemon::onboard_presentation::ReviewFlowKind::QuickDetectedSetup,
     );
     assert_eq!(
         quick_detected.progress_line,
@@ -3444,8 +3417,8 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
         "review detected starting point"
     );
 
-    let current_shortcut = loongclaw_daemon::onboard_presentation::shortcut_copy(
-        loongclaw_daemon::onboard_presentation::ShortcutKind::CurrentSetup,
+    let current_shortcut = loong_daemon::onboard_presentation::shortcut_copy(
+        loong_daemon::onboard_presentation::ShortcutKind::CurrentSetup,
     );
     assert_eq!(
         current_shortcut.subtitle,
@@ -3462,8 +3435,8 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
         "keep current setup"
     );
 
-    let detected_shortcut = loongclaw_daemon::onboard_presentation::shortcut_copy(
-        loongclaw_daemon::onboard_presentation::ShortcutKind::DetectedSetup,
+    let detected_shortcut = loong_daemon::onboard_presentation::shortcut_copy(
+        loong_daemon::onboard_presentation::ShortcutKind::DetectedSetup,
     );
     assert_eq!(
         detected_shortcut.subtitle,
@@ -3486,15 +3459,15 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
         "the detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::single_detected_starting_point_preview_subtitle(),
+        loong_daemon::onboard_presentation::single_detected_starting_point_preview_subtitle(),
         "review the detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::single_detected_starting_point_preview_title(),
+        loong_daemon::onboard_presentation::single_detected_starting_point_preview_title(),
         "review detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::single_detected_starting_point_preview_footer(),
+        loong_daemon::onboard_presentation::single_detected_starting_point_preview_footer(),
         "continuing with the only detected starting point"
     );
 }
@@ -3502,120 +3475,120 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
 #[test]
 fn onboard_presentation_entry_and_digest_copy_stays_canonical() {
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::current_setup_option_label(),
+        loong_daemon::onboard_presentation::current_setup_option_label(),
         "Continue current setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_setup_option_label(),
+        loong_daemon::onboard_presentation::detected_setup_option_label(),
         "Use detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::start_fresh_option_label(),
+        loong_daemon::onboard_presentation::start_fresh_option_label(),
         "Start fresh"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::start_fresh_option_detail(),
+        loong_daemon::onboard_presentation::start_fresh_option_detail(),
         "Configure provider, channels, and local behavior from scratch."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::current_setup_state_label(
-            loongclaw_daemon::migration::types::CurrentSetupState::LegacyOrIncomplete,
+        loong_daemon::onboard_presentation::current_setup_state_label(
+            loong_daemon::migration::types::CurrentSetupState::LegacyOrIncomplete,
         ),
         "legacy or incomplete"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::current_setup_option_detail(
-            loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
+        loong_daemon::onboard_presentation::current_setup_option_detail(
+            loong_daemon::migration::types::CurrentSetupState::Repairable,
         ),
         "Current config exists, but a few settings should be reviewed."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(true, true, 1),
+        loong_daemon::onboard_presentation::import_option_detail(true, true, 1),
         "A suggested starting point can supplement the current config with 1 reusable source."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(false, true, 2),
+        loong_daemon::onboard_presentation::import_option_detail(false, true, 2),
         "A suggested starting point is ready, built from 2 reusable sources."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 1),
+        loong_daemon::onboard_presentation::import_option_detail(false, false, 1),
         "1 reusable source was detected for provider, channels, or guidance."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 2),
+        loong_daemon::onboard_presentation::import_option_detail(false, false, 2),
         "2 reusable sources were detected for provider, channels, or guidance."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_coverage_prefix(true),
+        loong_daemon::onboard_presentation::detected_coverage_prefix(true),
         "- suggested starting point covers: "
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_coverage_prefix(false),
+        loong_daemon::onboard_presentation::detected_coverage_prefix(false),
         "- detected coverage: "
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::suggested_starting_point_ready_line(),
+        loong_daemon::onboard_presentation::suggested_starting_point_ready_line(),
         "- suggested starting point: ready"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_default_choice_description(
-            loongclaw_daemon::onboard_presentation::EntryChoiceKind::CurrentSetup,
+        loong_daemon::onboard_presentation::entry_default_choice_description(
+            loong_daemon::onboard_presentation::EntryChoiceKind::CurrentSetup,
         ),
         "continue current setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_default_choice_description(
-            loongclaw_daemon::onboard_presentation::EntryChoiceKind::DetectedSetup,
+        loong_daemon::onboard_presentation::entry_default_choice_description(
+            loong_daemon::onboard_presentation::EntryChoiceKind::DetectedSetup,
         ),
         "the detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_default_choice_description(
-            loongclaw_daemon::onboard_presentation::EntryChoiceKind::StartFresh,
+        loong_daemon::onboard_presentation::entry_default_choice_description(
+            loong_daemon::onboard_presentation::EntryChoiceKind::StartFresh,
         ),
         "start fresh"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_footer_description(
-            loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::onboard_presentation::starting_point_footer_description(
+            loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         ),
         "the suggested starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_footer_description(
-            loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::onboard_presentation::starting_point_footer_description(
+            loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         ),
         "the first starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_selection_subtitle(),
+        loong_daemon::onboard_presentation::starting_point_selection_subtitle(),
         "choose the starting point for this setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_selection_title(),
+        loong_daemon::onboard_presentation::starting_point_selection_title(),
         "choose detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_selection_hint(),
+        loong_daemon::onboard_presentation::starting_point_selection_hint(),
         "detected settings can still supplement the chosen starting point when they do not conflict"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_settings_section_heading(),
+        loong_daemon::onboard_presentation::detected_settings_section_heading(),
         "Detected settings"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_choice_section_heading(),
+        loong_daemon::onboard_presentation::entry_choice_section_heading(),
         "Choose how to start"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::adjust_settings_label(),
+        loong_daemon::onboard_presentation::adjust_settings_label(),
         "Adjust settings"
     );
 }
 
 #[test]
 fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
-    let risk = loongclaw_daemon::onboard_presentation::risk_screen_copy();
+    let risk = loong_daemon::onboard_presentation::risk_screen_copy();
     assert_eq!(risk.subtitle, "security check before setup");
     assert_eq!(risk.title, "security check");
     assert_eq!(risk.continue_label, "Continue onboarding");
@@ -3632,92 +3605,92 @@ fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
     assert_eq!(risk.confirm_prompt, "Continue");
 
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_header_title(),
+        loong_daemon::onboard_presentation::preflight_header_title(),
         "verify before write"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_section_title(),
+        loong_daemon::onboard_presentation::preflight_section_title(),
         "preflight checks"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_attention_summary_line(),
+        loong_daemon::onboard_presentation::preflight_attention_summary_line(),
         "- some checks need attention before write"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_green_summary_line(),
+        loong_daemon::onboard_presentation::preflight_green_summary_line(),
         "- all checks are green for this draft"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_probe_rerun_hint(),
+        loong_daemon::onboard_presentation::preflight_probe_rerun_hint(),
         "- rerun with --skip-model-probe if your provider blocks model listing during setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_explicit_model_rerun_hint(),
+        loong_daemon::onboard_presentation::preflight_explicit_model_rerun_hint(),
         "- rerun onboarding to choose a reviewed model, or set provider.model / preferred_models explicitly"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_explicit_model_only_rerun_hint(),
+        loong_daemon::onboard_presentation::preflight_explicit_model_only_rerun_hint(),
         "- set provider.model / preferred_models explicitly before retrying"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_continue_label(),
+        loong_daemon::onboard_presentation::preflight_continue_label(),
         "Continue anyway"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_continue_detail(),
+        loong_daemon::onboard_presentation::preflight_continue_detail(),
         "accept the remaining warnings and continue with this draft"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_cancel_label(),
+        loong_daemon::onboard_presentation::preflight_cancel_label(),
         "Cancel"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_cancel_detail(),
+        loong_daemon::onboard_presentation::preflight_cancel_detail(),
         "stop here and return without writing any config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_default_choice_description(),
+        loong_daemon::onboard_presentation::preflight_default_choice_description(),
         "cancel"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_confirm_prompt(),
+        loong_daemon::onboard_presentation::preflight_confirm_prompt(),
         "Continue anyway"
     );
 
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_title(),
+        loong_daemon::onboard_presentation::write_confirmation_title(),
         "ready to write config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_status_line(true),
+        loong_daemon::onboard_presentation::write_confirmation_status_line(true),
         "- warnings were kept by choice"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_status_line(false),
+        loong_daemon::onboard_presentation::write_confirmation_status_line(false),
         "- preflight is green for this draft"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_label(),
+        loong_daemon::onboard_presentation::write_confirmation_label(),
         "Write config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_detail(),
+        loong_daemon::onboard_presentation::write_confirmation_detail(),
         "persist this onboarding draft to the target path"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_cancel_label(),
+        loong_daemon::onboard_presentation::write_confirmation_cancel_label(),
         "Cancel"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_cancel_detail(),
+        loong_daemon::onboard_presentation::write_confirmation_cancel_detail(),
         "return without writing any config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_default_choice_description(),
+        loong_daemon::onboard_presentation::write_confirmation_default_choice_description(),
         "write config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_prompt(),
+        loong_daemon::onboard_presentation::write_confirmation_prompt(),
         "Write config"
     );
 }
@@ -3725,38 +3698,38 @@ fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
 #[test]
 fn onboard_entry_avoids_double_recommendation_when_suggested_starting_point_has_rollup_sources() {
     let current = import_candidate_with_kind(
-        loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
-        "existing config at ~/.config/loongclaw/config.toml",
+        loong_daemon::migration::types::ImportSourceKind::ExistingLoongConfig,
+        "existing config at ~/.config/loong/config.toml",
     );
     let mut recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
 
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Repairable,
         &[current, recommended],
     );
 
     let current_option = options
         .iter()
         .find(|option| {
-            option.choice == loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup
+            option.choice == loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup
         })
         .expect("current option");
     let import_option = options
         .iter()
         .find(|option| {
-            option.choice == loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
+            option.choice == loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
         })
         .expect("import option");
 
@@ -3772,19 +3745,19 @@ fn onboard_entry_avoids_double_recommendation_when_suggested_starting_point_has_
 
 #[test]
 fn onboard_entry_import_option_explains_detected_additions_when_current_setup_exists() {
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Healthy,
         &[
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
-                "existing config at ~/.config/loongclaw/config.toml",
+                loong_daemon::migration::types::ImportSourceKind::ExistingLoongConfig,
+                "existing config at ~/.config/loong/config.toml",
             ),
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+                loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
                 "recommended import plan",
             ),
             import_candidate_with_kind(
-                loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+                loong_daemon::migration::types::ImportSourceKind::Environment,
                 "your current environment",
             ),
         ],
@@ -3793,7 +3766,7 @@ fn onboard_entry_import_option_explains_detected_additions_when_current_setup_ex
     let import_option = options
         .iter()
         .find(|option| {
-            option.choice == loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
+            option.choice == loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup
         })
         .expect("import option");
 
@@ -3808,47 +3781,47 @@ fn onboard_entry_import_option_explains_detected_additions_when_current_setup_ex
 #[test]
 fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
     let current = import_candidate_with_kind(
-        loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
-        "existing config at ~/.config/loongclaw/config.toml",
+        loong_daemon::migration::types::ImportSourceKind::ExistingLoongConfig,
+        "existing config at ~/.config/loong/config.toml",
     );
     let mut recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
     recommended
         .channel_candidates
-        .push(loongclaw_daemon::migration::types::ChannelCandidate {
+        .push(loong_daemon::migration::types::ChannelCandidate {
             id: "telegram",
             label: "telegram",
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
             source: "your current environment".to_owned(),
             summary: "enabled · token resolved".to_owned(),
         });
     recommended
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::Supplement),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::Supplement),
             source: "your current environment".to_owned(),
             summary: "telegram Ready".to_owned(),
         });
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Repairable,
         &[current.clone(), recommended.clone()],
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_entry_screen_lines(
-        loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
+    let lines = loong_daemon::onboard_cli::render_onboard_entry_screen_lines(
+        loong_daemon::migration::types::CurrentSetupState::Repairable,
         Some(&current),
         &[recommended],
         &options,
@@ -3856,10 +3829,10 @@ fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "entry screen");
+    assert_compact_loong_header(&lines, "entry screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
-        "entry screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
+        "entry screen should not repeat the large LOONG banner after the first screen: {lines:#?}"
     );
     assert!(
         lines
@@ -3910,19 +3883,19 @@ fn onboard_entry_screen_uses_compact_header_and_detected_setup_digest() {
 
 #[test]
 fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Absent,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Absent,
         &[import_candidate_with_kind(
-            loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+            loong_daemon::migration::types::ImportSourceKind::Environment,
             "your current environment",
         )],
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_entry_screen_lines(
-        loongclaw_daemon::migration::types::CurrentSetupState::Absent,
+    let lines = loong_daemon::onboard_cli::render_onboard_entry_screen_lines(
+        loong_daemon::migration::types::CurrentSetupState::Absent,
         None,
         &[import_candidate_with_kind(
-            loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+            loong_daemon::migration::types::ImportSourceKind::Environment,
             "your current environment",
         )],
         &options,
@@ -3930,7 +3903,7 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
         40,
     );
 
-    assert_compact_loongclaw_header(&lines, "narrow entry screen");
+    assert_compact_loong_header(&lines, "narrow entry screen");
     assert!(
         lines.iter().any(|line| line == "Detected settings"),
         "narrow layout should retain the detected-settings section heading: {lines:#?}"
@@ -3950,34 +3923,34 @@ fn onboard_entry_screen_compacts_to_plain_wordmark_on_narrow_width() {
 #[test]
 fn onboard_entry_screen_wraps_detected_setup_digest_and_option_details() {
     let mut recommended = import_candidate_with_kind(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
     );
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Claude,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Claude,
             path: "/tmp/project/CLAUDE.md".to_owned(),
         },
     );
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Gemini,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Gemini,
             path: "/tmp/project/GEMINI.md".to_owned(),
         },
     );
-    let options = loongclaw_daemon::onboard_cli::build_onboard_entry_options(
-        loongclaw_daemon::migration::types::CurrentSetupState::Absent,
+    let options = loong_daemon::onboard_cli::build_onboard_entry_options(
+        loong_daemon::migration::types::CurrentSetupState::Absent,
         &[recommended.clone()],
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_entry_screen_lines(
-        loongclaw_daemon::migration::types::CurrentSetupState::Absent,
+    let lines = loong_daemon::onboard_cli::render_onboard_entry_screen_lines(
+        loong_daemon::migration::types::CurrentSetupState::Absent,
         None,
         &[recommended],
         &options,
@@ -4022,15 +3995,15 @@ fn onboard_entry_screen_wraps_detected_setup_digest_and_option_details() {
 #[test]
 fn onboard_provider_selection_plan_requires_explicit_choice_for_conflicting_recommended_import() {
     let mut recommended = import_candidate_with_kind(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
     );
     recommended
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::UseDetected),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::UseDetected),
             source: "Codex config at ~/.codex/config.toml".to_owned(),
             summary: "telegram Ready".to_owned(),
         });
@@ -4038,21 +4011,21 @@ fn onboard_provider_selection_plan_requires_explicit_choice_for_conflicting_reco
     recommended.config.telegram.bot_token_env = Some("TELEGRAM_BOT_TOKEN".to_owned());
 
     let codex = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     let env = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
         "DEEPSEEK_API_KEY",
     );
 
-    let plan = loongclaw_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
+    let plan = loong_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
         &recommended,
         &[recommended.clone(), codex, env],
     );
@@ -4079,28 +4052,28 @@ fn onboard_provider_selection_plan_requires_explicit_choice_for_conflicting_reco
 #[test]
 fn onboard_provider_selection_plan_retains_same_kind_profiles_and_defaults_to_selected_profile() {
     let recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "gpt-5",
         "OPENAI_MAIN_API_KEY",
     );
     let codex = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "gpt-5",
         "OPENAI_MAIN_API_KEY",
     );
     let env = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Openai,
         "o4-mini",
         "OPENAI_REASONING_API_KEY",
     );
 
-    let plan = loongclaw_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
+    let plan = loong_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
         &recommended,
         &[recommended.clone(), codex, env],
     );
@@ -4126,34 +4099,34 @@ fn onboard_provider_selection_plan_retains_same_kind_profiles_and_defaults_to_se
 #[test]
 fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
     let recommended = import_candidate_with_kind(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
     );
     let openai = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     let deepseek = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
         "DEEPSEEK_API_KEY",
     );
-    let plan = loongclaw_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
+    let plan = loong_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
         &recommended,
         &[recommended.clone(), openai, deepseek],
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
+    let lines = loong_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
-    assert_compact_loongclaw_header(&lines, "provider choice screen");
+    assert_compact_loong_header(&lines, "provider choice screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
-        "provider choice screen should not re-render the large LOONGCLAW banner mid-onboarding: {lines:#?}"
+        "provider choice screen should not re-render the large LOONG banner mid-onboarding: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "choose active provider"),
@@ -4198,9 +4171,9 @@ fn onboard_provider_selection_screen_includes_focus_title_and_choices() {
 
 #[test]
 fn onboard_provider_selection_screen_shows_default_enter_choice_when_provider_is_resolved() {
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: vec![
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openai".to_owned(),
                 kind: mvp::config::ProviderKind::Openai,
                 source: "Codex config at ~/.codex/config.toml".to_owned(),
@@ -4212,7 +4185,7 @@ fn onboard_provider_selection_screen_shows_default_enter_choice_when_provider_is
                     ..mvp::config::ProviderConfig::default()
                 },
             },
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "deepseek".to_owned(),
                 kind: mvp::config::ProviderKind::Deepseek,
                 source: "your current environment".to_owned(),
@@ -4230,7 +4203,7 @@ fn onboard_provider_selection_screen_shows_default_enter_choice_when_provider_is
         requires_explicit_choice: false,
     };
 
-    let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
+    let lines = loong_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
     assert!(
         lines
@@ -4242,9 +4215,9 @@ fn onboard_provider_selection_screen_shows_default_enter_choice_when_provider_is
 
 #[test]
 fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: vec![
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openai-gpt-5".to_owned(),
                 kind: mvp::config::ProviderKind::Openai,
                 source: "Codex config at ~/.codex/config.toml".to_owned(),
@@ -4256,7 +4229,7 @@ fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
                     ..mvp::config::ProviderConfig::default()
                 },
             },
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openai-o4-mini".to_owned(),
                 kind: mvp::config::ProviderKind::Openai,
                 source: "your current environment".to_owned(),
@@ -4274,7 +4247,7 @@ fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
         requires_explicit_choice: false,
     };
 
-    let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
+    let lines = loong_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
     assert!(
         lines.iter().any(|line| line == "openai-gpt-5) OpenAI"),
@@ -4306,16 +4279,16 @@ fn onboard_provider_selection_screen_uses_profile_ids_for_same_kind_choices() {
     );
     assert!(
         lines.iter().any(|line| line
-            .contains(loongclaw_daemon::migration::provider_selection::PROVIDER_SELECTOR_NOTE)),
+            .contains(loong_daemon::migration::provider_selection::PROVIDER_SELECTOR_NOTE)),
         "provider choice screen should explain the broader selector grammar without forcing users to memorize only profile ids: {lines:#?}"
     );
 }
 
 #[test]
 fn onboard_provider_selection_screen_prefers_short_human_selectors_on_narrow_width() {
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: vec![
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openai-o4-mini".to_owned(),
                 kind: mvp::config::ProviderKind::Openai,
                 source: "your current environment".to_owned(),
@@ -4327,7 +4300,7 @@ fn onboard_provider_selection_screen_prefers_short_human_selectors_on_narrow_wid
                     ..mvp::config::ProviderConfig::default()
                 },
             },
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openai-gpt-5".to_owned(),
                 kind: mvp::config::ProviderKind::Openai,
                 source: "Codex config at ~/.codex/config.toml".to_owned(),
@@ -4345,7 +4318,7 @@ fn onboard_provider_selection_screen_prefers_short_human_selectors_on_narrow_wid
         requires_explicit_choice: false,
     };
 
-    let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 52);
+    let lines = loong_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 52);
 
     assert!(
         lines.iter().any(|line| line == "    selector: openai"),
@@ -4359,9 +4332,9 @@ fn onboard_provider_selection_screen_prefers_short_human_selectors_on_narrow_wid
 
 #[test]
 fn onboard_provider_selector_reports_ambiguous_model_name() {
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: vec![
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openai-gpt-5".to_owned(),
                 kind: mvp::config::ProviderKind::Openai,
                 source: "Codex config at ~/.codex/config.toml".to_owned(),
@@ -4373,7 +4346,7 @@ fn onboard_provider_selector_reports_ambiguous_model_name() {
                     ..mvp::config::ProviderConfig::default()
                 },
             },
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openrouter-gpt-5".to_owned(),
                 kind: mvp::config::ProviderKind::Openrouter,
                 source: "your current environment".to_owned(),
@@ -4391,7 +4364,7 @@ fn onboard_provider_selector_reports_ambiguous_model_name() {
         requires_explicit_choice: false,
     };
 
-    let error = loongclaw_daemon::onboard_cli::resolve_provider_config_from_selector(
+    let error = loong_daemon::onboard_cli::resolve_provider_config_from_selector(
         &mvp::config::ProviderConfig::default(),
         &plan,
         "gpt-5",
@@ -4409,12 +4382,12 @@ fn onboard_provider_selector_reports_ambiguous_model_name() {
 
 #[test]
 fn onboard_provider_selection_screen_wraps_long_choice_details() {
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: vec![
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "openai".to_owned(),
                 kind: mvp::config::ProviderKind::Openai,
-                source: "Codex config at ~/.codex/agents/loongclaw/config.toml".to_owned(),
+                source: "Codex config at ~/.codex/agents/loong/config.toml".to_owned(),
                 summary: "OpenAI · openai/gpt-5.1-codex · credentials resolved".to_owned(),
                 config: mvp::config::ProviderConfig {
                     kind: mvp::config::ProviderKind::Openai,
@@ -4423,7 +4396,7 @@ fn onboard_provider_selection_screen_wraps_long_choice_details() {
                     ..mvp::config::ProviderConfig::default()
                 },
             },
-            loongclaw_daemon::migration::ImportedProviderChoice {
+            loong_daemon::migration::ImportedProviderChoice {
                 profile_id: "deepseek".to_owned(),
                 kind: mvp::config::ProviderKind::Deepseek,
                 source: "your current environment".to_owned(),
@@ -4441,7 +4414,7 @@ fn onboard_provider_selection_screen_wraps_long_choice_details() {
         requires_explicit_choice: true,
     };
 
-    let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 52);
+    let lines = loong_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 52);
 
     assert!(
         lines
@@ -4452,7 +4425,7 @@ fn onboard_provider_selection_screen_wraps_long_choice_details() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "      ~/.codex/agents/loongclaw/config.toml"),
+            .any(|line| line == "      ~/.codex/agents/loong/config.toml"),
         "provider choice screen should continue long source paths on an indented line: {lines:#?}"
     );
     assert!(
@@ -4499,8 +4472,8 @@ fn onboard_provider_selection_screen_wraps_long_choice_details() {
 
 #[test]
 fn onboard_provider_selection_screen_surfaces_responses_transport_for_choices() {
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
-        imported_choices: vec![loongclaw_daemon::migration::ImportedProviderChoice {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
+        imported_choices: vec![loong_daemon::migration::ImportedProviderChoice {
             profile_id: "deepseek".to_owned(),
             kind: mvp::config::ProviderKind::Deepseek,
             source: "Codex config at ~/.codex/config.toml".to_owned(),
@@ -4518,7 +4491,7 @@ fn onboard_provider_selection_screen_surfaces_responses_transport_for_choices() 
         requires_explicit_choice: false,
     };
 
-    let lines = loongclaw_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
+    let lines = loong_daemon::onboard_cli::render_provider_selection_screen_lines(&plan, 80);
 
     assert!(
         lines.iter().any(|line| {
@@ -4530,14 +4503,13 @@ fn onboard_provider_selection_screen_surfaces_responses_transport_for_choices() 
 
 #[test]
 fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.model = "gpt-4.1".to_owned();
     config.telegram.enabled = true;
 
-    let lines =
-        loongclaw_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 80);
+    let lines = loong_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 80);
 
-    assert_compact_loongclaw_header(&lines, "current-setup shortcut");
+    assert_compact_loong_header(&lines, "current-setup shortcut");
     assert!(
         lines.iter().any(|line| line == "continue current setup"),
         "current-setup shortcut should use a focused title: {lines:#?}"
@@ -4576,17 +4548,16 @@ fn onboard_current_setup_shortcut_screen_summarizes_existing_setup_and_choices()
 
 #[test]
 fn onboard_current_setup_shortcut_screen_groups_enabled_channels_by_runtime_taxonomy() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.model = "gpt-4.1".to_owned();
     config.telegram.enabled = true;
     config.weixin.enabled = true;
     config.discord.enabled = true;
-    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
         "discord-token".to_owned(),
     ));
 
-    let lines =
-        loongclaw_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 120);
+    let lines = loong_daemon::onboard_cli::render_continue_current_setup_screen_lines(&config, 120);
 
     assert!(
         lines
@@ -4616,8 +4587,8 @@ fn onboard_current_setup_shortcut_screen_groups_enabled_channels_by_runtime_taxo
 
 #[test]
 fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() {
-    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "");
-    let base_options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    let _guard = EnvVarGuard::set("LOONG_WEB_SEARCH_PROVIDER", "");
+    let base_options = loong_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,
         non_interactive: false,
@@ -4634,10 +4605,10 @@ fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() 
     };
 
     assert!(
-        loongclaw_daemon::onboard_cli::should_offer_current_setup_shortcut(
+        loong_daemon::onboard_cli::should_offer_current_setup_shortcut(
             &base_options,
-            loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+            loong_daemon::migration::types::CurrentSetupState::Healthy,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
         ),
         "healthy interactive continue-current-setup should offer the fast lane"
     );
@@ -4645,19 +4616,19 @@ fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() 
     let mut override_options = base_options.clone();
     override_options.model = Some("gpt-5".to_owned());
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_current_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_current_setup_shortcut(
             &override_options,
-            loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+            loong_daemon::migration::types::CurrentSetupState::Healthy,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
         ),
         "explicit overrides should go straight into detailed editing instead of the fast lane"
     );
 
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_current_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_current_setup_shortcut(
             &base_options,
-            loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+            loong_daemon::migration::types::CurrentSetupState::Repairable,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
         ),
         "repairable setups should stay on the explicit review/edit path"
     );
@@ -4665,8 +4636,8 @@ fn onboard_current_setup_shortcut_is_limited_to_healthy_interactive_keep_flow() 
 
 #[test]
 fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_override_env() {
-    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
-    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    let _guard = EnvVarGuard::set("LOONG_WEB_SEARCH_PROVIDER", "tavily");
+    let options = loong_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,
         non_interactive: false,
@@ -4683,10 +4654,10 @@ fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_override_en
     };
 
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_current_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_current_setup_shortcut(
             &options,
-            loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+            loong_daemon::migration::types::CurrentSetupState::Healthy,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
         ),
         "an explicit web-search provider override should force the detailed onboarding path"
     );
@@ -4694,7 +4665,7 @@ fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_override_en
 
 #[test]
 fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_option() {
-    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    let options = loong_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,
         non_interactive: false,
@@ -4711,10 +4682,10 @@ fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_option() {
     };
 
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_current_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_current_setup_shortcut(
             &options,
-            loongclaw_daemon::migration::types::CurrentSetupState::Healthy,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+            loong_daemon::migration::types::CurrentSetupState::Healthy,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
         ),
         "an explicit --web-search-provider option should force the detailed onboarding path"
     );
@@ -4722,17 +4693,17 @@ fn onboard_current_setup_shortcut_is_disabled_by_web_search_provider_option() {
 
 #[test]
 fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.model = "gpt-5.4".to_owned();
     config.telegram.enabled = true;
 
-    let lines = loongclaw_daemon::onboard_cli::render_continue_detected_setup_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_continue_detected_setup_screen_lines(
         &config,
         "Codex config at ~/.codex/config.toml",
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "detected-setup shortcut");
+    assert_compact_loong_header(&lines, "detected-setup shortcut");
     assert!(
         lines
             .iter()
@@ -4792,8 +4763,8 @@ fn onboard_detected_setup_shortcut_screen_summarizes_starting_point_and_choices(
 #[test]
 fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_default_provider_choice()
  {
-    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "");
-    let base_options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    let _guard = EnvVarGuard::set("LOONG_WEB_SEARCH_PROVIDER", "");
+    let base_options = loong_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,
         non_interactive: false,
@@ -4808,7 +4779,7 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
         system_prompt: None,
         skip_model_probe: false,
     };
-    let default_provider_plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let default_provider_plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: Vec::new(),
         default_kind: Some(mvp::config::ProviderKind::Openai),
         default_profile_id: Some("openai".to_owned()),
@@ -4816,9 +4787,9 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
     };
 
     assert!(
-        loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+        loong_daemon::onboard_cli::should_offer_detected_setup_shortcut(
             &base_options,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
             &default_provider_plan,
         ),
         "interactive detected-setup flows with a default provider should offer the fast lane"
@@ -4827,33 +4798,33 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
     let mut override_options = base_options.clone();
     override_options.api_key_env = Some("DEEPSEEK_API_KEY".to_owned());
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_detected_setup_shortcut(
             &override_options,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
             &default_provider_plan,
         ),
         "explicit overrides should go straight into detailed editing instead of the fast lane"
     );
 
-    let explicit_choice_plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let explicit_choice_plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: Vec::new(),
         default_kind: None,
         default_profile_id: None,
         requires_explicit_choice: true,
     };
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_detected_setup_shortcut(
             &base_options,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
             &explicit_choice_plan,
         ),
         "detected setups that still need an explicit provider choice should not skip the guided path"
     );
 
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_detected_setup_shortcut(
             &base_options,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ContinueCurrentSetup,
             &default_provider_plan,
         ),
         "the detected-setup fast lane should stay scoped to detected-setup entry choices"
@@ -4862,8 +4833,8 @@ fn onboard_detected_setup_shortcut_is_limited_to_interactive_import_flow_with_de
 
 #[test]
 fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_override_env() {
-    let _guard = EnvVarGuard::set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
-    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    let _guard = EnvVarGuard::set("LOONG_WEB_SEARCH_PROVIDER", "tavily");
+    let options = loong_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,
         non_interactive: false,
@@ -4878,7 +4849,7 @@ fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_override_e
         system_prompt: None,
         skip_model_probe: false,
     };
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: Vec::new(),
         default_kind: Some(mvp::config::ProviderKind::Openai),
         default_profile_id: Some("openai".to_owned()),
@@ -4886,9 +4857,9 @@ fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_override_e
     };
 
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_detected_setup_shortcut(
             &options,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
             &plan,
         ),
         "an explicit web-search provider override should force the detailed detected-setup path"
@@ -4897,7 +4868,7 @@ fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_override_e
 
 #[test]
 fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_option() {
-    let options = loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+    let options = loong_daemon::onboard_cli::OnboardCommandOptions {
         output: None,
         force: false,
         non_interactive: false,
@@ -4912,7 +4883,7 @@ fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_option() {
         system_prompt: None,
         skip_model_probe: false,
     };
-    let plan = loongclaw_daemon::migration::ProviderSelectionPlan {
+    let plan = loong_daemon::migration::ProviderSelectionPlan {
         imported_choices: Vec::new(),
         default_kind: Some(mvp::config::ProviderKind::Openai),
         default_profile_id: Some("openai".to_owned()),
@@ -4920,9 +4891,9 @@ fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_option() {
     };
 
     assert!(
-        !loongclaw_daemon::onboard_cli::should_offer_detected_setup_shortcut(
+        !loong_daemon::onboard_cli::should_offer_detected_setup_shortcut(
             &options,
-            loongclaw_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
+            loong_daemon::onboard_cli::OnboardEntryChoice::ImportDetectedSetup,
             &plan,
         ),
         "an explicit --web-search-provider option should force the detailed detected-setup path"
@@ -4932,7 +4903,7 @@ fn onboard_detected_setup_shortcut_is_disabled_by_web_search_provider_option() {
 #[test]
 fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_options() {
     let mut recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
@@ -4940,27 +4911,27 @@ fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_opti
     );
     recommended
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::UseDetected),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::UseDetected),
             source: "/tmp/project/AGENTS.md".to_owned(),
             summary: "AGENTS.md detected".to_owned(),
         });
     let env = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
         "DEEPSEEK_API_KEY",
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(
         &[recommended, env],
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "starting-point screen");
+    assert_compact_loong_header(&lines, "starting-point screen");
     assert!(
         lines
             .iter()
@@ -4994,7 +4965,7 @@ fn onboard_starting_point_selection_screen_uses_compact_header_and_detected_opti
 #[test]
 fn onboard_starting_point_selection_screen_deduplicates_workspace_guidance_and_channel_rollups() {
     let mut recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
@@ -5002,42 +4973,40 @@ fn onboard_starting_point_selection_screen_deduplicates_workspace_guidance_and_c
     );
     recommended
         .channel_candidates
-        .push(loongclaw_daemon::migration::types::ChannelCandidate {
+        .push(loong_daemon::migration::types::ChannelCandidate {
             id: "telegram",
             label: "telegram",
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
             source: "your current environment".to_owned(),
             summary: "enabled · token resolved · 0 allowed chat id(s)".to_owned(),
         });
     recommended
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::Supplement),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::Supplement),
             source: "multiple sources".to_owned(),
             summary: "telegram Ready from your current environment".to_owned(),
         });
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
     recommended
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::UseDetected),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::UseDetected),
             source: "workspace".to_owned(),
             summary: "AGENTS.md".to_owned(),
         });
 
-    let lines = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
-        &[recommended],
-        80,
-    );
+    let lines =
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80);
 
     assert!(
         lines
@@ -5064,41 +5033,39 @@ fn onboard_starting_point_selection_screen_deduplicates_workspace_guidance_and_c
 #[test]
 fn onboard_starting_point_selection_screen_summarizes_multi_source_origin() {
     let mut recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
-    recommended.domains[0].source = "existing config at ~/.config/loongclaw/config.toml".to_owned();
+    recommended.domains[0].source = "existing config at ~/.config/loong/config.toml".to_owned();
     recommended
         .channel_candidates
-        .push(loongclaw_daemon::migration::types::ChannelCandidate {
+        .push(loong_daemon::migration::types::ChannelCandidate {
             id: "telegram",
             label: "telegram",
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
             source: "your current environment".to_owned(),
             summary: "enabled · token resolved · 0 allowed chat id(s)".to_owned(),
         });
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
 
-    let joined = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
-        &[recommended],
-        80,
-    )
-    .join("\n");
+    let joined =
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80)
+            .join("\n");
 
     assert!(
         joined.contains("sources:"),
         "starting-point details should summarize the origin of a composed detected setup: {joined}"
     );
     assert!(
-        joined.contains("existing config at ~/.config/loongclaw/config.toml"),
+        joined.contains("existing config at ~/.config/loong/config.toml"),
         "starting-point details should keep the current-config contribution visible: {joined}"
     );
     assert!(
@@ -5114,20 +5081,20 @@ fn onboard_starting_point_selection_screen_summarizes_multi_source_origin() {
 #[test]
 fn onboard_single_detected_setup_preview_screen_uses_compact_follow_up_layout() {
     let candidate = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_single_detected_setup_preview_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_single_detected_setup_preview_screen_lines(
         &candidate,
         std::slice::from_ref(&candidate),
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "single detected-setup preview");
+    assert_compact_loong_header(&lines, "single detected-setup preview");
     assert!(
         lines
             .iter()
@@ -5164,28 +5131,26 @@ fn onboard_single_detected_setup_preview_screen_uses_compact_follow_up_layout() 
 #[test]
 fn onboard_starting_point_selection_screen_surfaces_keep_and_supplement_actions() {
     let mut recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     recommended.domains[0].decision =
-        Some(loongclaw_daemon::migration::types::PreviewDecision::KeepCurrent);
+        Some(loong_daemon::migration::types::PreviewDecision::KeepCurrent);
     recommended
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::Supplement),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::Supplement),
             source: "multiple sources".to_owned(),
             summary: "telegram Ready".to_owned(),
         });
 
-    let lines = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
-        &[recommended],
-        80,
-    );
+    let lines =
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80);
 
     assert!(
         lines.iter().any(|line| {
@@ -5205,34 +5170,32 @@ fn onboard_starting_point_selection_screen_surfaces_keep_and_supplement_actions(
 #[test]
 fn onboard_starting_point_selection_screen_explains_why_suggested_starting_point_is_recommended() {
     let mut recommended = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     recommended.domains[0].decision =
-        Some(loongclaw_daemon::migration::types::PreviewDecision::KeepCurrent);
+        Some(loong_daemon::migration::types::PreviewDecision::KeepCurrent);
     recommended
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::Supplement),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::Supplement),
             source: "your current environment".to_owned(),
             summary: "telegram Ready".to_owned(),
         });
     recommended.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
-        &[recommended],
-        80,
-    );
+    let lines =
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[recommended], 80);
     let joined = lines.join("\n");
 
     assert!(
@@ -5251,21 +5214,21 @@ fn onboard_starting_point_selection_screen_explains_when_direct_source_is_a_good
         std::env::set_var("DEEPSEEK_API_KEY", "deepseek-test-token");
     }
     let codex = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     let environment = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
         "DEEPSEEK_API_KEY",
     );
 
-    let joined = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
+    let joined = loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(
         &[codex, environment],
         80,
     )
@@ -5292,18 +5255,16 @@ fn onboard_starting_point_selection_screen_explains_when_direct_source_is_a_good
 #[test]
 fn onboard_starting_point_selection_screen_explains_explicit_path_fit() {
     let explicit = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::ExplicitPath,
-        "selected config at /tmp/loongclaw-import.toml",
+        loong_daemon::migration::types::ImportSourceKind::ExplicitPath,
+        "selected config at /tmp/loong-import.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
 
-    let joined = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
-        &[explicit],
-        80,
-    )
-    .join("\n");
+    let joined =
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[explicit], 80)
+            .join("\n");
 
     assert!(
         joined.contains("good fit: reuse the selected config file as your starting point"),
@@ -5314,7 +5275,7 @@ fn onboard_starting_point_selection_screen_explains_explicit_path_fit() {
 #[test]
 fn onboard_starting_point_selection_screen_explains_when_direct_source_can_supplement_setup() {
     let mut environment = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
@@ -5322,30 +5283,30 @@ fn onboard_starting_point_selection_screen_explains_when_direct_source_can_suppl
     );
     environment
         .channel_candidates
-        .push(loongclaw_daemon::migration::types::ChannelCandidate {
+        .push(loong_daemon::migration::types::ChannelCandidate {
             id: "telegram",
             label: "telegram",
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
             source: "your current environment".to_owned(),
             summary: "enabled · token resolved".to_owned(),
         });
     environment
         .domains
-        .push(loongclaw_daemon::migration::types::DomainPreview {
-            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
-            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::Supplement),
+        .push(loong_daemon::migration::types::DomainPreview {
+            kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loong_daemon::migration::types::PreviewDecision::Supplement),
             source: "your current environment".to_owned(),
             summary: "telegram Ready".to_owned(),
         });
     environment.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
 
-    let joined = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
+    let joined = loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(
         &[environment],
         120,
     )
@@ -5362,18 +5323,16 @@ fn onboard_starting_point_selection_screen_explains_when_direct_source_can_suppl
 #[test]
 fn onboard_starting_point_selection_screen_explains_why_starting_fresh_is_a_good_fit() {
     let candidate = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
 
-    let joined = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
-        &[candidate],
-        80,
-    )
-    .join("\n");
+    let joined =
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[candidate], 80)
+            .join("\n");
 
     assert!(
         joined.contains("good fit: start clean with full control"),
@@ -5384,14 +5343,14 @@ fn onboard_starting_point_selection_screen_explains_why_starting_fresh_is_a_good
 #[test]
 fn onboard_starting_point_selection_screen_prioritizes_richer_direct_sources() {
     let codex = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     let mut environment = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
@@ -5399,21 +5358,21 @@ fn onboard_starting_point_selection_screen_prioritizes_richer_direct_sources() {
     );
     environment
         .channel_candidates
-        .push(loongclaw_daemon::migration::types::ChannelCandidate {
+        .push(loong_daemon::migration::types::ChannelCandidate {
             id: "telegram",
             label: "telegram",
-            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+            status: loong_daemon::migration::types::PreviewStatus::Ready,
             source: "your current environment".to_owned(),
             summary: "enabled · token resolved".to_owned(),
         });
     environment.workspace_guidance.push(
-        loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
 
-    let joined = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
+    let joined = loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(
         &[codex, environment],
         80,
     )
@@ -5435,21 +5394,21 @@ fn onboard_starting_point_selection_screen_prioritizes_richer_direct_sources() {
 #[test]
 fn onboard_starting_point_selection_screen_prefers_explicit_config_sources_when_coverage_ties() {
     let codex = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
     let environment = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
         "DEEPSEEK_API_KEY",
     );
 
-    let joined = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
+    let joined = loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(
         &[environment, codex],
         80,
     )
@@ -5471,8 +5430,8 @@ fn onboard_starting_point_selection_screen_prefers_explicit_config_sources_when_
 #[test]
 fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details() {
     let mut codex = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
-        "Codex config at ~/.codex/agents/loongclaw/config.toml",
+        loong_daemon::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/agents/loong/config.toml",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
@@ -5481,7 +5440,7 @@ fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details(
         "OpenAI · openai/gpt-5.1-codex · credentials resolved from environment".to_owned();
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[codex], 48);
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[codex], 48);
 
     assert!(
         lines.iter().any(|line| line == "1) Codex config at"),
@@ -5490,7 +5449,7 @@ fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details(
     assert!(
         lines
             .iter()
-            .any(|line| line == "   ~/.codex/agents/loongclaw/config.toml"),
+            .any(|line| line == "   ~/.codex/agents/loong/config.toml"),
         "starting-point screen should continue long option labels on an indented line: {lines:#?}"
     );
     assert!(
@@ -5510,17 +5469,15 @@ fn onboard_starting_point_selection_screen_wraps_long_option_labels_and_details(
 #[test]
 fn onboard_starting_point_selection_screen_wraps_header_title_and_subtitle_on_narrow_width() {
     let candidate = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
         mvp::config::ProviderKind::Openai,
         "openai/gpt-5.1-codex",
         "OPENAI_API_KEY",
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
-        &[candidate],
-        22,
-    );
+    let lines =
+        loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[candidate], 22);
 
     assert!(
         lines.iter().all(|line| line.len() <= 22),
@@ -5539,13 +5496,13 @@ fn onboard_starting_point_selection_screen_wraps_header_title_and_subtitle_on_na
 
 #[test]
 fn onboard_model_selection_screen_keeps_provider_context() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Deepseek;
     config.provider.model = "deepseek-reasoner".to_owned();
 
-    let lines = loongclaw_daemon::onboard_cli::render_model_selection_screen_lines(&config, 80);
+    let lines = loong_daemon::onboard_cli::render_model_selection_screen_lines(&config, 80);
 
-    assert_compact_loongclaw_header(&lines, "model screen");
+    assert_compact_loong_header(&lines, "model screen");
     assert!(
         lines.iter().any(|line| line == "choose model"),
         "model screen should use a focused title: {lines:#?}"
@@ -5588,11 +5545,11 @@ fn onboard_model_selection_screen_keeps_provider_context() {
 
 #[test]
 fn onboard_model_selection_screen_shows_prefilled_model_when_enter_default_differs() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
 
-    let lines = loongclaw_daemon::onboard_cli::render_model_selection_screen_lines_with_default(
+    let lines = loong_daemon::onboard_cli::render_model_selection_screen_lines_with_default(
         &config,
         "openai/gpt-5.2",
         80,
@@ -5614,11 +5571,11 @@ fn onboard_model_selection_screen_shows_prefilled_model_when_enter_default_diffe
 
 #[test]
 fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_width() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
 
-    let lines = loongclaw_daemon::onboard_cli::render_model_selection_screen_lines(&config, 22);
+    let lines = loong_daemon::onboard_cli::render_model_selection_screen_lines(&config, 22);
 
     assert!(
         lines.iter().all(|line| line.len() <= 22),
@@ -5636,19 +5593,19 @@ fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_wi
 
 #[test]
 fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
-    config.provider.oauth_access_token = Some(loongclaw_contracts::SecretRef::Env {
+    config.provider.oauth_access_token = Some(loong_contracts::SecretRef::Env {
         env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
     });
 
-    let lines = loongclaw_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
         &config,
         "OPENAI_API_KEY",
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "credential-env screen");
+    assert_compact_loong_header(&lines, "credential-env screen");
     assert!(
         lines.iter().any(|line| line == "choose credential source"),
         "credential-env screen should use a focused title: {lines:#?}"
@@ -5698,19 +5655,18 @@ fn onboard_api_key_env_screen_explains_suggested_env_and_blank_behavior() {
 
 #[test]
 fn onboard_api_key_env_screen_shows_prefilled_env_when_enter_default_is_overridden() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
-    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Env {
+    config.provider.api_key = Some(loong_contracts::SecretRef::Env {
         env: "OPENAI_API_KEY".to_owned(),
     });
 
-    let lines =
-        loongclaw_daemon::onboard_cli::render_api_key_env_selection_screen_lines_with_default(
-            &config,
-            "OPENAI_API_KEY",
-            "TEAM_OPENAI_KEY",
-            80,
-        );
+    let lines = loong_daemon::onboard_cli::render_api_key_env_selection_screen_lines_with_default(
+        &config,
+        "OPENAI_API_KEY",
+        "TEAM_OPENAI_KEY",
+        80,
+    );
 
     assert!(
         lines
@@ -5728,12 +5684,12 @@ fn onboard_api_key_env_screen_shows_prefilled_env_when_enter_default_is_overridd
 
 #[test]
 fn onboard_api_key_env_screen_wraps_long_unbroken_env_names() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.api_key_env =
         Some("OPENAI_COMPATIBLE_PROVIDER_SUPER_LONG_ENV_POINTER".to_owned());
 
-    let lines = loongclaw_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
         &config,
         "OPENAI_COMPATIBLE_PROVIDER_DEFAULT_ENV_POINTER",
         36,
@@ -5753,9 +5709,9 @@ fn onboard_api_key_env_screen_wraps_long_unbroken_env_names() {
 
 #[test]
 fn onboard_api_key_env_screen_wraps_progress_line_on_narrow_width() {
-    let config = mvp::config::LoongClawConfig::default();
+    let config = mvp::config::LoongConfig::default();
 
-    let lines = loongclaw_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
         &config,
         "OPENAI_API_KEY",
         22,
@@ -5778,11 +5734,11 @@ fn onboard_api_key_env_screen_wraps_progress_line_on_narrow_width() {
 #[test]
 fn onboard_api_key_env_screen_redacts_invalid_current_source_and_keeps_clear_hint() {
     let secret = "sk-live-direct-secret-value";
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.api_key_env = Some(secret.to_owned());
 
-    let lines = loongclaw_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_api_key_env_selection_screen_lines(
         &config,
         "OPENAI_API_KEY",
         80,
@@ -5819,13 +5775,12 @@ fn onboard_api_key_env_screen_redacts_invalid_current_source_and_keeps_clear_hin
 
 #[test]
 fn onboard_system_prompt_screen_explains_blank_behavior() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.system_prompt = "be terse and code-focused".to_owned();
 
-    let lines =
-        loongclaw_daemon::onboard_cli::render_system_prompt_selection_screen_lines(&config, 80);
+    let lines = loong_daemon::onboard_cli::render_system_prompt_selection_screen_lines(&config, 80);
 
-    assert_compact_loongclaw_header(&lines, "system-prompt screen");
+    assert_compact_loong_header(&lines, "system-prompt screen");
     assert!(
         lines.iter().any(|line| line == "adjust cli behavior"),
         "system-prompt screen should frame this as a behavior adjustment: {lines:#?}"
@@ -5858,15 +5813,14 @@ fn onboard_system_prompt_screen_explains_blank_behavior() {
 
 #[test]
 fn onboard_system_prompt_screen_shows_prefilled_prompt_when_enter_default_differs() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.system_prompt = "be terse and code-focused".to_owned();
 
-    let lines =
-        loongclaw_daemon::onboard_cli::render_system_prompt_selection_screen_lines_with_default(
-            &config,
-            "speak with concise release-manager tone",
-            80,
-        );
+    let lines = loong_daemon::onboard_cli::render_system_prompt_selection_screen_lines_with_default(
+        &config,
+        "speak with concise release-manager tone",
+        80,
+    );
 
     assert!(
         lines.iter().any(|line| {
@@ -5884,14 +5838,13 @@ fn onboard_system_prompt_screen_shows_prefilled_prompt_when_enter_default_differ
 
 #[test]
 fn onboard_system_prompt_screen_wraps_long_current_prompt() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.system_prompt =
         "keep replies short and code-focused when reviewing repo state".to_owned();
 
-    let lines =
-        loongclaw_daemon::onboard_cli::render_system_prompt_selection_screen_lines(&config, 48);
+    let lines = loong_daemon::onboard_cli::render_system_prompt_selection_screen_lines(&config, 48);
 
-    assert_compact_loongclaw_header(&lines, "system-prompt screen");
+    assert_compact_loong_header(&lines, "system-prompt screen");
     assert!(
         lines
             .iter()
@@ -5908,7 +5861,7 @@ fn onboard_system_prompt_screen_wraps_long_current_prompt() {
 
 #[test]
 fn onboard_personality_selection_screen_shows_native_personality_choices() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
 
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
@@ -5934,10 +5887,10 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
         .filter(|line| line.contains("experimental ·"))
         .count();
 
-    assert_compact_loongclaw_header(&lines, "personality screen");
+    assert_compact_loong_header(&lines, "personality screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
-        "personality screen should not repeat the large LOONGCLAW banner mid-onboarding: {lines:#?}"
+        "personality screen should not repeat the large LOONG banner mid-onboarding: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "choose personality"),
@@ -5977,7 +5930,7 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
 
 #[test]
 fn onboard_prompt_addendum_screen_explains_keep_and_clear_behavior() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
 
     let lines = crate::onboard_cli::render_prompt_addendum_selection_screen_lines(&config, 80);
@@ -6012,12 +5965,12 @@ fn onboard_prompt_addendum_screen_explains_keep_and_clear_behavior() {
 
 #[test]
 fn onboard_memory_profile_screen_shows_supported_profiles() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
 
     let lines = crate::onboard_cli::render_memory_profile_selection_screen_lines(&config, 80);
 
-    assert_compact_loongclaw_header(&lines, "memory-profile screen");
+    assert_compact_loong_header(&lines, "memory-profile screen");
     assert!(
         lines.iter().any(|line| line == "choose memory profile"),
         "memory-profile screen should use a focused title: {lines:#?}"
@@ -6063,22 +6016,22 @@ fn onboard_memory_profile_screen_shows_supported_profiles() {
 #[test]
 fn onboard_provider_selection_uses_imported_provider_config_for_selected_choice() {
     let recommended = import_candidate_with_kind(
-        loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
+        loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         "recommended import plan",
     );
     let deepseek = import_candidate_with_provider(
-        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        loong_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment",
         mvp::config::ProviderKind::Deepseek,
         "deepseek-chat",
         "DEEPSEEK_API_KEY",
     );
-    let plan = loongclaw_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
+    let plan = loong_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
         &recommended,
         &[recommended.clone(), deepseek],
     );
 
-    let resolved = loongclaw_daemon::onboard_cli::resolve_provider_config_from_selection(
+    let resolved = loong_daemon::onboard_cli::resolve_provider_config_from_selection(
         &mvp::config::ProviderConfig::default(),
         &plan,
         mvp::config::ProviderKind::Deepseek,
@@ -6088,7 +6041,7 @@ fn onboard_provider_selection_uses_imported_provider_config_for_selected_choice(
     assert_eq!(resolved.model, "deepseek-chat");
     assert_eq!(
         resolved.api_key,
-        Some(loongclaw_contracts::SecretRef::Env {
+        Some(loong_contracts::SecretRef::Env {
             env: "DEEPSEEK_API_KEY".to_owned(),
         })
     );
@@ -6103,9 +6056,9 @@ fn onboard_provider_selection_manual_override_resets_model_for_new_provider() {
         api_key_env: Some("OPENAI_API_KEY".to_owned()),
         ..mvp::config::ProviderConfig::default()
     };
-    let plan = loongclaw_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
+    let plan = loong_daemon::onboard_cli::build_provider_selection_plan_for_candidate(
         &import_candidate_with_provider(
-            loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+            loong_daemon::migration::types::ImportSourceKind::CodexConfig,
             "Codex config at ~/.codex/config.toml",
             mvp::config::ProviderKind::Openai,
             "openai/gpt-5.1-codex",
@@ -6114,7 +6067,7 @@ fn onboard_provider_selection_manual_override_resets_model_for_new_provider() {
         &[],
     );
 
-    let resolved = loongclaw_daemon::onboard_cli::resolve_provider_config_from_selection(
+    let resolved = loong_daemon::onboard_cli::resolve_provider_config_from_selection(
         &current,
         &plan,
         mvp::config::ProviderKind::Anthropic,
@@ -6132,13 +6085,13 @@ fn onboard_provider_selection_manual_override_resets_model_for_new_provider() {
 
 #[test]
 fn onboarding_success_summary_reports_import_source_and_enabled_channels() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
         &config,
         Some("Codex config at ~/.codex/config.toml"),
@@ -6156,40 +6109,39 @@ fn onboarding_success_summary_reports_import_source_and_enabled_channels() {
     assert!(
         summary.next_actions.iter().any(|action| action
             .command
-            .contains("loong ask --config '/tmp/loongclaw-config.toml' --message")),
+            .contains("loong ask --config '/tmp/loong-config.toml' --message")),
         "success summary should keep a direct ask handoff: {summary:#?}"
     );
 }
 
 #[test]
 fn onboarding_success_summary_derives_structured_actions() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask
+        loong_daemon::onboard_cli::OnboardingActionKind::Ask
     );
     assert_eq!(
         summary.next_actions[1].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Chat
+        loong_daemon::onboard_cli::OnboardingActionKind::Chat
     );
     assert_eq!(
         summary.next_actions[2].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Personalize
+        loong_daemon::onboard_cli::OnboardingActionKind::Personalize
     );
     assert_eq!(
         summary.next_actions[3].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(
         summary.next_actions[4].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(
         summary.next_actions[5].kind,
@@ -6205,10 +6157,10 @@ fn onboarding_success_summary_derives_structured_actions() {
 
 #[test]
 fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_enabled() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let path = PathBuf::from("/tmp/loong-config.toml");
     let summary = crate::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         None,
     );
     let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 140);
@@ -6237,7 +6189,7 @@ fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_en
     assert_eq!(summary.next_actions[3].label, "channels");
     assert_eq!(
         summary.next_actions[3].command,
-        "loong channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loong-config.toml'"
     );
     assert!(
         lines
@@ -6257,7 +6209,7 @@ fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_en
 #[test]
 fn onboarding_success_summary_adds_doctor_action_for_plugin_backed_channels_needing_bridge_review()
 {
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_url": "https://bridge.example.test/weixin",
@@ -6266,7 +6218,7 @@ fn onboarding_success_summary_adds_doctor_action_for_plugin_backed_channels_need
         }
     }))
     .expect("deserialize weixin config");
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let path = PathBuf::from("/tmp/loong-config.toml");
 
     config.external_skills.install_root = None;
 
@@ -6287,7 +6239,7 @@ fn onboarding_success_summary_adds_doctor_action_for_plugin_backed_channels_need
             == crate::onboard_cli::OnboardingActionKind::Doctor
             && action.command
                 == format!(
-                    "{} doctor --config '/tmp/loongclaw-config.toml'",
+                    "{} doctor --config '/tmp/loong-config.toml'",
                     super::active_cli_command_name()
                 )),
         "plugin-backed channels that still need managed bridge review should surface doctor as an explicit next action: {summary:#?}"
@@ -6321,7 +6273,7 @@ fn onboarding_success_summary_adds_doctor_action_for_incomplete_managed_bridge_s
         Some("Run the QQ bridge setup flow before enabling this bridge."),
     );
     let manifest = super::managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "qqbot": {
             "enabled": true,
             "app_id": "10001",
@@ -6330,7 +6282,7 @@ fn onboarding_success_summary_adds_doctor_action_for_incomplete_managed_bridge_s
         }
     }))
     .expect("deserialize qqbot config");
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let path = PathBuf::from("/tmp/loong-config.toml");
 
     assert_eq!(
         removed_transport_family.as_deref(),
@@ -6363,7 +6315,7 @@ fn onboarding_success_summary_keeps_generic_handoff_when_managed_bridge_is_ready
             "weixin_reply_loop",
         ),
     );
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "weixin": {
             "enabled": true,
             "bridge_url": "https://bridge.example.test/weixin",
@@ -6372,7 +6324,7 @@ fn onboarding_success_summary_keeps_generic_handoff_when_managed_bridge_is_ready
         }
     }))
     .expect("deserialize weixin config");
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let path = PathBuf::from("/tmp/loong-config.toml");
 
     std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
     super::write_managed_bridge_manifest(
@@ -6395,10 +6347,10 @@ fn onboarding_success_summary_keeps_generic_handoff_when_managed_bridge_is_ready
 
 #[test]
 fn onboarding_success_summary_advertises_browser_preview_enable_action() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let path = PathBuf::from("/tmp/loong-config.toml");
     let summary = crate::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         None,
     );
     let lines = crate::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
@@ -6408,7 +6360,7 @@ fn onboarding_success_summary_advertises_browser_preview_enable_action() {
             action.kind == crate::onboard_cli::OnboardingActionKind::BrowserPreview
                 && action.label == "enable browser preview"
                 && action.command
-                    == "loong skills enable-browser-preview --config '/tmp/loongclaw-config.toml'"
+                    == "loong skills enable-browser-preview --config '/tmp/loong-config.toml'"
         }),
         "onboarding should surface a concrete browser preview enable step for operators: {summary:#?}"
     );
@@ -6418,22 +6370,22 @@ fn onboarding_success_summary_advertises_browser_preview_enable_action() {
                 && line.contains("loong skills enable-browser-preview --config")
         }) && lines
             .iter()
-            .any(|line| line.contains("/tmp/loongclaw-config.toml")),
+            .any(|line| line.contains("/tmp/loong-config.toml")),
         "success summary should render the browser preview enable action in the follow-up section: {lines:#?}"
     );
 }
 
 #[test]
 fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
-    let lines = loongclaw_daemon::onboard_cli::render_existing_config_write_screen_lines(
-        "/tmp/loongclaw-config.toml",
+    let lines = loong_daemon::onboard_cli::render_existing_config_write_screen_lines(
+        "/tmp/loong-config.toml",
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "existing-config write screen");
+    assert_compact_loong_header(&lines, "existing-config write screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
-        "existing-config write screen should not repeat the large LOONGCLAW banner after the first screen: {lines:#?}"
+        "existing-config write screen should not repeat the large LOONG banner after the first screen: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "existing config found"),
@@ -6442,7 +6394,7 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- config: /tmp/loongclaw-config.toml")),
+            .any(|line| line.contains("- config: /tmp/loong-config.toml")),
         "existing-config write screen should show the target path: {lines:#?}"
     );
     assert!(
@@ -6478,32 +6430,32 @@ fn onboard_existing_config_write_screen_offers_replace_backup_and_cancel() {
 #[test]
 fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
     let checks = vec![
-        loongclaw_daemon::onboard_cli::OnboardCheck {
+        loong_daemon::onboard_cli::OnboardCheck {
             name: "provider credentials",
-            level: loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass,
+            level: loong_daemon::onboard_cli::OnboardCheckLevel::Pass,
             detail: "OPENAI_API_KEY is available".to_owned(),
             non_interactive_warning_policy:
-                loongclaw_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
+                loong_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
         },
-        loongclaw_daemon::onboard_cli::OnboardCheck {
+        loong_daemon::onboard_cli::OnboardCheck {
             name: "provider model probe",
-            level: loongclaw_daemon::onboard_cli::OnboardCheckLevel::Fail,
+            level: loong_daemon::onboard_cli::OnboardCheckLevel::Fail,
             detail: "provider rejected the model list".to_owned(),
             non_interactive_warning_policy:
-                loongclaw_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
+                loong_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
         },
-        loongclaw_daemon::onboard_cli::OnboardCheck {
+        loong_daemon::onboard_cli::OnboardCheck {
             name: "telegram channel",
-            level: loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn,
+            level: loong_daemon::onboard_cli::OnboardCheckLevel::Warn,
             detail: "enabled but bot token is missing".to_owned(),
             non_interactive_warning_policy:
-                loongclaw_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
+                loong_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
         },
     ];
 
-    let lines = loongclaw_daemon::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
+    let lines = loong_daemon::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
 
-    assert_compact_loongclaw_header(&lines, "preflight screen");
+    assert_compact_loong_header(&lines, "preflight screen");
     assert!(
         lines.iter().any(|line| line == "preflight checks"),
         "preflight screen should use a focused title: {lines:#?}"
@@ -6554,15 +6506,15 @@ fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
 
 #[test]
 fn onboard_preflight_screen_omits_continue_cancel_choices_when_all_checks_are_green() {
-    let checks = vec![loongclaw_daemon::onboard_cli::OnboardCheck {
+    let checks = vec![loong_daemon::onboard_cli::OnboardCheck {
         name: "provider credentials",
-        level: loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass,
+        level: loong_daemon::onboard_cli::OnboardCheckLevel::Pass,
         detail: "OPENAI_API_KEY is available".to_owned(),
         non_interactive_warning_policy:
-            loongclaw_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
+            loong_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
     }];
 
-    let lines = loongclaw_daemon::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
+    let lines = loong_daemon::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
 
     assert!(
         lines
@@ -6584,17 +6536,17 @@ fn onboard_preflight_screen_omits_continue_cancel_choices_when_all_checks_are_gr
 
 #[test]
 fn onboard_preflight_screen_falls_back_to_stacked_rows_when_details_overflow() {
-    let checks = vec![loongclaw_daemon::onboard_cli::OnboardCheck {
+    let checks = vec![loong_daemon::onboard_cli::OnboardCheck {
         name: "provider model probe",
-        level: loongclaw_daemon::onboard_cli::OnboardCheckLevel::Fail,
+        level: loong_daemon::onboard_cli::OnboardCheckLevel::Fail,
         detail:
             "provider rejected the model list because the configured endpoint requires a different compatibility mode"
                 .to_owned(),
         non_interactive_warning_policy:
-            loongclaw_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
+            loong_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
     }];
 
-    let lines = loongclaw_daemon::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
+    let lines = loong_daemon::onboard_cli::render_preflight_summary_screen_lines(&checks, 80);
 
     assert!(
         lines
@@ -6611,17 +6563,16 @@ fn onboard_preflight_screen_falls_back_to_stacked_rows_when_details_overflow() {
 
 #[test]
 fn current_setup_preflight_screen_uses_quick_review_progress_copy() {
-    let checks = vec![loongclaw_daemon::onboard_cli::OnboardCheck {
+    let checks = vec![loong_daemon::onboard_cli::OnboardCheck {
         name: "provider credentials",
-        level: loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass,
+        level: loong_daemon::onboard_cli::OnboardCheckLevel::Pass,
         detail: "OPENAI_API_KEY is available".to_owned(),
         non_interactive_warning_policy:
-            loongclaw_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
+            loong_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
     }];
 
-    let lines = loongclaw_daemon::onboard_cli::render_current_setup_preflight_summary_screen_lines(
-        &checks, 80,
-    );
+    let lines =
+        loong_daemon::onboard_cli::render_current_setup_preflight_summary_screen_lines(&checks, 80);
 
     assert!(
         lines
@@ -6637,15 +6588,15 @@ fn current_setup_preflight_screen_uses_quick_review_progress_copy() {
 
 #[test]
 fn detected_setup_preflight_screen_uses_quick_review_progress_copy() {
-    let checks = vec![loongclaw_daemon::onboard_cli::OnboardCheck {
+    let checks = vec![loong_daemon::onboard_cli::OnboardCheck {
         name: "provider credentials",
-        level: loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass,
+        level: loong_daemon::onboard_cli::OnboardCheckLevel::Pass,
         detail: "OPENAI_API_KEY is available".to_owned(),
         non_interactive_warning_policy:
-            loongclaw_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
+            loong_daemon::onboard_cli::OnboardNonInteractiveWarningPolicy::Block,
     }];
 
-    let lines = loongclaw_daemon::onboard_cli::render_detected_setup_preflight_summary_screen_lines(
+    let lines = loong_daemon::onboard_cli::render_detected_setup_preflight_summary_screen_lines(
         &checks, 80,
     );
 
@@ -6663,13 +6614,13 @@ fn detected_setup_preflight_screen_uses_quick_review_progress_copy() {
 
 #[test]
 fn onboard_write_confirmation_screen_shows_target_path_and_write_choice() {
-    let lines = loongclaw_daemon::onboard_cli::render_write_confirmation_screen_lines(
-        "/tmp/loongclaw-config.toml",
+    let lines = loong_daemon::onboard_cli::render_write_confirmation_screen_lines(
+        "/tmp/loong-config.toml",
         true,
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "write-confirm screen");
+    assert_compact_loong_header(&lines, "write-confirm screen");
     assert!(
         lines.iter().any(|line| line == "ready to write config"),
         "write-confirm screen should use a focused title: {lines:#?}"
@@ -6677,7 +6628,7 @@ fn onboard_write_confirmation_screen_shows_target_path_and_write_choice() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- config: /tmp/loongclaw-config.toml")),
+            .any(|line| line.contains("- config: /tmp/loong-config.toml")),
         "write-confirm screen should show the target config path: {lines:#?}"
     );
     assert!(
@@ -6700,8 +6651,8 @@ fn onboard_write_confirmation_screen_shows_target_path_and_write_choice() {
 
 #[test]
 fn onboard_write_confirmation_screen_wraps_long_path_and_option_copy() {
-    let lines = loongclaw_daemon::onboard_cli::render_write_confirmation_screen_lines(
-        "/tmp/shared workspace/loongclaw config.toml",
+    let lines = loong_daemon::onboard_cli::render_write_confirmation_screen_lines(
+        "/tmp/shared workspace/loong config.toml",
         true,
         42,
     );
@@ -6709,7 +6660,7 @@ fn onboard_write_confirmation_screen_wraps_long_path_and_option_copy() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- config: /tmp/shared workspace/loongclaw"),
+            .any(|line| line == "- config: /tmp/shared workspace/loong"),
         "write-confirm screen should keep the config label visible before wrapping long paths: {lines:#?}"
     );
     assert!(
@@ -6730,8 +6681,8 @@ fn onboard_write_confirmation_screen_wraps_long_path_and_option_copy() {
 
 #[test]
 fn current_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
-    let lines = loongclaw_daemon::onboard_cli::render_current_setup_write_confirmation_screen_lines(
-        "/tmp/loongclaw-config.toml",
+    let lines = loong_daemon::onboard_cli::render_current_setup_write_confirmation_screen_lines(
+        "/tmp/loong-config.toml",
         true,
         80,
     );
@@ -6750,12 +6701,11 @@ fn current_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
 
 #[test]
 fn detected_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
-    let lines =
-        loongclaw_daemon::onboard_cli::render_detected_setup_write_confirmation_screen_lines(
-            "/tmp/loongclaw-config.toml",
-            true,
-            80,
-        );
+    let lines = loong_daemon::onboard_cli::render_detected_setup_write_confirmation_screen_lines(
+        "/tmp/loong-config.toml",
+        true,
+        80,
+    );
 
     assert!(
         lines
@@ -6777,19 +6727,19 @@ async fn onboard_current_setup_shortcut_flow_skips_detailed_edit_screens() {
         .expect("write workspace guidance");
 
     let output_path = unique_temp_path("current-shortcut-config.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     existing.telegram.enabled = true;
-    existing.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:test-token".to_owned(),
     ));
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -6853,15 +6803,15 @@ async fn onboard_current_setup_shortcut_flow_skips_detailed_edit_screens() {
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_current_setup_shortcut_can_install_selected_bundled_skills() {
     let output_path = isolated_output_path("current-shortcut-preinstall-config.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -6922,15 +6872,15 @@ async fn onboard_current_setup_shortcut_can_install_selected_bundled_skills() {
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_current_setup_shortcut_can_install_minimax_office_pack() {
     let output_path = isolated_output_path("current-shortcut-minimax-office-config.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -6997,16 +6947,16 @@ requires_openai_auth = true
     )
     .expect("write codex config");
 
-    let screen_candidates = loongclaw_daemon::onboard_cli::collect_import_candidates_with_paths(
+    let screen_candidates = loong_daemon::onboard_cli::collect_import_candidates_with_paths(
         &output_path,
         Some(&codex_path),
-        loongclaw_daemon::onboard_cli::ChannelImportReadiness::default().with_state(
+        loong_daemon::onboard_cli::ChannelImportReadiness::default().with_state(
             "telegram",
-            loongclaw_daemon::migration::ChannelCredentialState::Ready,
+            loong_daemon::migration::ChannelCredentialState::Ready,
         ),
     )
     .expect("collect import candidates for screen ordering");
-    let screen_lines = loongclaw_daemon::onboard_cli::render_starting_point_selection_screen_lines(
+    let screen_lines = loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(
         &screen_candidates,
         80,
     );
@@ -7018,7 +6968,7 @@ requires_openai_auth = true
     );
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -7117,7 +7067,7 @@ requires_openai_auth = true
     .expect("write codex config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -7189,7 +7139,7 @@ requires_openai_auth = true
     .expect("write codex config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -7235,19 +7185,19 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
         .expect("write workspace guidance");
 
     let output_path = unique_temp_path("current-adjusted-review-config.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     existing.telegram.enabled = true;
-    existing.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:test-token".to_owned(),
     ));
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -7343,9 +7293,9 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
         .expect("write workspace guidance");
 
     let output_path = unique_temp_path("current-adjusted-personality-memory-config.toml");
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
-    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
         "inline-secret".to_owned(),
     ));
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
@@ -7414,7 +7364,7 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
 
 #[test]
 fn onboard_interactive_flow_defaults_back_to_native_prompt_pack_even_from_inline_override() {
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.cli.prompt_pack_id = Some(String::new());
     existing.cli.personality = None;
     existing.cli.system_prompt_addendum = None;
@@ -7469,7 +7419,7 @@ requires_openai_auth = true
     .expect("write codex config");
 
     let transcript = run_scripted_onboard_flow(
-        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+        loong_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
             non_interactive: false,
@@ -7550,23 +7500,21 @@ requires_openai_auth = true
 
 #[test]
 fn onboard_review_lines_include_starting_point_and_domain_preview() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:test-token".to_owned(),
     ));
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         Some("Codex config at ~/.codex/config.toml"),
-        &[
-            loongclaw_daemon::migration::types::WorkspaceGuidanceCandidate {
-                kind: loongclaw_daemon::migration::types::WorkspaceGuidanceKind::Agents,
-                path: "/tmp/project/AGENTS.md".to_owned(),
-            },
-        ],
+        &[loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        }],
         80,
     );
 
@@ -7588,11 +7536,11 @@ fn onboard_review_lines_include_starting_point_and_domain_preview() {
 
 #[test]
 fn onboard_review_lines_group_details_into_named_sections() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         Some("Codex config at ~/.codex/config.toml"),
         &[],
@@ -7620,17 +7568,17 @@ fn onboard_review_lines_group_details_into_named_sections() {
 
 #[test]
 fn onboard_review_lines_use_compact_header() {
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
-        &mvp::config::LoongClawConfig::default(),
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+        &mvp::config::LoongConfig::default(),
         None,
         &[],
         80,
     );
 
-    assert_compact_loongclaw_header(&lines, "review screen");
+    assert_compact_loong_header(&lines, "review screen");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
-        "review screen should not repeat the large LOONGCLAW banner: {lines:#?}"
+        "review screen should not repeat the large LOONG banner: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "review setup"),
@@ -7644,8 +7592,8 @@ fn onboard_review_lines_use_compact_header() {
 
 #[test]
 fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
-        &mvp::config::LoongClawConfig::default(),
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+        &mvp::config::LoongConfig::default(),
         None,
         &[],
         80,
@@ -7699,12 +7647,12 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
 
 #[test]
 fn onboard_review_lines_prefer_oauth_env_over_api_key_env_when_both_are_configured() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.oauth_access_token = Some(loongclaw_contracts::SecretRef::Env {
+    let mut config = mvp::config::LoongConfig::default();
+    config.provider.oauth_access_token = Some(loong_contracts::SecretRef::Env {
         env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
     });
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         None,
         &[],
@@ -7727,7 +7675,7 @@ fn onboard_review_lines_prefer_oauth_env_over_api_key_env_when_both_are_configur
 
 #[test]
 fn onboard_review_lines_include_active_provider_and_saved_profiles_when_multiple_profiles_exist() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.model = "gpt-5".to_owned();
     config.active_provider = Some("openai".to_owned());
@@ -7745,7 +7693,7 @@ fn onboard_review_lines_include_active_provider_and_saved_profiles_when_multiple
         }),
     );
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         None,
         &[],
@@ -7768,8 +7716,8 @@ fn onboard_review_lines_include_active_provider_and_saved_profiles_when_multiple
 
 #[test]
 fn current_setup_review_lines_use_quick_review_progress_copy() {
-    let lines = loongclaw_daemon::onboard_cli::render_current_setup_review_lines_with_guidance(
-        &mvp::config::LoongClawConfig::default(),
+    let lines = loong_daemon::onboard_cli::render_current_setup_review_lines_with_guidance(
+        &mvp::config::LoongConfig::default(),
         None,
         &[],
         80,
@@ -7789,8 +7737,8 @@ fn current_setup_review_lines_use_quick_review_progress_copy() {
 
 #[test]
 fn detected_setup_review_lines_use_quick_review_progress_copy() {
-    let lines = loongclaw_daemon::onboard_cli::render_detected_setup_review_lines_with_guidance(
-        &mvp::config::LoongClawConfig::default(),
+    let lines = loong_daemon::onboard_cli::render_detected_setup_review_lines_with_guidance(
+        &mvp::config::LoongConfig::default(),
         Some("Codex config at ~/.codex/config.toml"),
         &[],
         80,
@@ -7810,8 +7758,8 @@ fn detected_setup_review_lines_use_quick_review_progress_copy() {
 
 #[test]
 fn onboard_review_lines_sanitize_suggested_starting_point_label() {
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
-        &mvp::config::LoongClawConfig::default(),
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+        &mvp::config::LoongConfig::default(),
         Some("recommended import plan"),
         &[],
         80,
@@ -7834,14 +7782,14 @@ fn onboard_review_lines_sanitize_suggested_starting_point_label() {
 #[test]
 fn onboard_review_lines_compact_on_narrow_width() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
         "123456:test-token".to_owned(),
     ));
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         None,
         &[],
@@ -7862,9 +7810,9 @@ fn onboard_review_lines_compact_on_narrow_width() {
 
 #[test]
 fn onboard_review_lines_wrap_long_starting_point_on_narrow_width() {
-    let lines = loongclaw_daemon::onboard_cli::render_detected_setup_review_lines_with_guidance(
-        &mvp::config::LoongClawConfig::default(),
-        Some("Codex config at ~/.codex/agents/loongclaw/config.toml"),
+    let lines = loong_daemon::onboard_cli::render_detected_setup_review_lines_with_guidance(
+        &mvp::config::LoongConfig::default(),
+        Some("Codex config at ~/.codex/agents/loong/config.toml"),
         &[],
         48,
     );
@@ -7878,56 +7826,49 @@ fn onboard_review_lines_wrap_long_starting_point_on_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "  ~/.codex/agents/loongclaw/config.toml"),
+            .any(|line| line == "  ~/.codex/agents/loong/config.toml"),
         "narrow review should continue long starting-point paths on an indented line: {lines:#?}"
     );
 }
 
 #[test]
 fn onboard_should_skip_config_write_when_existing_config_matches_draft() {
-    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut existing = mvp::config::LoongConfig::default();
     existing.provider.model = "openai/gpt-5.1".to_owned();
     existing.cli.system_prompt = "keep current setup".to_owned();
 
     assert!(
-        loongclaw_daemon::onboard_cli::should_skip_config_write(Some(&existing), &existing),
+        loong_daemon::onboard_cli::should_skip_config_write(Some(&existing), &existing),
         "matching draft and existing config should reuse the current file instead of forcing another write decision"
     );
 
     let mut changed = existing.clone();
     changed.provider.model = "openai/gpt-5.2".to_owned();
     assert!(
-        !loongclaw_daemon::onboard_cli::should_skip_config_write(Some(&existing), &changed),
+        !loong_daemon::onboard_cli::should_skip_config_write(Some(&existing), &changed),
         "a changed draft should still go through the normal write flow"
     );
 }
 
 #[test]
 fn render_onboarding_success_summary_compacts_for_narrow_width() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 48);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 48);
+    let rendered = collapse_wrapped_lines(&lines);
     assert!(
         lines.iter().any(|line| line == "start here"),
         "narrow renderer should explicitly call out the primary next action: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line == "- first answer: loong ask --config")
-            && lines
-                .iter()
-                .any(|line| line == "  '/tmp/loongclaw-config.toml' --message")
-            && lines
-                .iter()
-                .any(|line| line == "  'Summarize this repository and suggest the")
-            && lines.iter().any(|line| line == "  best next step.'"),
+        rendered.contains(
+            "- first answer: loong ask --config '/tmp/loong-config.toml' --message 'Summarize this repository and suggest the best next step.'"
+        ),
         "narrow renderer should keep the primary first-answer handoff readable even when the command wraps: {lines:#?}"
     );
     assert!(
@@ -7935,27 +7876,24 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
         "narrow renderer should group secondary channel actions under a separate heading: {lines:#?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line == "- chat: loong chat --config")
-            && lines
-                .iter()
-                .any(|line| line == "- Telegram: loong telegram-serve --config"),
+        rendered.contains("- chat: loong chat --config '/tmp/loong-config.toml'")
+            && rendered
+                .contains("- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"),
         "narrow renderer should keep secondary chat and channel actions visible after the primary ask example: {lines:#?}"
     );
 }
 
 #[test]
 fn onboarding_success_summary_surfaces_primary_handoff_before_saved_setup_details() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         None,
     );
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
     let start_here_index = lines
         .iter()
         .position(|line| line == "start here")
@@ -7973,15 +7911,15 @@ fn onboarding_success_summary_surfaces_primary_handoff_before_saved_setup_detail
 
 #[test]
 fn onboarding_success_summary_uses_starting_point_language() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         Some("Codex config at ~/.codex/config.toml"),
     );
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
     assert!(
         lines
             .iter()
@@ -7996,19 +7934,20 @@ fn onboarding_success_summary_uses_starting_point_language() {
 
 #[test]
 fn onboarding_success_summary_uses_compact_header() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         None,
     );
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
-    assert_compact_loongclaw_header(&lines, "success summary");
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+    let rendered = collapse_wrapped_lines(&lines);
+    assert_compact_loong_header(&lines, "success summary");
     assert!(
         lines.iter().all(|line| !line.starts_with("██╗")),
-        "success summary should not repeat the large LOONGCLAW banner after onboarding has already started: {lines:#?}"
+        "success summary should not repeat the large LOONG banner after onboarding has already started: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "onboarding complete"),
@@ -8016,12 +7955,9 @@ fn onboarding_success_summary_uses_compact_header() {
     );
     assert!(
         lines.iter().any(|line| line == "start here")
-            && lines.join(" ").contains(
-                "- first answer: loong ask --config '/tmp/loongclaw-config.toml' --message"
-            )
-            && lines
-                .join(" ")
-                .contains("Summarize this repository and suggest the best next step."),
+            && rendered.contains(
+                "- first answer: loong ask --config '/tmp/loong-config.toml' --message 'Summarize this repository and suggest the best next step.'"
+            ),
         "success summary should elevate ask as the primary handoff command even when wrapping is needed: {lines:#?}"
     );
     assert!(
@@ -8046,40 +7982,39 @@ fn onboarding_success_summary_uses_compact_header() {
 
 #[test]
 fn onboarding_success_summary_shell_quotes_config_paths_with_single_quotes() {
-    let path = PathBuf::from("/tmp/loongclaw's config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong's config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         None,
     );
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 160);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 160);
     let rendered = lines.join(" ");
 
     assert!(
         rendered.contains(
-            "- first answer: loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
+            "- first answer: loong ask --config '/tmp/loong'\"'\"'s config.toml' --message"
         ),
         "success summary should shell-quote single quotes in the primary ask handoff: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+        rendered.contains("- chat: loong chat --config '/tmp/loong'\"'\"'s config.toml'"),
         "success summary should shell-quote single quotes in the secondary chat handoff: {lines:#?}"
     );
 }
 
 #[test]
 fn onboarding_success_summary_prefers_oauth_env_over_api_key_env_when_both_are_configured() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.oauth_access_token = Some(loongclaw_contracts::SecretRef::Env {
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let mut config = mvp::config::LoongConfig::default();
+    config.provider.oauth_access_token = Some(loong_contracts::SecretRef::Env {
         env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
     });
 
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert!(
         lines
@@ -8097,16 +8032,16 @@ fn onboarding_success_summary_prefers_oauth_env_over_api_key_env_when_both_are_c
 
 #[test]
 fn onboarding_success_summary_reports_existing_config_kept() {
-    let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
+    let summary = loong_daemon::onboard_cli::OnboardingSuccessSummary {
         import_source: None,
-        config_path: "/tmp/loongclaw-config.toml".to_owned(),
+        config_path: "/tmp/loong-config.toml".to_owned(),
         config_status: Some("existing config kept; no changes were needed".to_owned()),
         provider: "openai".to_owned(),
         saved_provider_profiles: Vec::new(),
         model: "auto".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
         provider_endpoint: None,
-        credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+        credential: Some(loong_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "OPENAI_API_KEY".to_owned(),
         }),
@@ -8115,12 +8050,12 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         prompt_addendum: None,
         memory_profile: "window_only".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),
-        web_search_credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+        web_search_credential: Some(loong_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "web search credential",
             value: "not required".to_owned(),
         }),
         memory_path: None,
-        channel_surface_summary: loongclaw_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
+        channel_surface_summary: loong_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
             total_surface_count: 28,
             runtime_backed_surface_count: 5,
             config_backed_surface_count: 17,
@@ -8133,15 +8068,15 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         outbound_only_channels: Vec::new(),
         suggested_channels: Vec::new(),
         domain_outcomes: Vec::new(),
-        next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
-            kind: loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask,
+        next_actions: vec![loong_daemon::onboard_cli::OnboardingAction {
+            kind: loong_daemon::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loong ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
+            command: "loong ask --config /tmp/loong-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
         }],
     };
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert!(
         lines
@@ -8153,7 +8088,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
 
 #[test]
 fn onboarding_success_summary_reports_active_provider_and_saved_profiles() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.model = "gpt-5".to_owned();
     config.active_provider = Some("openai".to_owned());
@@ -8171,11 +8106,10 @@ fn onboarding_success_summary_reports_active_provider_and_saved_profiles() {
         }),
     );
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert!(
         lines.iter().any(|line| line == "- active provider: OpenAI"),
@@ -8191,14 +8125,14 @@ fn onboarding_success_summary_reports_active_provider_and_saved_profiles() {
 
 #[test]
 fn onboarding_success_summary_reports_web_search_provider_and_credential() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         None,
     );
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert!(
         lines.iter().any(|line| line == "- web search: DuckDuckGo"),
@@ -8214,14 +8148,14 @@ fn onboarding_success_summary_reports_web_search_provider_and_credential() {
 
 #[test]
 fn onboarding_success_summary_reports_channel_surface_distribution() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         None,
     );
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
 
     assert_eq!(summary.channel_surface_summary.total_surface_count, 28);
     assert_eq!(
@@ -8251,19 +8185,18 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
 
 #[test]
 fn onboarding_success_summary_groups_enabled_channels_by_runtime_taxonomy() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.weixin.enabled = true;
     config.discord.enabled = true;
-    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
         "discord-token".to_owned(),
     ));
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
 
     assert_eq!(summary.runtime_backed_channels, vec!["telegram".to_owned()]);
     assert_eq!(summary.plugin_backed_channels, vec!["weixin".to_owned()]);
@@ -8296,16 +8229,16 @@ fn onboarding_success_summary_groups_enabled_channels_by_runtime_taxonomy() {
 
 #[test]
 fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
-    let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
+    let summary = loong_daemon::onboard_cli::OnboardingSuccessSummary {
         import_source: Some("suggested starting point".to_owned()),
-        config_path: "/tmp/loongclaw-config.toml".to_owned(),
+        config_path: "/tmp/loong-config.toml".to_owned(),
         config_status: None,
         provider: "openai".to_owned(),
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
         provider_endpoint: None,
-        credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+        credential: Some(loong_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "OPENAI_API_KEY".to_owned(),
         }),
@@ -8314,12 +8247,12 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),
-        web_search_credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+        web_search_credential: Some(loong_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "web search credential",
             value: "not required".to_owned(),
         }),
         memory_path: None,
-        channel_surface_summary: loongclaw_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
+        channel_surface_summary: loong_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
             total_surface_count: 28,
             runtime_backed_surface_count: 5,
             config_backed_surface_count: 17,
@@ -8332,28 +8265,28 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         outbound_only_channels: Vec::new(),
         suggested_channels: Vec::new(),
         domain_outcomes: vec![
-            loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
-                kind: loongclaw_daemon::migration::types::SetupDomainKind::Provider,
-                decision: loongclaw_daemon::migration::types::PreviewDecision::AdjustedInSession,
+            loong_daemon::onboard_cli::OnboardingDomainOutcome {
+                kind: loong_daemon::migration::types::SetupDomainKind::Provider,
+                decision: loong_daemon::migration::types::PreviewDecision::AdjustedInSession,
             },
-            loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
-                kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-                decision: loongclaw_daemon::migration::types::PreviewDecision::Supplement,
+            loong_daemon::onboard_cli::OnboardingDomainOutcome {
+                kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+                decision: loong_daemon::migration::types::PreviewDecision::Supplement,
             },
-            loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
-                kind: loongclaw_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
-                decision: loongclaw_daemon::migration::types::PreviewDecision::UseDetected,
+            loong_daemon::onboard_cli::OnboardingDomainOutcome {
+                kind: loong_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
+                decision: loong_daemon::migration::types::PreviewDecision::UseDetected,
             },
         ],
-        next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
-            kind: loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask,
+        next_actions: vec![loong_daemon::onboard_cli::OnboardingAction {
+            kind: loong_daemon::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loong ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
+            command: "loong ask --config /tmp/loong-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
         }],
     };
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert!(
         lines.iter().any(|line| line == "setup outcome"),
@@ -8377,16 +8310,16 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
 
 #[test]
 fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
-    let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
+    let summary = loong_daemon::onboard_cli::OnboardingSuccessSummary {
         import_source: Some("suggested starting point".to_owned()),
-        config_path: "/tmp/loongclaw-config.toml".to_owned(),
+        config_path: "/tmp/loong-config.toml".to_owned(),
         config_status: None,
         provider: "openai".to_owned(),
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
         transport: "chat_completions compatibility mode".to_owned(),
         provider_endpoint: None,
-        credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+        credential: Some(loong_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "credential source",
             value: "OPENAI_API_KEY".to_owned(),
         }),
@@ -8395,12 +8328,12 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),
-        web_search_credential: Some(loongclaw_daemon::onboard_cli::OnboardingCredentialSummary {
+        web_search_credential: Some(loong_daemon::onboard_cli::OnboardingCredentialSummary {
             label: "web search credential",
             value: "not required".to_owned(),
         }),
         memory_path: None,
-        channel_surface_summary: loongclaw_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
+        channel_surface_summary: loong_daemon::onboard_cli::OnboardingChannelSurfaceSummary {
             total_surface_count: 28,
             runtime_backed_surface_count: 5,
             config_backed_surface_count: 17,
@@ -8413,28 +8346,28 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         outbound_only_channels: Vec::new(),
         suggested_channels: Vec::new(),
         domain_outcomes: vec![
-            loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
-                kind: loongclaw_daemon::migration::types::SetupDomainKind::Provider,
-                decision: loongclaw_daemon::migration::types::PreviewDecision::AdjustedInSession,
+            loong_daemon::onboard_cli::OnboardingDomainOutcome {
+                kind: loong_daemon::migration::types::SetupDomainKind::Provider,
+                decision: loong_daemon::migration::types::PreviewDecision::AdjustedInSession,
             },
-            loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
-                kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
-                decision: loongclaw_daemon::migration::types::PreviewDecision::AdjustedInSession,
+            loong_daemon::onboard_cli::OnboardingDomainOutcome {
+                kind: loong_daemon::migration::types::SetupDomainKind::Channels,
+                decision: loong_daemon::migration::types::PreviewDecision::AdjustedInSession,
             },
-            loongclaw_daemon::onboard_cli::OnboardingDomainOutcome {
-                kind: loongclaw_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
-                decision: loongclaw_daemon::migration::types::PreviewDecision::AdjustedInSession,
+            loong_daemon::onboard_cli::OnboardingDomainOutcome {
+                kind: loong_daemon::migration::types::SetupDomainKind::WorkspaceGuidance,
+                decision: loong_daemon::migration::types::PreviewDecision::AdjustedInSession,
             },
         ],
-        next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
-            kind: loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask,
+        next_actions: vec![loong_daemon::onboard_cli::OnboardingAction {
+            kind: loong_daemon::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loong ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
+            command: "loong ask --config /tmp/loong-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
         }],
     };
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 48);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 48);
 
     assert!(
         lines.iter().any(|line| line == "setup outcome"),
@@ -8454,21 +8387,20 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
 
 #[test]
 fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_handoff() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
-    let rendered = lines.join(" ");
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+    let rendered = collapse_wrapped_lines(&lines);
 
     assert!(
-        rendered
-            .contains("- first answer: loong ask --config '/tmp/loongclaw-config.toml' --message")
-            && rendered.contains("Summarize this repository and suggest the best next step."),
+        rendered.contains(
+            "- first answer: loong ask --config '/tmp/loong-config.toml' --message 'Summarize this repository and suggest the best next step.'"
+        ),
         "wide success summary should call out a single primary ask action even when wrapping is needed: {lines:#?}"
     );
     assert!(
@@ -8476,51 +8408,51 @@ fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_han
         "wide success summary should group secondary channel actions under a separate heading: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loong chat --config '/tmp/loongclaw-config.toml'"),
+        rendered.contains("- chat: loong chat --config '/tmp/loong-config.toml'"),
         "wide success summary should still surface interactive chat as a secondary follow-up: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(
+            |line| line == "- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"
+        ),
+        "wide success summary should list telegram as a secondary action: {lines:#?}"
     );
     assert!(
         lines
             .iter()
             .any(|line| line
-                == "- Telegram: loong telegram-serve --config '/tmp/loongclaw-config.toml'"),
-        "wide success summary should list telegram as a secondary action: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line
-            == "- Feishu/Lark: loong feishu-serve --config '/tmp/loongclaw-config.toml'"),
+                == "- Feishu/Lark: loong feishu-serve --config '/tmp/loong-config.toml'"),
         "wide success summary should list feishu as a secondary action: {lines:#?}"
     );
 }
 
 #[test]
 fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
     config.telegram.enabled = true;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel,
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel,
         "structured actions should promote the first enabled channel when cli is disabled: {summary:#?}"
     );
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.iter().any(|line| {
-                line == "- Telegram: loong telegram-serve --config '/tmp/loongclaw-config.toml'"
+                line == "- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"
             }),
         "success summary should guide users into the first enabled channel when cli is disabled: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| line != "- chat: loong chat --config '/tmp/loongclaw-config.toml'"),
+            .all(|line| line != "- chat: loong chat --config '/tmp/loong-config.toml'"),
         "success summary should not keep chat as the primary handoff once cli is disabled: {lines:#?}"
     );
 }
@@ -8528,25 +8460,24 @@ fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
 #[test]
 fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_and_no_service_channels_are_enabled()
  {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel,
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel,
         "channel catalog should become the primary handoff when cli and service channels are both unavailable: {summary:#?}"
     );
     assert_eq!(summary.next_actions[0].label, "channels");
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.iter().any(|line| {
-                line == "- channels: loong channels --config '/tmp/loongclaw-config.toml'"
+                line == "- channels: loong channels --config '/tmp/loong-config.toml'"
             }),
         "success summary should fall back to the channel catalog when no direct cli or service-channel handoff exists: {lines:#?}"
     );
@@ -8554,31 +8485,30 @@ fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_
 
 #[test]
 fn onboarding_success_summary_uses_contextual_discord_handoff_when_cli_is_disabled() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
     config.discord.enabled = true;
-    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
         "discord-token".to_owned(),
     ));
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(summary.next_actions[0].label, "inspect Discord");
     assert_eq!(
         summary.next_actions[0].command,
-        "loong channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loong-config.toml'"
     );
     assert!(
         lines.iter().any(|line| {
-            line == "- inspect Discord: loong channels --config '/tmp/loongclaw-config.toml'"
+            line == "- inspect Discord: loong channels --config '/tmp/loong-config.toml'"
         }),
         "success summary should surface a contextual inspection handoff for configured outbound channels: {lines:#?}"
     );
@@ -8587,40 +8517,39 @@ fn onboarding_success_summary_uses_contextual_discord_handoff_when_cli_is_disabl
 #[test]
 fn onboarding_success_summary_uses_contextual_discord_review_handoff_when_outbound_setup_is_blocked()
  {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
     config.discord.enabled = true;
     config.discord.bot_token = None;
     config.discord.bot_token_env = None;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+        loong_daemon::onboard_cli::OnboardingActionKind::Doctor
     );
     assert_eq!(summary.next_actions[0].label, "verify Discord setup");
     assert_eq!(
         summary.next_actions[0].command,
-        "loong doctor --config '/tmp/loongclaw-config.toml'"
+        "loong doctor --config '/tmp/loong-config.toml'"
     );
     assert_eq!(
         summary.next_actions[1].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(summary.next_actions[1].label, "inspect Discord");
     assert_eq!(
         summary.next_actions[1].command,
-        "loong channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loong-config.toml'"
     );
     assert!(
         lines.iter().any(|line| {
             line.contains("verify Discord setup")
-                && line.contains("loong doctor --config '/tmp/loongclaw-config.toml'")
+                && line.contains("loong doctor --config '/tmp/loong-config.toml'")
         }),
         "success summary should steer blocked outbound-only setups into a doctor-first handoff: {lines:#?}"
     );
@@ -8629,26 +8558,26 @@ fn onboarding_success_summary_uses_contextual_discord_review_handoff_when_outbou
 #[test]
 fn onboarding_success_summary_uses_outbound_group_handoff_when_multiple_outbound_channels_are_enabled()
  {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
     config.discord.enabled = true;
-    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
         "discord-token".to_owned(),
     ));
     config.slack.enabled = true;
-    config.slack.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.slack.bot_token = Some(loong_contracts::SecretRef::Inline(
         "xoxb-test-token".to_owned(),
     ));
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+    let rendered = collapse_wrapped_lines(&lines);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(
         summary.next_actions[0].label,
@@ -8656,15 +8585,15 @@ fn onboarding_success_summary_uses_outbound_group_handoff_when_multiple_outbound
     );
     assert_eq!(
         summary.next_actions[0].command,
-        "loong channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loong-config.toml'"
     );
     assert!(
         summary.suggested_channels.is_empty(),
         "once outbound channels are already configured, onboarding should stop suggesting unrelated runtime-backed channels: {summary:#?}"
     );
     assert!(
-        lines.join("\n").contains(
-            "- inspect configured outbound channels: loong channels --config\n  '/tmp/loongclaw-config.toml'"
+        rendered.contains(
+            "- inspect configured outbound channels: loong channels --config '/tmp/loong-config.toml'"
         ),
         "success summary should prefer an outbound-group inspection handoff when several outbound-only surfaces are configured: {lines:#?}"
     );
@@ -8672,51 +8601,50 @@ fn onboarding_success_summary_uses_outbound_group_handoff_when_multiple_outbound
 
 #[test]
 fn onboarding_success_summary_keeps_mixed_runtime_and_outbound_followups_after_doctor() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
     config.telegram.enabled = true;
     config.discord.enabled = true;
     config.discord.bot_token = None;
     config.discord.bot_token_env = None;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 100);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 100);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+        loong_daemon::onboard_cli::OnboardingActionKind::Doctor
     );
     assert_eq!(summary.next_actions[0].label, "verify Discord setup");
     assert_eq!(
         summary.next_actions[1].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(summary.next_actions[1].label, "Telegram");
     assert_eq!(
         summary.next_actions[1].command,
-        "loong telegram-serve --config '/tmp/loongclaw-config.toml'"
+        "loong telegram-serve --config '/tmp/loong-config.toml'"
     );
     assert_eq!(
         summary.next_actions[2].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(summary.next_actions[2].label, "inspect Discord");
     assert_eq!(
         summary.next_actions[2].command,
-        "loong channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loong-config.toml'"
     );
     assert!(
         lines.iter().any(|line| {
-            line == "- Telegram: loong telegram-serve --config '/tmp/loongclaw-config.toml'"
+            line == "- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"
         }),
         "mixed runtime-backed plus outbound setups should keep the runtime-backed handoff visible: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| {
-            line == "- inspect Discord: loong channels --config '/tmp/loongclaw-config.toml'"
+            line == "- inspect Discord: loong channels --config '/tmp/loong-config.toml'"
         }),
         "mixed runtime-backed plus outbound setups should still render the outbound inspection handoff after doctor: {lines:#?}"
     );
@@ -8725,34 +8653,33 @@ fn onboarding_success_summary_keeps_mixed_runtime_and_outbound_followups_after_d
 #[test]
 fn onboarding_success_summary_uses_outbound_review_handoff_when_multiple_outbound_channels_need_attention()
  {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
     config.discord.enabled = true;
-    config.discord.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.discord.bot_token = Some(loong_contracts::SecretRef::Inline(
         "discord-token".to_owned(),
     ));
     config.slack.enabled = true;
     config.slack.bot_token = None;
     config.slack.bot_token_env = None;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+        loong_daemon::onboard_cli::OnboardingActionKind::Doctor
     );
     assert_eq!(summary.next_actions[0].label, "verify Slack setup");
     assert_eq!(
         summary.next_actions[0].command,
-        "loong doctor --config '/tmp/loongclaw-config.toml'"
+        "loong doctor --config '/tmp/loong-config.toml'"
     );
     assert_eq!(
         summary.next_actions[1].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(
         summary.next_actions[1].label,
@@ -8760,12 +8687,12 @@ fn onboarding_success_summary_uses_outbound_review_handoff_when_multiple_outboun
     );
     assert_eq!(
         summary.next_actions[1].command,
-        "loong channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loong-config.toml'"
     );
     assert!(
         lines.iter().any(|line| {
             line.contains("verify Slack setup")
-                && line.contains("loong doctor --config '/tmp/loongclaw-config.toml'")
+                && line.contains("loong doctor --config '/tmp/loong-config.toml'")
         }),
         "success summary should elevate blocked outbound-only groups into a doctor-first handoff that points at the exact blocked surface when one is known: {lines:#?}"
     );
@@ -8774,24 +8701,23 @@ fn onboarding_success_summary_uses_outbound_review_handoff_when_multiple_outboun
 #[test]
 fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_when_cli_is_disabled()
 {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = false;
     config.weixin.enabled = true;
     config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
-    config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
         "weixin-token".to_owned(),
     ));
     config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor,
+        loong_daemon::onboard_cli::OnboardingActionKind::Doctor,
         "plugin-backed channel setups should guide operators into diagnostics before the generic channel catalog: {summary:#?}"
     );
     assert_eq!(
@@ -8801,13 +8727,13 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
     assert_eq!(
         summary.next_actions[0].command,
         format!(
-            "{} doctor --config '/tmp/loongclaw-config.toml'",
+            "{} doctor --config '/tmp/loong-config.toml'",
             super::active_cli_command_name()
         )
     );
     assert_eq!(
         summary.next_actions[1].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel,
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel,
         "a contextual bridge review handoff should remain available as a secondary fallback: {summary:#?}"
     );
     assert_eq!(summary.next_actions[1].label, "review Weixin bridge");
@@ -8823,7 +8749,7 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
             })
             && lines
                 .iter()
-                .any(|line| line.contains("/tmp/loongclaw-config.toml")),
+                .any(|line| line.contains("/tmp/loong-config.toml")),
         "success summary should render the managed bridge verification handoff as the primary action: {lines:#?}"
     );
 }
@@ -8840,7 +8766,7 @@ fn onboarding_success_summary_uses_contextual_bridge_handoff_when_ready_plugin_b
             "weixin_reply_loop",
         ),
     );
-    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+    let mut config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "cli": { "enabled": false },
         "weixin": {
             "enabled": true,
@@ -8850,7 +8776,7 @@ fn onboarding_success_summary_uses_contextual_bridge_handoff_when_ready_plugin_b
         }
     }))
     .expect("deserialize weixin config");
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let path = PathBuf::from("/tmp/loong-config.toml");
 
     std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
     super::write_managed_bridge_manifest(
@@ -8862,26 +8788,27 @@ fn onboarding_success_summary_uses_contextual_bridge_handoff_when_ready_plugin_b
 
     let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 90);
 
     assert_eq!(
         summary.next_actions[0].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(summary.next_actions[0].label, "inspect Weixin bridge");
     assert_eq!(
         summary.next_actions[0].command,
-        "loong channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loong-config.toml'"
     );
     assert!(
-        summary.next_actions.iter().all(
-            |action| action.kind != loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
-        ),
+        summary
+            .next_actions
+            .iter()
+            .all(|action| action.kind != loong_daemon::onboard_cli::OnboardingActionKind::Doctor),
         "ready managed bridge setups should not force a doctor handoff: {summary:#?}"
     );
     assert!(
         lines.iter().any(|line| {
-            line == "- inspect Weixin bridge: loong channels --config '/tmp/loongclaw-config.toml'"
+            line == "- inspect Weixin bridge: loong channels --config '/tmp/loong-config.toml'"
         }),
         "success summary should render a contextual bridge inspection handoff when bridge setup is already ready: {lines:#?}"
     );
@@ -8890,32 +8817,32 @@ fn onboarding_success_summary_uses_contextual_bridge_handoff_when_ready_plugin_b
 #[test]
 fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_when_cli_is_enabled()
 {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.weixin.enabled = true;
     config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
-    config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+    config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
         "weixin-token".to_owned(),
     ));
     config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 100);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 100);
     let ask_position = summary
         .next_actions
         .iter()
-        .position(|action| action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask);
-    let chat_position = summary.next_actions.iter().position(|action| {
-        action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Chat
-    });
+        .position(|action| action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Ask);
+    let chat_position = summary
+        .next_actions
+        .iter()
+        .position(|action| action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Chat);
     let personalize_position = summary.next_actions.iter().position(|action| {
-        action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Personalize
+        action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Personalize
             && action.label == "working preferences"
     });
     let doctor_position = summary.next_actions.iter().position(|action| {
-        action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+        action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Doctor
             && action.label == "verify weixin managed bridge"
     });
     let bridge_review_position = summary
@@ -8953,7 +8880,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
             line.contains("verify weixin managed bridge")
                 && line.contains(
                     format!(
-                        "{} doctor --config '/tmp/loongclaw-config.toml'",
+                        "{} doctor --config '/tmp/loong-config.toml'",
                         super::active_cli_command_name()
                     )
                     .as_str(),
@@ -8965,15 +8892,15 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
 
 #[test]
 fn onboarding_success_summary_sanitizes_suggested_starting_point_label() {
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary = loongclaw_daemon::onboard_cli::build_onboarding_success_summary(
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(
         &path,
-        &mvp::config::LoongClawConfig::default(),
+        &mvp::config::LoongConfig::default(),
         Some("recommended import plan"),
     );
 
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert!(
         lines
@@ -8991,12 +8918,12 @@ fn onboarding_success_summary_sanitizes_suggested_starting_point_label() {
 
 #[test]
 fn onboard_review_lines_surface_transport_summary_for_responses_compatibility_mode() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Deepseek;
     config.provider.model = "deepseek-chat".to_owned();
     config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         None,
         &[],
@@ -9013,10 +8940,10 @@ fn onboard_review_lines_surface_transport_summary_for_responses_compatibility_mo
 
 #[test]
 fn onboard_review_lines_surface_region_endpoint_note_for_minimax() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Minimax;
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         None,
         &[],
@@ -9033,11 +8960,11 @@ fn onboard_review_lines_surface_region_endpoint_note_for_minimax() {
 #[test]
 fn onboard_review_lines_redact_invalid_configured_credential_env_value() {
     let secret = "sk-live-direct-secret-value";
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.api_key_env = Some(secret.to_owned());
 
-    let lines = loongclaw_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
+    let lines = loong_daemon::onboard_cli::render_onboard_review_lines_with_guidance(
         &config,
         None,
         &[],
@@ -9064,16 +8991,15 @@ fn onboard_review_lines_redact_invalid_configured_credential_env_value() {
 
 #[test]
 fn onboarding_success_summary_surfaces_transport_summary() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Deepseek;
     config.provider.model = "deepseek-chat".to_owned();
     config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     assert!(
         lines
@@ -9085,14 +9011,13 @@ fn onboarding_success_summary_surfaces_transport_summary() {
 
 #[test]
 fn onboarding_success_summary_surfaces_region_endpoint_note_for_zhipu() {
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Zhipu;
 
-    let path = PathBuf::from("/tmp/loongclaw-config.toml");
-    let summary =
-        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let path = PathBuf::from("/tmp/loong-config.toml");
+    let summary = loong_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
-        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+        loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
 
     let rendered = lines.join("\n");
     assert!(
@@ -9103,8 +9028,8 @@ fn onboarding_success_summary_surfaces_region_endpoint_note_for_zhipu() {
 
 #[test]
 fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels() {
-    let lines = loongclaw_daemon::onboard_cli::build_channel_onboarding_follow_up_lines(
-        &mvp::config::LoongClawConfig::default(),
+    let lines = loong_daemon::onboard_cli::build_channel_onboarding_follow_up_lines(
+        &mvp::config::LoongConfig::default(),
     );
 
     assert_eq!(
@@ -9121,8 +9046,9 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
     }));
     assert!(lines.iter().any(|line| {
         line.contains("Feishu/Lark [feishu]")
-            && line.contains("strategy=manual_config")
+            && line.contains("strategy=qr_registration")
             && line.contains("aliases=lark")
+            && line.contains("repair_command=\"loong feishu onboard\"")
     }));
     assert!(lines.iter().any(|line| {
         line.contains("Discord [discord]")

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
+use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 
 use super::orchestrator::{
     BuiltinMemoryOrchestrator, hydrate_stage_envelope_without_execution_adapter,

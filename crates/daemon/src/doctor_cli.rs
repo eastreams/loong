@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use kernel::{probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal};
-use loongclaw_app as mvp;
-use loongclaw_contracts::SecretRef;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_contracts::SecretRef;
+use loong_spec::CliResult;
 use serde_json::json;
 
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
@@ -164,7 +164,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
             detail: "tools.file_root is empty (falls back to current working directory)".to_owned(),
         });
         if options.fix {
-            let suggested_root = mvp::config::default_loongclaw_home()
+            let suggested_root = mvp::config::default_loong_home()
                 .join("workspace")
                 .display()
                 .to_string();
@@ -307,7 +307,7 @@ fn check_directory_ready(
 }
 
 #[cfg(test)]
-fn check_channel_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
+fn check_channel_surfaces(config: &mvp::config::LoongConfig) -> Vec<DoctorCheck> {
     let inventory = mvp::channel::channel_inventory(config);
     collect_channel_surface_checks(&inventory)
 }
@@ -324,9 +324,7 @@ fn collect_channel_surface_checks(inventory: &mvp::channel::ChannelInventory) ->
     checks
 }
 
-fn collect_runtime_plugins_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<DoctorCheck> {
+fn collect_runtime_plugins_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<DoctorCheck> {
     let state = crate::collect_runtime_snapshot_runtime_plugins_state(config);
     let runtime_level = if !state.enabled || state.scanned_root_count == 0 {
         DoctorCheckLevel::Warn
@@ -701,7 +699,7 @@ fn check_audit_journal_directory(
 }
 
 pub fn check_feishu_integration(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     fix: bool,
     fixes: &mut Vec<String>,
 ) -> Vec<DoctorCheck> {
@@ -1742,7 +1740,7 @@ fn build_channel_runtime_check(
 }
 
 fn maybe_apply_provider_env_fix(
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     fix: bool,
     fixes: &mut Vec<String>,
 ) -> bool {
@@ -1777,7 +1775,7 @@ fn maybe_apply_provider_env_fix(
 }
 
 fn maybe_apply_channel_env_fix(
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     fix: bool,
     fixes: &mut Vec<String>,
 ) -> bool {
@@ -1892,7 +1890,7 @@ fn provider_route_probe_doctor_check(
 }
 
 fn provider_credentials_doctor_check(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     has_provider_credentials: bool,
 ) -> DoctorCheck {
     let provider_label = crate::provider_presentation::active_provider_detail_label(config);
@@ -1924,7 +1922,7 @@ fn provider_credentials_doctor_check(
     }
 }
 
-fn web_search_provider_doctor_check(config: &mvp::config::LoongClawConfig) -> DoctorCheck {
+fn web_search_provider_doctor_check(config: &mvp::config::LoongConfig) -> DoctorCheck {
     if !config.tools.web_search.enabled {
         return DoctorCheck {
             name: "web search provider".to_owned(),
@@ -1987,7 +1985,7 @@ fn doctor_check_from_provider_model_probe_failure(
 
 #[cfg(test)]
 fn provider_model_probe_failure_check(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     error: String,
 ) -> DoctorCheck {
     let probe_failure =
@@ -2006,7 +2004,7 @@ fn is_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
 
 fn provider_model_probe_recovery_advice_for_checks(
     checks: &[DoctorCheck],
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Option<provider_model_probe_policy::ProviderModelProbeRecoveryAdvice> {
     let probe_failure_check = checks
         .iter()
@@ -2019,7 +2017,7 @@ fn provider_model_probe_recovery_advice_for_checks(
 }
 
 async fn collect_browser_companion_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<DoctorCheck> {
     let Some(diagnostics) =
         crate::browser_companion_diagnostics::collect_browser_companion_diagnostics(config).await
@@ -2248,7 +2246,7 @@ fn doctor_render_string_list(values: &[String]) -> String {
 fn build_doctor_next_steps(
     checks: &[DoctorCheck],
     config_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     fix_requested: bool,
 ) -> Vec<String> {
     let path_env = env::var_os("PATH");
@@ -2265,7 +2263,7 @@ fn build_doctor_next_steps(
 fn build_doctor_next_steps_with_path_env(
     checks: &[DoctorCheck],
     config_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     fix_requested: bool,
     path_env: Option<&OsStr>,
 ) -> Vec<String> {
@@ -2283,7 +2281,7 @@ fn build_doctor_next_steps_with_path_env(
 fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     checks: &[DoctorCheck],
     config_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     channel_surfaces: &[mvp::channel::ChannelSurface],
     fix_requested: bool,
     path_env: Option<&OsStr>,
@@ -3056,15 +3054,15 @@ mod tests {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
         let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-browser-companion-doctor-{label}-{}-{seed}",
+            "loong-browser-companion-doctor-{label}-{}-{seed}",
             std::process::id()
         ));
         std::fs::create_dir_all(&temp_dir).expect("create browser companion temp dir");
         temp_dir
     }
 
-    fn runtime_plugins_test_config(root: &Path, enabled: bool) -> mvp::config::LoongClawConfig {
-        let mut config = mvp::config::LoongClawConfig::default();
+    fn runtime_plugins_test_config(root: &Path, enabled: bool) -> mvp::config::LoongConfig {
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.file_root = Some(root.display().to_string());
         config.runtime_plugins.enabled = enabled;
         config.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
@@ -3149,14 +3147,14 @@ mod tests {
                 channel_action_id: None,
                 browser_preview_phase: None,
                 label: "verify managed bridges".to_owned(),
-                command: "loong doctor --config '/tmp/loongclaw-config.toml'".to_owned(),
+                command: "loong doctor --config '/tmp/loong-config.toml'".to_owned(),
             },
             crate::next_actions::SetupNextAction {
                 kind: crate::next_actions::SetupNextActionKind::Channel,
                 channel_action_id: Some(crate::migration::channels::CHANNEL_CATALOG_ACTION_ID),
                 browser_preview_phase: None,
                 label: "channels".to_owned(),
-                command: "loong channels --config '/tmp/loongclaw-config.toml'".to_owned(),
+                command: "loong channels --config '/tmp/loong-config.toml'".to_owned(),
             },
         ];
 
@@ -3209,10 +3207,25 @@ mod tests {
         target_contract: &str,
     ) -> BTreeMap<String, String> {
         let mut metadata = BTreeMap::new();
+        let runtime_operations = serde_json::to_string(&[
+            "send_message",
+            "receive_batch",
+            "ack_inbound",
+            "complete_batch",
+        ])
+        .expect("serialize runtime operations");
 
         metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
         metadata.insert("transport_family".to_owned(), transport_family.to_owned());
         metadata.insert("target_contract".to_owned(), target_contract.to_owned());
+        metadata.insert(
+            "channel_runtime_contract".to_owned(),
+            mvp::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_CONTRACT_V1.to_owned(),
+        );
+        metadata.insert(
+            "channel_runtime_operations_json".to_owned(),
+            runtime_operations,
+        );
 
         metadata
     }
@@ -3223,7 +3236,7 @@ mod tests {
         manifest: &kernel::PluginManifest,
     ) {
         let plugin_directory = install_root.join(directory_name);
-        let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+        let manifest_path = plugin_directory.join("loong.plugin.json");
         let encoded_manifest =
             serde_json::to_string_pretty(manifest).expect("serialize managed bridge manifest");
 
@@ -3288,7 +3301,7 @@ mod tests {
 
         fn set_ready(value: Option<&str>) -> Self {
             let lock = crate::test_support::lock_daemon_test_environment();
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let key = "LOONG_BROWSER_COMPANION_READY";
             let saved_ready = std::env::var_os(key);
             match value {
                 Some(value) => set_browser_companion_env_var(key, value),
@@ -3304,7 +3317,7 @@ mod tests {
     #[cfg(unix)]
     impl Drop for BrowserCompanionEnvGuard {
         fn drop(&mut self) {
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let key = "LOONG_BROWSER_COMPANION_READY";
             match self.saved_ready.take() {
                 Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
                 None => remove_browser_companion_env_var(key),
@@ -3360,7 +3373,7 @@ mod tests {
 
     #[test]
     fn check_channel_surfaces_omit_disabled_channels() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let checks = check_channel_surfaces(&config);
         assert!(
             checks.is_empty(),
@@ -3406,7 +3419,7 @@ mod tests {
 
     #[test]
     fn build_channel_surface_checks_reports_plugin_bridge_contract_status_for_configured_surface() {
-        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/weixin",
@@ -3458,7 +3471,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/weixin",
@@ -3500,7 +3513,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/weixin",
@@ -3556,7 +3569,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "managed_bridge_plugin_id": "weixin-bridge-shared",
@@ -3597,7 +3610,7 @@ mod tests {
         );
         let removed_transport_family = metadata.remove("transport_family");
         let manifest = managed_bridge_manifest("qqbot", Some("channel"), metadata);
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "qqbot": {
                 "enabled": true,
                 "app_id": "10001",
@@ -3649,7 +3662,7 @@ mod tests {
             ),
         );
         let mut manifest = managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "qqbot": {
                 "enabled": true,
                 "app_id": "10001",
@@ -3714,7 +3727,7 @@ mod tests {
                 transport_family: Some("qq official".to_owned()),
                 target_contract: Some("qqbot\nreply".to_owned()),
                 account_scope: Some("shared scope".to_owned()),
-                runtime_contract: Some("loongclaw_channel_bridge_v1".to_owned()),
+                runtime_contract: Some("loong_channel_bridge_v1".to_owned()),
                 runtime_operations: vec![
                     "send_message".to_owned(),
                     "receive_batch".to_owned(),
@@ -3777,7 +3790,7 @@ mod tests {
 
     #[test]
     fn managed_bridge_incomplete_setup_step_escapes_untrusted_values() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let inventory = mvp::channel::channel_inventory(&config);
         let surface = inventory
             .channel_surfaces
@@ -3794,7 +3807,7 @@ mod tests {
             transport_family: Some("wechat clawbot".to_owned()),
             target_contract: Some("weixin reply".to_owned()),
             account_scope: Some("shared scope".to_owned()),
-            runtime_contract: Some("loongclaw_channel_bridge_v1".to_owned()),
+            runtime_contract: Some("loong_channel_bridge_v1".to_owned()),
             runtime_operations: vec!["send_message".to_owned(), "receive_batch".to_owned()],
             status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
             issues: vec!["missing\nfield".to_owned()],
@@ -3821,7 +3834,7 @@ mod tests {
     #[test]
     fn build_channel_surface_checks_fails_plugin_bridge_contract_when_serve_requirements_are_missing()
      {
-        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "qqbot": {
                 "enabled": true,
                 "app_id": "10001",
@@ -3881,7 +3894,7 @@ mod tests {
 
     #[test]
     fn channel_doctor_checks_report_enabled_channels_from_registry() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.telegram.enabled = true;
         config.telegram.bot_token = Some(SecretRef::Inline("123456:test-token".to_owned()));
         config.telegram.allowed_chat_ids = vec![123_i64];
@@ -3931,7 +3944,7 @@ mod tests {
 
     #[test]
     fn channel_env_fix_uses_registered_channel_defaults() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.telegram.bot_token_env = None;
         config.feishu.app_id_env = None;
         config.feishu.app_secret_env = None;
@@ -3984,7 +3997,7 @@ mod tests {
 
     #[test]
     fn provider_env_fix_prefers_oauth_default_when_available() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.api_key_env = None;
         config.provider.oauth_access_token_env = None;
 
@@ -3994,7 +4007,7 @@ mod tests {
         assert!(changed);
         assert_eq!(
             config.provider.oauth_access_token,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
             })
         );
@@ -4007,8 +4020,8 @@ mod tests {
 
     #[test]
     fn provider_env_fix_does_not_overwrite_inline_api_key() {
-        let mut config = mvp::config::LoongClawConfig::default();
-        config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        let mut config = mvp::config::LoongConfig::default();
+        config.provider.api_key = Some(loong_contracts::SecretRef::Inline(
             "inline-secret".to_owned(),
         ));
         config.provider.api_key_env = None;
@@ -4021,7 +4034,7 @@ mod tests {
         assert!(!changed);
         assert_eq!(
             config.provider.api_key,
-            Some(loongclaw_contracts::SecretRef::Inline(
+            Some(loong_contracts::SecretRef::Inline(
                 "inline-secret".to_owned(),
             ))
         );
@@ -4031,9 +4044,9 @@ mod tests {
 
     #[test]
     fn provider_env_fix_does_not_overwrite_file_backed_api_key() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let credential_path = PathBuf::from("/tmp/openai-api-key.txt");
-        config.provider.api_key = Some(loongclaw_contracts::SecretRef::File {
+        config.provider.api_key = Some(loong_contracts::SecretRef::File {
             file: credential_path.clone(),
         });
         config.provider.api_key_env = None;
@@ -4046,7 +4059,7 @@ mod tests {
         assert!(!changed);
         assert_eq!(
             config.provider.api_key,
-            Some(loongclaw_contracts::SecretRef::File {
+            Some(loong_contracts::SecretRef::File {
                 file: credential_path,
             })
         );
@@ -4079,7 +4092,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_warns_for_explicit_model() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "openai/gpt-5.1-codex".to_owned();
 
         let check = provider_model_probe_failure_check(
@@ -4097,7 +4110,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_transport_failure_prioritizes_route_guidance() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "custom-explicit-model".to_owned();
 
         let check = provider_model_probe_failure_check(
@@ -4125,7 +4138,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_fails_for_auto_model() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "auto".to_owned();
 
         let check = provider_model_probe_failure_check(
@@ -4155,7 +4168,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_warns_for_preferred_model_fallbacks() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
         config.provider.preferred_models = vec!["MiniMax-M2.5".to_owned()];
@@ -4179,7 +4192,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_guides_reviewed_default_for_auto_model() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
 
@@ -4202,7 +4215,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_includes_region_hint_for_zhipu() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Zhipu;
         config.provider.model = "auto".to_owned();
 
@@ -4219,7 +4232,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_skips_region_hint_for_non_auth_errors() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Zhipu;
         config.provider.model = "auto".to_owned();
 
@@ -4236,7 +4249,7 @@ mod tests {
 
     #[test]
     fn build_doctor_next_steps_includes_region_endpoint_step_for_minimax_probe_failures() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         let checks = vec![
             DoctorCheck {
@@ -4255,7 +4268,7 @@ mod tests {
 
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -4273,7 +4286,7 @@ mod tests {
 
     #[test]
     fn build_doctor_next_steps_skips_region_endpoint_step_for_non_auth_probe_failures() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         let checks = vec![
             DoctorCheck {
@@ -4292,7 +4305,7 @@ mod tests {
 
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -4410,11 +4423,11 @@ mod tests {
             detail: "audit.mode=in_memory; security-critical audit evidence is lost on restart"
                 .to_owned(),
         }];
-        let config_path = PathBuf::from("/tmp/loongclaw.toml");
+        let config_path = PathBuf::from("/tmp/loong.toml");
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
             &config_path,
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             false,
             None,
         );
@@ -4435,11 +4448,11 @@ mod tests {
             level: DoctorCheckLevel::Fail,
             detail: "audit.mode=fanout -> /tmp/audit exists but is not a regular file".to_owned(),
         }];
-        let config_path = PathBuf::from("/tmp/loongclaw.toml");
+        let config_path = PathBuf::from("/tmp/loong.toml");
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
             &config_path,
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             false,
             None,
         );
@@ -4578,7 +4591,7 @@ mod tests {
         let sequence = FEISHU_TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir()
             .join(format!(
-                "loongclaw-doctor-feishu-{label}-{}-{nanos}-{sequence}.sqlite3",
+                "loong-doctor-feishu-{label}-{}-{nanos}-{sequence}.sqlite3",
                 std::process::id()
             ))
             .display()
@@ -4593,7 +4606,7 @@ mod tests {
 
     #[test]
     fn check_feishu_integration_warns_when_user_grants_are_missing() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.feishu.enabled = true;
         config.feishu.app_id = Some(SecretRef::Inline("cli_a1b2c3".to_owned()));
         config.feishu.app_secret = Some(SecretRef::Inline("app-secret".to_owned()));
@@ -4621,7 +4634,7 @@ mod tests {
 
     #[test]
     fn check_feishu_integration_passes_when_ready_grant_exists() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.feishu.enabled = true;
         config.feishu.app_id = Some(SecretRef::Inline("cli_a1b2c3".to_owned()));
         config.feishu.app_secret = Some(SecretRef::Inline("app-secret".to_owned()));
@@ -5149,20 +5162,20 @@ mod tests {
             DoctorCheck {
                 name: "memory path".to_owned(),
                 level: DoctorCheckLevel::Fail,
-                detail: "/tmp/loongclaw-memory is missing".to_owned(),
+                detail: "/tmp/loong-memory is missing".to_owned(),
             },
         ];
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
-            &mvp::config::LoongClawConfig::default(),
+            Path::new("/tmp/loong.toml"),
+            &mvp::config::LoongConfig::default(),
             false,
             Some(std::ffi::OsStr::new("")),
         );
 
         assert_eq!(
             next_steps[0],
-            "Apply safe local repairs: loong doctor --config '/tmp/loongclaw.toml' --fix"
+            "Apply safe local repairs: loong doctor --config '/tmp/loong.toml' --fix"
         );
         assert!(
             next_steps.iter().any(|step| {
@@ -5174,8 +5187,7 @@ mod tests {
         assert!(
             next_steps
                 .iter()
-                .any(|step| step
-                    == "Re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"),
+                .any(|step| step == "Re-run diagnostics: loong doctor --config '/tmp/loong.toml'"),
             "doctor should tell the operator how to confirm the repair path: {next_steps:#?}"
         );
     }
@@ -5198,7 +5210,7 @@ mod tests {
             ),
         );
         let mut manifest = managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "qqbot": {
                 "enabled": true,
                 "app_id": "10001",
@@ -5220,7 +5232,7 @@ mod tests {
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -5253,7 +5265,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/weixin",
@@ -5273,7 +5285,7 @@ mod tests {
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -5303,7 +5315,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "managed_bridge_plugin_id": "missing-bridge",
@@ -5341,7 +5353,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "default_account": "ops",
@@ -5388,7 +5400,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "default_account": "ops",
@@ -5442,7 +5454,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "managed_bridge_plugin_id": "missing-bridge",
@@ -5463,7 +5475,7 @@ mod tests {
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -5493,7 +5505,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "managed_bridge_plugin_id": "weixin-bridge-shared",
@@ -5514,7 +5526,7 @@ mod tests {
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -5545,7 +5557,7 @@ mod tests {
             Some("channel"),
             compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         );
-        let mut config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/weixin",
@@ -5571,7 +5583,7 @@ mod tests {
 
         let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             &inventory.channel_surfaces,
             false,
@@ -5589,7 +5601,7 @@ mod tests {
 
     #[test]
     fn provider_credentials_doctor_check_adds_volcengine_auth_guidance() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Volcengine;
         config.provider.api_key = None;
         config.provider.api_key_env = None;
@@ -5611,7 +5623,7 @@ mod tests {
 
     #[test]
     fn provider_credentials_doctor_check_passes_for_auth_optional_provider() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Ollama;
         config.provider.api_key = None;
         config.provider.api_key_env = None;
@@ -5628,7 +5640,7 @@ mod tests {
     #[test]
     fn web_search_provider_doctor_check_warns_when_firecrawl_credential_is_missing() {
         let mut env = ScopedEnv::new();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let provider_id = mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
         let configured_secret = "${FIRECRAWL_API_KEY}".to_owned();
 
@@ -5647,7 +5659,7 @@ mod tests {
 
     #[test]
     fn web_search_provider_doctor_check_passes_when_firecrawl_credential_is_available() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let provider_id = mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
         let configured_secret = "${FIRECRAWL_API_KEY}".to_owned();
         let mut env = ScopedEnv::new();
@@ -5666,7 +5678,7 @@ mod tests {
 
     #[test]
     fn web_search_provider_doctor_check_passes_when_tool_is_disabled() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
 
         config.tools.web_search.enabled = false;
         config.tools.web_search.default_provider =
@@ -5684,24 +5696,24 @@ mod tests {
         let checks = vec![DoctorCheck {
             name: "memory path".to_owned(),
             level: DoctorCheckLevel::Fail,
-            detail: "/tmp/loongclaw-memory is missing".to_owned(),
+            detail: "/tmp/loong-memory is missing".to_owned(),
         }];
         let next_steps = build_doctor_next_steps(
             &checks,
-            Path::new("/tmp/loongclaw's config.toml"),
-            &mvp::config::LoongClawConfig::default(),
+            Path::new("/tmp/loong's config.toml"),
+            &mvp::config::LoongConfig::default(),
             false,
         );
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Apply safe local repairs: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml' --fix"
+                step == "Apply safe local repairs: loong doctor --config '/tmp/loong'\"'\"'s config.toml' --fix"
             }),
             "doctor should shell-quote config paths with single quotes in fix commands: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Re-run diagnostics: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+                step == "Re-run diagnostics: loong doctor --config '/tmp/loong'\"'\"'s config.toml'"
             }),
             "doctor should shell-quote config paths with single quotes in rerun commands: {next_steps:#?}"
         );
@@ -5712,19 +5724,19 @@ mod tests {
         let checks = vec![DoctorCheck {
             name: "browser companion install".to_owned(),
             level: DoctorCheckLevel::Warn,
-            detail: "command `loongclaw-browser-companion` was not found on PATH".to_owned(),
+            detail: "command `loong-browser-companion` was not found on PATH".to_owned(),
         }];
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
-            &mvp::config::LoongClawConfig::default(),
+            Path::new("/tmp/loong.toml"),
+            &mvp::config::LoongConfig::default(),
             false,
             Some(std::ffi::OsStr::new("")),
         );
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Install or expose the browser companion command on PATH, then re-run: loong doctor --config '/tmp/loongclaw.toml'"
+                step == "Install or expose the browser companion command on PATH, then re-run: loong doctor --config '/tmp/loong.toml'"
             }),
             "doctor should turn browser companion warnings into a concrete repair path: {next_steps:#?}"
         );
@@ -5735,12 +5747,12 @@ mod tests {
         let checks = vec![DoctorCheck {
             name: "browser companion install".to_owned(),
             level: DoctorCheckLevel::Warn,
-            detail: "command `browser-companion` responded, but expected_version=1.5.0 observed_version=loongclaw-browser-companion 1.4.0".to_owned(),
+            detail: "command `browser-companion` responded, but expected_version=1.5.0 observed_version=loong-browser-companion 1.4.0".to_owned(),
         }];
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
-            &mvp::config::LoongClawConfig::default(),
+            Path::new("/tmp/loong.toml"),
+            &mvp::config::LoongConfig::default(),
             false,
             Some(std::ffi::OsStr::new("")),
         );
@@ -5760,8 +5772,8 @@ mod tests {
             level: DoctorCheckLevel::Warn,
             detail: "Firecrawl Search: FIRECRAWL_API_KEY (expected). web.search will stay unavailable until the provider credential is supplied".to_owned(),
         }];
-        let mut config = mvp::config::LoongClawConfig::default();
-        let config_path = Path::new("/tmp/loongclaw.toml");
+        let mut config = mvp::config::LoongConfig::default();
+        let config_path = Path::new("/tmp/loong.toml");
 
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
@@ -5774,7 +5786,7 @@ mod tests {
             Some(std::ffi::OsStr::new("")),
         );
         let rerun_onboard_command =
-            crate::cli_handoff::format_subcommand_with_config("onboard", "/tmp/loongclaw.toml");
+            crate::cli_handoff::format_subcommand_with_config("onboard", "/tmp/loong.toml");
         let expected_onboard_step = format!(
             "Or rerun onboarding to review the web search provider choice: {rerun_onboard_command}"
         );
@@ -5795,7 +5807,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_doctor_checks_warn_when_command_is_missing() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
 
         let checks = collect_browser_companion_doctor_checks(&config).await;
@@ -5816,7 +5828,7 @@ mod tests {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
         let (command, observed_version, _exact_version, partial_version) = rustc_version_probe();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(command);
         config.tools.browser_companion.expected_version = Some(partial_version.clone());
@@ -5844,7 +5856,7 @@ mod tests {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
         let (command, _observed_version, exact_version, _partial_version) = rustc_version_probe();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(command);
         config.tools.browser_companion.expected_version = Some(exact_version);
@@ -5867,7 +5879,7 @@ mod tests {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_open();
         let (command, _observed_version, exact_version, _partial_version) = rustc_version_probe();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(command);
         config.tools.browser_companion.expected_version = Some(exact_version);
@@ -5899,22 +5911,22 @@ mod tests {
             level: DoctorCheckLevel::Fail,
             detail: "DeepSeek [deepseek]: model catalog probe failed (401 Unauthorized); current config still uses `model = auto`; rerun onboarding and accept reviewed model `deepseek-chat`, or set `provider.model` / `preferred_models` explicitly".to_owned(),
         }];
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
 
         let next_steps =
-            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+            build_doctor_next_steps(&checks, Path::new("/tmp/loong.toml"), &config, false);
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Rerun onboarding and accept reviewed model `deepseek-chat`: loong onboard --config '/tmp/loongclaw.toml'"
+                step == "Rerun onboarding and accept reviewed model `deepseek-chat`: loong onboard --config '/tmp/loong.toml'"
             }),
             "doctor should point reviewed providers back to onboarding when auto-model recovery needs an explicit reviewed default: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"
+                step == "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: loong doctor --config '/tmp/loong.toml'"
             }),
             "doctor should also keep the manual remediation path explicit for operators who do not want to rerun onboarding: {next_steps:#?}"
         );
@@ -5933,22 +5945,22 @@ mod tests {
             level: DoctorCheckLevel::Warn,
             detail: "DeepSeek [deepseek]: model catalog probe failed (401 Unauthorized); chat may still work because model `deepseek-chat` is explicitly configured".to_owned(),
         }];
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "deepseek-chat".to_owned();
 
         let next_steps =
-            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+            build_doctor_next_steps(&checks, Path::new("/tmp/loong.toml"), &config, false);
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loongclaw.toml'"
+                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loong.toml'"
             }),
             "warn-level explicit model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loong.toml' --skip-model-probe"
             }),
             "warn-level explicit model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
         );
@@ -5961,24 +5973,24 @@ mod tests {
             level: DoctorCheckLevel::Warn,
             detail: "DeepSeek [deepseek]: model catalog probe failed (401 Unauthorized); runtime will try configured preferred model fallback(s): `deepseek-chat`, `deepseek-reasoner`".to_owned(),
         }];
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
         config.provider.preferred_models =
             vec!["deepseek-chat".to_owned(), "deepseek-reasoner".to_owned()];
 
         let next_steps =
-            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+            build_doctor_next_steps(&checks, Path::new("/tmp/loong.toml"), &config, false);
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loongclaw.toml'"
+                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loong.toml'"
             }),
             "warn-level preferred-model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loong.toml' --skip-model-probe"
             }),
             "warn-level preferred-model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
         );
@@ -6005,8 +6017,8 @@ mod tests {
 
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
-            &mvp::config::LoongClawConfig::default(),
+            Path::new("/tmp/loong.toml"),
+            &mvp::config::LoongConfig::default(),
             false,
             Some(std::ffi::OsStr::new("")),
         );
@@ -6014,7 +6026,7 @@ mod tests {
         assert!(
             next_steps.iter().any(|step| {
                 step.contains("provider route")
-                    && step.contains("loong doctor --config '/tmp/loongclaw.toml'")
+                    && step.contains("loong doctor --config '/tmp/loong.toml'")
             }),
             "route-probe findings should produce a concrete diagnostics rerun step: {next_steps:#?}"
         );
@@ -6033,12 +6045,12 @@ mod tests {
             level: DoctorCheckLevel::Warn,
             detail: "skipped because credentials are missing".to_owned(),
         }];
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "deepseek-chat".to_owned();
 
         let next_steps =
-            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+            build_doctor_next_steps(&checks, Path::new("/tmp/loong.toml"), &config, false);
 
         assert!(
             next_steps
@@ -6070,39 +6082,39 @@ mod tests {
         ];
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
-            &mvp::config::LoongClawConfig::default(),
+            Path::new("/tmp/loong.toml"),
+            &mvp::config::LoongConfig::default(),
             false,
             Some(std::ffi::OsStr::new("")),
         );
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Get a first answer: loong ask --config '/tmp/loongclaw.toml' --message 'Summarize this repository and suggest the best next step.'"
+                step == "Get a first answer: loong ask --config '/tmp/loong.toml' --message 'Summarize this repository and suggest the best next step.'"
             }),
             "green doctor runs should hand the user into ask immediately: {next_steps:#?}"
         );
         assert!(
-            next_steps.iter().any(|step| {
-                step == "Continue in chat: loong chat --config '/tmp/loongclaw.toml'"
-            }),
+            next_steps
+                .iter()
+                .any(|step| { step == "Continue in chat: loong chat --config '/tmp/loong.toml'" }),
             "green doctor runs should still advertise chat as the follow-up path: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Set your working preferences: loong personalize --config '/tmp/loongclaw.toml'"
+                step == "Set your working preferences: loong personalize --config '/tmp/loong.toml'"
             }),
             "green doctor runs should surface personalization as the third healthy-path suggestion: {next_steps:#?}"
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Open a channel: loong channels --config '/tmp/loongclaw.toml'"
+                step == "Open a channel: loong channels --config '/tmp/loong.toml'"
             }),
             "green doctor runs should cap the healthy-path list before lower-priority channel setup suggestions: {next_steps:#?}"
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loong.toml'"
             }),
             "green doctor runs should keep generic browser-preview nudges behind personalization: {next_steps:#?}"
         );
@@ -6140,7 +6152,7 @@ mod tests {
             level: DoctorCheckLevel::Pass,
             detail: "provider credentials are available".to_owned(),
         }];
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.file_root = Some(root.display().to_string());
         config.tools.shell_allow.push("agent-browser".to_owned());
         config.external_skills.enabled = true;
@@ -6149,7 +6161,7 @@ mod tests {
 
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -6169,7 +6181,7 @@ mod tests {
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loong.toml'"
             }),
             "doctor should not fall back to the optional enable step after preview has already been configured: {next_steps:#?}"
         );
@@ -6184,12 +6196,12 @@ mod tests {
             level: DoctorCheckLevel::Pass,
             detail: "provider credentials are available".to_owned(),
         }];
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.telegram.enabled = true;
 
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
@@ -6197,13 +6209,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Set your working preferences: loong personalize --config '/tmp/loongclaw.toml'"
+                step == "Set your working preferences: loong personalize --config '/tmp/loong.toml'"
             }),
             "doctor should prioritize personalization ahead of generic browser preview when the healthy-path list is capped: {next_steps:#?}"
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loong.toml'"
             }),
             "doctor should keep generic browser preview behind personalization when only three healthy-path actions are shown: {next_steps:#?}"
         );
@@ -6296,14 +6308,14 @@ mod tests {
             level: DoctorCheckLevel::Warn,
             detail: "enabled=false supported_bridges=- supported_adapter_families=- roots=/tmp/runtime-plugins scanned_roots=0".to_owned(),
         }];
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
 
         let next_steps =
-            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+            build_doctor_next_steps(&checks, Path::new("/tmp/loong.toml"), &config, false);
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Enable runtime plugins by setting [runtime_plugins].enabled = true, then re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"
+                step == "Enable runtime plugins by setting [runtime_plugins].enabled = true, then re-run diagnostics: loong doctor --config '/tmp/loong.toml'"
             }),
             "doctor should surface an explicit runtime-plugin enablement step: {next_steps:#?}"
         );

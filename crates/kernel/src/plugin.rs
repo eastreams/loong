@@ -15,13 +15,13 @@ use crate::{
     pack::VerticalPackManifest,
 };
 
-pub const PACKAGE_MANIFEST_FILE_NAME: &str = "loongclaw.plugin.json";
+pub const PACKAGE_MANIFEST_FILE_NAME: &str = "loong.plugin.json";
 const OPENCLAW_PACKAGE_MANIFEST_FILE_NAME: &str = "openclaw.plugin.json";
 const PACKAGE_JSON_FILE_NAME: &str = "package.json";
 const OPENCLAW_MODERN_COMPATIBILITY_ADAPTER_FAMILY: &str = "openclaw-modern-compat";
 const OPENCLAW_LEGACY_COMPATIBILITY_ADAPTER_FAMILY: &str = "openclaw-legacy-compat";
 pub const CURRENT_PLUGIN_MANIFEST_API_VERSION: &str = "v1alpha1";
-pub const CURRENT_PLUGIN_HOST_API: &str = "loongclaw-plugin/v1";
+pub const CURRENT_PLUGIN_HOST_API: &str = "loong-plugin/v1";
 const RESERVED_PACKAGE_METADATA_PREFIX: &str = "plugin_";
 pub(crate) const PLUGIN_MANIFEST_API_VERSION_METADATA_KEY: &str = "plugin_manifest_api_version";
 pub(crate) const PLUGIN_VERSION_METADATA_KEY: &str = "plugin_version";
@@ -267,8 +267,8 @@ impl PluginSourceKind {
 #[serde(rename_all = "snake_case")]
 pub enum PluginContractDialect {
     #[default]
-    LoongClawPackageManifest,
-    LoongClawEmbeddedSource,
+    LoongPackageManifest,
+    LoongEmbeddedSource,
     OpenClawModernManifest,
     OpenClawLegacyPackage,
 }
@@ -277,8 +277,8 @@ impl PluginContractDialect {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::LoongClawPackageManifest => "loongclaw_package_manifest",
-            Self::LoongClawEmbeddedSource => "loongclaw_embedded_source",
+            Self::LoongPackageManifest => "loong_package_manifest",
+            Self::LoongEmbeddedSource => "loong_embedded_source",
             Self::OpenClawModernManifest => "openclaw_modern_manifest",
             Self::OpenClawLegacyPackage => "openclaw_legacy_package",
         }
@@ -899,7 +899,7 @@ fn collect_package_manifest_descriptors(
     let known_files = files.iter().cloned().collect::<BTreeSet<_>>();
 
     for path in files {
-        if is_loongclaw_package_manifest_file(path) {
+        if is_loong_package_manifest_file(path) {
             let descriptor = parse_package_manifest_descriptor(path)?;
             descriptors.insert(path.clone(), descriptor);
             continue;
@@ -984,7 +984,7 @@ fn descriptor_contract_diagnostic_findings(
                 "embedded source manifests remain a migration-only contract; package manifests are the preferred public SDK surface"
                     .to_owned(),
             remediation: Some(
-                "add a `loongclaw.plugin.json` package manifest and keep source markers only as a temporary compatibility bridge"
+                "add a `loong.plugin.json` package manifest and keep source markers only as a temporary compatibility bridge"
                     .to_owned(),
             ),
         });
@@ -1028,7 +1028,7 @@ fn descriptor_contract_diagnostic_findings(
                 descriptor.compatibility_mode.as_str()
             ),
             remediation: Some(
-                "keep compatibility intake on the adapter boundary, or migrate the plugin to a native `loongclaw.plugin.json` contract for first-class SDK support"
+                "keep compatibility intake on the adapter boundary, or migrate the plugin to a native `loong.plugin.json` contract for first-class SDK support"
                     .to_owned(),
             ),
         });
@@ -1089,7 +1089,7 @@ fn parse_package_manifest_descriptor(path: &Path) -> Result<PluginDescriptor, In
     let descriptor = build_plugin_descriptor(
         path,
         PluginSourceKind::PackageManifest,
-        PluginContractDialect::LoongClawPackageManifest,
+        PluginContractDialect::LoongPackageManifest,
         Some(CURRENT_PLUGIN_MANIFEST_API_VERSION.to_owned()),
         PluginCompatibilityMode::Native,
         Some(path),
@@ -1771,7 +1771,7 @@ fn parse_source_manifest_descriptor(
     let descriptor = build_plugin_descriptor(
         path,
         PluginSourceKind::EmbeddedSource,
-        PluginContractDialect::LoongClawEmbeddedSource,
+        PluginContractDialect::LoongEmbeddedSource,
         None,
         PluginCompatibilityMode::Native,
         None,
@@ -1826,10 +1826,10 @@ fn path_to_string(path: &Path) -> String {
 }
 
 fn is_package_manifest_file(path: &Path) -> bool {
-    is_loongclaw_package_manifest_file(path) || is_openclaw_package_manifest_file(path)
+    is_loong_package_manifest_file(path) || is_openclaw_package_manifest_file(path)
 }
 
-fn is_loongclaw_package_manifest_file(path: &Path) -> bool {
+fn is_loong_package_manifest_file(path: &Path) -> bool {
     let file_name = path.file_name();
     let file_name = file_name.and_then(|value| value.to_str());
 
@@ -2166,8 +2166,8 @@ fn parse_manifest_block(
     content: &str,
     path: &Path,
 ) -> Result<Option<PluginManifest>, IntegrationError> {
-    const START: &str = "LOONGCLAW_PLUGIN_START";
-    const END: &str = "LOONGCLAW_PLUGIN_END";
+    const START: &str = "LOONG_PLUGIN_START";
+    const END: &str = "LOONG_PLUGIN_END";
 
     let Some(start_idx) = content.find(START) else {
         return Ok(None);
@@ -2176,7 +2176,7 @@ fn parse_manifest_block(
     let Some(end_idx) = content[start_idx..].find(END).map(|idx| start_idx + idx) else {
         return Err(IntegrationError::PluginManifestParse {
             path: path.display().to_string(),
-            reason: "missing LOONGCLAW_PLUGIN_END".to_owned(),
+            reason: "missing LOONG_PLUGIN_END".to_owned(),
         });
     };
 
@@ -2726,14 +2726,14 @@ mod tests {
 
     #[test]
     fn scanner_finds_manifest_in_rust_and_python_files() {
-        let root = unique_tmp_dir("loongclaw-plugin-scan");
+        let root = unique_tmp_dir("loong-plugin-scan");
         fs::create_dir_all(&root).expect("create temp root");
 
         let rust_file = root.join("openrouter.rs");
         fs::write(
             &rust_file,
             r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "openrouter-rs",
 //   "provider_id": "openrouter",
@@ -2743,7 +2743,7 @@ mod tests {
 //   "capabilities": ["InvokeConnector", "ObserveTelemetry"],
 //   "metadata": {"version":"0.2.0","lang":"rust"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
         )
         .expect("write rust plugin");
@@ -2752,7 +2752,7 @@ mod tests {
         fs::write(
             &py_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "slack-py",
 #   "provider_id": "slack",
@@ -2762,7 +2762,7 @@ mod tests {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"version":"1.1.0","lang":"python"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write python plugin");
@@ -2818,7 +2818,7 @@ mod tests {
 
     #[test]
     fn scanner_finds_package_manifest_file() {
-        let root = unique_tmp_dir("loongclaw-plugin-package-manifest");
+        let root = unique_tmp_dir("loong-plugin-package-manifest");
         fs::create_dir_all(&root).expect("create temp root");
 
         let manifest_file = root.join(PACKAGE_MANIFEST_FILE_NAME);
@@ -2917,7 +2917,7 @@ mod tests {
 
     #[test]
     fn scanner_requires_api_version_for_package_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-package-api-required");
+        let root = unique_tmp_dir("loong-plugin-package-api-required");
         fs::create_dir_all(&root).expect("create temp root");
 
         let manifest_file = root.join(PACKAGE_MANIFEST_FILE_NAME);
@@ -2949,7 +2949,7 @@ mod tests {
 
     #[test]
     fn scanner_requires_top_level_version_for_package_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-package-version-required");
+        let root = unique_tmp_dir("loong-plugin-package-version-required");
         fs::create_dir_all(&root).expect("create temp root");
 
         let manifest_file = root.join(PACKAGE_MANIFEST_FILE_NAME);
@@ -2981,7 +2981,7 @@ mod tests {
 
     #[test]
     fn scanner_rejects_legacy_version_metadata_in_package_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-package-legacy-version");
+        let root = unique_tmp_dir("loong-plugin-package-legacy-version");
         fs::create_dir_all(&root).expect("create temp root");
 
         let manifest_file = root.join(PACKAGE_MANIFEST_FILE_NAME);
@@ -3015,7 +3015,7 @@ mod tests {
 
     #[test]
     fn scanner_rejects_reserved_metadata_namespace_in_package_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-package-reserved-metadata");
+        let root = unique_tmp_dir("loong-plugin-package-reserved-metadata");
         fs::create_dir_all(&root).expect("create temp root");
 
         let manifest_file = root.join(PACKAGE_MANIFEST_FILE_NAME);
@@ -3049,7 +3049,7 @@ mod tests {
 
     #[test]
     fn scanner_rejects_invalid_top_level_plugin_version() {
-        let root = unique_tmp_dir("loongclaw-plugin-invalid-version");
+        let root = unique_tmp_dir("loong-plugin-invalid-version");
         fs::create_dir_all(&root).expect("create temp root");
 
         let manifest_file = root.join(PACKAGE_MANIFEST_FILE_NAME);
@@ -3082,14 +3082,14 @@ mod tests {
 
     #[test]
     fn scanner_rejects_conflicting_top_level_and_metadata_version_in_source_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-source-version-conflict");
+        let root = unique_tmp_dir("loong-plugin-source-version-conflict");
         fs::create_dir_all(&root).expect("create temp root");
 
         let source_file = root.join("plugin.py");
         fs::write(
             &source_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "version": "1.2.3",
 #   "plugin_id": "source-version-conflict",
@@ -3101,7 +3101,7 @@ mod tests {
 #     "version": "9.9.9"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write source manifest");
@@ -3118,7 +3118,7 @@ mod tests {
 
     #[test]
     fn scanner_rejects_unknown_package_manifest_fields() {
-        let root = unique_tmp_dir("loongclaw-plugin-unknown-package-field");
+        let root = unique_tmp_dir("loong-plugin-unknown-package-field");
         fs::create_dir_all(&root).expect("create temp root");
 
         let manifest_file = root.join(PACKAGE_MANIFEST_FILE_NAME);
@@ -3152,7 +3152,7 @@ mod tests {
 
     #[test]
     fn scanner_prefers_package_manifest_over_embedded_source_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-precedence");
+        let root = unique_tmp_dir("loong-plugin-precedence");
         let package_root = root.join("pkg");
         fs::create_dir_all(&package_root).expect("create temp root");
 
@@ -3181,7 +3181,7 @@ mod tests {
         fs::write(
             &source_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "package-plugin",
 #   "provider_id": "package-provider",
@@ -3191,7 +3191,7 @@ mod tests {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write source plugin");
@@ -3235,7 +3235,7 @@ mod tests {
 
     #[test]
     fn scanner_fails_when_package_manifest_conflicts_with_source_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-conflict");
+        let root = unique_tmp_dir("loong-plugin-conflict");
         let package_root = root.join("pkg");
         fs::create_dir_all(&package_root).expect("create temp root");
 
@@ -3264,7 +3264,7 @@ mod tests {
         fs::write(
             &source_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "package-plugin",
 #   "provider_id": "source-provider",
@@ -3274,7 +3274,7 @@ mod tests {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write source plugin");
@@ -3298,7 +3298,7 @@ mod tests {
 
     #[test]
     fn scanner_uses_nearest_package_manifest_for_nested_package_roots() {
-        let root = unique_tmp_dir("loongclaw-plugin-nested-package-root");
+        let root = unique_tmp_dir("loong-plugin-nested-package-root");
         let outer_root = root.join("outer");
         let inner_root = outer_root.join("inner");
         fs::create_dir_all(&inner_root).expect("create nested root");
@@ -3349,7 +3349,7 @@ mod tests {
         fs::write(
             &source_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "inner-plugin",
 #   "provider_id": "inner-provider",
@@ -3359,7 +3359,7 @@ mod tests {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write nested source plugin");
@@ -3385,7 +3385,7 @@ mod tests {
 
     #[test]
     fn scanner_allows_source_only_optional_fields_under_package_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-optional-source-fields");
+        let root = unique_tmp_dir("loong-plugin-optional-source-fields");
         let package_root = root.join("pkg");
         fs::create_dir_all(&package_root).expect("create temp root");
 
@@ -3414,7 +3414,7 @@ mod tests {
         fs::write(
             &source_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "package-plugin",
 #   "provider_id": "package-provider",
@@ -3427,7 +3427,7 @@ mod tests {
 #   "tags": ["legacy", "source"],
 #   "input_examples": [{"query":"hello"}]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write source plugin");
@@ -3468,7 +3468,7 @@ mod tests {
 
     #[test]
     fn scanner_falls_back_to_embedded_source_manifest_without_package_manifest() {
-        let root = unique_tmp_dir("loongclaw-plugin-source-fallback");
+        let root = unique_tmp_dir("loong-plugin-source-fallback");
         let package_root = root.join("pkg");
         fs::create_dir_all(&package_root).expect("create temp root");
 
@@ -3476,7 +3476,7 @@ mod tests {
         fs::write(
             &source_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "source-plugin",
 #   "provider_id": "source-provider",
@@ -3491,7 +3491,7 @@ mod tests {
 #     "default_env_var": "SOURCE_TOKEN"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write source plugin");
@@ -3546,7 +3546,7 @@ mod tests {
 
     #[test]
     fn scanner_treats_empty_metadata_only_setup_as_absent() {
-        let root = unique_tmp_dir("loongclaw-plugin-empty-setup");
+        let root = unique_tmp_dir("loong-plugin-empty-setup");
         let package_root = root.join("pkg");
         fs::create_dir_all(&package_root).expect("create temp root");
 
@@ -3575,7 +3575,7 @@ mod tests {
         fs::write(
             &source_file,
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "package-plugin",
 #   "provider_id": "package-provider",
@@ -3586,7 +3586,7 @@ mod tests {
 #   "metadata": {"bridge_kind":"http_json"},
 #   "setup": {}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write source plugin");
@@ -3602,7 +3602,7 @@ mod tests {
 
     #[test]
     fn scanner_recognizes_openclaw_modern_manifest_through_explicit_compatibility_boundary() {
-        let root = unique_tmp_dir("loongclaw-openclaw-modern");
+        let root = unique_tmp_dir("loong-openclaw-modern");
         let package_root = root.join("pkg");
         fs::create_dir_all(package_root.join("dist")).expect("create temp root");
 
@@ -3693,7 +3693,7 @@ mod tests {
 
     #[test]
     fn scanner_recognizes_openclaw_legacy_package_metadata_without_promoting_it_to_native() {
-        let root = unique_tmp_dir("loongclaw-openclaw-legacy");
+        let root = unique_tmp_dir("loong-openclaw-legacy");
         let package_root = root.join("pkg");
         fs::create_dir_all(package_root.join("dist")).expect("create temp root");
 
@@ -3768,7 +3768,7 @@ mod tests {
             descriptors: vec![PluginDescriptor {
                 path: "/tmp/openai.rs".to_owned(),
                 source_kind: PluginSourceKind::EmbeddedSource,
-                dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                dialect: PluginContractDialect::LoongEmbeddedSource,
                 dialect_version: None,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 package_root: "/tmp".to_owned(),
@@ -3829,7 +3829,7 @@ mod tests {
                 PluginDescriptor {
                     path: "/tmp/search-a.py".to_owned(),
                     source_kind: PluginSourceKind::EmbeddedSource,
-                    dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                    dialect: PluginContractDialect::LoongEmbeddedSource,
                     dialect_version: None,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     package_root: "/tmp".to_owned(),
@@ -3863,7 +3863,7 @@ mod tests {
                 PluginDescriptor {
                     path: "/tmp/search-b.py".to_owned(),
                     source_kind: PluginSourceKind::EmbeddedSource,
-                    dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                    dialect: PluginContractDialect::LoongEmbeddedSource,
                     dialect_version: None,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     package_root: "/tmp".to_owned(),
@@ -3920,7 +3920,7 @@ mod tests {
                 PluginDescriptor {
                     path: "/tmp/search-shared.py".to_owned(),
                     source_kind: PluginSourceKind::EmbeddedSource,
-                    dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                    dialect: PluginContractDialect::LoongEmbeddedSource,
                     dialect_version: None,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     package_root: "/tmp".to_owned(),
@@ -3957,7 +3957,7 @@ mod tests {
                 PluginDescriptor {
                     path: "/tmp/search-advisory.py".to_owned(),
                     source_kind: PluginSourceKind::EmbeddedSource,
-                    dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                    dialect: PluginContractDialect::LoongEmbeddedSource,
                     dialect_version: None,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     package_root: "/tmp".to_owned(),
@@ -4034,7 +4034,7 @@ mod tests {
             descriptors: vec![PluginDescriptor {
                 path: "/tmp/incompatible-host.py".to_owned(),
                 source_kind: PluginSourceKind::EmbeddedSource,
-                dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                dialect: PluginContractDialect::LoongEmbeddedSource,
                 dialect_version: None,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 package_root: "/tmp".to_owned(),
@@ -4059,7 +4059,7 @@ mod tests {
                     setup: None,
                     slot_claims: Vec::new(),
                     compatibility: Some(PluginCompatibility {
-                        host_api: Some("loongclaw-plugin/v999".to_owned()),
+                        host_api: Some("loong-plugin/v999".to_owned()),
                         host_version_req: None,
                     }),
                 },
@@ -4088,7 +4088,7 @@ mod tests {
             descriptors: vec![PluginDescriptor {
                 path: "/tmp/invalid-version.py".to_owned(),
                 source_kind: PluginSourceKind::EmbeddedSource,
-                dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                dialect: PluginContractDialect::LoongEmbeddedSource,
                 dialect_version: None,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 package_root: "/tmp".to_owned(),
@@ -4135,7 +4135,7 @@ mod tests {
 
     #[test]
     fn scanner_skips_non_utf8_files_instead_of_failing() {
-        let root = unique_tmp_dir("loongclaw-plugin-binary");
+        let root = unique_tmp_dir("loong-plugin-binary");
         fs::create_dir_all(&root).expect("create temp root");
         let binary = root.join("compiled.bin");
         fs::write(&binary, [0xff_u8, 0xfe, 0x00, 0x81]).expect("write binary file");
@@ -4161,7 +4161,7 @@ mod tests {
                 PluginDescriptor {
                     path: "/tmp/good.rs".to_owned(),
                     source_kind: PluginSourceKind::EmbeddedSource,
-                    dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                    dialect: PluginContractDialect::LoongEmbeddedSource,
                     dialect_version: None,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     package_root: "/tmp".to_owned(),
@@ -4191,7 +4191,7 @@ mod tests {
                 PluginDescriptor {
                     path: "/tmp/bad.rs".to_owned(),
                     source_kind: PluginSourceKind::EmbeddedSource,
-                    dialect: PluginContractDialect::LoongClawEmbeddedSource,
+                    dialect: PluginContractDialect::LoongEmbeddedSource,
                     dialect_version: None,
                     compatibility_mode: PluginCompatibilityMode::Native,
                     package_root: "/tmp".to_owned(),
@@ -4241,12 +4241,12 @@ mod tests {
         let summary = format_plugin_provenance_summary(
             PluginSourceKind::EmbeddedSource,
             "/tmp/pkg/plugin.py",
-            Some("/tmp/pkg/loongclaw.plugin.json"),
+            Some("/tmp/pkg/loong.plugin.json"),
         );
 
         assert_eq!(
             summary,
-            "embedded_source:/tmp/pkg/plugin.py (package_manifest:/tmp/pkg/loongclaw.plugin.json)"
+            "embedded_source:/tmp/pkg/plugin.py (package_manifest:/tmp/pkg/loong.plugin.json)"
         );
     }
 }

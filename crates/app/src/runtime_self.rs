@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

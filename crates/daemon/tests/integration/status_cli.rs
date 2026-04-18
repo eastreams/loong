@@ -1,5 +1,5 @@
 use super::*;
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 use serde_json::Value;
 use std::{
     fs,
@@ -28,7 +28,7 @@ fn write_status_config(
     fs::create_dir_all(root).expect("create fixture root");
 
     let sqlite_path = root.join("memory.sqlite3");
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.memory.sqlite_path = sqlite_path.display().to_string();
     config.tools.file_root = Some(root.display().to_string());
     config.set_active_provider_profile(
@@ -52,7 +52,7 @@ fn write_status_config(
         config.acp.allowed_agents = vec!["codex".to_owned()];
     }
 
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
     let config_path_text = config_path
         .to_str()
         .expect("config path should be valid utf-8");
@@ -101,27 +101,21 @@ fn cli_status_help_mentions_operator_runtime_summary() {
 
 #[test]
 fn cli_status_parse_accepts_config_and_json_flags() {
-    let cli = try_parse_cli([
-        "loongclaw",
-        "status",
-        "--config",
-        "/tmp/loongclaw.toml",
-        "--json",
-    ])
-    .expect("status CLI should parse");
+    let cli = try_parse_cli(["loong", "status", "--config", "/tmp/loong.toml", "--json"])
+        .expect("status CLI should parse");
 
     let command = cli.command.expect("CLI should parse a subcommand");
     let Commands::Status { config, json } = command else {
         panic!("unexpected CLI parse result: {command:?}");
     };
 
-    assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+    assert_eq!(config.as_deref(), Some("/tmp/loong.toml"));
     assert!(json);
 }
 
 #[test]
 fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
-    let root = unique_temp_dir("loongclaw-status-cli-json");
+    let root = unique_temp_dir("loong-status-cli-json");
     let home_root = root.join("home");
     fs::create_dir_all(&home_root).expect("create home root");
     let config_path = write_status_config(
@@ -193,7 +187,7 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
 
 #[test]
 fn status_cli_text_surfaces_section_summaries_and_recipes() {
-    let root = unique_temp_dir("loongclaw-status-cli-text");
+    let root = unique_temp_dir("loong-status-cli-text");
     let home_root = root.join("home");
     fs::create_dir_all(&home_root).expect("create home root");
     let config_path = write_status_config(

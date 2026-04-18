@@ -4,10 +4,10 @@ import subprocess
 import tomllib
 import unittest
 
-from harbor_loongclaw.commands import build_agent_install_command
-from harbor_loongclaw.commands import build_agent_run_command
-from harbor_loongclaw.commands import build_runtime_config_text
-from harbor_loongclaw.commands import sanitize_profile_id
+from harbor_loong.commands import build_agent_install_command
+from harbor_loong.commands import build_agent_run_command
+from harbor_loong.commands import build_runtime_config_text
+from harbor_loong.commands import sanitize_profile_id
 
 
 def assert_shell_parses(script: str) -> None:
@@ -34,19 +34,19 @@ def assert_shell_parses(script: str) -> None:
     raise AssertionError(error_message)
 
 
-class HarborLoongClawCommandTests(unittest.TestCase):
+class HarborLoongCommandTests(unittest.TestCase):
     def test_install_command_is_valid_shell(self) -> None:
-        command = build_agent_install_command("/opt/loongclaw-src")
+        command = build_agent_install_command("/opt/loong-src")
         assert_shell_parses(command)
 
     def test_install_command_uses_cargo_install_without_source_fallback(self) -> None:
-        command = build_agent_install_command("/opt/loongclaw-src")
+        command = build_agent_install_command("/opt/loong-src")
 
         self.assertIn("--bin loong", command)
-        self.assertIn("--bin loongclaw", command)
+        self.assertIn("--bin loong", command)
         self.assertNotIn("scripts/install.sh", command)
         self.assertIn(
-            'ln -sf "$HOME/.local/bin/loong" "$HOME/.local/bin/loongclaw"',
+            'ln -sf "$HOME/.local/bin/loong" "$HOME/.local/bin/loong"',
             command,
         )
         self.assertIn('echo "failed to install cargo with rustup" >&2', command)
@@ -104,9 +104,9 @@ class HarborLoongClawCommandTests(unittest.TestCase):
             shell_default_mode="allow",
             session_name="harbor",
             instruction="say hello",
-            config_path="/logs/agent/loongclaw-config.toml",
-            output_path="/logs/agent/loongclaw.txt",
-            trajectory_path="/logs/agent/loongclaw-trajectory.json",
+            config_path="/logs/agent/loong-config.toml",
+            output_path="/logs/agent/loong.txt",
+            trajectory_path="/logs/agent/loong-trajectory.json",
         )
 
         assert_shell_parses(command)
@@ -121,9 +121,9 @@ class HarborLoongClawCommandTests(unittest.TestCase):
             shell_default_mode="allow",
             session_name="harbor",
             instruction="say hello",
-            config_path="/logs/agent/loongclaw-config.toml",
-            output_path="/logs/agent/loongclaw.txt",
-            trajectory_path="/logs/agent/loongclaw-trajectory.json",
+            config_path="/logs/agent/loong-config.toml",
+            output_path="/logs/agent/loong.txt",
+            trajectory_path="/logs/agent/loong-trajectory.json",
         )
 
         self.assertIn("loong validate-config", command)
@@ -131,7 +131,7 @@ class HarborLoongClawCommandTests(unittest.TestCase):
         self.assertIn("loong trajectory-export", command)
         self.assertIn('export TASK_CWD="$(pwd)"', command)
         self.assertIn(
-            "<<'LOONGCLAW_HARBOR_CONFIG_EOF'",
+            "<<'LOONG_HARBOR_CONFIG_EOF'",
             command,
         )
 

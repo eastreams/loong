@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 
 #[cfg(test)]
 use super::ConstrainedSubagentMode;
@@ -34,7 +34,7 @@ pub(super) fn normalize_delegate_workspace_path(path: &Path) -> PathBuf {
 }
 
 pub(super) fn prepare_delegate_workspace_root(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     child_session_id: &str,
     isolation: ConstrainedSubagentIsolation,
 ) -> Result<Option<PathBuf>, String> {
@@ -421,8 +421,8 @@ mod tests {
         assert!(commit_status.success(), "git commit should succeed");
     }
 
-    fn worktree_test_config(root: &Path) -> LoongClawConfig {
-        let mut config = LoongClawConfig::default();
+    fn worktree_test_config(root: &Path) -> LoongConfig {
+        let mut config = LoongConfig::default();
         config.tools.file_root = Some(root.display().to_string());
         config
     }

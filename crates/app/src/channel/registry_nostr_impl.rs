@@ -104,14 +104,14 @@ pub(super) const NOSTR_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 pub(super) const NOSTR_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
-        setup_hint: "configure relay_urls and private_key in loongclaw.toml under nostr or nostr.accounts.<account>; outbound signed note publish is shipped, while inbound relay subscription support remains planned",
+        setup_hint: "configure relay_urls and private_key in loong.toml under nostr or nostr.accounts.<account>; outbound signed note publish is shipped, while inbound relay subscription support remains planned",
         status_command: "loong doctor",
         repair_command: Some("loong doctor --fix"),
     };
 
 pub(super) fn build_nostr_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn nostr_status_requires_relay_urls_and_private_key_for_send() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.nostr.enabled = true;
 
         let snapshots = channel_status_snapshots(&config);
@@ -416,10 +416,10 @@ mod tests {
 
     #[test]
     fn nostr_status_rejects_non_websocket_relay_urls() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.nostr.enabled = true;
         config.nostr.relay_urls = vec!["https://relay.example.test".to_owned()];
-        config.nostr.private_key = Some(loongclaw_contracts::SecretRef::Inline(
+        config.nostr.private_key = Some(loong_contracts::SecretRef::Inline(
             deterministic_test_nostr_private_key_hex(),
         ));
 
@@ -441,10 +441,10 @@ mod tests {
 
     #[test]
     fn nostr_status_reports_invalid_private_key_without_missing_duplicate() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.nostr.enabled = true;
         config.nostr.relay_urls = vec!["wss://relay.example.test".to_owned()];
-        config.nostr.private_key = Some(loongclaw_contracts::SecretRef::Inline("00".repeat(32)));
+        config.nostr.private_key = Some(loong_contracts::SecretRef::Inline("00".repeat(32)));
 
         let snapshots = channel_status_snapshots(&config);
         let nostr = snapshots

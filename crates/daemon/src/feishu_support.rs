@@ -7,8 +7,8 @@ use rand::RngExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 
 const FEISHU_GROUP_MESSAGE_READ_SCOPE: &str = "im:message.group_msg";
 const FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY: &str = "im:message.group_msg:readonly";
@@ -84,7 +84,7 @@ pub struct FeishuAccountRecommendations {
 
 pub struct FeishuDaemonContext {
     pub config_path: PathBuf,
-    pub config: mvp::config::LoongClawConfig,
+    pub config: mvp::config::LoongConfig,
     pub resolved: mvp::config::ResolvedFeishuChannelConfig,
     pub store: mvp::channel::feishu::api::FeishuTokenStore,
 }
@@ -564,19 +564,15 @@ mod tests {
 
     #[test]
     fn disabled_feishu_channel_still_allows_integration_context_loading() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-feishu-support-{}", unix_ts_now()));
+        let temp_dir = std::env::temp_dir().join(format!("loong-feishu-support-{}", unix_ts_now()));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
-        let config_path = temp_dir.join("loongclaw.toml");
-        let mut config = mvp::config::LoongClawConfig::default();
+        let config_path = temp_dir.join("loong.toml");
+        let mut config = mvp::config::LoongConfig::default();
         config.feishu.enabled = false;
         config.feishu.account_id = Some("feishu_main".to_owned());
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "cli_a1b2c3".to_owned(),
-        ));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "app-secret".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
         config.feishu_integration.sqlite_path =
             temp_dir.join("feishu.sqlite3").display().to_string();
         mvp::config::write(config_path.to_str(), &config, true).expect("write config");
@@ -590,7 +586,7 @@ mod tests {
     #[test]
     fn resolve_selected_grant_suggests_auth_list_when_multiple_grants_exist() {
         let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-feishu-support-multi-{}", unix_ts_now()));
+            std::env::temp_dir().join(format!("loong-feishu-support-multi-{}", unix_ts_now()));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
         let store =
             mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
@@ -613,10 +609,8 @@ mod tests {
 
     #[test]
     fn resolve_selected_grant_prefers_persisted_selected_open_id() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-feishu-support-selected-{}",
-            unix_ts_now()
-        ));
+        let temp_dir =
+            std::env::temp_dir().join(format!("loong-feishu-support-selected-{}", unix_ts_now()));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
         let store =
             mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
@@ -641,7 +635,7 @@ mod tests {
     #[test]
     fn resolve_selected_grant_clears_stale_selected_open_id_and_returns_single_grant() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-feishu-support-stale-selected-single-{}",
+            "loong-feishu-support-stale-selected-single-{}",
             unix_ts_now()
         ));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
@@ -671,7 +665,7 @@ mod tests {
     #[test]
     fn resolve_selected_grant_clears_stale_selected_open_id_before_multi_grant_error() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-feishu-support-stale-selected-multi-{}",
+            "loong-feishu-support-stale-selected-multi-{}",
             unix_ts_now()
         ));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
@@ -703,7 +697,7 @@ mod tests {
     #[test]
     fn resolve_selected_grant_reports_missing_explicit_open_id() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-feishu-support-missing-open-id-{}",
+            "loong-feishu-support-missing-open-id-{}",
             unix_ts_now()
         ));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");

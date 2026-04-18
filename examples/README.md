@@ -1,7 +1,7 @@
-# LoongClaw Examples
+# Loong Examples
 
 This directory contains execution specifications, plugin samples, benchmark configurations,
-and security policy profiles for LoongClaw.
+and security policy profiles for Loong.
 
 ## Directory Index
 
@@ -37,8 +37,8 @@ Each spec file is a self-contained execution scenario. No external services requ
 ## Running Spec Files
 
 ```bash
-loongclaw run-spec --spec examples/spec/runtime-extension.json --print-audit
-loongclaw run-spec --spec examples/spec/tool-search-trusted.json --render-summary
+loong run-spec --spec examples/spec/runtime-extension.json --print-audit
+loong run-spec --spec examples/spec/tool-search-trusted.json --render-summary
 ```
 
 `--print-audit` shows the full audit trail for the execution.
@@ -48,7 +48,7 @@ preserving the full JSON report on `stdout`.
 Generate a trust-guarded starter spec:
 
 ```bash
-loongclaw init-spec --preset plugin-trust-guard --output loongclaw.plugin-trust.json
+loong init-spec --preset plugin-trust-guard --output loong.plugin-trust.json
 ```
 
 Run all spec files:
@@ -56,7 +56,7 @@ Run all spec files:
 ```bash
 for spec in examples/spec/*.json; do
   echo "--- Running: $spec ---"
-  loongclaw run-spec --spec "$spec" --print-audit
+  loong run-spec --spec "$spec" --print-audit
 done
 ```
 
@@ -65,7 +65,7 @@ done
 Programmatic pressure benchmark:
 
 ```bash
-loongclaw benchmark-programmatic-pressure \
+loong benchmark-programmatic-pressure \
   --matrix examples/benchmarks/programmatic-pressure-matrix.json \
   --enforce-gate
 ```
@@ -73,7 +73,7 @@ loongclaw benchmark-programmatic-pressure \
 WASM cache benchmark:
 
 ```bash
-loongclaw benchmark-wasm-cache \
+loong benchmark-wasm-cache \
   --wasm examples/plugins-wasm/secure_echo.wasm \
   --enforce-gate
 ```
@@ -82,7 +82,7 @@ Optional runtime tuning:
 
 ```bash
 # default = 32, max = 4096
-LOONGCLAW_WASM_CACHE_CAPACITY=64 loongclaw benchmark-wasm-cache \
+LOONG_WASM_CACHE_CAPACITY=64 loong benchmark-wasm-cache \
   --wasm examples/plugins-wasm/secure_echo.wasm \
   --enforce-gate
 ```
@@ -96,25 +96,25 @@ Convenience scripts:
 
 ## Plugin Examples
 
-- `plugins/openrouter_plugin.rs` -- Rust plugin with embedded `LOONGCLAW_PLUGIN_START` / `LOONGCLAW_PLUGIN_END` manifest markers. This example is marked `verified-community` so tool search and catalog reports surface a non-default trust tier.
+- `plugins/openrouter_plugin.rs` -- Rust plugin with embedded `LOONG_PLUGIN_START` / `LOONG_PLUGIN_END` manifest markers. This example is marked `verified-community` so tool search and catalog reports surface a non-default trust tier.
 - `plugins-wasm/secure_wasm_plugin.rs` -- WASM plugin Rust source. Compiled to `secure_echo.wasm`, with an `official` trust tier for first-party runtime examples.
 - `plugins-process/stdio_echo_plugin.py` -- Python stdio echo plugin for process-bridge testing. This example stays explicitly `unverified` so the trust-policy fixtures can demonstrate blocked auto-apply without hiding the plugin from scan/search results.
 
-Tool search and bootstrap reports now surface `trust_tier` and `provenance_summary` fields for scanned plugin-backed providers. `run-spec` reports also include a top-level `plugin_trust_summary`, so operator review can see tier counts and review-required high-risk plugins without manually diffing raw scan/bootstrap arrays. `tool_search` accepts both inline query prefixes like `trust:official` / `tier:verified-community` and a structured `trust_tiers` array on the operation payload when specs need deterministic trust-aware discovery. The `tool_search` outcome now also carries a `trust_filter_summary` block so operators can see which trust scope was requested, how many candidates were filtered out, and whether conflicting trust constraints collapsed the result set. For quick operator review, `run-spec` also mirrors this into a top-level `tool_search_summary` with the query, returned count, trust scope, and compact top-result cards, and `loongclaw run-spec --render-summary` renders the same trust-aware summary to `stderr` without breaking JSON consumers. The audit lane now also records `ToolSearchEvaluated` events, so `loongclaw audit recent`, `loongclaw audit summary`, and the dedicated `loongclaw audit discovery` subcommand can surface trust-filter conflicts and trust-filtered empty discovery outcomes directly, including trust-scope rollups, the last triage label, a compact context summary, and an operator hint for what to adjust next.
+Tool search and bootstrap reports now surface `trust_tier` and `provenance_summary` fields for scanned plugin-backed providers. `run-spec` reports also include a top-level `plugin_trust_summary`, so operator review can see tier counts and review-required high-risk plugins without manually diffing raw scan/bootstrap arrays. `tool_search` accepts both inline query prefixes like `trust:official` / `tier:verified-community` and a structured `trust_tiers` array on the operation payload when specs need deterministic trust-aware discovery. The `tool_search` outcome now also carries a `trust_filter_summary` block so operators can see which trust scope was requested, how many candidates were filtered out, and whether conflicting trust constraints collapsed the result set. For quick operator review, `run-spec` also mirrors this into a top-level `tool_search_summary` with the query, returned count, trust scope, and compact top-result cards, and `loong run-spec --render-summary` renders the same trust-aware summary to `stderr` without breaking JSON consumers. The audit lane now also records `ToolSearchEvaluated` events, so `loong audit recent`, `loong audit summary`, and the dedicated `loong audit discovery` subcommand can surface trust-filter conflicts and trust-filtered empty discovery outcomes directly, including trust-scope rollups, the last triage label, a compact context summary, and an operator hint for what to adjust next.
 
 When auditing retained history, you can now narrow the view to the relevant trust-aware events directly:
 
 ```bash
-loongclaw audit recent --kind tool-search-evaluated --limit 5
-loongclaw audit recent --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
-loongclaw audit summary --triage-label tool-search-trust-conflict
-loongclaw audit summary --group-by token
-loongclaw audit discovery --query-contains "trust:official" --trust-tier official
-loongclaw audit discovery --group-by agent
-loongclaw audit discovery --since-epoch-s 1700010051 --until-epoch-s 1700010052 --query-contains "catalog"
-loongclaw audit recent --pack-id tool-search-trusted-pack --agent-id agent-tool-search-trusted
-loongclaw audit recent --event-id evt-tool-search-conflict --token-id token-tool-search
-loongclaw audit token-trail --token-id token-tool-search --limit 20
+loong audit recent --kind tool-search-evaluated --limit 5
+loong audit recent --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
+loong audit summary --triage-label tool-search-trust-conflict
+loong audit summary --group-by token
+loong audit discovery --query-contains "trust:official" --trust-tier official
+loong audit discovery --group-by agent
+loong audit discovery --since-epoch-s 1700010051 --until-epoch-s 1700010052 --query-contains "catalog"
+loong audit recent --pack-id tool-search-trusted-pack --agent-id agent-tool-search-trusted
+loong audit recent --event-id evt-tool-search-conflict --token-id token-tool-search
+loong audit token-trail --token-id token-tool-search --limit 20
 ```
 
 The `limit` applies after filtering, so these commands return the most recent matching events instead of trimming the full journal first. `audit discovery` also preloads the `ToolSearchEvaluated` kind filter and aggregates requested/effective trust tiers so operators can review trust-aware discovery drift without manually composing event-kind filters. When you need to isolate one rollout or incident window, `audit recent`, `audit summary`, and `audit discovery` also accept inclusive `--since-epoch-s` / `--until-epoch-s` filters and echo those bounds back in text and JSON output.

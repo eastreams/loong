@@ -1,8 +1,8 @@
 use std::env;
 
-use loongclaw_app as mvp;
-use loongclaw_contracts::SecretRef;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_contracts::SecretRef;
+use loong_spec::CliResult;
 
 use crate::onboard_cli::OnboardCommandOptions;
 use crate::onboard_types::OnboardingCredentialSummary;
@@ -32,7 +32,7 @@ pub(crate) enum WebSearchProviderRecommendationSource {
 
 pub(crate) async fn resolve_web_search_provider_recommendation(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> CliResult<WebSearchProviderRecommendation> {
     if let Some(explicit_recommendation) = explicit_web_search_provider_override(options)? {
         return Ok(explicit_recommendation);
@@ -60,7 +60,7 @@ pub(crate) async fn resolve_web_search_provider_recommendation(
 }
 
 fn configured_default_web_search_provider(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Option<&'static str> {
     let configured_provider = config.tools.web_search.default_provider.as_str();
     if configured_provider == mvp::config::DEFAULT_WEB_SEARCH_PROVIDER {
@@ -70,7 +70,7 @@ fn configured_default_web_search_provider(
     mvp::config::normalize_web_search_provider(configured_provider)
 }
 
-pub(crate) fn current_web_search_provider(config: &mvp::config::LoongClawConfig) -> &'static str {
+pub(crate) fn current_web_search_provider(config: &mvp::config::LoongConfig) -> &'static str {
     let configured_provider = config.tools.web_search.default_provider.as_str();
     let normalized_provider = mvp::config::normalize_web_search_provider(configured_provider);
     normalized_provider.unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER)
@@ -78,7 +78,7 @@ pub(crate) fn current_web_search_provider(config: &mvp::config::LoongClawConfig)
 
 pub(crate) fn resolve_effective_web_search_default_provider(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     recommendation: &WebSearchProviderRecommendation,
 ) -> &'static str {
     if !options.non_interactive {
@@ -156,7 +156,7 @@ pub(crate) fn explicit_web_search_provider_override(
         return Ok(Some(recommendation));
     }
 
-    let raw_provider = match env::var("LOONGCLAW_WEB_SEARCH_PROVIDER") {
+    let raw_provider = match env::var("LOONG_WEB_SEARCH_PROVIDER") {
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
@@ -166,8 +166,8 @@ pub(crate) fn explicit_web_search_provider_override(
     }
 
     let normalized_provider =
-        normalize_selected_web_search_provider("LOONGCLAW_WEB_SEARCH_PROVIDER", trimmed_provider)?;
-    let reason = "set by LOONGCLAW_WEB_SEARCH_PROVIDER".to_owned();
+        normalize_selected_web_search_provider("LOONG_WEB_SEARCH_PROVIDER", trimmed_provider)?;
+    let reason = "set by LOONG_WEB_SEARCH_PROVIDER".to_owned();
     let source = WebSearchProviderRecommendationSource::ExplicitEnv;
     let recommendation = WebSearchProviderRecommendation {
         provider: normalized_provider,
@@ -193,7 +193,7 @@ fn normalize_selected_web_search_provider(
 }
 
 pub(crate) fn recommend_web_search_provider_from_available_credentials(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Option<WebSearchProviderRecommendation> {
     let mut ready_providers = mvp::config::web_search_provider_descriptors()
         .iter()
@@ -326,7 +326,7 @@ async fn probe_duckduckgo_route() -> bool {
     let Some(client) = build_onboard_probe_client() else {
         return false;
     };
-    let request = client.get("https://html.duckduckgo.com/html/?q=loongclaw");
+    let request = client.get("https://html.duckduckgo.com/html/?q=loong");
     let response = request.send().await;
     match response {
         Ok(response) => response.status().is_success() || response.status().is_redirection(),
@@ -341,7 +341,7 @@ async fn probe_tavily_route() -> bool {
     let request = client
         .post("https://api.tavily.com/search")
         .header("Content-Type", "application/json")
-        .body(r#"{"query":"loongclaw","max_results":1}"#);
+        .body(r#"{"query":"loong","max_results":1}"#);
     let response = request.send().await;
     match response {
         Ok(response) => {
@@ -353,7 +353,7 @@ async fn probe_tavily_route() -> bool {
 }
 
 fn build_onboard_probe_client() -> Option<reqwest::Client> {
-    build_onboard_probe_client_with_user_agent("LoongClaw-Onboard/0.1")
+    build_onboard_probe_client_with_user_agent("Loong-Onboard/0.1")
 }
 
 fn build_onboard_probe_client_with_user_agent(user_agent: &str) -> Option<reqwest::Client> {
@@ -386,7 +386,7 @@ fn render_web_search_credential_source_value(raw: Option<&str>) -> Option<String
 }
 
 pub(crate) fn configured_web_search_provider_credential_source_value(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
 ) -> Option<String> {
     let configured_secret = configured_web_search_provider_secret(config, provider);
@@ -394,7 +394,7 @@ pub(crate) fn configured_web_search_provider_credential_source_value(
 }
 
 pub(crate) fn configured_web_search_provider_env_name(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
 ) -> Option<String> {
     let raw = configured_web_search_provider_secret(config, provider)?;
@@ -403,7 +403,7 @@ pub(crate) fn configured_web_search_provider_env_name(
 }
 
 pub(crate) fn web_search_provider_has_inline_credential(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
 ) -> bool {
     let configured_secret = configured_web_search_provider_secret(config, provider);
@@ -415,7 +415,7 @@ pub(crate) fn web_search_provider_has_inline_credential(
 }
 
 pub(crate) fn preferred_web_search_credential_env_default(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
 ) -> String {
     if let Some(env_name) = configured_web_search_provider_env_name(config, provider) {
@@ -444,7 +444,7 @@ pub(crate) fn preferred_web_search_credential_env_default(
 }
 
 pub(crate) fn summarize_web_search_provider_credential(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
 ) -> Option<OnboardingCredentialSummary> {
     let descriptor = mvp::config::web_search_provider_descriptor(provider)?;
@@ -496,7 +496,7 @@ pub(crate) fn summarize_web_search_provider_credential(
 }
 
 pub(crate) fn web_search_provider_has_available_credential(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
 ) -> bool {
     let descriptor = mvp::config::web_search_provider_descriptor(provider);
@@ -527,7 +527,7 @@ pub(crate) fn web_search_provider_has_available_credential(
 }
 
 pub(crate) fn configured_web_search_provider_secret<'a>(
-    config: &'a mvp::config::LoongClawConfig,
+    config: &'a mvp::config::LoongConfig,
     provider: &str,
 ) -> Option<&'a str> {
     config
@@ -582,7 +582,7 @@ mod tests {
     async fn resolve_web_search_provider_recommendation_detects_unique_ready_credential_without_explicit_default_provider()
      {
         let options = default_options();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
@@ -607,7 +607,7 @@ mod tests {
     async fn resolve_web_search_provider_recommendation_keeps_explicitly_configured_default_provider()
      {
         let options = default_options();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
         let mut env = ScopedEnv::new();
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn configured_web_search_provider_secret_reads_firecrawl_field() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let secret_value = "${FIRECRAWL_API_KEY}".to_owned();
 
         config.tools.web_search.firecrawl_api_key = Some(secret_value);
@@ -646,7 +646,7 @@ mod tests {
     fn resolve_effective_web_search_default_provider_keeps_current_interactive_provider_for_detected_recommendations()
      {
         let options = default_options();
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let recommendation = WebSearchProviderRecommendation {
             provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
             reason: "domestic locale or timezone was detected".to_owned(),
@@ -667,7 +667,7 @@ mod tests {
     fn resolve_effective_web_search_default_provider_keeps_explicit_interactive_override() {
         let mut options = default_options();
         options.web_search_provider = Some("tavily".to_owned());
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let recommendation = WebSearchProviderRecommendation {
             provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
             reason: "set by --web-search-provider".to_owned(),
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn build_onboard_probe_client_returns_none_when_ssrf_safe_client_build_fails() {
-        let invalid_user_agent = "LoongClaw-Onboard\nTest";
+        let invalid_user_agent = "Loong-Onboard\nTest";
         let client = build_onboard_probe_client_with_user_agent(invalid_user_agent);
 
         assert!(

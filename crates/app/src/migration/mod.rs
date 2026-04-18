@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     CliResult,
-    config::{LoongClawConfig, MemoryProfile, active_cli_command_name},
+    config::{LoongConfig, MemoryProfile, active_cli_command_name},
     prompt::DEFAULT_PROMPT_PACK_ID,
 };
 use serde_json::Value;
@@ -132,7 +132,7 @@ pub fn plan_external_skill_mapping(input_path: &Path) -> ExternalSkillMappingPla
 }
 
 pub fn apply_external_skill_mapping(
-    config: &mut LoongClawConfig,
+    config: &mut LoongConfig,
     plan: &ExternalSkillMappingPlan,
 ) -> usize {
     let Some(addendum) = plan.profile_note_addendum.as_deref() else {
@@ -188,7 +188,7 @@ pub fn plan_import_from_path(
             ImportFileKind::Heartbeat => {
                 if heartbeat_has_active_tasks(&file.content) {
                     warnings.push(format!(
-                        "{} contains active periodic tasks; LoongClaw does not auto-wire heartbeat jobs yet",
+                        "{} contains active periodic tasks; Loong does not auto-wire heartbeat jobs yet",
                         file.label
                     ));
                 }
@@ -219,7 +219,7 @@ pub fn plan_import_from_path(
     })
 }
 
-pub fn apply_import_plan(config: &mut LoongClawConfig, plan: &ImportPlan) {
+pub fn apply_import_plan(config: &mut LoongConfig, plan: &ImportPlan) {
     config.cli.prompt_pack_id = Some(DEFAULT_PROMPT_PACK_ID.to_owned());
     config.cli.system_prompt_addendum = plan.system_prompt_addendum.clone();
     config.cli.refresh_native_system_prompt();
@@ -621,7 +621,7 @@ fn external_skill_probe_roots(input_path: &Path) -> Vec<PathBuf> {
 
 fn external_skill_warning(artifact: &ExternalSkillArtifact) -> String {
     format!(
-        "detected external skills artifact `{}` ({}); LoongClaw imports prompt/profile content by default, and installable local skills can be bridged into the managed runtime with `{} migrate --mode apply_selected --apply-external-skills-plan` or the explicit external skills lifecycle (`fetch` -> `install` -> `list` -> `invoke`)",
+        "detected external skills artifact `{}` ({}); Loong imports prompt/profile content by default, and installable local skills can be bridged into the managed runtime with `{} migrate --mode apply_selected --apply-external-skills-plan` or the explicit external skills lifecycle (`fetch` -> `install` -> `list` -> `invoke`)",
         artifact.path.display(),
         artifact.kind.as_id(),
         active_cli_command_name()
@@ -1023,7 +1023,7 @@ fn normalize_brand_references(content: &str) -> String {
         "nanobot", "Nanobot", "NanoBot", "openclaw", "OpenClaw", "picoclaw", "PicoClaw",
         "zeroclaw", "ZeroClaw", "nanoclaw", "NanoClaw",
     ] {
-        normalized = replace_identity_token(&normalized, needle, "LoongClaw");
+        normalized = replace_identity_token(&normalized, needle, "Loong");
     }
     normalized
 }
@@ -1085,7 +1085,7 @@ fn is_identity_boundary(content: &[u8], index: usize, leading: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LoongClawConfig;
+    use crate::config::LoongConfig;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1109,8 +1109,8 @@ mod tests {
     }
 
     #[test]
-    fn nanobot_stock_templates_nativeize_to_loongclaw_defaults() {
-        let root = unique_temp_dir("loongclaw-import-nanobot-stock");
+    fn nanobot_stock_templates_nativeize_to_loong_defaults() {
+        let root = unique_temp_dir("loong-import-nanobot-stock");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(
             &root,
@@ -1129,7 +1129,7 @@ mod tests {
         );
 
         let plan = plan_import_from_path(&root, None).expect("plan should succeed");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         apply_import_plan(&mut config, &plan);
 
         assert_eq!(plan.source, LegacyClawSource::Nanobot);
@@ -1143,12 +1143,12 @@ mod tests {
 
     #[test]
     fn custom_prompt_and_memory_content_are_preserved_with_brand_remap() {
-        let root = unique_temp_dir("loongclaw-import-customized");
+        let root = unique_temp_dir("loong-import-customized");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(
             &root,
             "SOUL.md",
-            "# Soul\n\nAlways prefer concise shell output. If you mention nanobot, say LoongClaw instead.\n",
+            "# Soul\n\nAlways prefer concise shell output. If you mention nanobot, say Loong instead.\n",
         );
         write_file(
             &root,
@@ -1158,7 +1158,7 @@ mod tests {
 
         let plan = plan_import_from_path(&root, Some(LegacyClawSource::Nanobot))
             .expect("plan should succeed");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         apply_import_plan(&mut config, &plan);
 
         assert_eq!(config.cli.prompt_pack_id(), Some(DEFAULT_PROMPT_PACK_ID));
@@ -1166,13 +1166,13 @@ mod tests {
         assert_eq!(
             config.cli.system_prompt_addendum.as_deref(),
             Some(
-                "## Imported SOUL.md\n# Soul\n\nAlways prefer concise shell output. If you mention LoongClaw, say LoongClaw instead."
+                "## Imported SOUL.md\n# Soul\n\nAlways prefer concise shell output. If you mention Loong, say Loong instead."
             )
         );
         assert_eq!(
             config.memory.profile_note.as_deref(),
             Some(
-                "## Imported IDENTITY.md\n# Identity\n\n- Name: My build copilot\n- Motto: updated by LoongClaw after every release"
+                "## Imported IDENTITY.md\n# Identity\n\n- Name: My build copilot\n- Motto: updated by Loong after every release"
             )
         );
 
@@ -1189,8 +1189,8 @@ mod tests {
              Key: openclaw_agent_id",
         );
 
-        assert!(normalized.contains("I am LoongClaw."));
-        assert!(normalized.contains("your LoongClaw agent"));
+        assert!(normalized.contains("I am Loong."));
+        assert!(normalized.contains("your Loong agent"));
         assert!(normalized.contains("github.com/openclaw-ai/openclaw"));
         assert!(normalized.contains("~/.config/openclaw/IDENTITY.md"));
         assert!(normalized.contains("openclaw.toml"));
@@ -1199,7 +1199,7 @@ mod tests {
 
     #[test]
     fn zeroclaw_aieos_identity_is_promoted_into_profile_note() {
-        let root = unique_temp_dir("loongclaw-import-zeroclaw-aieos");
+        let root = unique_temp_dir("loong-import-zeroclaw-aieos");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(
             &root,
@@ -1215,7 +1215,7 @@ mod tests {
 
         let plan = plan_import_from_path(&root, Some(LegacyClawSource::ZeroClaw))
             .expect("plan should succeed");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         apply_import_plan(&mut config, &plan);
 
         assert_eq!(plan.source, LegacyClawSource::ZeroClaw);
@@ -1227,7 +1227,7 @@ mod tests {
             .as_deref()
             .expect("profile note should be present");
         assert!(note.contains("Nova"));
-        assert!(note.contains("LoongClaw Labs"));
+        assert!(note.contains("Loong Labs"));
         assert!(note.contains("privacy first"));
 
         fs::remove_dir_all(&root).ok();
@@ -1235,7 +1235,7 @@ mod tests {
 
     #[test]
     fn external_skill_artifacts_emit_warnings_in_import_plan() {
-        let root = unique_temp_dir("loongclaw-import-external-skill-warning");
+        let root = unique_temp_dir("loong-import-external-skill-warning");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(
             &root,
@@ -1259,7 +1259,7 @@ mod tests {
 
     #[test]
     fn plan_external_skill_mapping_builds_profile_note_addendum() {
-        let root = unique_temp_dir("loongclaw-import-external-skill-map");
+        let root = unique_temp_dir("loong-import-external-skill-map");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(&root, "SKILLS.md", "# Skills\n\n- custom/skill-a\n");
         fs::create_dir_all(root.join(".codex/skills")).expect("create codex skills dir");
@@ -1307,12 +1307,12 @@ mod tests {
 
     #[test]
     fn apply_external_skill_mapping_appends_profile_note_once() {
-        let root = unique_temp_dir("loongclaw-import-external-skill-apply");
+        let root = unique_temp_dir("loong-import-external-skill-apply");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(&root, "SKILLS.md", "# Skills\n\n- custom/skill-a\n");
 
         let plan = plan_external_skill_mapping(&root);
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.memory.profile_note = Some("## Imported IDENTITY.md\n- tone steady".to_owned());
 
         let first_applied = apply_external_skill_mapping(&mut config, &plan);
@@ -1337,7 +1337,7 @@ mod tests {
 
     #[test]
     fn external_skill_profile_note_addendum_does_not_embed_absolute_paths() {
-        let root = unique_temp_dir("loongclaw-import-external-skill-redacted-paths");
+        let root = unique_temp_dir("loong-import-external-skill-redacted-paths");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(&root, "SKILLS.md", "# Skills\n\n- custom/skill-a\n");
         fs::create_dir_all(root.join(".codex/skills")).expect("create codex skills dir");

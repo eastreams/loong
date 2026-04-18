@@ -62,7 +62,7 @@ use crate::CliResult;
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
@@ -128,7 +128,7 @@ pub trait ChannelAdapter {
 }
 
 // ============================================================================
-// KnownChannelSessionSendTarget and parse functions (runtime-coupled due to LoongClawConfig)
+// KnownChannelSessionSendTarget and parse functions (runtime-coupled due to LoongConfig)
 // ============================================================================
 
 #[cfg(any(
@@ -203,7 +203,7 @@ pub struct ResolvedKnownChannelSessionTarget {
     feature = "channel-whatsapp"
 ))]
 pub(in crate::channel) fn parse_known_channel_session_send_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
 ) -> CliResult<KnownChannelSessionSendTarget> {
     let (channel, scope) = parse_route_session_id(session_id)?
@@ -229,7 +229,7 @@ pub(in crate::channel) fn parse_known_channel_session_send_target(
     feature = "channel-wecom"
 ))]
 pub fn resolve_known_channel_session_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
 ) -> CliResult<ResolvedKnownChannelSessionTarget> {
     let (channel, scope) = parse_route_session_id(session_id)?
@@ -255,7 +255,7 @@ pub fn resolve_known_channel_session_target(
     feature = "channel-wecom"
 ))]
 fn parse_telegram_session_send_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<KnownChannelSessionSendTarget> {
@@ -302,7 +302,7 @@ fn parse_telegram_session_send_target(
     feature = "channel-whatsapp"
 ))]
 fn resolve_telegram_known_session_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<ResolvedKnownChannelSessionTarget> {
@@ -369,7 +369,7 @@ fn resolve_telegram_known_session_target(
     feature = "channel-wecom"
 ))]
 fn parse_feishu_session_send_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<KnownChannelSessionSendTarget> {
@@ -414,7 +414,7 @@ fn parse_feishu_session_send_target(
     feature = "channel-whatsapp"
 ))]
 fn parse_line_session_send_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<KnownChannelSessionSendTarget> {
@@ -456,7 +456,7 @@ fn parse_line_session_send_target(
     feature = "channel-whatsapp"
 ))]
 fn resolve_feishu_known_session_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<ResolvedKnownChannelSessionTarget> {
@@ -545,7 +545,7 @@ fn resolve_feishu_known_session_target(
     feature = "channel-wecom"
 ))]
 fn parse_matrix_session_send_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<KnownChannelSessionSendTarget> {
@@ -587,7 +587,7 @@ fn parse_matrix_session_send_target(
     feature = "channel-whatsapp"
 ))]
 fn resolve_matrix_known_session_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<ResolvedKnownChannelSessionTarget> {
@@ -645,7 +645,7 @@ fn resolve_matrix_known_session_target(
     feature = "channel-wecom"
 ))]
 fn parse_wecom_session_send_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<KnownChannelSessionSendTarget> {
@@ -693,7 +693,7 @@ fn parse_wecom_session_send_target(
     feature = "channel-whatsapp"
 ))]
 fn parse_whatsapp_session_send_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<KnownChannelSessionSendTarget> {
@@ -735,7 +735,7 @@ fn parse_whatsapp_session_send_target(
     feature = "channel-whatsapp"
 ))]
 fn resolve_wecom_known_session_target(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     scope: &[String],
 ) -> CliResult<ResolvedKnownChannelSessionTarget> {
