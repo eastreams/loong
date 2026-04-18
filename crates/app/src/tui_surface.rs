@@ -379,7 +379,7 @@ fn build_screen_section_block(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 {
-                    Some(title) => format!("{} · {title}", tone_label(*tone)),
+                    Some(title) => format!("{}: {title}", tone_label(*tone)),
                     None => tone_label(*tone).to_owned(),
                 },
             ),
