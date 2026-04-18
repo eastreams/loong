@@ -36,7 +36,7 @@ fn append_session_turn(
     session_id: &str,
     role: &str,
     content: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) {
     store::append_session_turn_direct(session_id, role, content, memory_config)
         .expect("append session turn");

@@ -36,7 +36,7 @@ use crate::operator::delegate_runtime::{
     DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed,
 };
 use crate::runtime_self_continuity;
-use crate::session::store::{self, SessionStoreConfig as MemoryRuntimeConfig};
+use crate::session::store::{self, SessionStoreConfig};
 
 use self::safe_lane_events::*;
 use self::safe_lane_execution::*;
@@ -4098,8 +4098,7 @@ where
 
                 #[cfg(feature = "memory-sqlite")]
                 {
-                    let memory_config =
-                        MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+                    let memory_config = SessionStoreConfig::from_memory_config(&self.config.memory);
                     let effective_tool_config =
                         effective_tool_config_for_session(&self.config.tools, session_context);
                     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
@@ -4469,7 +4468,7 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 struct PreparedAsyncDelegateEnqueue {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     request: AsyncDelegateSpawnRequest,
     outcome: loong_contracts::ToolCoreOutcome,
 }
@@ -6408,7 +6407,7 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn sqlite_memory_config(label: &str) -> MemoryRuntimeConfig {
+    fn sqlite_memory_config(label: &str) -> SessionStoreConfig {
         let path = unique_sqlite_path(label);
         let _ = std::fs::remove_file(&path);
         let mut config = LoongConfig::default();
