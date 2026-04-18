@@ -11,7 +11,7 @@ use crate::KernelContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::session::store::{self, SessionStoreConfig};
 
 use super::analytics::{
     DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary, PromptFrameEventSummary,
@@ -141,7 +141,7 @@ pub async fn load_turn_checkpoint_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<TurnCheckpointEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -163,7 +163,7 @@ pub async fn load_safe_lane_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<SafeLaneEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -184,7 +184,7 @@ pub async fn load_fast_lane_tool_batch_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<FastLaneToolBatchEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -205,7 +205,7 @@ pub async fn load_prompt_frame_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<PromptFrameEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -226,7 +226,7 @@ pub async fn load_discovery_first_event_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<DiscoveryFirstEventSummary> {
     load_discovery_first_event_summary_with_binding(
         session_id,
@@ -242,7 +242,7 @@ pub async fn load_discovery_first_event_summary_with_kernel_context(
     session_id: &str,
     limit: usize,
     kernel_ctx: Option<&KernelContext>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<DiscoveryFirstEventSummary> {
     let binding = kernel_ctx.map_or_else(
         ConversationRuntimeBinding::direct,
@@ -262,7 +262,7 @@ pub(crate) async fn load_discovery_first_event_summary_with_binding(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<DiscoveryFirstEventSummary> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -283,7 +283,7 @@ pub(crate) async fn load_latest_turn_checkpoint_entry(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<Option<TurnCheckpointLatestEntry>> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -306,7 +306,7 @@ pub(crate) async fn load_turn_checkpoint_history_snapshot(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> CliResult<TurnCheckpointHistorySnapshot> {
     let assistant_contents =
         load_assistant_contents_from_session_window(session_id, limit, binding, memory_config)
@@ -319,7 +319,7 @@ pub(crate) async fn load_assistant_contents_from_session_window(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> CliResult<Vec<String>> {
     load_assistant_contents_from_session_window_detailed(session_id, limit, binding, memory_config)
         .await
@@ -331,7 +331,7 @@ async fn load_assistant_history_summary<T, F>(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     summarize: F,
 ) -> CliResult<T>
 where
@@ -348,7 +348,7 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> Result<Vec<String>, AssistantHistoryLoadError> {
     if let Some(ctx) = binding.kernel_context() {
         let request = MemoryCoreRequest {
@@ -375,7 +375,7 @@ pub(crate) async fn load_assistant_contents_from_session_window_detailed(
         return collect_assistant_contents_from_memory_window_payload(outcome.payload.get("turns"));
     }
 
-    let turns = memory::window_direct(session_id, limit, memory_config)
+    let turns = store::window_session_turns(session_id, limit, memory_config)
         .map_err(AssistantHistoryLoadError::direct_read_failed)?;
     Ok(turns
         .iter()

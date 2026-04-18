@@ -595,17 +595,15 @@ async fn load_stage_envelope(
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<memory::StageEnvelope> {
     if let Some(ctx) = binding.kernel_context() {
-        let runtime_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let tool_runtime_config =
             crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
         let workspace_root = tool_runtime_config
             .effective_workspace_root()
             .map(Path::to_path_buf);
-        let request = memory::build_read_stage_envelope_request_with_workspace_root(
+        let request = memory::build_read_stage_envelope_request_for_memory_config(
             session_id,
             workspace_root.as_deref(),
-            &runtime_config,
+            &config.memory,
         );
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let outcome = ctx
@@ -625,9 +623,7 @@ async fn load_stage_envelope(
             .ok_or_else(|| "decode staged memory envelope via kernel failed".to_owned());
     }
 
-    let runtime_config =
-        memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    memory::hydrate_stage_envelope(session_id, &runtime_config)
+    memory::hydrate_stage_envelope_for_memory_config(session_id, None, &config.memory)
         .map_err(|error| format!("load staged memory envelope failed: {error}"))
 }
 
@@ -788,16 +784,36 @@ mod tests {
         config.memory.sqlite_path = sqlite_path_text.clone();
 
         let memory_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
 
-        memory::append_turn_direct(session_id, "user", "turn 1", &memory_config)
-            .expect("append turn 1 should succeed");
-        memory::append_turn_direct(session_id, "assistant", "turn 2", &memory_config)
-            .expect("append turn 2 should succeed");
-        memory::append_turn_direct(session_id, "user", "turn 3", &memory_config)
-            .expect("append turn 3 should succeed");
-        memory::append_turn_direct(session_id, "assistant", "turn 4", &memory_config)
-            .expect("append turn 4 should succeed");
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "user",
+            "turn 1",
+            &memory_config,
+        )
+        .expect("append turn 1 should succeed");
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "assistant",
+            "turn 2",
+            &memory_config,
+        )
+        .expect("append turn 2 should succeed");
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "user",
+            "turn 3",
+            &memory_config,
+        )
+        .expect("append turn 3 should succeed");
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "assistant",
+            "turn 4",
+            &memory_config,
+        )
+        .expect("append turn 4 should succeed");
 
         let binding =
             ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
@@ -846,10 +862,15 @@ mod tests {
         config.memory.sqlite_path = sqlite_path_text.clone();
 
         let memory_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
 
-        memory::append_turn_direct(session_id, "assistant", "turn 1", &memory_config)
-            .expect("append turn should succeed");
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "assistant",
+            "turn 1",
+            &memory_config,
+        )
+        .expect("append turn should succeed");
 
         let binding =
             ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
@@ -952,11 +973,21 @@ mod tests {
         config.memory.system_id = Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
 
         let memory_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        memory::append_turn_direct(session_id, "user", "turn 1", &memory_config)
-            .expect("append turn 1 should succeed");
-        memory::append_turn_direct(session_id, "assistant", "turn 2", &memory_config)
-            .expect("append turn 2 should succeed");
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "user",
+            "turn 1",
+            &memory_config,
+        )
+        .expect("append turn 1 should succeed");
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "assistant",
+            "turn 2",
+            &memory_config,
+        )
+        .expect("append turn 2 should succeed");
 
         let binding =
             ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
@@ -1019,10 +1050,15 @@ mod tests {
         config.memory.sqlite_path = sqlite_path_text.clone();
 
         let memory_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
 
-        memory::append_turn_direct(session_id, "assistant", "turn 1", &memory_config)
-            .expect("append turn should succeed");
+        crate::session::store::append_session_turn_direct(
+            session_id,
+            "assistant",
+            "turn 1",
+            &memory_config,
+        )
+        .expect("append turn should succeed");
 
         let binding =
             ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));

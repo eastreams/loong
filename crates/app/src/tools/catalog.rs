@@ -4995,15 +4995,11 @@ mod tests {
     fn memory_search_corpus_visibility_gate_allows_canonical_memory_without_workspace_files() {
         let runtime_dir = tempdir().expect("tempdir");
         let db_path = runtime_dir.path().join("memory.sqlite3");
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
-        crate::memory::append_turn_direct(
+        crate::memory::append_turn_direct_with_sqlite_path(
             "canonical-search-gate-session",
             "assistant",
             "Rollback checklist includes smoke tests and release notes.",
-            &memory_config,
+            &db_path,
         )
         .expect("append canonical turn");
 
@@ -5027,15 +5023,11 @@ mod tests {
     fn runtime_tool_view_includes_memory_search_for_canonical_memory_without_workspace_files() {
         let runtime_dir = tempdir().expect("tempdir");
         let db_path = runtime_dir.path().join("memory.sqlite3");
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
-        crate::memory::append_turn_direct(
+        crate::memory::append_turn_direct_with_sqlite_path(
             "canonical-view-session",
             "assistant",
             "Rollback checklist includes smoke tests and release notes.",
-            &memory_config,
+            &db_path,
         )
         .expect("append canonical turn");
 

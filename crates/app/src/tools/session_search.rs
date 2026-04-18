@@ -7,9 +7,9 @@ use serde_json::{Value, json};
 use super::payload::{optional_payload_limit, optional_payload_string, required_payload_string};
 
 use crate::config::{SessionVisibility, ToolConfig};
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::search_text::{normalize_search_text, tokenize_normalized_search_text};
 use crate::session::repository::{SessionRepository, SessionSearchSourceKind};
+use crate::session::store::SessionStoreConfig;
 
 const DEFAULT_SESSION_SEARCH_MAX_RESULTS: usize = 5;
 const MAX_SESSION_SEARCH_MAX_RESULTS: usize = 20;
@@ -35,7 +35,7 @@ struct SessionSearchHit {
 pub(super) fn execute_session_search_with_policies(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let query = required_payload_string(&payload, "query", "session_search")?;
@@ -304,13 +304,13 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::memory::append_turn_direct;
     use crate::session::repository::{
         FinalizeSessionTerminalRequest, NewSessionEvent, NewSessionRecord, SessionKind,
         SessionRepository, SessionState,
     };
+    use crate::session::store::append_session_turn_direct;
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-session-search-{test_name}-{}",
             std::process::id()
@@ -318,9 +318,9 @@ mod tests {
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -357,14 +357,14 @@ mod tests {
         let repo = SessionRepository::new(&config).expect("repository");
         create_root_and_child(&repo);
 
-        append_turn_direct(
+        append_session_turn_direct(
             "child-session",
             "assistant",
             "Deploy freeze window is Friday and customer migration starts Saturday.",
             &config,
         )
         .expect("append child turn");
-        append_turn_direct(
+        append_session_turn_direct(
             "other-session",
             "assistant",
             "Deploy freeze for hidden session.",
@@ -453,7 +453,7 @@ mod tests {
         let repo = SessionRepository::new(&config).expect("repository");
         create_root_and_child(&repo);
 
-        append_turn_direct(
+        append_session_turn_direct(
             "child-session",
             "assistant",
             "Deploy freeze window is Friday.",
@@ -484,7 +484,7 @@ mod tests {
         let repo = SessionRepository::new(&config).expect("repository");
         create_root_and_child(&repo);
 
-        append_turn_direct(
+        append_session_turn_direct(
             "child-session",
             "assistant",
             "Deploy freeze window is Friday.",

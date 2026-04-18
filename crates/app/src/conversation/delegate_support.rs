@@ -15,13 +15,13 @@ use serde_json::Value;
 use tokio::runtime::Handle;
 
 use crate::config::LoongConfig;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::next_delegate_child_depth;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::frozen_result::capture_frozen_result;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{FinalizeSessionTerminalRequest, SessionRepository, SessionState};
+use crate::session::store::SessionStoreConfig;
 
 #[cfg(feature = "memory-sqlite")]
 use super::announce::{DelegateAnnounceSettings, enqueue_delegate_result_announce};
@@ -39,7 +39,7 @@ use super::turn_coordinator::emit_async_delegate_child_terminal_event;
 
 #[cfg(all(feature = "memory-sqlite", test))]
 pub(crate) fn finalize_async_delegate_spawn_failure(
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
@@ -62,7 +62,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
 
 #[cfg(feature = "memory-sqlite")]
 pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
@@ -100,7 +100,7 @@ pub(crate) fn format_async_delegate_spawn_panic(panic_payload: Box<dyn Any + Sen
 pub(crate) fn spawn_async_delegate_detached(
     runtime_handle: Handle,
     config: Arc<LoongConfig>,
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     spawner: Arc<dyn AsyncDelegateSpawner>,
     request: AsyncDelegateSpawnRequest,
     max_frozen_bytes: usize,
@@ -194,7 +194,7 @@ pub(crate) fn enqueue_delegate_result_announce_for_parent(
     parent_session_id: &str,
     child_session_id: &str,
 ) {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
     let announce_settings = DelegateAnnounceSettings::from_config(config);
 
     enqueue_delegate_result_announce_with_memory_config(
@@ -207,7 +207,7 @@ pub(crate) fn enqueue_delegate_result_announce_for_parent(
 
 #[cfg(feature = "memory-sqlite")]
 pub(crate) fn enqueue_delegate_result_announce_with_memory_config(
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     parent_session_id: String,
     child_session_id: String,
     announce_settings: DelegateAnnounceSettings,

@@ -44,7 +44,7 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         }
     };
     let base_app_dispatcher = DefaultAppToolDispatcher::with_config(
-        MemoryRuntimeConfig::from_memory_config(&config.memory),
+        store::session_store_config_from_memory_config(&config.memory),
         config.clone(),
     );
     let app_dispatcher = CoordinatorAppToolDispatcher {

@@ -32,8 +32,6 @@ use crate::acp::{
 };
 use crate::memory::MEMORY_OP_WINDOW;
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
 use crate::memory::{
     MemorySystem, MemorySystemCapability, MemorySystemMetadata, RECALL_FIRST_MEMORY_SYSTEM_ID,
     register_memory_system,
@@ -45,10 +43,36 @@ use crate::session::repository::{
     TransitionApprovalRequestIfCurrentRequest,
 };
 #[cfg(feature = "memory-sqlite")]
+use crate::session::store::SessionStoreConfig as MemoryRuntimeConfig;
+#[cfg(feature = "memory-sqlite")]
 use crate::test_support::unique_temp_dir;
 
 #[cfg(feature = "memory-sqlite")]
 const DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
+
+#[cfg(feature = "memory-sqlite")]
+fn session_store_config_from_config(config: &LoongConfig) -> MemoryRuntimeConfig {
+    crate::session::store::session_store_config_from_memory_config(&config.memory)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_session_turn_direct(
+    session_id: &str,
+    role: &str,
+    content: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<(), String> {
+    crate::session::store::append_session_turn_direct(session_id, role, content, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn window_session_turns(
+    session_id: &str,
+    limit: usize,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<crate::session::store::SessionTranscriptTurn>, String> {
+    crate::session::store::window_session_turns(session_id, limit, config)
+}
 
 #[cfg(feature = "memory-sqlite")]
 async fn wait_for_delegate_announce_event(
@@ -1690,7 +1714,7 @@ impl ConversationRuntime for FakeRuntime {
         }
         #[cfg(feature = "memory-sqlite")]
         if let Some(config) = self.durable_memory_config.as_ref() {
-            crate::memory::append_turn_direct(session_id, role, content, config)
+            append_session_turn_direct(session_id, role, content, config)
                 .map_err(|error| format!("persist {role} turn failed: {error}"))?;
         }
         self.persisted.lock().expect("persist lock").push((
@@ -1810,7 +1834,7 @@ async fn provider_messages_with_kernel_binding(
     session_id: &str,
     kernel_ctx: &KernelContext,
 ) -> Vec<Value> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(config);
     let workspace_root = config
         .tools
         .file_root
@@ -1938,7 +1962,7 @@ fn seed_delegate_child_session_with_contract(
 ) -> String {
     let sqlite_path = unique_memory_sqlite_path(&format!("delegate-runtime-contract-{suffix}"));
     config.memory.sqlite_path = sqlite_path;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let root_session_id = format!("root-session-{suffix}");
     let child_session_id = format!("child-session-{suffix}");
@@ -2553,8 +2577,7 @@ fn default_runtime_tool_view_uses_persisted_delegate_child_restrictions() {
     ));
     let _ = std::fs::remove_file(&db_path);
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -2600,7 +2623,7 @@ fn default_runtime_tool_view_intersects_root_session_with_persisted_tool_policy(
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -2677,8 +2700,7 @@ fn default_runtime_tool_view_denies_delegate_for_broken_lineage_child() {
     ));
     let _ = std::fs::remove_file(&db_path);
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -2716,8 +2738,7 @@ fn default_runtime_session_context_uses_persisted_parent_session_id() {
     ));
     let _ = std::fs::remove_file(&db_path);
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -2790,8 +2811,7 @@ fn default_runtime_session_context_errors_when_session_repository_is_unavailable
 fn default_runtime_session_context_uses_persisted_subagent_profile() {
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("persisted-profile");
-    let memory_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -2887,8 +2907,7 @@ fn default_runtime_session_context_derives_subagent_profile_for_legacy_child_wit
     let mut config = test_config();
     config.tools.delegate.max_depth = 3;
     config.memory.sqlite_path = unique_memory_sqlite_path("legacy-derived-profile");
-    let memory_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -2948,8 +2967,7 @@ fn default_runtime_tool_view_respects_persisted_leaf_subagent_profile() {
     let mut config = test_config();
     config.tools.delegate.max_depth = 3;
     config.memory.sqlite_path = unique_memory_sqlite_path("persisted-leaf-profile");
-    let memory_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -3422,15 +3440,14 @@ async fn default_runtime_kernel_stage_hydration_still_applies_system_prompt_addi
         "kernel-stage-hydration-tool-view",
         sample_delegate_runtime_narrowing(),
     );
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&child_session_id, "user", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&child_session_id, "user", "turn 1", &runtime_config)
         .expect("append turn 1 should succeed");
-    crate::memory::append_turn_direct(&child_session_id, "assistant", "turn 2", &runtime_config)
+    append_session_turn_direct(&child_session_id, "assistant", "turn 2", &runtime_config)
         .expect("append turn 2 should succeed");
-    crate::memory::append_turn_direct(&child_session_id, "user", "turn 3", &runtime_config)
+    append_session_turn_direct(&child_session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
-    crate::memory::append_turn_direct(&child_session_id, "assistant", "turn 4", &runtime_config)
+    append_session_turn_direct(&child_session_id, "assistant", "turn 4", &runtime_config)
         .expect("append turn 4 should succeed");
 
     let runtime = DefaultConversationRuntime::default();
@@ -3523,7 +3540,7 @@ async fn default_runtime_build_context_does_not_add_delegate_runtime_contract_fo
     let mut config = test_config();
     let sqlite_path = unique_memory_sqlite_path("persisted-root-session-no-contract");
     config.memory.sqlite_path = sqlite_path;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session-no-contract".to_owned(),
@@ -3664,15 +3681,14 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "user", "turn 1", &runtime_config)
         .expect("append turn 1 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
         .expect("append turn 2 should succeed");
-    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+    append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
         .expect("append turn 4 should succeed");
 
     let assembled = runtime
@@ -3734,7 +3750,7 @@ async fn default_runtime_build_context_rehydrates_runtime_self_continuity_when_l
     config.memory.sqlite_path = sqlite_path.clone();
     config.tools.file_root = Some(empty_workspace_root.display().to_string());
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let root_session = create_root_session_record(&session_id);
 
@@ -3799,7 +3815,7 @@ async fn default_runtime_build_context_rehydrates_delegate_child_runtime_self_co
     config.memory.sqlite_path = sqlite_path.clone();
     config.tools.file_root = Some(empty_workspace_root.display().to_string());
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let root_session = create_root_session_record(&root_session_id);
     let child_session = create_child_session_record(&child_session_id, &root_session_id);
@@ -3858,7 +3874,7 @@ async fn default_runtime_build_context_prefers_live_identity_over_stored_runtime
     config.memory.sqlite_path = sqlite_path.clone();
     config.tools.file_root = Some(workspace_root.display().to_string());
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let root_session = create_root_session_record(&session_id);
     let stored_identity_text = "# Identity\n\n- Name: Stored continuity identity";
@@ -3915,7 +3931,7 @@ async fn default_runtime_build_context_rehydrates_missing_session_profile_from_s
     config.memory.sqlite_path = sqlite_path.clone();
     config.tools.file_root = Some(workspace_root.display().to_string());
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let root_session = create_root_session_record(&session_id);
     let stored_identity_text = "# Identity\n\n- Name: Stored continuity identity";
@@ -3969,9 +3985,8 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
         .expect("append turn should succeed");
 
     let assembled = runtime
@@ -4033,7 +4048,7 @@ async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compact
     config.conversation.compact_min_messages = Some(999);
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let root_session = create_root_session_record(&session_id);
     let session_id_for_hook = session_id.clone();
@@ -4130,13 +4145,12 @@ async fn default_runtime_build_context_fail_open_memory_derivation_preserves_rec
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "user", "turn 1", &runtime_config)
         .expect("append turn 1 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
         .expect("append turn 2 should succeed");
-    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+    append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
 
     let assembled = runtime
@@ -4182,15 +4196,14 @@ async fn default_runtime_kernel_build_context_matches_builtin_summary_projection
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "user", "turn 1", &runtime_config)
         .expect("append turn 1 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
         .expect("append turn 2 should succeed");
-    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+    append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
         .expect("append turn 4 should succeed");
 
     let kernel_ctx =
@@ -4228,9 +4241,8 @@ async fn default_runtime_kernel_build_context_preserves_profile_projection() {
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
         .expect("append turn should succeed");
 
     let kernel_ctx =
@@ -4280,13 +4292,12 @@ async fn default_runtime_build_context_with_registry_selected_system_keeps_runti
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "user", "turn 1", &runtime_config)
         .expect("append turn 1 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
         .expect("append turn 2 should succeed");
-    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+    append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
 
     let assembled = runtime
@@ -4354,13 +4365,12 @@ async fn default_runtime_build_context_with_recall_first_system_prioritizes_reca
     )
     .expect("write workspace memory file");
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "user", "turn 1", &runtime_config)
         .expect("append turn 1 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
         .expect("append turn 2 should succeed");
-    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+    append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
 
     let assembled = runtime
@@ -4424,13 +4434,12 @@ async fn default_runtime_kernel_build_context_emits_context_artifact_annotations
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let runtime_config =
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+    let runtime_config = session_store_config_from_config(&config);
+    append_session_turn_direct(&session_id, "user", "turn 1", &runtime_config)
         .expect("append turn 1 should succeed");
-    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+    append_session_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
         .expect("append turn 2 should succeed");
-    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+    append_session_turn_direct(&session_id, "user", "turn 3", &runtime_config)
         .expect("append turn 3 should succeed");
 
     let kernel_ctx = test_kernel_context_with_memory(
@@ -6382,7 +6391,7 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     config.conversation.compact_min_messages = Some(999);
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let exported_capture = Arc::new(Mutex::new(None::<String>));
     let workspace_root_for_hook = workspace_root.clone();
     let exported_capture_for_hook = Arc::clone(&exported_capture);
@@ -6426,14 +6435,14 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     .with_durable_memory_config(memory_config.clone())
     .with_compact_hook(compact_hook);
 
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         "session-pre-compaction-flush",
         "user",
         "earlier ask",
         &memory_config,
     )
     .expect("seed earlier user turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         "session-pre-compaction-flush",
         "assistant",
         "earlier reply",
@@ -6485,7 +6494,7 @@ async fn handle_turn_with_runtime_does_not_flush_durable_memory_when_compaction_
     config.memory.sliding_window = 1;
     config.conversation.compact_enabled = false;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let runtime = FakeRuntime::new(
         vec![json!({"role": "system", "content": "sys"})],
         Ok("assistant-reply".to_owned()),
@@ -7135,7 +7144,7 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
     let mut config = test_config();
     let sqlite_path = unique_memory_sqlite_path("tool-discovery-delta");
     config.memory.sqlite_path = sqlite_path;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let session_id = "session-tool-discovery-delta";
     let discovery_event = crate::memory::build_conversation_event_content(
         "tool_discovery_refreshed",
@@ -7154,7 +7163,7 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
         }),
     );
 
-    crate::memory::append_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
+    append_session_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
         .expect("persist discovery event");
 
     let runtime = DefaultConversationRuntime::default();
@@ -7200,7 +7209,7 @@ async fn default_runtime_build_context_sanitizes_tool_discovery_delta_advisory_t
     let mut config = test_config();
     let sqlite_path = unique_memory_sqlite_path("tool-discovery-delta-sanitized-advisory");
     config.memory.sqlite_path = sqlite_path;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let session_id = "session-tool-discovery-delta-sanitized-advisory";
     let discovery_event = crate::memory::build_conversation_event_content(
         "tool_discovery_refreshed",
@@ -7223,7 +7232,7 @@ async fn default_runtime_build_context_sanitizes_tool_discovery_delta_advisory_t
         }),
     );
 
-    crate::memory::append_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
+    append_session_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
         .expect("persist discovery event");
 
     let runtime = DefaultConversationRuntime::default();
@@ -7291,7 +7300,7 @@ async fn default_runtime_build_messages_filters_tool_discovery_delta_to_requeste
     let mut config = test_config();
     let sqlite_path = unique_memory_sqlite_path("tool-discovery-delta-filtered-view");
     config.memory.sqlite_path = sqlite_path;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let session_id = "session-tool-discovery-delta-filtered-view";
     let discovery_event = crate::memory::build_conversation_event_content(
         "tool_discovery_refreshed",
@@ -7311,7 +7320,7 @@ async fn default_runtime_build_messages_filters_tool_discovery_delta_to_requeste
         }),
     );
 
-    crate::memory::append_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
+    append_session_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
         .expect("persist discovery event");
 
     let runtime = DefaultConversationRuntime::default();
@@ -7354,7 +7363,7 @@ async fn default_runtime_build_context_uses_configured_runtime_tool_view_for_too
     config.external_skills.enabled = true;
     config.tools.web_search.enabled = false;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let session_id = "session-tool-discovery-delta-configured-runtime-view";
     let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(&config);
     let discovery_event = crate::memory::build_conversation_event_content(
@@ -7390,7 +7399,7 @@ async fn default_runtime_build_context_uses_configured_runtime_tool_view_for_too
         "configured runtime tool view should hide web.search when disabled"
     );
 
-    crate::memory::append_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
+    append_session_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
         .expect("persist discovery event");
 
     let runtime = DefaultConversationRuntime::default();
@@ -7451,7 +7460,7 @@ async fn default_runtime_kernel_build_context_uses_configured_runtime_tool_view_
     config.external_skills.enabled = true;
     config.tools.web_search.enabled = false;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let session_id = "session-tool-discovery-delta-configured-runtime-view-kernel";
     let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(&config);
     let discovery_event = crate::memory::build_conversation_event_content(
@@ -7487,7 +7496,7 @@ async fn default_runtime_kernel_build_context_uses_configured_runtime_tool_view_
         "configured runtime tool view should hide web.search when disabled"
     );
 
-    crate::memory::append_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
+    append_session_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
         .expect("persist discovery event");
 
     let kernel_ctx = test_kernel_context_with_memory(
@@ -8901,7 +8910,7 @@ async fn handle_turn_with_runtime_provider_switch_tool_updates_provider_for_foll
     config.memory.sqlite_path = unique_acp_sqlite_path("provider-switch-followup-round");
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "session-provider-switch".to_owned(),
@@ -9066,15 +9075,15 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
     let sqlite_path = unique_memory_sqlite_path("fast-lane-batch-event");
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(
+    let memory_config = session_store_config_from_config(&config);
+    append_session_turn_direct(
         "session-fast-lane-batch-event",
         "user",
         "hello",
         &memory_config,
     )
     .expect("append user turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         "session-fast-lane-batch-event",
         "assistant",
         "done",
@@ -9234,15 +9243,15 @@ async fn handle_turn_with_runtime_fast_lane_batch_persist_failure_surfaces_runti
     let sqlite_path = unique_memory_sqlite_path("fast-lane-batch-persist-failure");
     config.memory.sqlite_path = sqlite_path.clone();
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(
+    let memory_config = session_store_config_from_config(&config);
+    append_session_turn_direct(
         "session-fast-lane-batch-persist-failure",
         "user",
         "hello",
         &memory_config,
     )
     .expect("append user turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         "session-fast-lane-batch-persist-failure",
         "assistant",
         "done",
@@ -11105,8 +11114,8 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
         .conversation
         .safe_lane_session_governor_force_node_max_attempts = 1;
 
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-    crate::memory::append_turn_direct(
+    let mem_config = session_store_config_from_config(&config);
+    append_session_turn_direct(
         "session-safe-governor-fallback",
         "assistant",
         r#"{"type":"conversation_event","event":"final_status","payload":{"status":"failed","failure_code":"safe_lane_plan_node_retryable_error","route_decision":"terminal"}} "#.trim(),
@@ -13476,7 +13485,7 @@ async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -13543,7 +13552,7 @@ async fn child_session_hidden_session_wait_is_rejected_by_default_dispatcher() {
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -13603,7 +13612,7 @@ async fn child_session_hidden_sessions_send_is_rejected_by_default_dispatcher() 
     let mut config = test_config();
     config.tools.messages.enabled = true;
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -13658,7 +13667,7 @@ async fn sessions_send_rejects_unknown_target_session() {
     config.tools.messages.enabled = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("sessions-send-unknown-target");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -13705,7 +13714,7 @@ async fn sessions_send_rejects_delegate_child_target() {
     config.tools.messages.enabled = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("sessions-send-child-target");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -13761,7 +13770,7 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-completed-child");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -13884,7 +13893,7 @@ async fn continue_session_with_runtime_preserves_prior_terminal_outcome_when_res
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-preserve-outcome");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -13980,7 +13989,7 @@ async fn continue_session_with_runtime_backfills_profile_from_older_delegate_anc
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-profile-backfill");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -14070,7 +14079,7 @@ async fn continue_session_with_runtime_rejects_running_delegate_child() {
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-running-child");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -14119,7 +14128,7 @@ async fn continue_session_with_runtime_rejects_failed_delegate_child() {
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-failed-child");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -14192,7 +14201,7 @@ async fn continue_session_with_runtime_rejects_archived_delegate_child() {
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-archived-child");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -14274,7 +14283,7 @@ async fn continue_session_with_runtime_rejects_invalid_timeout_override() {
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-invalid-timeout");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -14349,7 +14358,7 @@ async fn continue_session_with_runtime_caps_timeout_override_and_persists_contra
     config.tools.delegate.timeout_seconds = 30;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-timeout-cap");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -14449,7 +14458,7 @@ async fn default_app_tool_dispatcher_rejects_session_continue_without_runtime_co
     config.tools.sessions.allow_mutation = true;
     config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-not-configured");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -15226,7 +15235,7 @@ async fn autonomy_policy_turn_engine_discovery_only_denies_capability_install() 
     config.external_skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
         "autonomy-discovery-install-denied",
@@ -15309,7 +15318,7 @@ async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_ca
     config.external_skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
@@ -15432,7 +15441,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_allows_capability_instal
     config.external_skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
@@ -15528,7 +15537,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
     config.external_skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
         "autonomy-bounded-install-budget",
@@ -15667,7 +15676,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_pr
     let canonical_config_path =
         std::fs::canonicalize(&config_path).expect("canonicalize config path");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
@@ -15765,7 +15774,7 @@ async fn autonomy_policy_turn_engine_discovery_only_denies_topology_expand() {
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-discovery-delegate-denied");
     config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
         "autonomy-discovery-delegate-denied",
@@ -15825,7 +15834,7 @@ async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_po
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-guided-policy-mutation-denied");
     config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
         "autonomy-guided-policy-mutation-denied",
@@ -15918,7 +15927,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_se
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
     config.tools.sessions.allow_mutation = true;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
         "autonomy-bounded-session-mutation-denied",
@@ -16006,7 +16015,7 @@ async fn autonomy_policy_turn_engine_advisory_binding_denies_session_mutation_be
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
     config.tools.sessions.allow_mutation = true;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let session_id = "session-autonomy-advisory-session-mutation";
@@ -16396,7 +16405,7 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
     config.external_skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
     let dispatcher = crate::conversation::turn_engine::DefaultAppToolDispatcher::with_config(
-        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory),
+        session_store_config_from_config(&config),
         config.clone(),
     );
     let session_context = crate::conversation::SessionContext::root_with_tool_view(
@@ -17091,10 +17100,10 @@ fn prepare_discovery_first_summary_test(
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
     for payload in payloads {
-        crate::memory::append_turn_direct(direct_session_id, "assistant", payload, &mem_config)
+        append_session_turn_direct(direct_session_id, "assistant", payload, &mem_config)
             .expect("persist discovery-first payload");
     }
 
@@ -17634,7 +17643,7 @@ async fn load_turn_checkpoint_event_summary_prefers_kernel_memory_window_when_co
     let audit = Arc::new(InMemoryAuditSink::default());
     let (ctx, invocations) = build_kernel_context_with_window_turns(audit, checkpoint_turns);
     let config = test_config();
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
     let summary = load_turn_checkpoint_event_summary(
         "session-k-turn-checkpoint",
@@ -17682,9 +17691,9 @@ async fn load_turn_checkpoint_event_summary_fails_closed_when_kernel_window_erro
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.memory.sliding_window = 8;
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         "session-kernel-window-error",
         "assistant",
         r#"{"type":"conversation_event","event":"turn_checkpoint","payload":{"schema_version":1,"stage":"finalized","checkpoint":{"lane":{"lane":"safe","result_kind":"tool_call"},"finalization":{"persistence_mode":"success"}},"finalization_progress":{"after_turn":"completed","compaction":"skipped"},"failure":null}}"#,
@@ -17723,7 +17732,7 @@ async fn load_turn_checkpoint_event_summary_fails_closed_when_kernel_window_payl
     let (ctx, invocations) =
         build_kernel_context_with_raw_window_payload(audit, json!({"unexpected": "shape"}));
     let config = test_config();
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
     let error = load_turn_checkpoint_event_summary(
         "session-kernel-window-malformed",
@@ -17759,7 +17768,7 @@ async fn load_turn_checkpoint_event_summary_fails_closed_when_kernel_window_assi
         }),
     );
     let config = test_config();
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
     let error = load_turn_checkpoint_event_summary(
         "session-kernel-window-malformed-assistant-content",
@@ -17790,7 +17799,7 @@ async fn load_turn_checkpoint_event_summary_direct_read_failure_uses_neutral_err
     let mut config = test_config();
     config.memory.sqlite_path = sqlite_dir.display().to_string();
     config.memory.sliding_window = 8;
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
     let error = load_turn_checkpoint_event_summary(
         "session-direct-read-error",
@@ -18303,13 +18312,13 @@ async fn persisted_turn_checkpoint_events_survive_reload_without_polluting_promp
 
     let runtime = DefaultConversationRuntime::default();
     let session_id = "session-turn-checkpoint-reload";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18339,7 +18348,7 @@ async fn persisted_turn_checkpoint_events_survive_reload_without_polluting_promp
         &mem_config,
     )
     .expect("persist post_persist checkpoint");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18395,8 +18404,8 @@ async fn persisted_turn_checkpoint_events_survive_reload_without_polluting_promp
         "checkpoint events must not pollute provider prompt history: {messages:?}"
     );
 
-    let turns = crate::memory::window_direct(session_id, 16, &mem_config)
-        .expect("load raw turns from sqlite");
+    let turns =
+        window_session_turns(session_id, 16, &mem_config).expect("load raw turns from sqlite");
     let assistant_contents = turns
         .iter()
         .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))
@@ -18435,13 +18444,13 @@ async fn load_turn_checkpoint_event_summary_reads_recovery_state_from_sqlite_his
     config.memory.sliding_window = 8;
 
     let session_id = "session-turn-checkpoint-reader";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18470,7 +18479,7 @@ async fn load_turn_checkpoint_event_summary_reads_recovery_state_from_sqlite_his
         &mem_config,
     )
     .expect("persist post_persist checkpoint");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18565,13 +18574,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_finalizes_pending_checkpoint()
     config.conversation.compact_fail_open = false;
 
     let session_id = "session-turn-checkpoint-repair-pending";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18676,13 +18685,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_without
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-repair-missing-identity";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18782,13 +18791,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_preserves_safe_lane_override_r
     config.memory.sliding_window = 12;
 
     let session_id = "session-turn-checkpoint-repair-safe-lane-override-manual-reason";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18888,13 +18897,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_requires_manual_repair_on_iden
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-repair-identity-mismatch";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -18990,13 +18999,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_retries_failed_compaction_only
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-repair-compaction";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19100,13 +19109,13 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
     config.conversation.compact_trigger_estimated_tokens = None;
 
     let session_id = "session-turn-checkpoint-repair-compaction-context";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19223,13 +19232,13 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
     config.conversation.compact_trigger_estimated_tokens = Some(50);
 
     let session_id = "session-turn-checkpoint-repair-compaction-estimate";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19332,13 +19341,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-probe-context-fingerprint-mismatch";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19448,13 +19457,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_when_repair_not_ne
     config.memory.sliding_window = 12;
 
     let session_id = "session-turn-checkpoint-probe-not-needed";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19544,13 +19553,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_summary_manual
     config.memory.sliding_window = 12;
 
     let session_id = "session-turn-checkpoint-probe-summary-manual";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19640,13 +19649,13 @@ async fn probe_turn_checkpoint_tail_runtime_gate_returns_none_for_runnable_repai
     config.memory.sliding_window = 12;
 
     let session_id = "session-turn-checkpoint-probe-runnable";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19738,13 +19747,13 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_manual_
     config.memory.sliding_window = 12;
 
     let session_id = "session-turn-checkpoint-diagnostics-summary-manual";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19845,13 +19854,13 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-diagnostics-runtime-drift";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -19973,13 +19982,13 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_degrades_build_context_fa
     config.memory.sliding_window = 12;
 
     let session_id = "session-turn-checkpoint-diagnostics-build-context-failure";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -20258,7 +20267,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.delegate.child_tool_allowlist = vec!["web.fetch".to_owned()];
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -20425,7 +20434,7 @@ async fn session_context_uses_persisted_child_tool_view_constraints() {
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.delegate.child_tool_allowlist = vec!["file.read".to_owned()];
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -20510,7 +20519,7 @@ async fn session_context_preserves_child_workspace_root_from_delegate_execution_
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.file_root = Some(empty_root.display().to_string());
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -20633,7 +20642,7 @@ async fn trait_default_session_context_preserves_delegate_execution_contract() {
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.file_root = Some(empty_root.display().to_string());
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -20713,7 +20722,7 @@ async fn session_context_preserves_child_runtime_narrowing_after_many_later_even
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.create_session(NewSessionRecord {
         session_id: "root-session".to_owned(),
@@ -20803,7 +20812,7 @@ async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
         sample_delegate_runtime_narrowing(),
     );
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     repo.upsert_session_tool_policy(NewSessionToolPolicyRecord {
         session_id: child_session_id.clone(),
@@ -20865,7 +20874,7 @@ async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher(
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -20946,7 +20955,7 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
     config.telegram.base_url = base_url;
     config.telegram.allowed_chat_ids = vec![123];
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -20965,10 +20974,10 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
         state: crate::session::repository::SessionState::Ready,
     })
     .expect("create telegram root");
-    crate::memory::append_turn_direct("telegram:123", "user", "previous inbound", &memory_config)
+    append_session_turn_direct("telegram:123", "user", "previous inbound", &memory_config)
         .expect("append prior transcript turn");
     let before_turns =
-        crate::memory::window_direct("telegram:123", 10, &memory_config).expect("window turns");
+        window_session_turns("telegram:123", 10, &memory_config).expect("window turns");
 
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
@@ -21029,7 +21038,7 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
     assert!(request.contains("\"text\":\"hello root channel\""));
 
     let after_turns =
-        crate::memory::window_direct("telegram:123", 10, &memory_config).expect("window turns");
+        window_session_turns("telegram:123", 10, &memory_config).expect("window turns");
     assert_eq!(after_turns.len(), before_turns.len());
     assert_eq!(after_turns[0].role, before_turns[0].role);
     assert_eq!(after_turns[0].content, before_turns[0].content);
@@ -21059,7 +21068,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
 
     let mut config = make_delegate_announce_test_config(&db_path);
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -21176,7 +21185,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
 
     let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -21333,7 +21342,7 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
 
     let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -21460,7 +21469,7 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
 
     let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -21541,7 +21550,7 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
 
     let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -21663,7 +21672,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserve
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -21797,7 +21806,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_core_replay_f
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -21912,7 +21921,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -22084,7 +22093,7 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -22195,7 +22204,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_fo
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -22328,7 +22337,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -22507,7 +22516,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -22639,7 +22648,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -22819,7 +22828,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_persis
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
 
@@ -22957,7 +22966,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replay_surface
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23067,7 +23076,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23221,7 +23230,7 @@ async fn spawn_background_delegate_with_runtime_creates_missing_root_session_sco
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
 
@@ -23310,7 +23319,7 @@ async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitte
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.delegate.timeout_seconds = 77;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23364,7 +23373,7 @@ async fn handle_turn_with_runtime_delegate_async_direct_binding_fails_before_per
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23452,7 +23461,7 @@ async fn handle_turn_with_runtime_delegate_async_direct_binding_still_fails_when
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23538,7 +23547,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_keeps_delegate_async_
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23664,7 +23673,7 @@ async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23756,7 +23765,7 @@ async fn handle_turn_with_runtime_delegate_async_rejects_when_active_child_limit
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
     config.tools.delegate.max_active_children = 1;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -23848,7 +23857,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24010,7 +24019,7 @@ async fn handle_turn_with_runtime_delegate_async_preserves_kernel_binding_in_spa
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24120,7 +24129,7 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
     config.tools.delegate.allow_shell_in_child = true;
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24241,7 +24250,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_queued_event_to_parent
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24332,7 +24341,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_terminal_event_to_pare
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24458,7 +24467,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24591,7 +24600,7 @@ async fn handle_turn_with_runtime_kernel_delegate_async_spawn_failure_closes_lif
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24698,7 +24707,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_panic_is_observable_after
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24812,7 +24821,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -24933,7 +24942,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25021,7 +25030,7 @@ async fn handle_turn_with_runtime_delegate_supports_worktree_isolation_for_clean
     config.tools.file_root = Some(repo_root.display().to_string());
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25149,7 +25158,7 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25334,7 +25343,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
     config.memory.sqlite_path = db_path.display().to_string();
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25489,7 +25498,7 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate");
     config.tools.delegate.max_depth = 2;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25599,7 +25608,7 @@ async fn handle_turn_with_runtime_executes_session_wait_via_default_dispatcher()
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25691,7 +25700,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.conversation.safe_lane_plan_execution_enabled = true;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25777,7 +25786,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
     config.telegram.base_url = base_url;
     config.telegram.allowed_chat_ids = vec![123];
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25873,7 +25882,7 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.conversation.safe_lane_plan_execution_enabled = true;
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -25965,13 +25974,13 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-repair-context-mismatch";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -26082,13 +26091,13 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-repair-context-fingerprint-mismatch";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -26206,13 +26215,13 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-repair-preparation-malformed";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -26319,13 +26328,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_after_turn_rep
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let session_id = "session-turn-checkpoint-repair-after-turn-fail";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -26431,13 +26440,13 @@ async fn repair_turn_checkpoint_tail_with_runtime_persists_failed_compaction_rep
     config.conversation.compact_fail_open = false;
 
     let session_id = "session-turn-checkpoint-repair-compaction-fail";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -26547,13 +26556,13 @@ async fn durable_turn_checkpoint_repair_persists_finalized_checkpoint_and_repeat
     config.conversation.compact_fail_open = false;
 
     let session_id = "session-turn-checkpoint-durable-repair-idempotent";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -26715,7 +26724,7 @@ async fn repair_turn_checkpoint_tail_with_runtime_recovers_discovery_followup_ch
     let session_id = "session-turn-checkpoint-discovery-followup-repair";
     let user_input = "search for the right tool, then read and summarize note.md";
     let final_reply = "Summary: the note says hello from discovery followup repair.";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
     let harness = TurnTestHarness::new();
     std::fs::write(
@@ -26860,13 +26869,13 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
     config.conversation.compact_fail_open = false;
 
     let session_id = "session-turn-checkpoint-durable-repair-retry";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
-    crate::memory::append_turn_direct(
+    append_session_turn_direct(
         session_id,
         "assistant",
         &json!({
@@ -27470,7 +27479,7 @@ async fn default_context_engine_compact_context_rewrites_persisted_window() {
     config.memory.sqlite_path = db_path.clone();
     config.memory.sliding_window = 32;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let kernel_ctx =
         test_kernel_context_with_memory("test-default-context-engine-compaction", &memory_config);
     let session_id = "default-context-engine-compaction";
@@ -27485,7 +27494,7 @@ async fn default_context_engine_compact_context_rewrites_persisted_window() {
         ("user", "recent ask"),
         ("assistant", "recent reply"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+        append_session_turn_direct(session_id, role, content, &memory_config)
             .expect("seed turns should succeed");
     }
 
@@ -27495,8 +27504,8 @@ async fn default_context_engine_compact_context_rewrites_persisted_window() {
         .await
         .expect("default engine compaction should succeed");
 
-    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
-        .expect("window load should succeed");
+    let turns =
+        window_session_turns(session_id, 32, &memory_config).expect("window load should succeed");
 
     assert_eq!(turns.len(), 7);
     assert_eq!(turns[0].role, "user");
@@ -27521,7 +27530,7 @@ async fn default_context_engine_compact_context_compacts_full_session_but_assemb
     config.memory.sqlite_path = db_path.clone();
     config.memory.sliding_window = 4;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let kernel_ctx = test_kernel_context_with_memory(
         "test-default-context-engine-compaction-clamp",
         &memory_config,
@@ -27536,7 +27545,7 @@ async fn default_context_engine_compact_context_compacts_full_session_but_assemb
         ("user", "recent ask"),
         ("assistant", "recent reply"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+        append_session_turn_direct(session_id, role, content, &memory_config)
             .expect("seed turns should succeed");
     }
 
@@ -27546,8 +27555,8 @@ async fn default_context_engine_compact_context_compacts_full_session_but_assemb
         .await
         .expect("default engine compaction should succeed");
 
-    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
-        .expect("window load should succeed");
+    let turns =
+        window_session_turns(session_id, 32, &memory_config).expect("window load should succeed");
     assert_eq!(turns.len(), 4);
     assert_eq!(turns[0].role, "user");
     assert!(turns[0].content.contains("Compacted 3 earlier turns"));
@@ -27594,7 +27603,7 @@ async fn default_context_engine_compact_context_rewrites_from_full_session_snaps
     config.memory.sliding_window = 4;
     config.conversation.compact_preserve_recent_turns = 2;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let kernel_ctx = test_kernel_context_with_memory(
         "test-default-context-engine-compaction-full-session-snapshot",
         &memory_config,
@@ -27613,7 +27622,7 @@ async fn default_context_engine_compact_context_rewrites_from_full_session_snaps
         ("user", "turn 9"),
         ("assistant", "turn 10"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+        append_session_turn_direct(session_id, role, content, &memory_config)
             .expect("seed turns should succeed");
     }
 
@@ -27623,8 +27632,8 @@ async fn default_context_engine_compact_context_rewrites_from_full_session_snaps
         .await
         .expect("default engine compaction should succeed");
 
-    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
-        .expect("window load should succeed");
+    let turns =
+        window_session_turns(session_id, 32, &memory_config).expect("window load should succeed");
     assert_eq!(turns.len(), 3);
     assert_eq!(turns[0].role, "user");
     assert!(turns[0].content.contains("Compacted 8 earlier turns"));
@@ -27647,7 +27656,7 @@ async fn default_context_engine_compact_context_summarizes_visible_history_not_c
     config.memory.sliding_window = 32;
     config.conversation.compact_preserve_recent_turns = 2;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let kernel_ctx = test_kernel_context_with_memory(
         "test-default-context-engine-compaction-visible-history",
         &memory_config,
@@ -27682,7 +27691,7 @@ async fn default_context_engine_compact_context_summarizes_visible_history_not_c
         ("user", "recent ask"),
         ("assistant", "recent reply"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+        append_session_turn_direct(session_id, role, content, &memory_config)
             .expect("seed turns should succeed");
     }
 
@@ -27849,7 +27858,7 @@ async fn default_context_engine_compact_context_preserves_existing_summarized_hi
     config.memory.sliding_window = 2;
     config.conversation.compact_preserve_recent_turns = 1;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let kernel_ctx = test_kernel_context_with_memory(
         "test-default-context-engine-preserve-summary-history",
         &memory_config,
@@ -27862,7 +27871,7 @@ async fn default_context_engine_compact_context_preserves_existing_summarized_hi
         ("user", "turn 3"),
         ("assistant", "turn 4"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+        append_session_turn_direct(session_id, role, content, &memory_config)
             .expect("seed turns should succeed");
     }
 
@@ -27909,7 +27918,7 @@ async fn default_context_engine_compact_context_can_run_again_after_a_prior_chec
     config.memory.sliding_window = 32;
     config.conversation.compact_preserve_recent_turns = 2;
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = session_store_config_from_config(&config);
     let kernel_ctx = test_kernel_context_with_memory(
         "test-default-context-engine-repeated-compaction",
         &memory_config,
@@ -27926,7 +27935,7 @@ async fn default_context_engine_compact_context_can_run_again_after_a_prior_chec
         ("user", "recent ask"),
         ("assistant", "recent reply"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+        append_session_turn_direct(session_id, role, content, &memory_config)
             .expect("seed initial turns should succeed");
     }
 
@@ -27942,7 +27951,7 @@ async fn default_context_engine_compact_context_can_run_again_after_a_prior_chec
         ("user", "newest ask"),
         ("assistant", "newest reply"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+        append_session_turn_direct(session_id, role, content, &memory_config)
             .expect("append follow-up turns should succeed");
     }
 
@@ -27951,8 +27960,8 @@ async fn default_context_engine_compact_context_can_run_again_after_a_prior_chec
         .await
         .expect("second compaction should succeed");
 
-    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
-        .expect("window load should succeed");
+    let turns =
+        window_session_turns(session_id, 32, &memory_config).expect("window load should succeed");
     let summary = &turns[0].content;
 
     assert_eq!(turns.len(), 3);
@@ -28109,7 +28118,7 @@ async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_
     config.conversation.compact_fail_open = false;
 
     let session_id = "session-turn-checkpoint-default-engine-compaction";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
     for (role, content) in [
         ("user", "ask 1"),
@@ -28121,7 +28130,7 @@ async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_
         ("user", "recent ask"),
         ("assistant", "recent reply"),
     ] {
-        crate::memory::append_turn_direct(session_id, role, content, &mem_config)
+        append_session_turn_direct(session_id, role, content, &mem_config)
             .expect("seed turn should succeed");
     }
 
@@ -28156,8 +28165,7 @@ async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_
         .expect("turn should succeed with durable compaction");
     assert_eq!(reply, "fresh reply");
 
-    let turns =
-        crate::memory::window_direct(session_id, 32, &mem_config).expect("load compacted turns");
+    let turns = window_session_turns(session_id, 32, &mem_config).expect("load compacted turns");
     let assistant_contents = turns
         .iter()
         .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))
@@ -28211,11 +28219,11 @@ async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_whe
     config.conversation.compact_fail_open = true;
 
     let session_id = "session-turn-checkpoint-compaction-failed-open";
-    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let mem_config = session_store_config_from_config(&config);
 
-    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+    append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
-    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+    append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
         .expect("persist assistant turn");
 
     let runtime = FakeRuntime::with_turns_and_completions(
@@ -28251,8 +28259,7 @@ async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_whe
     assert_eq!(reply, "assistant-reply-2");
     assert_eq!(runtime.compact_calls.lock().expect("compact lock").len(), 1);
 
-    let turns =
-        crate::memory::window_direct(session_id, 16, &mem_config).expect("load fail-open turns");
+    let turns = window_session_turns(session_id, 16, &mem_config).expect("load fail-open turns");
     let assistant_contents = turns
         .iter()
         .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))
