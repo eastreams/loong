@@ -811,20 +811,18 @@ pub fn execute_tool_core_with_config(
                         "tool execution rejected"
                     );
                 }
-            } else {
-                if warn_log_enabled {
-                    tracing::warn!(
-                        target: "loong.tools",
-                        requested_tool_name = %requested_tool_name,
-                        canonical_tool_name = %canonical_name,
-                        inner_tool_name = %inner_tool_name,
-                        payload_kind,
-                        payload_keys = ?payload_keys,
-                        duration_ms,
-                        error = %crate::observability::summarize_error(error),
-                        "tool execution failed"
-                    );
-                }
+            } else if warn_log_enabled {
+                tracing::warn!(
+                    target: "loong.tools",
+                    requested_tool_name = %requested_tool_name,
+                    canonical_tool_name = %canonical_name,
+                    inner_tool_name = %inner_tool_name,
+                    payload_kind,
+                    payload_keys = ?payload_keys,
+                    duration_ms,
+                    error = %crate::observability::summarize_error(error),
+                    "tool execution failed"
+                );
             }
         }
     }
