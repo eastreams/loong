@@ -63,8 +63,6 @@ use super::delegate_support::{
 };
 use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
-#[cfg(feature = "memory-sqlite")]
-use super::mailbox_for_session;
 use super::persistence::{
     format_provider_error_reply, persist_acp_runtime_events, persist_conversation_event,
     persist_reply_turns_raw_with_mode, persist_reply_turns_with_mode, persist_tool_decision,
@@ -163,8 +161,6 @@ use crate::session::repository::{
     ApprovalDecision, ApprovalRequestStatus, NewSessionEvent, NewSessionRecord, SessionKind,
     SessionRepository, SessionState,
 };
-#[cfg(feature = "memory-sqlite")]
-use loong_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
 use support::{
     ProviderTurnPreparation, ProviderTurnReplyTailPhase, ProviderTurnSessionState,
     emit_async_delegate_child_queued_event, emit_discovery_first_event, emit_prompt_frame_event,
@@ -4772,7 +4768,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
         Ok(Ok(Err(error))) => {
@@ -4829,7 +4824,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
         Ok(Err(panic_payload)) => {
@@ -4887,7 +4881,6 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
         Err(_) => {
@@ -4944,35 +4937,9 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
-            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
     }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn notify_parent_delegate_result(
-    parent_session_id: &str,
-    child_session_id: &str,
-    outcome: &loong_contracts::ToolCoreOutcome,
-) {
-    let mailbox = mailbox_for_session(parent_session_id);
-    let author = AgentPath::root()
-        .join(child_session_id)
-        .unwrap_or_else(|_| AgentPath::root());
-    let message = InterAgentMessage {
-        author,
-        recipient: AgentPath::root(),
-        content: MailboxContent::DelegateResult {
-            session_id: child_session_id.to_owned(),
-            frozen_result: json!({
-                "status": outcome.status,
-                "payload": outcome.payload,
-            }),
-        },
-        trigger_turn: true,
-    };
-    let _ = mailbox.send(message);
 }
 
 async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(

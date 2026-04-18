@@ -27,7 +27,6 @@ use super::context_engine_registry::{
     DEFAULT_CONTEXT_ENGINE_ID, context_engine_id_from_env, describe_context_engine,
     list_context_engine_metadata, resolve_context_engine,
 };
-use super::mailbox_for_session;
 use super::prompt_orchestrator::seed_prompt_fragments_from_context;
 use super::prompt_orchestrator::sync_prompt_fragments_into_context;
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
@@ -68,10 +67,8 @@ pub struct SessionContext {
 
 impl SessionContext {
     pub fn root_with_tool_view(session_id: impl Into<String>, tool_view: ToolView) -> Self {
-        let session_id = normalize_session_id(session_id.into());
-        let _ = mailbox_for_session(&session_id);
         Self {
-            session_id,
+            session_id: normalize_session_id(session_id.into()),
             parent_session_id: None,
             profile: None,
             tool_view,
@@ -88,13 +85,9 @@ impl SessionContext {
         parent_session_id: impl Into<String>,
         tool_view: ToolView,
     ) -> Self {
-        let session_id = normalize_session_id(session_id.into());
-        let parent_session_id = normalize_session_id(parent_session_id.into());
-        let _ = mailbox_for_session(&session_id);
-        let _ = mailbox_for_session(&parent_session_id);
         Self {
-            session_id,
-            parent_session_id: Some(parent_session_id),
+            session_id: normalize_session_id(session_id.into()),
+            parent_session_id: Some(normalize_session_id(parent_session_id.into())),
             profile: None,
             tool_view,
             workspace_root: None,

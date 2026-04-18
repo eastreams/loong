@@ -11,7 +11,6 @@ pub mod errors;
 pub mod harness;
 pub mod integration;
 pub mod kernel;
-pub mod mailbox;
 pub mod memory;
 pub mod pack;
 pub mod plugin;
