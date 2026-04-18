@@ -484,6 +484,14 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
         encoded["tools"]["tool_calling"]["structured_tool_schema_enabled"],
         true
     );
+    assert!(encoded["tools"]["web_access"]["ordinary_network_access_enabled"].is_boolean());
+    assert!(encoded["tools"]["web_access"]["query_search_enabled"].is_boolean());
+    assert!(encoded["tools"]["web_access"]["query_search_default_provider"].is_string());
+    assert!(encoded["tools"]["web_access"]["query_search_credential_ready"].is_boolean());
+    assert_eq!(
+        encoded["tools"]["web_access"]["separation_note"],
+        "web-search provider settings affect only query search mode; ordinary network access stays separately governed"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -609,6 +617,14 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     assert_eq!(
         summary.runtime.tool_calling.availability,
         runtime_snapshot.tools.tool_calling.availability
+    );
+    assert_eq!(
+        summary.runtime.web_access,
+        runtime_snapshot.tools.web_access
+    );
+    assert_eq!(
+        encoded["runtime"]["web_access"]["separation_note"],
+        "web-search provider settings affect only query search mode; ordinary network access stays separately governed"
     );
     assert_eq!(
         encoded["control_surface"]["base_url"],

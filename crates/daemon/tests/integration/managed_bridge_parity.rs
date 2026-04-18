@@ -68,6 +68,13 @@ fn runtime_snapshot_fixture(
                 active_model: "gpt-4.1-mini".to_owned(),
                 reason: "no runtime-visible tools are enabled".to_owned(),
             },
+            web_access: loong_daemon::gateway::read_models::GatewayWebAccessReadModel {
+                ordinary_network_access_enabled: false,
+                query_search_enabled: false,
+                query_search_default_provider: "duckduckgo".to_owned(),
+                query_search_credential_ready: true,
+                separation_note: "web-search provider settings affect only query search mode; ordinary network access stays separately governed".to_owned(),
+            },
         },
         runtime_plugins: serde_json::json!({}),
         external_skills: serde_json::json!({}),

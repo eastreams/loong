@@ -628,7 +628,10 @@ fn map_task_summary(
     let timeout_seconds = task.timeout_seconds;
     let approval_request_count = task.approval_request_count;
     let approval_attention_count = task.approval_attention_count;
+    let requested_tool_ids = task.requested_tool_ids;
+    let visible_requested_tool_ids = task.visible_requested_tool_ids;
     let effective_tool_ids = task.effective_tool_ids;
+    let visible_effective_tool_ids = task.visible_effective_tool_ids;
     let effective_runtime_narrowing = task.effective_runtime_narrowing;
     let label = task.label;
     let last_error = task.last_error;
@@ -645,7 +648,10 @@ fn map_task_summary(
         workflow,
         approval_request_count,
         approval_attention_count,
+        requested_tool_ids,
+        visible_requested_tool_ids,
         effective_tool_ids,
+        visible_effective_tool_ids,
         effective_runtime_narrowing,
         last_error,
     }
@@ -709,12 +715,29 @@ fn map_approval_summary(
         .get("rule_id")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned);
+    let visible_tool_name = Some(mvp::tools::user_visible_tool_name(
+        approval.tool_name.as_str(),
+    ));
+    let raw_request = approval
+        .request_payload_json
+        .as_object()
+        .and_then(|payload| payload.get("args_json"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let summarized_request =
+        mvp::tools::summarize_tool_request_for_display(approval.tool_name.as_str(), raw_request);
+    let request_summary = Some(serde_json::json!({
+        "tool": visible_tool_name.clone().unwrap_or_else(|| approval.tool_name.clone()),
+        "request": summarized_request,
+    }));
     ControlPlaneApprovalSummary {
         approval_request_id: approval.approval_request_id,
         session_id: approval.session_id,
         turn_id: approval.turn_id,
         tool_call_id: approval.tool_call_id,
         tool_name: approval.tool_name,
+        visible_tool_name,
+        request_summary,
         approval_key: approval.approval_key,
         status: map_approval_status(approval.status),
         decision: approval.decision.map(map_approval_decision),
@@ -4728,6 +4751,10 @@ mod tests {
             "child-session"
         );
         assert_eq!(task.delegate_mode.as_deref(), Some("async"));
+        assert_eq!(task.requested_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(task.visible_requested_tool_ids, vec!["read".to_owned()]);
+        assert_eq!(task.effective_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(task.visible_effective_tool_ids, vec!["read".to_owned()]);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -4775,6 +4802,16 @@ mod tests {
         );
         assert_eq!(task.task.delegate_phase.as_deref(), Some("running"));
         assert_eq!(task.task.approval_request_count, 1);
+        assert_eq!(task.task.requested_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(
+            task.task.visible_requested_tool_ids,
+            vec!["read".to_owned()]
+        );
+        assert_eq!(task.task.effective_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(
+            task.task.visible_effective_tool_ids,
+            vec!["read".to_owned()]
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -4849,6 +4886,17 @@ mod tests {
         assert_eq!(
             approvals.approvals[0].reason.as_deref(),
             Some("governed_tool_requires_approval")
+        );
+        assert_eq!(
+            approvals.approvals[0].visible_tool_name.as_deref(),
+            Some("delegate")
+        );
+        assert_eq!(
+            approvals.approvals[0].request_summary.as_ref(),
+            Some(&serde_json::json!({
+                "tool": "delegate",
+                "request": {}
+            }))
         );
     }
 

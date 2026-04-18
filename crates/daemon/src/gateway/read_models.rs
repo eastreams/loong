@@ -4,11 +4,12 @@ use std::net::{IpAddr, SocketAddr};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::CHANNELS_CLI_JSON_LEGACY_VIEWS;
-use crate::CHANNELS_CLI_JSON_SCHEMA_VERSION;
 use crate::RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION;
 use crate::RuntimeSnapshotCliState;
 use crate::mvp;
+use crate::operator_inventory_cli::{
+    CHANNELS_CLI_JSON_LEGACY_VIEWS, CHANNELS_CLI_JSON_SCHEMA_VERSION,
+};
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 
 use super::state::GatewayOwnerStatus;
@@ -245,6 +246,15 @@ pub struct GatewayRuntimeSnapshotChannelsReadModel {
     pub inventory: GatewayChannelInventoryReadModel,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayWebAccessReadModel {
+    pub ordinary_network_access_enabled: bool,
+    pub query_search_enabled: bool,
+    pub query_search_default_provider: String,
+    pub query_search_credential_ready: bool,
+    pub separation_note: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayRuntimeSnapshotToolsReadModel {
     pub visible_tool_count: usize,
@@ -256,6 +266,7 @@ pub struct GatewayRuntimeSnapshotToolsReadModel {
     pub capability_snapshot_sha256: String,
     pub capability_snapshot: String,
     pub tool_calling: GatewayToolCallingReadModel,
+    pub web_access: GatewayWebAccessReadModel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +275,8 @@ pub struct GatewayToolSurfaceReadModel {
     pub prompt_snippet: String,
     pub usage_guidance: String,
     pub tool_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_tool_names: Vec<String>,
     pub tool_ids: Vec<String>,
 }
 
@@ -340,6 +353,7 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub active_provider_profile_id: Option<String>,
     pub active_provider_label: Option<String>,
     pub tool_calling: GatewayToolCallingReadModel,
+    pub web_access: GatewayWebAccessReadModel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -564,6 +578,7 @@ pub fn build_runtime_snapshot_read_model(
     let capability_snapshot_sha256 = snapshot.capability_snapshot_sha256.clone();
     let capability_snapshot = snapshot.capability_snapshot.clone();
     let tool_calling = build_tool_calling_read_model(&snapshot.tool_calling);
+    let web_access = build_web_access_read_model(&snapshot.tool_runtime);
     let tools = GatewayRuntimeSnapshotToolsReadModel {
         visible_tool_count,
         visible_tool_names,
@@ -574,6 +589,7 @@ pub fn build_runtime_snapshot_read_model(
         capability_snapshot_sha256,
         capability_snapshot,
         tool_calling,
+        web_access,
     };
     let runtime_plugins = crate::runtime_snapshot_runtime_plugins_json(&snapshot.runtime_plugins);
     let external_skills = crate::runtime_snapshot_external_skills_json(&snapshot.external_skills);
@@ -1106,6 +1122,7 @@ fn build_operator_runtime_summary_read_model(
         json_string_field(&runtime_snapshot.provider, "active_profile_id");
     let active_provider_label = json_string_field(&runtime_snapshot.provider, "active_label");
     let tool_calling = runtime_snapshot.tools.tool_calling.clone();
+    let web_access = runtime_snapshot.tools.web_access.clone();
 
     GatewayOperatorRuntimeSummaryReadModel {
         enabled_channel_ids,
@@ -1120,6 +1137,21 @@ fn build_operator_runtime_summary_read_model(
         active_provider_profile_id,
         active_provider_label,
         tool_calling,
+        web_access,
+    }
+}
+
+fn build_web_access_read_model(
+    runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> GatewayWebAccessReadModel {
+    let summary = crate::runtime_web_access_summary(runtime);
+
+    GatewayWebAccessReadModel {
+        ordinary_network_access_enabled: summary.ordinary_network_access_enabled,
+        query_search_enabled: summary.query_search_enabled,
+        query_search_default_provider: summary.query_search_default_provider,
+        query_search_credential_ready: summary.query_search_credential_ready,
+        separation_note: summary.separation_note.to_owned(),
     }
 }
 
@@ -1131,8 +1163,22 @@ fn build_tool_surface_read_model(
         prompt_snippet: surface.prompt_snippet.clone(),
         usage_guidance: surface.usage_guidance.clone(),
         tool_count: surface.tool_count(),
+        visible_tool_names: visible_tool_names_for_surface(surface),
         tool_ids: surface.tool_ids.clone(),
     }
+}
+
+fn visible_tool_names_for_surface(surface: &mvp::tools::ToolSurfaceState) -> Vec<String> {
+    let mut visible_tool_names = Vec::new();
+
+    for tool_id in &surface.tool_ids {
+        let visible_tool_name = mvp::tools::user_visible_tool_name(tool_id.as_str());
+        if !visible_tool_names.contains(&visible_tool_name) {
+            visible_tool_names.push(visible_tool_name);
+        }
+    }
+
+    visible_tool_names
 }
 
 fn build_tool_calling_read_model(
@@ -1321,6 +1367,7 @@ mod tests {
 
         assert_eq!(read_model.surface_id, "read");
         assert_eq!(read_model.tool_count, 2);
+        assert_eq!(read_model.visible_tool_names, vec!["read", "write"]);
         assert_eq!(read_model.tool_ids, vec!["file.read", "file.write"]);
         assert_eq!(read_model.usage_guidance, "prefer direct read before shell");
     }
@@ -1378,10 +1425,15 @@ mod tests {
                 hidden_tool_tags: vec!["session".to_owned(), "web".to_owned()],
                 hidden_tool_surfaces: vec![
                     GatewayToolSurfaceReadModel {
-                        surface_id: "session".to_owned(),
-                        prompt_snippet: "inspect session state".to_owned(),
-                        usage_guidance: "use for history and in-flight runtime state".to_owned(),
+                        surface_id: "agent".to_owned(),
+                        prompt_snippet: "inspect agent runtime state".to_owned(),
+                        usage_guidance: "use for approvals, sessions, routing, or delegation"
+                            .to_owned(),
                         tool_count: 2,
+                        visible_tool_names: vec![
+                            "session_events".to_owned(),
+                            "session_status".to_owned(),
+                        ],
                         tool_ids: vec!["session_events".to_owned(), "session_status".to_owned()],
                     },
                     GatewayToolSurfaceReadModel {
@@ -1389,6 +1441,7 @@ mod tests {
                         prompt_snippet: "hidden http operations".to_owned(),
                         usage_guidance: "use direct web first".to_owned(),
                         tool_count: 1,
+                        visible_tool_names: vec!["http.request".to_owned()],
                         tool_ids: vec!["http.request".to_owned()],
                     },
                 ],
@@ -1401,6 +1454,13 @@ mod tests {
                     active_model: "gpt-4.1-mini".to_owned(),
                     reason: "runtime ready".to_owned(),
                 },
+                web_access: GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                },
             },
             runtime_plugins: serde_json::json!({}),
             external_skills: serde_json::json!({}),
@@ -1409,6 +1469,8 @@ mod tests {
         let summary = build_operator_runtime_summary_read_model(&runtime_snapshot);
 
         assert_eq!(summary.visible_direct_tool_names, vec!["read", "write"]);
-        assert_eq!(summary.hidden_tool_surface_ids, vec!["session", "web"]);
+        assert_eq!(summary.hidden_tool_surface_ids, vec!["agent", "web"]);
+        assert!(summary.web_access.ordinary_network_access_enabled);
+        assert!(!summary.web_access.query_search_enabled);
     }
 }
