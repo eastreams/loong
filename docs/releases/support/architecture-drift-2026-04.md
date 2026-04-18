@@ -20,7 +20,7 @@ release review. It is not part of the primary public release trail.
   repository's current architecture boundaries
 
 ## Summary
-- Generated at: 2026-04-18T15:01:02Z
+- Generated at: 2026-04-18T16:52:47Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/support/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -34,7 +34,7 @@ release review. It is not part of the primary public release trail.
 | spec_runtime | `foundation` | `crates/spec/src/spec_runtime.rs` | 3513 | 3600 | 87 | 65 | 65 | 0 | 100.0% | TIGHT | 3455 | 1.7% | PASS | 65 |
 | spec_execution | `foundation` | `crates/spec/src/spec_execution.rs` | 3574 | 3700 | 126 | 48 | 80 | 32 | 96.6% | TIGHT | 3547 | 0.8% | PASS | 43 |
 | provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 416 | 1000 | 584 | 13 | 20 | 7 | 65.0% | HEALTHY | 375 | 10.9% | BREACH | 10 |
-| memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 456 | 650 | 194 | 16 | 16 | 0 | 100.0% | TIGHT | 356 | 28.1% | BREACH | 14 |
+| memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 473 | 650 | 177 | 16 | 16 | 0 | 100.0% | TIGHT | 356 | 32.9% | BREACH | 14 |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3058 | 3600 | 542 | 0 | 12 | 12 | 84.9% | HEALTHY | 3383 | -9.6% | PASS | 8 |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 1776 | 2800 | 1024 | 7 | 65 | 58 | 63.4% | HEALTHY | 2698 | -34.2% | PASS | 56 |
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10113 | 10500 | 387 | 78 | 90 | 12 | 96.3% | TIGHT | 9922 | 1.9% | PASS | 88 |
@@ -88,7 +88,7 @@ release review. It is not part of the primary public release trail.
 <!-- arch-hotspot key=spec_runtime lines=3513 functions=65 -->
 <!-- arch-hotspot key=spec_execution lines=3574 functions=48 -->
 <!-- arch-hotspot key=provider_mod lines=416 functions=13 -->
-<!-- arch-hotspot key=memory_mod lines=456 functions=16 -->
+<!-- arch-hotspot key=memory_mod lines=473 functions=16 -->
 <!-- arch-hotspot key=acp_manager lines=3058 functions=0 -->
 <!-- arch-hotspot key=acpx_runtime lines=1776 functions=7 -->
 <!-- arch-hotspot key=channel_registry lines=10113 functions=78 -->
