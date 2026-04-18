@@ -20,6 +20,7 @@ pub mod runtime_env;
 mod runtime_identity;
 mod runtime_self;
 mod runtime_self_continuity;
+pub(crate) mod search_text;
 mod secrets;
 pub mod session;
 pub mod tools;
