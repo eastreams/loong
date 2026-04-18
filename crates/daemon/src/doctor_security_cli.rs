@@ -1704,7 +1704,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_shell_execution_is_covered_when_allowlist_is_empty() {
+    async fn default_shell_execution_is_exposed_in_yolo_mode() {
         let path = temp_config_path("shell-covered");
         write_placeholder_config(&path);
 
@@ -1714,10 +1714,12 @@ mod tests {
             .expect("build security execution");
         let finding = finding_by_id(&execution.findings, "shell_execution");
 
-        assert_eq!(finding.status, SecurityFindingStatus::Covered);
-        assert_eq!(finding.severity, SecurityFindingSeverity::Info);
+        assert_eq!(finding.status, SecurityFindingStatus::Exposed);
+        assert_eq!(finding.severity, SecurityFindingSeverity::Critical);
         assert!(
-            finding.summary.contains("effectively disabled"),
+            finding
+                .summary
+                .contains("allows unknown commands by default"),
             "unexpected summary: {}",
             finding.summary
         );

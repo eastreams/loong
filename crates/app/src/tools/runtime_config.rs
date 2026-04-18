@@ -208,7 +208,7 @@ pub(crate) fn merge_runtime_narrowing_sources(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExternalSkillsRuntimePolicy {
     pub enabled: bool,
     pub require_download_approval: bool,
@@ -216,22 +216,6 @@ pub struct ExternalSkillsRuntimePolicy {
     pub blocked_domains: BTreeSet<String>,
     pub install_root: Option<PathBuf>,
     pub auto_expose_installed: bool,
-}
-
-impl Default for ExternalSkillsRuntimePolicy {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            require_download_approval: true,
-            allowed_domains: BTreeSet::new(),
-            blocked_domains: crate::config::DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            install_root: None,
-            auto_expose_installed: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -705,10 +689,10 @@ impl Default for ToolRuntimeConfig {
                 .map(|s| (*s).to_owned())
                 .collect(),
             shell_deny: BTreeSet::new(),
-            shell_default_mode: ShellPolicyDefault::Deny,
+            shell_default_mode: ShellPolicyDefault::Allow,
             config_path: None,
             sessions_enabled: true,
-            sessions_allow_mutation: false,
+            sessions_allow_mutation: true,
             messages_enabled: false,
             delegate_enabled: true,
             runtime_self: RuntimeSelfRuntimePolicy::default(),
@@ -945,7 +929,7 @@ impl ToolRuntimeConfig {
         let shell_deny = BTreeSet::new();
         let sessions_enabled = parse_env_bool("LOONG_TOOL_SESSIONS_ENABLED").unwrap_or(true);
         let sessions_allow_mutation =
-            parse_env_bool("LOONG_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(false);
+            parse_env_bool("LOONG_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(true);
         let messages_enabled = parse_env_bool("LOONG_TOOL_MESSAGES_ENABLED").unwrap_or(false);
         let delegate_enabled = parse_env_bool("LOONG_TOOL_DELEGATE_ENABLED").unwrap_or(true);
         let runtime_self_max_source_chars = parse_env_usize("LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS")
@@ -1038,7 +1022,7 @@ impl ToolRuntimeConfig {
         let autonomy_profile = resolve_autonomy_profile_from_env();
         let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
         let require_download_approval =
-            parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
+            parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(false);
         let allowed_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
         let blocked_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
         let install_root = std::env::var("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT")
@@ -1087,7 +1071,7 @@ impl ToolRuntimeConfig {
             selected_memory_system_id,
             shell_allow,
             shell_deny,
-            shell_default_mode: ShellPolicyDefault::Deny,
+            shell_default_mode: ShellPolicyDefault::Allow,
             config_path,
             sessions_enabled,
             sessions_allow_mutation,
@@ -1803,7 +1787,7 @@ mod tests {
         assert!(config.workspace_root.is_none());
         assert!(config.config_path.is_none());
         assert!(config.sessions_enabled);
-        assert!(!config.sessions_allow_mutation);
+        assert!(config.sessions_allow_mutation);
         assert!(!config.messages_enabled);
         assert!(config.delegate_enabled);
         assert_eq!(
@@ -1848,14 +1832,9 @@ mod tests {
             crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS
         );
         assert!(!config.external_skills.enabled);
-        assert!(config.external_skills.require_download_approval);
+        assert!(!config.external_skills.require_download_approval);
         assert!(config.external_skills.allowed_domains.is_empty());
-        assert!(
-            config
-                .external_skills
-                .blocked_domains
-                .contains("*.clawhub.io")
-        );
+        assert!(config.external_skills.blocked_domains.is_empty());
         assert!(config.external_skills.install_root.is_none());
         assert!(!config.external_skills.auto_expose_installed);
     }

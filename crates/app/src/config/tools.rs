@@ -471,7 +471,7 @@ pub struct WebSearchToolConfig {
 }
 
 fn default_shell_default_mode() -> String {
-    "deny".to_owned()
+    "allow".to_owned()
 }
 
 const fn default_browser_companion_timeout_seconds() -> u64 {
@@ -488,9 +488,8 @@ const fn default_runtime_self_max_total_chars() -> usize {
 
 /// Default allow list used when the config file omits `shell_allow`.
 ///
-/// Empty by design: no commands are allowed unless the user explicitly
-/// configures `shell_allow` in their config file. This upholds the
-/// default-deny principle — silent implicit permissions are not injected.
+/// Empty by design: Loong starts in broad YOLO mode via `shell_default_mode = "allow"`,
+/// and `shell_allow` is reserved for users who later want an explicit allowlist.
 ///
 /// Also used by `ToolRuntimeConfig::default()` so the runtime fallback
 /// and a freshly-parsed config file agree on the initial allow set.
@@ -498,7 +497,7 @@ pub const DEFAULT_SHELL_ALLOW: &[&str] = &[];
 
 /// Serde default for `ToolConfig::shell_allow`.
 ///
-/// Returns an empty list — no commands are implicitly allowed.
+/// Returns an empty list — no explicit allowlist entries are injected.
 fn default_shell_allow() -> Vec<String> {
     DEFAULT_SHELL_ALLOW
         .iter()
@@ -507,10 +506,7 @@ fn default_shell_allow() -> Vec<String> {
 }
 
 fn default_external_skills_blocked_domains() -> Vec<String> {
-    DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES
-        .iter()
-        .map(|rule| (*rule).to_owned())
-        .collect()
+    Vec::new()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -608,7 +604,7 @@ impl Default for SessionToolConfig {
             visibility: SessionVisibility::default(),
             list_limit: default_session_list_limit(),
             history_limit: default_session_history_limit(),
-            allow_mutation: false,
+            allow_mutation: true,
         }
     }
 }
@@ -1413,7 +1409,7 @@ const fn default_web_search_max_results() -> usize {
 }
 
 const fn default_require_download_approval() -> bool {
-    true
+    false
 }
 
 const fn default_auto_expose_installed() -> bool {
@@ -1441,7 +1437,7 @@ mod tests {
         let config = ToolConfig::default();
         assert!(config.shell_allow.is_empty());
         assert!(config.shell_deny.is_empty());
-        assert_eq!(config.shell_default_mode, "deny");
+        assert_eq!(config.shell_default_mode, "allow");
         assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
         assert_eq!(config.consent.default_mode, ToolConsentMode::Full);
         assert_eq!(config.approval.mode, GovernedToolApprovalMode::Disabled);
@@ -1451,7 +1447,7 @@ mod tests {
         assert_eq!(config.sessions.visibility, SessionVisibility::Children);
         assert_eq!(config.sessions.list_limit, 100);
         assert_eq!(config.sessions.history_limit, 200);
-        assert!(!config.sessions.allow_mutation);
+        assert!(config.sessions.allow_mutation);
         assert!(!config.messages.enabled);
         assert!(config.delegate.enabled);
         assert_eq!(config.delegate.max_depth, 1);
@@ -2181,12 +2177,12 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
-    fn external_skills_defaults_to_safe_off_mode() {
+    fn external_skills_defaults_to_yolo_off_mode() {
         let config = ExternalSkillsConfig::default();
         assert!(!config.enabled);
-        assert!(config.require_download_approval);
+        assert!(!config.require_download_approval);
         assert!(config.allowed_domains.is_empty());
-        assert_eq!(config.blocked_domains, vec!["*.clawhub.io".to_owned()]);
+        assert!(config.blocked_domains.is_empty());
         assert!(config.install_root.is_none());
         assert!(!config.auto_expose_installed);
     }

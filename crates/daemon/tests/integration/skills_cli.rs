@@ -504,6 +504,15 @@ fn execute_skills_command_fetch_propagates_runtime_policy_errors() {
     let root = unique_temp_dir("loong-skills-cli-fetch-policy");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
     let config_path = write_external_skills_config(&root, true);
+    let (resolved_path, mut config) =
+        mvp::config::load(Some(config_path.to_string_lossy().as_ref())).expect("load config");
+    config.external_skills.require_download_approval = true;
+    mvp::config::write(
+        Some(resolved_path.to_string_lossy().as_ref()),
+        &config,
+        true,
+    )
+    .expect("persist gated config");
 
     let error = loong_daemon::skills_cli::execute_skills_command(
         loong_daemon::skills_cli::SkillsCommandOptions {
@@ -576,10 +585,14 @@ fn execute_skills_command_enable_browser_preview_persists_runtime_and_installs_h
     assert!(
         reloaded
             .tools
-            .shell_allow
-            .iter()
-            .any(|command| command == "agent-browser"),
-        "enable-browser-preview should allow the browser companion command through shell policy"
+            .shell_default_mode
+            .eq_ignore_ascii_case("allow")
+            || reloaded
+                .tools
+                .shell_allow
+                .iter()
+                .any(|command| command == "agent-browser"),
+        "enable-browser-preview should leave the browser companion command allowed through shell policy"
     );
 
     let list = loong_daemon::skills_cli::execute_skills_command(
@@ -2030,7 +2043,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
     assert_eq!(initial.outcome.payload["policy"]["enabled"], false);
     assert_eq!(
         initial.outcome.payload["policy"]["require_download_approval"],
-        true
+        false
     );
     assert_eq!(
         initial.outcome.payload["policy"]["allowed_domains"],
@@ -2038,7 +2051,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
     );
     assert_eq!(
         initial.outcome.payload["policy"]["blocked_domains"],
-        serde_json::json!(["*.clawhub.io"])
+        serde_json::json!([])
     );
     assert_eq!(
         initial.outcome.payload["policy"]["install_root"],
@@ -2120,7 +2133,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
     assert_eq!(reset.outcome.payload["policy"]["enabled"], false);
     assert_eq!(
         reset.outcome.payload["policy"]["require_download_approval"],
-        true
+        false
     );
     assert_eq!(
         reset.outcome.payload["policy"]["allowed_domains"],
@@ -2128,7 +2141,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
     );
     assert_eq!(
         reset.outcome.payload["policy"]["blocked_domains"],
-        serde_json::json!(["*.clawhub.io"])
+        serde_json::json!([])
     );
 
     let final_get = loong_daemon::skills_cli::execute_skills_command(
@@ -2144,7 +2157,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
     assert_eq!(final_get.outcome.payload["policy"]["enabled"], false);
     assert_eq!(
         final_get.outcome.payload["policy"]["require_download_approval"],
-        true
+        false
     );
     assert_eq!(
         final_get.outcome.payload["policy"]["allowed_domains"],
@@ -2152,14 +2165,14 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
     );
     assert_eq!(
         final_get.outcome.payload["policy"]["blocked_domains"],
-        serde_json::json!(["*.clawhub.io"])
+        serde_json::json!([])
     );
 
     let (_, reloaded_after_reset) = mvp::config::load(Some(config_path.to_string_lossy().as_ref()))
         .expect("reload reset config");
     assert!(!reloaded_after_reset.external_skills.enabled);
     assert!(
-        reloaded_after_reset
+        !reloaded_after_reset
             .external_skills
             .require_download_approval
     );
@@ -2169,9 +2182,11 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
             .allowed_domains
             .is_empty()
     );
-    assert_eq!(
-        reloaded_after_reset.external_skills.blocked_domains,
-        vec!["*.clawhub.io".to_owned()]
+    assert!(
+        reloaded_after_reset
+            .external_skills
+            .blocked_domains
+            .is_empty()
     );
     assert_eq!(
         reloaded_after_reset.external_skills.install_root.as_deref(),
@@ -2264,12 +2279,9 @@ fn execute_skills_command_policy_set_requires_explicit_approval() {
     let (_, reloaded) =
         mvp::config::load(Some(config_string.as_str())).expect("reload unchanged config");
     assert!(!reloaded.external_skills.enabled);
-    assert!(reloaded.external_skills.require_download_approval);
+    assert!(!reloaded.external_skills.require_download_approval);
     assert!(reloaded.external_skills.allowed_domains.is_empty());
-    assert_eq!(
-        reloaded.external_skills.blocked_domains,
-        vec!["*.clawhub.io".to_owned()]
-    );
+    assert!(reloaded.external_skills.blocked_domains.is_empty());
 
     fs::remove_dir_all(&root).ok();
 }
@@ -2308,10 +2320,7 @@ fn execute_skills_command_policy_set_rejects_invalid_domain_rules() {
         mvp::config::load(Some(config_string.as_str())).expect("reload unchanged config");
     assert!(!reloaded.external_skills.enabled);
     assert!(reloaded.external_skills.allowed_domains.is_empty());
-    assert_eq!(
-        reloaded.external_skills.blocked_domains,
-        vec!["*.clawhub.io".to_owned()]
-    );
+    assert!(reloaded.external_skills.blocked_domains.is_empty());
 
     fs::remove_dir_all(&root).ok();
 }
