@@ -11,12 +11,13 @@ mod shared;
 mod tools;
 
 #[allow(unused_imports)]
-pub use crate::channel::{ChannelDescriptor, ChannelRuntimeKind};
+pub use crate::channel::{ChannelDescriptor, ChannelOperationalModel, ChannelRuntimeKind};
 #[allow(unused_imports)]
 pub use crate::channel::{
-    catalog_only_channel_descriptors, channel_descriptor, outbound_only_channel_descriptors,
-    plugin_backed_channel_descriptors, runtime_backed_channel_descriptors,
-    service_channel_descriptors,
+    catalog_only_channel_descriptors, channel_descriptor, gateway_supervised_channel_descriptors,
+    outbound_only_channel_descriptors, plugin_backed_channel_descriptors,
+    runtime_backed_channel_descriptors, service_channel_descriptors,
+    standalone_runtime_channel_descriptors,
 };
 pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
@@ -190,6 +191,14 @@ mod tests {
         ]
     }
 
+    fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
+        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+    }
+
+    fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
+        vec!["line", "webhook"]
+    }
+
     fn expected_plugin_backed_channel_ids() -> Vec<&'static str> {
         vec!["weixin", "qqbot", "onebot"]
     }
@@ -239,54 +248,90 @@ mod tests {
         assert_eq!(telegram.id, "telegram");
         assert_eq!(telegram.surface_label, "telegram channel");
         assert_eq!(telegram.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            telegram.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(telegram.serve_subcommand, Some("telegram-serve"));
 
         let feishu = channel_descriptor("feishu").expect("feishu descriptor");
         assert_eq!(feishu.id, "feishu");
         assert_eq!(feishu.surface_label, "feishu channel");
         assert_eq!(feishu.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            feishu.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(feishu.serve_subcommand, Some("feishu-serve"));
 
         let wecom = channel_descriptor("wecom").expect("wecom descriptor");
         assert_eq!(wecom.id, "wecom");
         assert_eq!(wecom.surface_label, "wecom channel");
         assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            wecom.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
 
         let weixin = channel_descriptor("wechat").expect("weixin descriptor");
         assert_eq!(weixin.id, "weixin");
         assert_eq!(weixin.surface_label, "weixin channel");
         assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            weixin.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(weixin.serve_subcommand, None);
 
         let qqbot = channel_descriptor("qq").expect("qqbot descriptor");
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
         assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            qqbot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(qqbot.serve_subcommand, None);
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
         assert_eq!(onebot.id, "onebot");
         assert_eq!(onebot.surface_label, "onebot channel");
         assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            onebot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(onebot.serve_subcommand, None);
 
         let discord = channel_descriptor("discord").expect("discord descriptor");
         assert_eq!(discord.id, "discord");
         assert_eq!(discord.surface_label, "discord channel");
         assert_eq!(discord.runtime_kind, ChannelRuntimeKind::OutboundOnly);
+        assert_eq!(
+            discord.operational_model,
+            ChannelOperationalModel::OutboundOnly
+        );
         assert_eq!(discord.serve_subcommand, None);
 
         let slack = channel_descriptor("slack").expect("slack descriptor");
         assert_eq!(slack.id, "slack");
         assert_eq!(slack.surface_label, "slack channel");
         assert_eq!(slack.runtime_kind, ChannelRuntimeKind::OutboundOnly);
+        assert_eq!(
+            slack.operational_model,
+            ChannelOperationalModel::OutboundOnly
+        );
         assert_eq!(slack.serve_subcommand, None);
 
         let line = channel_descriptor("line").expect("line descriptor");
         assert_eq!(line.id, "line");
         assert_eq!(line.surface_label, "line channel");
         assert_eq!(line.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            line.operational_model,
+            ChannelOperationalModel::StandaloneRuntime
+        );
         assert_eq!(line.serve_subcommand, Some("line-serve"));
 
         let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
@@ -299,6 +344,10 @@ mod tests {
         assert_eq!(whatsapp.id, "whatsapp");
         assert_eq!(whatsapp.surface_label, "whatsapp channel");
         assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            whatsapp.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(whatsapp.serve_subcommand, Some("whatsapp-serve"));
 
         let email = channel_descriptor("email").expect("email descriptor");
@@ -311,6 +360,10 @@ mod tests {
         assert_eq!(webhook.id, "webhook");
         assert_eq!(webhook.surface_label, "webhook channel");
         assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            webhook.operational_model,
+            ChannelOperationalModel::StandaloneRuntime
+        );
         assert_eq!(webhook.serve_subcommand, Some("webhook-serve"));
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
@@ -463,6 +516,14 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
+        let gateway_supervised_ids = gateway_supervised_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let standalone_runtime_ids = standalone_runtime_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
         let plugin_backed_ids = plugin_backed_channel_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
@@ -477,6 +538,14 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(runtime_backed_ids, expected_service_channel_ids());
+        assert_eq!(
+            gateway_supervised_ids,
+            expected_gateway_supervised_channel_ids()
+        );
+        assert_eq!(
+            standalone_runtime_ids,
+            expected_standalone_runtime_channel_ids()
+        );
         assert_eq!(plugin_backed_ids, expected_plugin_backed_channel_ids());
         assert_eq!(outbound_only_ids, expected_outbound_channel_ids());
         assert_eq!(catalog_only_ids, vec!["zalo", "zalo-personal", "webchat"]);

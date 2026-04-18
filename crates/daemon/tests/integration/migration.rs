@@ -1287,6 +1287,7 @@ fn migration_classify_current_setup_treats_enabled_managed_bridge_without_ready_
 
 #[test]
 fn migration_classify_current_setup_treats_blocked_outbound_only_channel_as_repairable() {
+    let _env = MigrationEnvironmentGuard::set(&[("DISCORD_BOT_TOKEN", None)]);
     let path = unique_temp_dir("outbound-only-repairable").join("config.toml");
     let mut config = mvp::config::LoongConfig::default();
 
@@ -1303,8 +1304,8 @@ fn migration_classify_current_setup_treats_blocked_outbound_only_channel_as_repa
 
     assert_eq!(
         loong_daemon::migration::discovery::classify_current_setup(&path),
-        loong_daemon::migration::types::CurrentSetupState::Healthy,
-        "configured outbound-only channels currently keep the current setup in the healthy bucket: {path:?}"
+        loong_daemon::migration::types::CurrentSetupState::Repairable,
+        "blocked outbound-only channels should stay repairable once ambient env fallback is removed: {path:?}"
     );
 }
 

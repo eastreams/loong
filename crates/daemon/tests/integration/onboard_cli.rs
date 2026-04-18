@@ -2558,6 +2558,7 @@ fn channel_preflight_checks_report_configured_outbound_channels() {
 
 #[test]
 fn channel_preflight_checks_summarize_outbound_multi_account_state_and_reserved_runtime_fields() {
+    let _env = super::MigrationEnvironmentGuard::set(&[("DISCORD_BOT_TOKEN", None)]);
     let config: mvp::config::LoongConfig = serde_json::from_value(json!({
         "discord": {
             "enabled": true,
@@ -2578,16 +2579,17 @@ fn channel_preflight_checks_summarize_outbound_multi_account_state_and_reserved_
     assert!(
         checks.iter().any(|check| {
             check.name == "discord channel"
-                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Pass
-                && check.detail.contains("direct send ready on 2 account(s)")
+                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.detail.contains("direct send ready on 1/2 account(s)")
                 && check.detail.contains("ops ready")
-                && check.detail.contains("alerts ready")
+                && check
+                    .detail
+                    .contains("alerts needs review (bot_token is missing)")
                 && check.detail.contains(
                     "reserved future runtime fields: ops [application_id, allowed_guild_ids:2]",
                 )
-                && check.detail.contains("outbound-only surface")
         }),
-        "configured outbound multi-account channels should surface per-account readiness and reserved future runtime fields in preflight detail: {checks:#?}"
+        "configured outbound multi-account channels should surface partial readiness and reserved future runtime fields in preflight detail: {checks:#?}"
     );
 }
 

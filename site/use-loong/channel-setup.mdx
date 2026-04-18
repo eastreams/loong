@@ -1,12 +1,13 @@
 ---
 title: Channel Setup
-description: Practical setup guidance for runtime-backed, plugin-backed, and outbound-only delivery surfaces.
+description: Practical setup guidance for gateway-supervised, standalone native-serve, plugin-backed, and outbound-only delivery surfaces.
 ---
 
 # Channel Setup
 
 Loong keeps channel setup explicit so operators can tell what is actually
-shipped, what is bridge-owned, what is outbound-only, and what still depends on
+shipped, what is gateway-supervised, what stays on a standalone native serve
+loop, what is bridge-owned, what is outbound-only, and what still depends on
 future runtime work.
 
 Use this page when you want the practical setup contract. If you want step-by-step
@@ -22,7 +23,8 @@ headless supervision, or `--channel-account` selectors, continue to
 | If you need... | Start with... |
 | --- | --- |
 | a local assistant only | `onboard`, `ask`, `chat`, and `doctor` |
-| inbound or reply-loop automation | one shipped runtime-backed service channel |
+| inbound or reply-loop automation that should join `gateway run` later | one shipped gateway-supervised service channel |
+| one built-in serve loop that should stay on its own command for now | one standalone native-serve surface |
 | a real channel contract whose login/runtime stays in an external bridge | one plugin-backed bridge surface |
 | proactive delivery without a reply loop | one outbound-only surface |
 | the shared account and selector config shape first | [Configuration Patterns](/use-loong/configuration-patterns) |
@@ -36,7 +38,7 @@ Before any channel is really ready:
 - the base CLI path should already work locally
 - provider credentials should already be healthy
 - channel-specific credentials should already resolve
-- the surface should be described truthfully as runtime-backed, plugin-backed, or outbound-only
+- the surface should be described truthfully as gateway-supervised, standalone native-serve, plugin-backed, or outbound-only
 - setup should point to a concrete operator path instead of a vague support claim
 
 ## Common Rollout Shapes
@@ -48,13 +50,15 @@ Before any channel is really ready:
 | one Matrix bot should own a room sync loop | configure `matrix` and run `loong matrix-serve` | the homeserver, room ids, and sync boundary stay explicit |
 | one WhatsApp business account should own a Cloud API reply loop | configure `whatsapp` and run `loong whatsapp-serve` | send and serve are both shipped on the verified webhook path |
 | one WeCom bot should own the official long connection | configure `wecom` and run `loong wecom-serve` | this matches the shipped AIBot contract |
+| one LINE or generic webhook lane should use a real built-in serve loop without gateway supervision yet | configure the standalone native-serve block and run `loong <surface>-serve --bind ...` | the runtime is real, but the owner is still the direct `*-serve` command |
 | one WeChat / QQ / OneBot bridge should stay external but visible | configure the plugin-backed channel block and run `loong doctor` plus `loong channels` | bridge-owned surfaces are real but should not pretend the gateway already owns the upstream login stack |
 | you need several accounts in one channel family | add `default_account` plus `accounts.<id>` before adding gateway selectors | stable account ids make later supervision and routing legible |
 | you only need governed direct sends | configure one outbound-only surface and use `loong <surface>-send` | this avoids pretending a reply loop already ships |
 
-## Runtime-Backed Service Channels
+## Gateway-Supervised Service Channels
 
-These are the shipped reply-loop surfaces today.
+These are the shipped reply-loop surfaces that can join `gateway run` or
+`multi-channel-serve` today.
 
 | Surface | What you configure first | Run loop |
 | --- | --- | --- |
@@ -63,6 +67,16 @@ These are the shipped reply-loop surfaces today.
 | Matrix | homeserver base URL, access token, and trusted room ids | `loong matrix-serve` |
 | WhatsApp | Cloud API credentials plus verified webhook material | `loong whatsapp-serve` |
 | WeCom | bot id, secret, and trusted conversation ids | `loong wecom-serve` |
+
+## Standalone Native-Serve Surfaces
+
+These surfaces ship real built-in serve loops, but the runtime still stays on
+the direct `*-serve` command instead of gateway supervision.
+
+| Surface | What you configure first | Run loop |
+| --- | --- | --- |
+| LINE | channel access token, channel secret, and a chosen local bind address | `loong line-serve --bind <HOST:PORT>` |
+| Webhook | signing secret plus a chosen local bind address | `loong webhook-serve --bind <HOST:PORT>` |
 
 ## Plugin-Backed Bridge Surfaces
 
@@ -180,9 +194,9 @@ metadata without claiming a full reply-loop runtime.
 
 | Surface family | Current examples | Primary command shape |
 | --- | --- | --- |
-| chat and workplace platforms | Discord, Slack, LINE, DingTalk, Microsoft Teams, Mattermost, Google Chat | `loong <surface>-send` |
+| chat and workplace platforms | Discord, Slack, DingTalk, Microsoft Teams, Mattermost, Google Chat | `loong <surface>-send` |
 | messaging and communication bridges | Signal, IRC, iMessage / BlueBubbles, Nostr | `loong <surface>-send` |
-| generic or self-hosted delivery | Webhook, Email, Nextcloud Talk, Synology Chat, Tlon | `loong <surface>-send` |
+| generic or self-hosted delivery | Email, Nextcloud Talk, Synology Chat, Tlon | `loong <surface>-send` |
 | community-facing outbound integrations | Twitch and similar outbound-only integrations | `loong <surface>-send` |
 
 ## Outbound HTTP Trust Rules
@@ -202,7 +216,8 @@ the runtime can widen that boundary explicitly instead of silently assuming it.
 When you move beyond one local surface:
 
 - `gateway run`, `gateway status`, and `gateway stop` are the explicit owner contract
-- `multi-channel-serve` is the compatibility wrapper for the shipped runtime-backed subset
+- `multi-channel-serve` is the compatibility wrapper for the shipped gateway-supervised subset
+- standalone native-serve surfaces use their own `*-serve` loop instead of joining the same reply-loop runtime contract
 - plugin-backed surfaces are inspected through `doctor` and `channels`, not supervised through the same reply-loop runtime contract
 - outbound-only surfaces should not be described as if they are supervised by the same reply-loop runtime contract
 - the detailed command model, selector syntax, and recovery loop live in
@@ -211,10 +226,11 @@ When you move beyond one local surface:
 ## Recommended Progression
 
 1. Get the local assistant path healthy first.
-2. Add one runtime-backed service channel if you need inbound or reply-loop behavior.
-3. Add one plugin-backed bridge surface when the ecosystem is real but the runtime owner should stay external.
-4. Add outbound-only surfaces when you need governed direct sends.
-5. Reach for gateway and `multi-channel-serve` only after one runtime-backed channel already works cleanly.
+2. Add one gateway-supervised service channel if you need the shortest path into `gateway run` or `multi-channel-serve`.
+3. Add one standalone native-serve surface when you need a real built-in serve loop without gateway supervision yet.
+4. Add one plugin-backed bridge surface when the ecosystem is real but the runtime owner should stay external.
+5. Add outbound-only surfaces when you need governed direct sends.
+6. Reach for gateway and `multi-channel-serve` only after one gateway-supervised channel already works cleanly.
 
 ## Deep References
 
