@@ -188,7 +188,7 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - Use community channels such as Discord and Telegram. If you are already active in Feishu or
   WeChat community spaces, those are also good places to ask.
 - If you want to introduce yourself directly or talk about where you could help most, email
-  [contact@loong.ai](mailto:contact@loong.ai).
+  [contact@loongclaw.ai](mailto:contact@loongclaw.ai).
 - Use the private security advisory flow for vulnerabilities instead of public issues.
 
 The public workflow in this guide is the contributor-facing source of truth.
@@ -216,7 +216,7 @@ care.
 - If your strengths are design, docs, docs-site editing, QA, operations, support, or community work,
   those are first-class contributions here, not second-tier work.
 - If you would rather start with a direct introduction, email
-  [contact@loong.ai](mailto:contact@loong.ai). A short note is enough. You do not need a
+  [contact@loongclaw.ai](mailto:contact@loongclaw.ai). A short note is enough. You do not need a
   formal application.
 - If you are unsure where to begin, open a Discussion or send that introduction email and we will
   help point you toward good starting areas.
