@@ -10,10 +10,10 @@ contact_links:
     url: https://discord.gg/7kSTX9mca
     about: Join Discord for community help and day-to-day discussion. If you are already active in Telegram, Feishu, or WeChat community spaces, those are good places to ask too.
   - name: Telegram community
-    url: https://t.me/loong
+    url: https://t.me/loongclaw
     about: Telegram is another active community space for support and contributor chat.
   - name: Direct introduction
-    url: mailto:contact@loong.ai
+    url: mailto:contact@loongclaw.ai
     about: If you want to introduce yourself, talk about where you could help most, or ask where your strengths fit, email us directly.
   - name: Contribution guide
     url: https://github.com/eastreams/loong/blob/dev/CONTRIBUTING.md
