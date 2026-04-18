@@ -1562,7 +1562,10 @@ pub struct ControlPlaneTaskSummaryView {
     pub workflow: ControlPlaneSessionWorkflowView,
     pub approval_request_count: usize,
     pub approval_attention_count: usize,
+    pub requested_tool_ids: Vec<String>,
+    pub visible_requested_tool_ids: Vec<String>,
     pub effective_tool_ids: Vec<String>,
+    pub visible_effective_tool_ids: Vec<String>,
     pub effective_runtime_narrowing: Value,
     pub last_error: Option<String>,
 }
@@ -1894,7 +1897,12 @@ impl ControlPlaneRepositoryView {
         let workflow = control_plane_session_workflow_view(workflow_record);
         let tool_policy_payload =
             build_session_tool_policy_status_payload(repo, &session.session_id, &self.tool_config)?;
+        let requested_tool_ids = control_plane_requested_tool_ids(&tool_policy_payload);
+        let visible_requested_tool_ids =
+            control_plane_visible_requested_tool_ids(&tool_policy_payload);
         let effective_tool_ids = control_plane_effective_tool_ids(&tool_policy_payload);
+        let visible_effective_tool_ids =
+            control_plane_visible_effective_tool_ids(&tool_policy_payload);
         let effective_runtime_narrowing =
             control_plane_effective_runtime_narrowing(&tool_policy_payload);
         let approval_requests =
@@ -1918,7 +1926,10 @@ impl ControlPlaneRepositoryView {
             workflow,
             approval_request_count: approval_requests.len(),
             approval_attention_count: pending_approval_requests.len(),
+            requested_tool_ids,
+            visible_requested_tool_ids,
             effective_tool_ids,
+            visible_effective_tool_ids,
             effective_runtime_narrowing,
             last_error: session.last_error.clone(),
         };
@@ -2018,9 +2029,49 @@ fn current_control_plane_unix_timestamp() -> i64 {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn control_plane_requested_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
+    control_plane_tool_ids(tool_policy_payload, "requested_tool_ids")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_visible_requested_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
+    let visible_tool_ids =
+        control_plane_tool_ids(tool_policy_payload, "visible_requested_tool_ids");
+    if !visible_tool_ids.is_empty() {
+        return visible_tool_ids;
+    }
+
+    let requested_tool_ids = control_plane_requested_tool_ids(tool_policy_payload);
+    requested_tool_ids
+        .iter()
+        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
+        .collect()
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn control_plane_effective_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
+    control_plane_tool_ids(tool_policy_payload, "effective_tool_ids")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_visible_effective_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
+    let visible_tool_ids =
+        control_plane_tool_ids(tool_policy_payload, "visible_effective_tool_ids");
+    if !visible_tool_ids.is_empty() {
+        return visible_tool_ids;
+    }
+
+    let effective_tool_ids = control_plane_effective_tool_ids(tool_policy_payload);
+    effective_tool_ids
+        .iter()
+        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
+        .collect()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_tool_ids(tool_policy_payload: &Value, field_name: &str) -> Vec<String> {
     let tool_id_values = tool_policy_payload
-        .get("effective_tool_ids")
+        .get(field_name)
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -3302,7 +3353,10 @@ mod tests {
         assert_eq!(task.delegate_phase.as_deref(), Some("running"));
         assert_eq!(task.approval_request_count, 1);
         assert_eq!(task.approval_attention_count, 1);
+        assert_eq!(task.requested_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(task.visible_requested_tool_ids, vec!["read".to_owned()]);
         assert_eq!(task.effective_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(task.visible_effective_tool_ids, vec!["read".to_owned()]);
     }
 
     #[cfg(feature = "memory-sqlite")]

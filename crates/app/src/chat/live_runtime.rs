@@ -698,7 +698,10 @@ fn build_cli_chat_live_tool_snapshots(
     for tool_state in ordered_states {
         let snapshot = CliChatLiveToolSnapshot {
             tool_call_id: tool_state.tool_call_id.clone(),
-            name: tool_state.name.clone(),
+            name: tool_state
+                .name
+                .as_deref()
+                .map(crate::tools::user_visible_tool_name),
             request_summary: tool_state.request_summary.clone(),
             args: tool_state.args.clone(),
             status: tool_state.status,

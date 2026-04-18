@@ -3272,6 +3272,20 @@ fn tool_view_names(tool_view: &ToolView) -> Vec<String> {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn visible_tool_id_names(tool_ids: &[String]) -> Vec<String> {
+    let mut visible_tool_ids = Vec::new();
+
+    for tool_id in tool_ids {
+        let visible_tool_id = crate::tools::model_visible_tool_name(tool_id.as_str());
+        if !visible_tool_ids.contains(&visible_tool_id) {
+            visible_tool_ids.push(visible_tool_id);
+        }
+    }
+
+    visible_tool_ids
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn runtime_narrowing_json(runtime_narrowing: Option<ToolRuntimeNarrowing>) -> Value {
     match runtime_narrowing {
         Some(runtime_narrowing) => serde_json::to_value(runtime_narrowing).unwrap_or(Value::Null),
@@ -3303,13 +3317,18 @@ pub(crate) fn build_session_tool_policy_status_payload(
         (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
     });
     let updated_at = session_tool_policy.as_ref().map(|policy| policy.updated_at);
+    let base_tool_ids = tool_view_names(&base_tool_view);
+    let effective_tool_ids = tool_view_names(&effective_tool_view);
 
     Ok(json!({
         "has_policy": session_tool_policy.is_some(),
         "updated_at": updated_at,
         "requested_tool_ids": requested_tool_ids,
-        "base_tool_ids": tool_view_names(&base_tool_view),
-        "effective_tool_ids": tool_view_names(&effective_tool_view),
+        "visible_requested_tool_ids": visible_tool_id_names(&requested_tool_ids),
+        "base_tool_ids": base_tool_ids,
+        "visible_base_tool_ids": visible_tool_id_names(&base_tool_ids),
+        "effective_tool_ids": effective_tool_ids,
+        "visible_effective_tool_ids": visible_tool_id_names(&effective_tool_ids),
         "requested_runtime_narrowing": runtime_narrowing_json(requested_runtime_narrowing),
         "delegate_runtime_narrowing": runtime_narrowing_json(delegate_runtime_narrowing),
         "effective_runtime_narrowing": runtime_narrowing_json(effective_runtime_narrowing),
@@ -4082,10 +4101,12 @@ mod tests {
     }
 
     #[test]
-    fn session_mutation_tools_are_disabled_by_default() {
+    fn session_mutation_tools_can_be_explicitly_disabled() {
         let config = isolated_memory_config("session-mutation-disabled");
+        let mut tool_config = ToolConfig::default();
+        tool_config.sessions.allow_mutation = false;
         for tool_name in ["session_archive", "session_cancel", "session_recover"] {
-            let error = execute_session_tool_with_config(
+            let error = execute_session_tool_with_policies(
                 ToolCoreRequest {
                     tool_name: tool_name.to_owned(),
                     payload: json!({
@@ -4094,6 +4115,7 @@ mod tests {
                 },
                 "root-session",
                 &config,
+                &tool_config,
             )
             .expect_err("session mutation tools should require explicit opt-in");
             let expected_error = format!(
@@ -5219,8 +5241,16 @@ mod tests {
             json!(["session_status", "tool.search"])
         );
         assert_eq!(
+            set.payload["policy"]["visible_requested_tool_ids"],
+            json!(["agent", "tool.search"])
+        );
+        assert_eq!(
             set.payload["policy"]["effective_tool_ids"],
             json!(["session_status", "tool.search"])
+        );
+        assert_eq!(
+            set.payload["policy"]["visible_effective_tool_ids"],
+            json!(["agent", "tool.search"])
         );
         assert_eq!(
             set.payload["policy"]["requested_runtime_narrowing"]["browser"]["max_sessions"],
@@ -5245,6 +5275,10 @@ mod tests {
         assert_eq!(
             status.payload["policy"]["requested_tool_ids"],
             json!(["session_status", "tool.search"])
+        );
+        assert_eq!(
+            status.payload["policy"]["visible_requested_tool_ids"],
+            json!(["agent", "tool.search"])
         );
         assert_eq!(
             status.payload["policy"]["requested_runtime_narrowing"]["web_fetch"]["blocked_domains"],

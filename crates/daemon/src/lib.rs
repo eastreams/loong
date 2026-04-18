@@ -2467,6 +2467,67 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub missing_required_config_keys: Vec<String>,
 }
 
+pub(crate) const RUNTIME_WEB_ACCESS_SEPARATION_NOTE: &str = "web-search provider settings affect only query search mode; ordinary network access stays separately governed";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeWebAccessSummary {
+    pub ordinary_network_access_enabled: bool,
+    pub query_search_enabled: bool,
+    pub query_search_default_provider: String,
+    pub query_search_credential_ready: bool,
+    pub separation_note: &'static str,
+}
+
+pub(crate) fn runtime_web_access_summary(
+    runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+) -> RuntimeWebAccessSummary {
+    let ordinary_network_access_enabled = runtime.web_fetch.enabled;
+    let query_search_enabled = runtime.web_search.enabled;
+    let query_search_default_provider = runtime.web_search.default_provider.clone();
+    let query_search_credential_ready = web_search_provider_credential_ready(&runtime.web_search);
+    let separation_note = RUNTIME_WEB_ACCESS_SEPARATION_NOTE;
+
+    RuntimeWebAccessSummary {
+        ordinary_network_access_enabled,
+        query_search_enabled,
+        query_search_default_provider,
+        query_search_credential_ready,
+        separation_note,
+    }
+}
+
+fn web_search_provider_credential_ready(
+    policy: &mvp::tools::runtime_config::WebSearchRuntimePolicy,
+) -> bool {
+    let provider = policy.default_provider.trim();
+    match provider {
+        mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO => true,
+        mvp::config::WEB_SEARCH_PROVIDER_BRAVE => {
+            option_has_non_empty_runtime_text(policy.brave_api_key.as_deref())
+        }
+        mvp::config::WEB_SEARCH_PROVIDER_TAVILY => {
+            option_has_non_empty_runtime_text(policy.tavily_api_key.as_deref())
+        }
+        mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY => {
+            option_has_non_empty_runtime_text(policy.perplexity_api_key.as_deref())
+        }
+        mvp::config::WEB_SEARCH_PROVIDER_EXA => {
+            option_has_non_empty_runtime_text(policy.exa_api_key.as_deref())
+        }
+        mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL => {
+            option_has_non_empty_runtime_text(policy.firecrawl_api_key.as_deref())
+        }
+        mvp::config::WEB_SEARCH_PROVIDER_JINA => {
+            option_has_non_empty_runtime_text(policy.jina_api_key.as_deref())
+        }
+        _ => false,
+    }
+}
+
+fn option_has_non_empty_runtime_text(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSnapshotArtifactMetadata {
     pub created_at: String,
