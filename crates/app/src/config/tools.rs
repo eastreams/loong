@@ -227,6 +227,8 @@ pub struct DelegateToolConfig {
     pub announce_debounce_ms: u64,
     #[serde(default = "default_delegate_announce_max_batch")]
     pub announce_max_batch: usize,
+    #[serde(default = "default_delegate_max_pending")]
+    pub max_pending: Option<usize>,
     #[serde(default)]
     pub child_runtime: DelegateChildRuntimeConfig,
 }
@@ -623,6 +625,7 @@ impl Default for DelegateToolConfig {
             max_frozen_bytes: default_delegate_max_frozen_bytes(),
             announce_debounce_ms: default_delegate_announce_debounce_ms(),
             announce_max_batch: default_delegate_announce_max_batch(),
+            max_pending: default_delegate_max_pending(),
             child_runtime: DelegateChildRuntimeConfig::default(),
         }
     }
@@ -1360,6 +1363,9 @@ const fn default_delegate_announce_debounce_ms() -> u64 {
 
 const fn default_delegate_announce_max_batch() -> usize {
     20
+}
+const fn default_delegate_max_pending() -> Option<usize> {
+    None
 }
 
 const fn default_browser_max_sessions() -> usize {

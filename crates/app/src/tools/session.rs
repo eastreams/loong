@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 #[cfg(feature = "memory-sqlite")]
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{Duration, Instant, timeout};
 
 use loong_contracts::{
     GovernedSessionMode, GovernedWorkflowPhase, ToolCoreOutcome, ToolCoreRequest,
@@ -24,6 +24,8 @@ use crate::conversation::{
     ConstrainedSubagentIdentity, ConstrainedSubagentProfile, DelegateBuiltinProfile,
     coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
+#[cfg(feature = "memory-sqlite")]
+use crate::conversation::{InterAgentMessage, mailbox_for_session};
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
@@ -1506,6 +1508,8 @@ async fn wait_for_single_session_with_policies(
     let started_at = Instant::now();
     let mut next_after_id = after_id.unwrap_or(0).max(0);
     let mut observed_events = Vec::new();
+    let mailbox = mailbox_for_session(current_session_id);
+    let mut mailbox_subscription = mailbox.subscribe();
 
     loop {
         let observation = observe_visible_session_with_policies(
@@ -1557,7 +1561,19 @@ async fn wait_for_single_session_with_policies(
         }
 
         let remaining_ms = timeout_ms - elapsed_ms;
-        sleep(Duration::from_millis(remaining_ms.min(25))).await;
+        let drained: Vec<InterAgentMessage> = mailbox.drain().await;
+        if !drained.is_empty() {
+            continue;
+        }
+
+        let wait_result = timeout(
+            Duration::from_millis(remaining_ms),
+            mailbox_subscription.changed(),
+        )
+        .await;
+        if let Ok(Err(_)) = wait_result {
+            return Err("session_wait_internal_error: mailbox subscription closed".to_owned());
+        }
     }
 }
 
@@ -1573,6 +1589,8 @@ async fn wait_for_session_batch_with_policies(
     event_limit: usize,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
+    let mailbox = mailbox_for_session(current_session_id);
+    let mut mailbox_subscription = mailbox.subscribe();
     let mut results = vec![None; target_session_ids.len()];
     let mut pending = Vec::new();
     for (index, target_session_id) in target_session_ids.into_iter().enumerate() {
@@ -1729,7 +1747,19 @@ async fn wait_for_session_batch_with_policies(
         }
 
         let remaining_ms = timeout_ms - elapsed_ms;
-        sleep(Duration::from_millis(remaining_ms.min(25))).await;
+        let drained: Vec<InterAgentMessage> = mailbox.drain().await;
+        if !drained.is_empty() {
+            continue;
+        }
+
+        let wait_result = timeout(
+            Duration::from_millis(remaining_ms),
+            mailbox_subscription.changed(),
+        )
+        .await;
+        if let Ok(Err(_)) = wait_result {
+            return Err("session_wait_internal_error: mailbox subscription closed".to_owned());
+        }
     }
 }
 
