@@ -556,10 +556,10 @@ const FEISHU_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::RuntimeTracking,
 ];
 const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure feishu or lark app credentials, allowed chat ids, and either webhook secrets or mode = \"websocket\" in loongclaw.toml under feishu or feishu.accounts.<account>",
+    strategy: ChannelOnboardingStrategy::QrRegistration,
+    setup_hint: "run `loong feishu onboard` to create Feishu or Lark bot credentials from an in-terminal QR flow and persist them under feishu or feishu.accounts.<account>; `loong feishu onboard --manual --app-id ... --app-secret ...` remains available for manual credential handoff, and webhook mode still requires verification_token plus encrypt_key",
     status_command: "loong doctor",
-    repair_command: Some("loong doctor --fix"),
+    repair_command: Some("loong feishu onboard"),
 };
 
 const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -7208,9 +7208,11 @@ mod tests {
 
         assert_eq!(
             lark.onboarding.strategy,
-            ChannelOnboardingStrategy::ManualConfig
+            ChannelOnboardingStrategy::QrRegistration
         );
         assert_eq!(lark.onboarding.status_command, "loong doctor");
+        assert_eq!(lark.onboarding.repair_command, Some("loong feishu onboard"));
+        assert!(lark.onboarding.setup_hint.contains("QR"));
 
         assert_eq!(
             discord.onboarding.strategy,

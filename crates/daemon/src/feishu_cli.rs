@@ -6,6 +6,10 @@ use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 use serde_json::{Value, json};
 
+use crate::feishu_onboarding::{
+    FeishuOnboardApplyOptions, FeishuOnboardCredentialSource, FeishuOnboardCredentials,
+    apply_manual_feishu_onboarding, onboard_via_qr_registration,
+};
 use crate::feishu_support::{
     FeishuAuthCapability, FeishuConfiguredCapability, FeishuDaemonContext,
     build_account_recommendations, build_grant_recommendations, build_pkce_pair,
@@ -28,6 +32,8 @@ pub enum FeishuCommand {
         #[command(subcommand)]
         command: FeishuAuthCommand,
     },
+    /// Create or update Feishu/Lark bot channel credentials in loongclaw.toml
+    Onboard(FeishuOnboardArgs),
     /// Resolve the selected user grant and print Feishu profile details
     Whoami(FeishuGrantArgs),
     /// Create or append Feishu docx documents
@@ -190,6 +196,58 @@ pub struct FeishuGrantArgs {
     pub common: FeishuCommonArgs,
     #[arg(long)]
     pub open_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FeishuOnboardDomainArg {
+    Feishu,
+    Lark,
+}
+
+impl FeishuOnboardDomainArg {
+    fn as_config_domain(self) -> mvp::config::FeishuDomain {
+        match self {
+            Self::Feishu => mvp::config::FeishuDomain::Feishu,
+            Self::Lark => mvp::config::FeishuDomain::Lark,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FeishuOnboardModeArg {
+    Websocket,
+    Webhook,
+}
+
+impl FeishuOnboardModeArg {
+    fn as_config_mode(self) -> mvp::config::FeishuChannelServeMode {
+        match self {
+            Self::Websocket => mvp::config::FeishuChannelServeMode::Websocket,
+            Self::Webhook => mvp::config::FeishuChannelServeMode::Webhook,
+        }
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuOnboardArgs {
+    #[command(flatten)]
+    pub common: FeishuCommonArgs,
+    #[arg(long, default_value_t = FeishuOnboardDomainArg::Feishu, value_enum)]
+    pub domain: FeishuOnboardDomainArg,
+    #[arg(long, value_enum)]
+    pub mode: Option<FeishuOnboardModeArg>,
+    #[arg(long)]
+    pub timeout_s: Option<u64>,
+    #[arg(long, default_value_t = false)]
+    pub manual: bool,
+    #[arg(long)]
+    pub app_id: Option<String>,
+    #[arg(long)]
+    pub app_secret: Option<String>,
+    #[arg(long)]
+    pub verification_token: Option<String>,
+    #[arg(long)]
+    pub encrypt_key: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -812,6 +870,10 @@ pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
                 print_feishu_payload(&payload, args.common.json, render_auth_revoke_text)?;
             }
         },
+        FeishuCommand::Onboard(args) => {
+            let payload = execute_feishu_onboard(&args).await?;
+            print_feishu_payload(&payload, args.common.json, render_onboard_text)?;
+        }
         FeishuCommand::Whoami(args) => {
             let payload = execute_feishu_whoami(&args).await?;
             print_feishu_payload(&payload, args.common.json, render_whoami_text)?;
@@ -1047,6 +1109,128 @@ pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
         }
     }
     Ok(())
+}
+
+pub async fn execute_feishu_onboard(args: &FeishuOnboardArgs) -> CliResult<Value> {
+    let mode = args
+        .mode
+        .unwrap_or(FeishuOnboardModeArg::Websocket)
+        .as_config_mode();
+    let manual = args.manual
+        || args.app_id.is_some()
+        || args.app_secret.is_some()
+        || args.verification_token.is_some()
+        || args.encrypt_key.is_some();
+
+    if mode != mvp::config::FeishuChannelServeMode::Webhook
+        && (args.verification_token.is_some() || args.encrypt_key.is_some())
+    {
+        return Err("webhook verification_token/encrypt_key require `--mode webhook`".to_owned());
+    }
+
+    let result = if manual {
+        let app_id = trimmed_opt(args.app_id.as_deref())
+            .ok_or_else(|| "manual Feishu onboarding requires `--app-id`".to_owned())?;
+        let app_secret = trimmed_opt(args.app_secret.as_deref())
+            .ok_or_else(|| "manual Feishu onboarding requires `--app-secret`".to_owned())?;
+        let verification_token = trimmed_opt(args.verification_token.as_deref()).map(str::to_owned);
+        let encrypt_key = trimmed_opt(args.encrypt_key.as_deref()).map(str::to_owned);
+        if mode == mvp::config::FeishuChannelServeMode::Webhook
+            && (verification_token.is_none() || encrypt_key.is_none())
+        {
+            return Err(
+                "manual Feishu webhook onboarding requires both `--verification-token` and `--encrypt-key`"
+                    .to_owned(),
+            );
+        }
+
+        apply_manual_feishu_onboarding(
+            args.common.config.as_deref(),
+            args.common.account.as_deref(),
+            &FeishuOnboardCredentials {
+                app_id: app_id.to_owned(),
+                app_secret: app_secret.to_owned(),
+                verification_token,
+                encrypt_key,
+            },
+            FeishuOnboardApplyOptions {
+                domain: args.domain.as_config_domain(),
+                mode,
+            },
+        )?
+    } else {
+        if mode != mvp::config::FeishuChannelServeMode::Websocket {
+            return Err(
+                "QR-based Feishu/Lark onboarding currently supports `--mode websocket` only; use `--manual` for webhook credentials"
+                    .to_owned(),
+            );
+        }
+        onboard_via_qr_registration(
+            args.common.config.as_deref(),
+            args.common.account.as_deref(),
+            args.domain.as_config_domain(),
+            args.timeout_s,
+            Some(mode),
+        )
+        .await?
+    };
+
+    let serve_command = if result.configured_account_id == "feishu_cli_default" {
+        "loong feishu serve".to_owned()
+    } else {
+        format!(
+            "loong feishu serve --account {}",
+            result.configured_account_id
+        )
+    };
+    let mut notes = vec!["run `loong doctor` to verify the saved channel contract".to_owned()];
+    if result.owner_direct_chat_bootstrap_applied {
+        if let Some(owner_open_id) = result.owner_open_id.as_deref() {
+            notes.push(format!(
+                "defaulted inbound bootstrap access to `allowed_chat_ids = [\"*\"]` and `allowed_sender_ids = [\"{owner_open_id}\"]` so the onboarding user can start a direct Feishu/Lark chat immediately"
+            ));
+            notes.push(
+                "tighten `allowed_chat_ids` after first-run validation if you want the bot limited to specific chats"
+                    .to_owned(),
+            );
+        }
+    } else {
+        notes.push(
+            "set `feishu.allowed_chat_ids` and, when needed, `feishu.allowed_sender_ids` before running the long-lived reply loop in production"
+                .to_owned(),
+        );
+    }
+    if result.credential_source == FeishuOnboardCredentialSource::QrRegistration {
+        notes.push(
+            "QR registration writes the generated bot app_id/app_secret directly into loongclaw.toml and defaults the channel to websocket mode"
+                .to_owned(),
+        );
+    }
+    if result.mode == mvp::config::FeishuChannelServeMode::Webhook {
+        notes.push(
+            "webhook mode expects Feishu event delivery to target the bind/path you pass to `loong feishu serve`"
+                .to_owned(),
+        );
+    }
+
+    Ok(json!({
+        "account_id": result.runtime_account_id,
+        "configured_account": result.configured_account_label,
+        "configured_account_id": result.configured_account_id,
+        "config": result.config_path,
+        "credential_source": result.credential_source.as_str(),
+        "domain": result.domain.as_str(),
+        "mode": result.mode.as_str(),
+        "owner_open_id": result.owner_open_id,
+        "bot_name": result.bot_name,
+        "bot_open_id": result.bot_open_id,
+        "qr_url": result.qr_url,
+        "qr_rendered": result.qr_rendered,
+        "owner_direct_chat_bootstrap_applied": result.owner_direct_chat_bootstrap_applied,
+        "serve_command": serve_command,
+        "status_command": "loong doctor",
+        "notes": notes,
+    }))
 }
 
 pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<Value> {
@@ -2986,6 +3170,51 @@ fn print_feishu_payload(
     Ok(())
 }
 
+fn render_onboard_text(payload: &Value) -> CliResult<String> {
+    let mut lines = vec![
+        "feishu onboard".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!("config: {}", required_json_string(payload, "config")?),
+        format!(
+            "credential_source: {}",
+            required_json_string(payload, "credential_source")?
+        ),
+        format!("domain: {}", required_json_string(payload, "domain")?),
+        format!("mode: {}", required_json_string(payload, "mode")?),
+    ]);
+    if let Some(owner_open_id) = payload.get("owner_open_id").and_then(Value::as_str) {
+        lines.push(format!("owner_open_id: {owner_open_id}"));
+    }
+    if let Some(bot_name) = payload.get("bot_name").and_then(Value::as_str) {
+        lines.push(format!("bot_name: {bot_name}"));
+    }
+    if let Some(bot_open_id) = payload.get("bot_open_id").and_then(Value::as_str) {
+        lines.push(format!("bot_open_id: {bot_open_id}"));
+    }
+    if let Some(qr_url) = payload.get("qr_url").and_then(Value::as_str) {
+        lines.push(format!("qr_url: {qr_url}"));
+    }
+    lines.push(format!(
+        "serve_command: {}",
+        required_json_string(payload, "serve_command")?
+    ));
+    lines.push(format!(
+        "status_command: {}",
+        required_json_string(payload, "status_command")?
+    ));
+    if let Some(notes) = payload.get("notes").and_then(Value::as_array) {
+        for note in notes.iter().filter_map(Value::as_str) {
+            lines.push(format!("note: {note}"));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 fn render_auth_start_text(payload: &Value) -> CliResult<String> {
     let mut lines = vec![
         "feishu auth start".to_owned(),
@@ -4475,6 +4704,35 @@ mod render_tests {
         let rendered = render_auth_start_text(&payload).expect("render auth start");
 
         assert!(rendered.contains("configured_account: work"));
+    }
+
+    #[test]
+    fn render_onboard_text_includes_qr_registration_summary() {
+        let payload = json!({
+            "account_id": "feishu_main",
+            "configured_account": "work",
+            "config": "/tmp/loongclaw.toml",
+            "credential_source": "qr_registration",
+            "domain": "lark",
+            "mode": "websocket",
+            "owner_open_id": "ou_owner_1",
+            "bot_name": "Loong Bot",
+            "bot_open_id": "ou_bot_1",
+            "qr_url": "https://scan.example/activate",
+            "owner_direct_chat_bootstrap_applied": true,
+            "serve_command": "loong feishu serve --account work",
+            "status_command": "loong doctor",
+            "notes": ["defaulted inbound bootstrap access to `allowed_chat_ids = [\"*\"]` and `allowed_sender_ids = [\"ou_owner_1\"]` so the onboarding user can start a direct Feishu/Lark chat immediately"],
+        });
+
+        let rendered = render_onboard_text(&payload).expect("render onboard");
+
+        assert!(rendered.contains("feishu onboard"));
+        assert!(rendered.contains("configured_account: work"));
+        assert!(rendered.contains("credential_source: qr_registration"));
+        assert!(rendered.contains("bot_name: Loong Bot"));
+        assert!(rendered.contains("allowed_sender_ids = [\"ou_owner_1\"]"));
+        assert!(rendered.contains("serve_command: loong feishu serve --account work"));
     }
 
     #[test]

@@ -172,6 +172,14 @@ model = "auto"
 
 #### Channels — Lark
 
+Recommended first-run setup:
+
+```bash
+loong feishu onboard --domain lark
+```
+
+That flow shows an in-terminal QR code, creates the bot app through the official Lark/Feishu registration API, and writes the generated credentials into `loongclaw.toml`. Manual fallback is still available through `loong feishu onboard --manual --app-id ... --app-secret ...`.
+
 ```toml
 [feishu]
 enabled = true

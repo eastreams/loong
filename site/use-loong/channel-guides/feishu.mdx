@@ -20,6 +20,14 @@ This is a shipped runtime-backed surface: direct sends are implemented, the serv
 
 ## Minimal Config
 
+Preferred setup path:
+
+```bash
+loong feishu onboard
+```
+
+This starts the official Feishu/Lark QR registration flow in the terminal, saves the generated `app_id` and `app_secret` into `loongclaw.toml`, and defaults the channel to `mode = "websocket"`. Manual credential handoff remains available with `loong feishu onboard --manual --app-id ... --app-secret ...`.
+
 ```toml
 [feishu]
 enabled = true
@@ -71,7 +79,10 @@ This surface can run directly through its own `*-serve` command, or under [Gatew
 
 ## Operator Notes
 
+- `loong feishu onboard` is the recommended first-run path for both Feishu and Lark. Use `--domain lark` to start on the international lane, or keep the default Feishu lane and let the registration poll switch to Lark when the scanned tenant reports `tenant_brand = "lark"`.
 - Webhook mode additionally needs `verification_token` and `encrypt_key`; websocket mode does not.
+- QR onboarding only provisions `app_id` and `app_secret`, so it currently targets websocket mode. Use `loong feishu onboard --manual --mode webhook ...` when you need webhook callback credentials.
+- When QR onboarding receives the configuring user's `open_id` and no Feishu inbound allowlists are already configured, Loong bootstraps `allowed_chat_ids = ["*"]` plus `allowed_sender_ids = [owner_open_id]` so that same user can immediately start a direct chat with the bot after setup.
 - Use `allowed_chat_ids` as the trust boundary instead of treating it as a convenience filter.
 - Keep `domain = "lark"` for the Lark lane and `domain = "feishu"` for the Feishu lane; the runtime contract is the same family.
 

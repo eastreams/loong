@@ -126,6 +126,7 @@ pub mod doctor_security_cli;
 mod env_compat;
 mod external_skills_policy_probe;
 pub mod feishu_cli;
+mod feishu_onboarding;
 pub mod feishu_support;
 pub mod gateway;
 pub mod import_cli;

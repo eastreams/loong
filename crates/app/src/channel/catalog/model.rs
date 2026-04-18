@@ -179,6 +179,7 @@ impl ChannelCapability {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelOnboardingStrategy {
     ManualConfig,
+    QrRegistration,
     PluginBridge,
     Planned,
 }
@@ -187,6 +188,7 @@ impl ChannelOnboardingStrategy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ManualConfig => "manual_config",
+            Self::QrRegistration => "qr_registration",
             Self::PluginBridge => "plugin_bridge",
             Self::Planned => "planned",
         }

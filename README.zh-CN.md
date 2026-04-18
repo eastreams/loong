@@ -172,6 +172,14 @@ model = "auto"
 
 #### 接入频道 —— 以飞书为例
 
+推荐先走命令行二维码接入：
+
+```bash
+loong feishu onboard
+```
+
+这条命令会在终端里展示二维码，走官方 Feishu/Lark 注册接口创建 bot app，并把生成的凭据写回 `loongclaw.toml`。如果你已经有现成凭据，也可以继续用 `loong feishu onboard --manual --app-id ... --app-secret ...` 手动回填。
+
 ```toml
 [feishu]
 enabled = true
