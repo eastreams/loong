@@ -2279,14 +2279,12 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
             ));
         }
 
-        let workspace_root = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
-            config, None,
-        )
-        .effective_memory_workspace_root();
+        let workspace_root =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None)
+                .effective_memory_workspace_root();
 
-        let memory_config =
-            store::session_store_config_from_memory_config(&config.memory)
-                .with_workspace_root(workspace_root.clone());
+        let memory_config = store::session_store_config_from_memory_config(&config.memory)
+            .with_workspace_root(workspace_root.clone());
         let compact_stage_result =
             crate::memory::run_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
                 .await;

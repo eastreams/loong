@@ -626,7 +626,7 @@ fn recent_window_records(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::MemoryProfile;
+    use crate::config::{MemoryMode, MemoryProfile};
     use crate::memory::{
         DEFAULT_MEMORY_SYSTEM_ID, DerivedMemoryKind, MemoryContextKind, MemoryRecallMode,
         MemoryScope, MemoryStageFamily, MemorySystem, MemorySystemCapability, MemorySystemMetadata,
