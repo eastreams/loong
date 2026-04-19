@@ -24,8 +24,6 @@ use crate::conversation::{
     ConstrainedSubagentIdentity, ConstrainedSubagentProfile, DelegateBuiltinProfile,
     coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
-use crate::memory;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::runtime_self_continuity;
 #[cfg(feature = "memory-sqlite")]
@@ -37,6 +35,7 @@ use crate::session::recovery::{
     build_queued_async_overdue_recovery_payload, build_running_async_overdue_recovery_payload,
     observe_missing_recovery, recovery_json,
 };
+use crate::session::store::{self, SessionStoreConfig};
 #[cfg(feature = "memory-sqlite")]
 use crate::session::{
     DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED, DELEGATE_CANCEL_REQUESTED_EVENT_KIND,
@@ -312,7 +311,7 @@ fn collect_session_batch_results(
 pub fn execute_session_tool_with_config(
     request: ToolCoreRequest,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
 ) -> Result<ToolCoreOutcome, String> {
     execute_session_tool_with_policies(request, current_session_id, config, &ToolConfig::default())
 }
@@ -320,7 +319,7 @@ pub fn execute_session_tool_with_config(
 pub fn execute_session_tool_with_policies(
     request: ToolCoreRequest,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
@@ -411,7 +410,7 @@ struct SessionContinueRequest {
 pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Sized>(
     payload: Value,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     app_config: &LoongConfig,
     runtime: &R,
@@ -588,7 +587,7 @@ fn inject_session_continue_payload(
 fn parse_session_continue_request(
     payload: &Value,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     default_timeout_seconds: u64,
 ) -> Result<SessionContinueRequest, String> {
     let session_id = required_payload_string(payload, "session_id", "session_continue")?;
@@ -673,7 +672,7 @@ fn load_delegate_execution_contract(
 pub(super) async fn wait_for_session_tool_with_policies(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let request = parse_session_target_request(&payload)?;
@@ -715,7 +714,7 @@ pub(super) async fn wait_for_session_tool_with_policies(
 fn execute_sessions_list(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
@@ -813,7 +812,7 @@ fn execute_sessions_list(
 fn execute_session_events(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
@@ -857,7 +856,7 @@ fn execute_session_events(
 fn execute_sessions_history(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
@@ -875,7 +874,7 @@ fn execute_sessions_history(
         &target_session_id,
         tool_config.sessions.visibility,
     )?;
-    let turns = memory::window_direct(&target_session_id, limit, config)
+    let turns = store::window_session_turns(&target_session_id, limit, config)
         .map_err(|error| format!("load session transcript failed: {error}"))?;
 
     Ok(ToolCoreOutcome {
@@ -892,7 +891,7 @@ fn execute_sessions_history(
 fn execute_session_tool_policy_status(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
@@ -921,7 +920,7 @@ fn execute_session_tool_policy_status(
 fn execute_session_tool_policy_set(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
@@ -1003,7 +1002,7 @@ fn execute_session_tool_policy_set(
 fn execute_session_tool_policy_clear(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
@@ -1035,7 +1034,7 @@ fn execute_session_tool_policy_clear(
 fn execute_session_status(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let request = parse_session_target_request(&payload)?;
@@ -1080,7 +1079,7 @@ fn execute_session_status(
 fn execute_session_recover(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let request = parse_session_mutation_request(&payload)?;
@@ -1147,7 +1146,7 @@ fn execute_session_recover(
 fn execute_session_cancel(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let request = parse_session_mutation_request(&payload)?;
@@ -1214,7 +1213,7 @@ fn execute_session_cancel(
 fn execute_session_archive(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let request = parse_session_mutation_request(&payload)?;
@@ -1304,7 +1303,7 @@ fn apply_session_archive_plan(
     repo: &SessionRepository,
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     snapshot: &SessionInspectionSnapshot,
     archive_plan: &SessionArchivePlan,
@@ -1350,7 +1349,7 @@ fn apply_session_archive_plan(
 fn execute_session_archive_batch_result(
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     dry_run: bool,
 ) -> Result<SessionBatchResultRecord, String> {
@@ -1476,7 +1475,7 @@ fn session_archive_action_json(plan: &SessionArchivePlan) -> Value {
 pub(super) fn inspect_visible_session_with_policies(
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     recent_event_limit: usize,
 ) -> Result<SessionInspectionSnapshot, String> {
@@ -1497,7 +1496,7 @@ pub(super) fn inspect_visible_session_with_policies(
 async fn wait_for_single_session_with_policies(
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     after_id: Option<i64>,
     timeout_ms: u64,
@@ -1566,7 +1565,7 @@ async fn wait_for_single_session_with_policies(
 async fn wait_for_session_batch_with_policies(
     target_session_ids: Vec<String>,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     after_id: Option<i64>,
     timeout_ms: u64,
@@ -1737,7 +1736,7 @@ async fn wait_for_session_batch_with_policies(
 pub(super) fn observe_visible_session_with_policies(
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     recent_event_limit: usize,
     tail_after_id: Option<i64>,
@@ -2221,7 +2220,7 @@ fn session_terminal_outcome_missing_reason(
 fn execute_session_status_batch_result(
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<SessionBatchResultRecord, String> {
     let repo = SessionRepository::new(config)?;
@@ -2273,7 +2272,7 @@ fn execute_session_status_batch_result(
 fn execute_session_recover_batch_result(
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     dry_run: bool,
 ) -> Result<SessionBatchResultRecord, String> {
@@ -2380,7 +2379,7 @@ fn apply_session_recover_plan(
     repo: &SessionRepository,
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     snapshot: &SessionInspectionSnapshot,
     recover_plan: &SessionRecoverPlan,
@@ -2588,7 +2587,7 @@ fn session_recovery_error(plan: &SessionRecoverPlan) -> String {
 fn execute_session_cancel_batch_result(
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     dry_run: bool,
 ) -> Result<SessionBatchResultRecord, String> {
@@ -2695,7 +2694,7 @@ fn apply_session_cancel_plan(
     repo: &SessionRepository,
     target_session_id: &str,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     snapshot: &SessionInspectionSnapshot,
     cancel_plan: SessionCancelPlan,
@@ -3967,16 +3966,15 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::config::{SessionVisibility, ToolConfig};
-    use crate::memory::append_turn_direct;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{
         FinalizeSessionTerminalRequest, NewSessionEvent, NewSessionRecord, SessionEventRecord,
         SessionKind, SessionRepository, SessionState, SessionSummaryRecord,
     };
+    use crate::session::store::{SessionStoreConfig, append_session_turn_direct};
 
     use super::{execute_session_tool_with_config, execute_session_tool_with_policies};
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-session-tools-{test_name}-{}",
             std::process::id()
@@ -3984,16 +3982,16 @@ mod tests {
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
     fn execute_session_mutation_tool_with_config(
         request: ToolCoreRequest,
         current_session_id: &str,
-        config: &MemoryRuntimeConfig,
+        config: &SessionStoreConfig,
     ) -> Result<ToolCoreOutcome, String> {
         let mut tool_config = ToolConfig::default();
         tool_config.sessions.allow_mutation = true;
@@ -4001,7 +3999,7 @@ mod tests {
     }
 
     fn overwrite_session_event_ts(
-        config: &MemoryRuntimeConfig,
+        config: &SessionStoreConfig,
         session_id: &str,
         event_kind: &str,
         ts: i64,
@@ -4022,7 +4020,7 @@ mod tests {
         assert!(updated > 0, "expected at least one updated event row");
     }
 
-    fn overwrite_session_updated_at(config: &MemoryRuntimeConfig, session_id: &str, ts: i64) {
+    fn overwrite_session_updated_at(config: &SessionStoreConfig, session_id: &str, ts: i64) {
         let db_path = config
             .sqlite_path
             .as_ref()
@@ -4104,10 +4102,11 @@ mod tests {
         })
         .expect("create other");
 
-        append_turn_direct("root-session", "user", "root turn", &config).expect("append root turn");
-        append_turn_direct("child-session", "assistant", "child turn", &config)
+        append_session_turn_direct("root-session", "user", "root turn", &config)
+            .expect("append root turn");
+        append_session_turn_direct("child-session", "assistant", "child turn", &config)
             .expect("append child turn");
-        append_turn_direct("other-session", "user", "other turn", &config)
+        append_session_turn_direct("other-session", "user", "other turn", &config)
             .expect("append other turn");
 
         let outcome = execute_session_tool_with_config(
@@ -4709,8 +4708,9 @@ mod tests {
         })
         .expect("append event");
 
-        append_turn_direct("child-session", "user", "hello", &config).expect("append user turn");
-        append_turn_direct("child-session", "assistant", "world", &config)
+        append_session_turn_direct("child-session", "user", "hello", &config)
+            .expect("append user turn");
+        append_session_turn_direct("child-session", "assistant", "world", &config)
             .expect("append assistant turn");
 
         let outcome = execute_session_tool_with_config(
@@ -4864,8 +4864,9 @@ mod tests {
             }),
         })
         .expect("append delegate_started");
-        append_turn_direct("child-session", "user", "hello", &config).expect("append user turn");
-        append_turn_direct("child-session", "assistant", "world", &config)
+        append_session_turn_direct("child-session", "user", "hello", &config)
+            .expect("append user turn");
+        append_session_turn_direct("child-session", "assistant", "world", &config)
             .expect("append assistant turn");
 
         let outcome = execute_session_tool_with_config(
@@ -6940,9 +6941,9 @@ mod tests {
     #[test]
     fn session_status_returns_inferred_legacy_current_session_without_backfill() {
         let config = isolated_memory_config("legacy-session-status");
-        append_turn_direct("delegate:legacy-child", "user", "hello", &config)
+        append_session_turn_direct("delegate:legacy-child", "user", "hello", &config)
             .expect("append user turn");
-        append_turn_direct("delegate:legacy-child", "assistant", "done", &config)
+        append_session_turn_direct("delegate:legacy-child", "assistant", "done", &config)
             .expect("append assistant turn");
 
         let outcome = execute_session_tool_with_config(

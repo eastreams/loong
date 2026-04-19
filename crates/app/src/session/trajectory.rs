@@ -4,10 +4,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::memory;
-use crate::memory::ConversationTurn;
 use crate::memory::canonical_memory_record_from_persisted_turn;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::repository::ApprovalDecision;
 use super::repository::ApprovalRequestRecord;
@@ -16,6 +13,7 @@ use super::repository::SessionEventRecord;
 use super::repository::SessionRepository;
 use super::repository::SessionSummaryRecord;
 use super::repository::SessionTerminalOutcomeRecord;
+use super::store::{self, SessionStoreConfig, SessionTranscriptTurn};
 
 pub const SESSION_TRAJECTORY_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 pub const SESSION_TRAJECTORY_ARTIFACT_SURFACE: &str = "runtime_trajectory";
@@ -140,7 +138,7 @@ pub struct SessionTrajectoryArtifact {
 
 pub fn export_session_trajectory(
     session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     options: &SessionTrajectoryExportOptions,
 ) -> Result<SessionTrajectoryArtifact, String> {
     validate_export_options(options)?;
@@ -213,17 +211,17 @@ fn load_export_turns_with_conn(
     conn: &rusqlite::Connection,
     session_id: &str,
     turn_limit: usize,
-) -> Result<Vec<ConversationTurn>, String> {
+) -> Result<Vec<SessionTranscriptTurn>, String> {
     if turn_limit == 0 {
         return Ok(Vec::new());
     }
 
-    let recent_turns = memory::window_direct_with_conn(conn, session_id, turn_limit)?;
+    let recent_turns = store::window_session_turns_with_conn(conn, session_id, turn_limit)?;
     if recent_turns.len() == turn_limit {
         return Ok(recent_turns);
     }
 
-    let transcript = memory::transcript_direct_paged_with_conn(
+    let transcript = store::transcript_session_turns_paged_with_conn(
         conn,
         session_id,
         SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE,
@@ -233,7 +231,10 @@ fn load_export_turns_with_conn(
     Ok(trimmed_transcript)
 }
 
-fn trim_turns_to_limit(turns: Vec<ConversationTurn>, turn_limit: usize) -> Vec<ConversationTurn> {
+fn trim_turns_to_limit(
+    turns: Vec<SessionTranscriptTurn>,
+    turn_limit: usize,
+) -> Vec<SessionTranscriptTurn> {
     let turn_count = turns.len();
     if turn_count <= turn_limit {
         return turns;
@@ -285,7 +286,7 @@ fn resolve_first_sequence(total_turn_count: usize, exported_turn_count: usize) -
 }
 
 fn build_trajectory_turns(
-    turns: &[ConversationTurn],
+    turns: &[SessionTranscriptTurn],
     first_sequence: usize,
 ) -> Vec<SessionTrajectoryTurn> {
     let mut trajectory_turns = Vec::with_capacity(turns.len());
@@ -313,7 +314,7 @@ fn build_trajectory_events(events: &[SessionEventRecord]) -> Vec<SessionTrajecto
 
 fn build_canonical_records(
     session_id: &str,
-    turns: &[ConversationTurn],
+    turns: &[SessionTranscriptTurn],
 ) -> Vec<SessionTrajectoryCanonicalRecord> {
     let mut canonical_records = Vec::with_capacity(turns.len());
 
@@ -383,7 +384,7 @@ impl SessionTrajectorySession {
 }
 
 impl SessionTrajectoryTurn {
-    fn from_turn(sequence: usize, turn: &ConversationTurn) -> Self {
+    fn from_turn(sequence: usize, turn: &SessionTranscriptTurn) -> Self {
         Self {
             sequence,
             role: turn.role.clone(),
@@ -464,12 +465,10 @@ impl SessionTrajectoryApprovalRequest {
 mod tests {
     use serde_json::json;
 
-    use super::ConversationTurn;
     use super::SessionTrajectoryExportOptions;
+    use super::SessionTranscriptTurn;
     use super::export_session_trajectory;
     use super::trim_turns_to_limit;
-    use crate::memory;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::FinalizeSessionTerminalRequest;
     use crate::session::repository::NewApprovalRequestRecord;
     use crate::session::repository::NewSessionEvent;
@@ -478,24 +477,25 @@ mod tests {
     use crate::session::repository::SessionRecord;
     use crate::session::repository::SessionRepository;
     use crate::session::repository::SessionState;
+    use crate::session::store::{SessionStoreConfig, append_session_turn_direct};
     use crate::test_support::unique_temp_dir;
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let root = unique_temp_dir(test_name);
         let sqlite_path = root.join("memory.sqlite3");
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(sqlite_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
     fn append_turns(
         session_id: &str,
-        config: &MemoryRuntimeConfig,
+        config: &SessionStoreConfig,
         contents: &[&str],
     ) -> Result<(), String> {
         for content in contents {
-            memory::append_turn_direct(session_id, "assistant", content, config)?;
+            append_session_turn_direct(session_id, "assistant", content, config)?;
         }
 
         Ok(())
@@ -653,17 +653,17 @@ mod tests {
     #[test]
     fn trim_turns_to_limit_keeps_only_the_most_recent_turns() {
         let turns = vec![
-            ConversationTurn {
+            SessionTranscriptTurn {
                 role: "assistant".to_owned(),
                 content: "one".to_owned(),
                 ts: 1,
             },
-            ConversationTurn {
+            SessionTranscriptTurn {
                 role: "assistant".to_owned(),
                 content: "two".to_owned(),
                 ts: 2,
             },
-            ConversationTurn {
+            SessionTranscriptTurn {
                 role: "assistant".to_owned(),
                 content: "three".to_owned(),
                 ts: 3,

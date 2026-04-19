@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
-use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::session::store;
 
 use super::super::config::LoongConfig;
 use super::ProviderErrorMode;
@@ -120,7 +120,7 @@ impl ConversationTurnLoop {
         let session_context = runtime.session_context(config, session_id, binding)?;
         let tool_view = session_context.tool_view.clone();
         let app_dispatcher = DefaultAppToolDispatcher::with_config(
-            MemoryRuntimeConfig::from_memory_config(&config.memory),
+            store::session_store_config_from_memory_config(&config.memory),
             config.clone(),
         );
         let turn_id = super::turn_shared::next_conversation_turn_id();

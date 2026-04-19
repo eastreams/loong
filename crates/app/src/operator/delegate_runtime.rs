@@ -9,7 +9,6 @@ use crate::conversation::{
     ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason, ConversationRuntimeBinding,
     DelegateBuiltinProfile,
 };
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
 use crate::session::frozen_result::capture_frozen_result;
 use crate::session::recovery::{
@@ -20,6 +19,7 @@ use crate::session::repository::{
     CreateSessionWithEventRequest, FinalizeSessionTerminalRequest, NewSessionRecord, SessionKind,
     SessionRepository, SessionState,
 };
+use crate::session::store::SessionStoreConfig;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::trust::{
     delegate_child_trust_event, embed_trust_event_payload, extract_trust_event_payload,
@@ -276,7 +276,7 @@ fn build_delegate_child_event_payload(
 
 #[cfg(test)]
 pub(crate) fn finalize_async_delegate_spawn_failure(
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
@@ -306,7 +306,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
 }
 
 pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
@@ -597,8 +597,8 @@ mod tests {
 
     use super::*;
     use crate::config::LoongConfig;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{NewSessionEvent, NewSessionRecord};
+    use crate::session::store::SessionStoreConfig;
     use crate::trust::extract_trust_event_payload;
 
     fn isolated_repo(test_name: &str) -> SessionRepository {
@@ -612,9 +612,9 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&sqlite_path);
-        let config = MemoryRuntimeConfig {
+        let config = SessionStoreConfig {
             sqlite_path: Some(sqlite_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         };
         let repo = SessionRepository::new(&config).expect("session repository");
         let sqlite_path = config.sqlite_path.expect("sqlite path");
@@ -919,9 +919,9 @@ mod tests {
         drop(conn);
 
         finalize_async_delegate_spawn_failure_with_recovery(
-            &MemoryRuntimeConfig {
+            &SessionStoreConfig {
                 sqlite_path: Some(sqlite_path),
-                ..MemoryRuntimeConfig::default()
+                ..SessionStoreConfig::default()
             },
             "child-session",
             "root-session",

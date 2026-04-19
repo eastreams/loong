@@ -20,7 +20,7 @@ use tool_search::{
 
 use crate::KernelContext;
 use crate::config::ToolConfig;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::session::store::SessionStoreConfig;
 
 pub(crate) mod approval;
 mod bash;
@@ -340,7 +340,7 @@ pub fn execute_tool_core(request: ToolCoreRequest) -> Result<ToolCoreOutcome, St
 pub fn execute_app_tool_with_config(
     request: ToolCoreRequest,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     execute_app_tool_with_browser_companion_readiness(
@@ -355,7 +355,7 @@ pub fn execute_app_tool_with_config(
 pub(crate) fn execute_app_tool_with_visibility_checked_config(
     request: ToolCoreRequest,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     execute_app_tool_with_browser_companion_readiness(
@@ -370,7 +370,7 @@ pub(crate) fn execute_app_tool_with_visibility_checked_config(
 fn execute_app_tool_with_browser_companion_readiness(
     request: ToolCoreRequest,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     assume_browser_companion_ready: bool,
 ) -> Result<ToolCoreOutcome, String> {
@@ -432,7 +432,7 @@ fn execute_app_tool_with_browser_companion_readiness(
 pub async fn wait_for_session_with_config(
     payload: Value,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
@@ -465,7 +465,7 @@ pub(crate) async fn continue_session_with_runtime<
 >(
     payload: Value,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     app_config: &crate::config::LoongConfig,
     runtime: &R,
@@ -3303,7 +3303,7 @@ mod tests {
                 }),
             },
             "root-session",
-            &crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+            &crate::session::store::SessionStoreConfig::default(),
             &tool_config,
         )
         .expect("browser companion click should succeed");

@@ -18,8 +18,6 @@ use crate::config::LoongConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::config::ToolConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalRequestRecord, ApprovalRequestStatus, ControlPlaneDeviceTokenRecord,
     ControlPlanePairingRequestRecord as PersistedControlPlanePairingRequestRecord,
@@ -28,6 +26,8 @@ use crate::session::repository::{
     SessionObservationRecord, SessionRepository, SessionSummaryRecord,
     SessionTerminalOutcomeRecord, TransitionControlPlanePairingRequestIfCurrentRequest,
 };
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store::{self, SessionStoreConfig};
 #[cfg(feature = "memory-sqlite")]
 use crate::tools::session::{
     SessionRuntimeSelfContinuityRecord, SessionWorkflowBindingRecord, SessionWorkflowRecord,
@@ -1041,7 +1041,7 @@ pub struct ControlPlanePairingRegistry {
     requests: RwLock<BTreeMap<String, ControlPlanePairingRequestRecord>>,
     approved_devices: RwLock<BTreeMap<String, ControlPlaneApprovedDeviceRecord>>,
     #[cfg(feature = "memory-sqlite")]
-    memory_config: Option<MemoryRuntimeConfig>,
+    memory_config: Option<SessionStoreConfig>,
 }
 
 impl Default for ControlPlanePairingRegistry {
@@ -1062,7 +1062,7 @@ impl ControlPlanePairingRegistry {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    pub fn with_memory_config(memory_config: MemoryRuntimeConfig) -> Result<Self, String> {
+    pub fn with_memory_config(memory_config: SessionStoreConfig) -> Result<Self, String> {
         let repo = SessionRepository::new(&memory_config)?;
         let persisted_requests = repo.list_control_plane_pairing_requests(None)?;
         let persisted_devices = repo.list_control_plane_device_tokens()?;
@@ -1605,7 +1605,7 @@ pub struct ControlPlaneAcpSessionReadView {
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone)]
 pub struct ControlPlaneRepositoryView {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     tool_config: ToolConfig,
     current_session_id: String,
 }
@@ -1613,7 +1613,7 @@ pub struct ControlPlaneRepositoryView {
 #[cfg(feature = "memory-sqlite")]
 impl ControlPlaneRepositoryView {
     pub fn new(
-        memory_config: MemoryRuntimeConfig,
+        memory_config: SessionStoreConfig,
         tool_config: ToolConfig,
         current_session_id: impl Into<String>,
     ) -> Self {
@@ -2144,8 +2144,9 @@ impl ControlPlaneAcpView {
         if self.current_session_id == DEFAULT_CONTROL_PLANE_SESSION_ID {
             return Ok(None);
         }
-        let memory_config =
-            MemoryRuntimeConfig::from_memory_config_without_env_overrides(&self.config.memory);
+        let memory_config = store::session_store_config_from_memory_config_without_env_overrides(
+            &self.config.memory,
+        );
         SessionRepository::new(&memory_config).map(Some)
     }
 
@@ -2206,12 +2207,12 @@ mod tests {
     use std::fs;
 
     #[cfg(feature = "memory-sqlite")]
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
-    #[cfg(feature = "memory-sqlite")]
     use crate::session::repository::{
         ApprovalRequestStatus, NewApprovalRequestRecord, NewSessionEvent, NewSessionRecord,
         SessionKind, SessionRepository, SessionState,
     };
+    #[cfg(feature = "memory-sqlite")]
+    use crate::session::store::SessionStoreConfig;
     #[cfg(feature = "memory-sqlite")]
     use crate::{
         acp::{
@@ -2941,7 +2942,7 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-control-plane-view-{test_name}-{}",
             std::process::id()
@@ -2949,23 +2950,23 @@ mod tests {
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn broken_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn broken_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-control-plane-broken-{test_name}-{}",
             std::process::id()
         ));
         let sqlite_path = base.join("sqlite-dir");
         let _ = fs::create_dir_all(&sqlite_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(sqlite_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 

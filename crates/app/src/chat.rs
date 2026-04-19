@@ -95,14 +95,12 @@ use super::conversation::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::conversation::{load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary};
-#[cfg(any(test, feature = "memory-sqlite"))]
-use super::memory;
-#[cfg(feature = "memory-sqlite")]
-use super::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use super::session::LATEST_SESSION_SELECTOR;
 #[cfg(feature = "memory-sqlite")]
 use super::session::latest_resumable_root_session_id;
+#[cfg(feature = "memory-sqlite")]
+use super::session::store::{self, SessionStoreConfig};
 use super::tui_surface::{
     TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec, TuiHeaderStyle,
     TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec, render_tui_message_body_spec,
@@ -264,7 +262,7 @@ pub(crate) struct CliTurnRuntime {
     pub(crate) effective_working_directory: Option<PathBuf>,
     pub(crate) memory_label: String,
     #[cfg(feature = "memory-sqlite")]
-    pub(crate) memory_config: MemoryRuntimeConfig,
+    pub(crate) memory_config: SessionStoreConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -582,12 +580,12 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         .or_else(|| config.acp.dispatch.resolved_working_directory());
 
     #[cfg(feature = "memory-sqlite")]
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
 
     #[cfg(feature = "memory-sqlite")]
     let memory_label = {
         let sqlite_path = config.memory.resolved_sqlite_path();
-        let initialized = memory::ensure_memory_db_ready(Some(sqlite_path), &memory_config)
+        let initialized = store::ensure_session_store_ready(Some(sqlite_path), &memory_config)
             .map_err(|error| format!("failed to initialize sqlite memory: {error}"))?;
         initialized.display().to_string()
     };
@@ -642,7 +640,7 @@ fn resolve_cli_session_id(
 fn resolve_cli_runtime_session_id(
     session_hint: Option<&str>,
     session_requirement: CliSessionRequirement,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> CliResult<String> {
     let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
     let should_resolve_latest = session_requirement == CliSessionRequirement::AllowImplicitDefault
@@ -1664,7 +1662,7 @@ async fn print_fast_lane_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -1700,7 +1698,7 @@ async fn print_safe_lane_summary(
     limit: usize,
     conversation_config: &ConversationConfig,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -1741,7 +1739,7 @@ async fn print_turn_checkpoint_summary(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] _memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] _memory_config: &SessionStoreConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -2183,7 +2181,7 @@ async fn load_fast_lane_summary_output(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> CliResult<String> {
     let summary =
         load_fast_lane_tool_batch_event_summary(session_id, limit, binding, memory_config).await?;
@@ -2520,7 +2518,7 @@ async fn load_safe_lane_summary_output(
     limit: usize,
     conversation_config: &ConversationConfig,
     binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> CliResult<String> {
     let summary = load_safe_lane_event_summary(session_id, limit, binding, memory_config).await?;
 
@@ -3527,7 +3525,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     fn test_kernel_context_with_memory(
         agent_id: &str,
-        memory_config: &MemoryRuntimeConfig,
+        memory_config: &SessionStoreConfig,
     ) -> crate::KernelContext {
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let audit = Arc::new(InMemoryAuditSink::default());
@@ -3675,17 +3673,15 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    pub(super) fn init_chat_test_memory(
-        label: &str,
-    ) -> (LoongConfig, MemoryRuntimeConfig, PathBuf) {
+    pub(super) fn init_chat_test_memory(label: &str) -> (LoongConfig, SessionStoreConfig, PathBuf) {
         let sqlite_path = unique_chat_sqlite_path(label);
         cleanup_chat_test_memory(&sqlite_path);
 
         let mut config = LoongConfig::default();
         config.audit.mode = crate::config::AuditMode::InMemory;
         config.memory.sqlite_path = sqlite_path.display().to_string();
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::ensure_memory_db_ready(
+        let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+        store::ensure_session_store_ready(
             Some(config.memory.resolved_sqlite_path()),
             &memory_config,
         )
@@ -3795,10 +3791,10 @@ mod tests {
     fn append_assistant_payloads(
         session_id: &str,
         payloads: &[String],
-        memory_config: &MemoryRuntimeConfig,
+        memory_config: &SessionStoreConfig,
     ) {
         for payload in payloads {
-            crate::memory::append_turn_direct(session_id, "assistant", payload, memory_config)
+            store::append_session_turn_direct(session_id, "assistant", payload, memory_config)
                 .expect("persist assistant payload");
         }
     }
@@ -4045,9 +4041,9 @@ mod tests {
         let (config, memory_config, sqlite_path) = init_chat_test_memory("diagnostics");
 
         let session_id = "chat-binding-history-direct";
-        crate::memory::append_turn_direct(session_id, "user", "hello", &memory_config)
+        store::append_session_turn_direct(session_id, "user", "hello", &memory_config)
             .expect("persist user turn");
-        crate::memory::append_turn_direct(session_id, "assistant", "world", &memory_config)
+        store::append_session_turn_direct(session_id, "assistant", "world", &memory_config)
             .expect("persist assistant turn");
 
         let direct_lines = load_history_lines(
@@ -6124,7 +6120,7 @@ allowed_decisions: yes / auto / full / esc";
         config.conversation.compact_enabled = false;
         config.conversation.compact_preserve_recent_turns = 2;
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
         let kernel_ctx = test_kernel_context_with_memory("chat-manual-compaction", &memory_config);
         let session_id = "chat-manual-compaction";
 
@@ -6138,7 +6134,7 @@ allowed_decisions: yes / auto / full / esc";
             ("user", "recent ask"),
             ("assistant", "recent reply"),
         ] {
-            crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            store::append_session_turn_direct(session_id, role, content, &memory_config)
                 .expect("seed turns should succeed");
         }
 
@@ -6170,7 +6166,7 @@ allowed_decisions: yes / auto / full / esc";
             "manual compaction detail should reuse the continuity boundary note"
         );
 
-        let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        let turns = store::window_session_turns(session_id, 32, &memory_config)
             .expect("window load should succeed");
         assert!(
             turns[0]

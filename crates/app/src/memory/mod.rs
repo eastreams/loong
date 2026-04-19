@@ -1,4 +1,6 @@
 #[cfg(feature = "memory-sqlite")]
+use std::path::Path;
+#[cfg(feature = "memory-sqlite")]
 use std::path::PathBuf;
 #[cfg(test)]
 use std::{
@@ -250,6 +252,18 @@ pub fn append_turn_direct(
     sqlite::append_turn_direct(session_id, role, content, config)
 }
 
+#[cfg(all(test, feature = "memory-sqlite"))]
+#[allow(dead_code)]
+pub(crate) fn append_turn_direct_with_sqlite_path(
+    session_id: &str,
+    role: &str,
+    content: &str,
+    sqlite_path: &Path,
+) -> Result<(), String> {
+    let config = runtime_config::MemoryRuntimeConfig::for_sqlite_path(sqlite_path.to_path_buf());
+    append_turn_direct(session_id, role, content, &config)
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[cfg(test)]
 pub fn replace_session_turns_direct(
@@ -336,6 +350,45 @@ pub(crate) fn search_canonical_memory(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<Vec<CanonicalMemorySearchHit>, String> {
     sqlite::search_canonical_records_for_recall(query, limit, exclude_session_id, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn search_canonical_memory_with_sqlite_path(
+    query: &str,
+    limit: usize,
+    exclude_session_id: Option<&str>,
+    sqlite_path: &Path,
+) -> Result<Vec<CanonicalMemorySearchHit>, String> {
+    let config = runtime_config::MemoryRuntimeConfig::for_sqlite_path(sqlite_path.to_path_buf());
+    search_canonical_memory(query, limit, exclude_session_id, &config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn build_read_stage_envelope_request_for_memory_config(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &crate::config::MemoryConfig,
+) -> MemoryCoreRequest {
+    let runtime_config = runtime_config::MemoryRuntimeConfig::from_memory_config(config);
+    build_read_stage_envelope_request_with_workspace_root(
+        session_id,
+        workspace_root,
+        &runtime_config,
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn hydrate_stage_envelope_for_memory_config(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &crate::config::MemoryConfig,
+) -> Result<StageEnvelope, String> {
+    let runtime_config = runtime_config::MemoryRuntimeConfig::from_memory_config(config);
+    orchestrator::hydrate_stage_envelope_with_workspace_root(
+        session_id,
+        workspace_root,
+        &runtime_config,
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]

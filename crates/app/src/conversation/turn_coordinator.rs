@@ -31,12 +31,12 @@ use crate::acp::{
     AcpConversationTurnOptions, AcpTurnEventSink, evaluate_acp_conversation_turn_entry_for_address,
     execute_acp_conversation_turn_for_address,
 };
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
     DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed,
 };
 use crate::runtime_self_continuity;
+use crate::session::store::{self, SessionStoreConfig};
 
 use self::safe_lane_events::*;
 use self::safe_lane_execution::*;
@@ -1680,7 +1680,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+            let memory_config = store::session_store_config_from_memory_config(&config.memory);
             let Some(entry) = load_latest_turn_checkpoint_entry(
                 session_id,
                 config.memory.sliding_window,
@@ -1714,7 +1714,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<TurnCheckpointDiagnostics> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+            let memory_config = store::session_store_config_from_memory_config(&config.memory);
             let (summary, latest_entry) =
                 load_turn_checkpoint_history_snapshot(session_id, limit, binding, &memory_config)
                     .await?
@@ -2149,7 +2149,7 @@ impl ConversationTurnCoordinator {
             runtime.bootstrap(config, session_id, kernel_ctx).await?;
         }
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config)?;
         let Some(pending_request) = repo
             .list_approval_requests_for_session(session_id, Some(ApprovalRequestStatus::Pending))?
@@ -2463,7 +2463,7 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
             .filter(|value| !value.is_empty())
             .map(|_| config.tools.resolved_file_root());
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
         let compact_stage_result =
             crate::memory::run_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
                 .await;
@@ -2512,7 +2512,7 @@ fn persist_runtime_self_continuity_for_compaction(
     config: &LoongConfig,
     session_id: &str,
 ) -> Result<(), String> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
     ensure_session_exists_for_runtime_self_continuity(&repo, session_id)?;
@@ -3799,7 +3799,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_entry_with_limit<
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let Some(entry) =
         load_latest_turn_checkpoint_entry(session_id, limit, binding, &memory_config).await?
     else {
@@ -4094,8 +4094,7 @@ where
 
                 #[cfg(feature = "memory-sqlite")]
                 {
-                    let memory_config =
-                        MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+                    let memory_config = SessionStoreConfig::from_memory_config(&self.config.memory);
                     let effective_tool_config =
                         effective_tool_config_for_session(&self.config.tools, session_context);
                     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
@@ -4271,7 +4270,9 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
+    let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
+        &config.memory,
+    ))?;
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -4463,7 +4464,7 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 struct PreparedAsyncDelegateEnqueue {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     request: AsyncDelegateSpawnRequest,
     outcome: loong_contracts::ToolCoreOutcome,
 }
@@ -4483,7 +4484,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
     ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
@@ -4689,7 +4690,9 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     // been created. The remaining job is to run the child turn with the shared
     // runtime/binding, enforce timeout + unwind containment, and then finalize
     // the persisted delegate session/announcement state from the outcome.
-    let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
+    let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
+        &config.memory,
+    ))?;
     let start = Instant::now();
     let child_coordinator = ConversationTurnCoordinator::new();
     let child_turn_future = child_coordinator.handle_turn_with_runtime(
@@ -4987,7 +4990,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         }
     };
     let base_app_dispatcher = DefaultAppToolDispatcher::with_config(
-        MemoryRuntimeConfig::from_memory_config(&config.memory),
+        store::session_store_config_from_memory_config(&config.memory),
         config.clone(),
     );
     let app_dispatcher = CoordinatorAppToolDispatcher {
@@ -5962,7 +5965,7 @@ async fn load_safe_lane_history_signals_for_governor(
         .safe_lane_session_governor_window_turns();
     #[cfg(feature = "memory-sqlite")]
     {
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
         return match load_assistant_contents_from_session_window_detailed(
             session_id,
             window_turns,
@@ -6371,12 +6374,12 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn sqlite_memory_config(label: &str) -> MemoryRuntimeConfig {
+    fn sqlite_memory_config(label: &str) -> SessionStoreConfig {
         let path = unique_sqlite_path(label);
         let _ = std::fs::remove_file(&path);
         let mut config = LoongConfig::default();
         config.memory.sqlite_path = path.display().to_string();
-        MemoryRuntimeConfig::from_memory_config(&config.memory)
+        store::session_store_config_from_memory_config(&config.memory)
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -8142,15 +8145,15 @@ mod tests {
         config.conversation.compact_trigger_estimated_tokens = Some(1);
         config.conversation.compact_fail_open = true;
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "session-durable-flush-fail-open",
             "user",
             "remember the deployment cutoff",
             &memory_config,
         )
         .expect("append user turn");
-        crate::memory::append_turn_direct(
+        crate::session::store::append_session_turn_direct(
             "session-durable-flush-fail-open",
             "assistant",
             "deployment cutoff is tonight",
@@ -8198,8 +8201,8 @@ mod tests {
         let _ = std::fs::remove_file(&sqlite_path);
         config.memory.sqlite_path = sqlite_path.display().to_string();
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "compact-session-build-messages",
             "user",
             "remember this detail",
@@ -8255,8 +8258,8 @@ mod tests {
         let _ = std::fs::remove_file(&sqlite_path);
         config.memory.sqlite_path = sqlite_path.display().to_string();
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "compact-session-readback-fail",
             "user",
             "keep the context intact",

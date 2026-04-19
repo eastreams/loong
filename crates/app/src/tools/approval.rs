@@ -9,7 +9,6 @@ use super::payload::{optional_payload_limit, optional_payload_string, required_p
 use crate::config::ToolConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::config::{SessionVisibility, ToolConsentMode};
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::OperatorApprovalRuntime;
 #[cfg(feature = "memory-sqlite")]
@@ -18,6 +17,7 @@ use crate::session::repository::{
     NewApprovalGrantRecord, NewSessionToolConsentRecord, SessionRepository,
     TransitionApprovalRequestIfCurrentRequest,
 };
+use crate::session::store::SessionStoreConfig;
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,7 +346,7 @@ struct ApprovalRequestView {
 pub fn execute_approval_tool_with_policies(
     request: ToolCoreRequest,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
@@ -389,7 +389,7 @@ pub fn execute_approval_tool_with_policies(
 pub async fn execute_approval_tool_with_runtime_support(
     request: ToolCoreRequest,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     runtime: Option<&(dyn ApprovalResolutionRuntime + '_)>,
 ) -> Result<ToolCoreOutcome, String> {
@@ -434,7 +434,7 @@ pub async fn execute_approval_tool_with_runtime_support(
 fn execute_approval_requests_list(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
@@ -512,7 +512,7 @@ fn execute_approval_requests_list(
 fn execute_approval_request_status(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let approval_request_id =
@@ -542,7 +542,7 @@ fn execute_approval_request_status(
 async fn execute_approval_request_resolve(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     runtime: &(dyn ApprovalResolutionRuntime + '_),
 ) -> Result<ToolCoreOutcome, String> {
@@ -571,7 +571,7 @@ async fn execute_approval_request_resolve(
 
 #[cfg(feature = "memory-sqlite")]
 async fn resolve_approval_request_with_runtime(
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     runtime: &(dyn ApprovalResolutionRuntime + '_),
     request: ApprovalResolutionRequest,
 ) -> Result<ApprovalResolutionOutcome, String> {
@@ -1348,14 +1348,14 @@ mod tests {
 
     use super::*;
     use crate::config::ToolConfig;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{
         ApprovalDecision, ApprovalRequestStatus, NewApprovalGrantRecord, NewApprovalRequestRecord,
         NewSessionRecord, SessionKind, SessionRepository, SessionState,
         TransitionApprovalRequestIfCurrentRequest,
     };
+    use crate::session::store::SessionStoreConfig;
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-approval-tools-{test_name}-{}",
             std::process::id()
@@ -1363,9 +1363,9 @@ mod tests {
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -1471,7 +1471,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     fn age_runtime_grant(
-        config: &MemoryRuntimeConfig,
+        config: &SessionStoreConfig,
         scope_session_id: &str,
         approval_key: &str,
         updated_at: i64,
@@ -1492,7 +1492,7 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn delete_session_row(config: &MemoryRuntimeConfig, session_id: &str) {
+    fn delete_session_row(config: &SessionStoreConfig, session_id: &str) {
         let db_path = config
             .sqlite_path
             .as_ref()

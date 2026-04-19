@@ -8,10 +8,8 @@ use rusqlite::{
 use serde_json::Value;
 
 use super::frozen_result::FrozenResult;
+use super::store::{self, SessionStoreConfig, SessionTranscriptTurn};
 use crate::config::ToolConsentMode;
-use crate::memory;
-use crate::memory::ConversationTurn;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 pub(crate) const SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE: usize = 200;
@@ -370,7 +368,7 @@ pub struct SessionTrajectoryReadSnapshot {
     pub summary: SessionSummaryRecord,
     pub lineage_root_session_id: Option<String>,
     pub lineage_depth: usize,
-    pub turns: Vec<ConversationTurn>,
+    pub turns: Vec<SessionTranscriptTurn>,
     pub events: Vec<SessionEventRecord>,
     pub approval_requests: Vec<ApprovalRequestRecord>,
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
@@ -474,8 +472,8 @@ pub struct SessionRepository {
 }
 
 impl SessionRepository {
-    pub fn new(config: &MemoryRuntimeConfig) -> Result<Self, String> {
-        let db_path = memory::ensure_memory_db_ready(config.sqlite_path.clone(), config)?;
+    pub fn new(config: &SessionStoreConfig) -> Result<Self, String> {
+        let db_path = store::ensure_session_store_ready(config.sqlite_path.clone(), config)?;
         Ok(Self { db_path })
     }
 
@@ -1220,7 +1218,7 @@ impl SessionRepository {
             let lineage_root_session_id =
                 Self::lineage_root_session_id_with_conn(conn, &session_id)?;
             let lineage_depth = Self::session_lineage_depth_with_conn(conn, &session_id)?;
-            let turns = memory::transcript_direct_paged_with_conn(
+            let turns = store::transcript_session_turns_paged_with_conn(
                 conn,
                 &session_id,
                 SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE,
@@ -3932,13 +3930,12 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::memory::append_turn_direct;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
+    use crate::session::store::{SessionStoreConfig, append_session_turn_direct};
     use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
     use super::*;
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-session-repository-{test_name}-{}",
             std::process::id()
@@ -3946,9 +3943,9 @@ mod tests {
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -3979,12 +3976,12 @@ mod tests {
     }
 
     fn append_session_turn(
-        config: &MemoryRuntimeConfig,
+        config: &SessionStoreConfig,
         session_id: &str,
         role: &str,
         content: &str,
     ) {
-        append_turn_direct(session_id, role, content, config).expect("append session turn");
+        append_session_turn_direct(session_id, role, content, config).expect("append session turn");
     }
 
     fn set_session_updated_at(repo: &SessionRepository, session_id: &str, updated_at: i64) {
@@ -4504,8 +4501,9 @@ mod tests {
     #[test]
     fn list_visible_sessions_infers_legacy_rows_from_turn_history_without_backfill() {
         let config = isolated_memory_config("legacy-visible-sessions");
-        append_turn_direct("telegram:123", "user", "hello", &config).expect("append user turn");
-        append_turn_direct("telegram:123", "assistant", "world", &config)
+        append_session_turn_direct("telegram:123", "user", "hello", &config)
+            .expect("append user turn");
+        append_session_turn_direct("telegram:123", "assistant", "world", &config)
             .expect("append assistant turn");
 
         let repo = SessionRepository::new(&config).expect("repository");
@@ -4536,9 +4534,10 @@ mod tests {
     #[test]
     fn inferred_legacy_session_kind_uses_known_prefixes() {
         let config = isolated_memory_config("legacy-kind-prefixes");
-        append_turn_direct("delegate:legacy-child", "assistant", "done", &config)
+        append_session_turn_direct("delegate:legacy-child", "assistant", "done", &config)
             .expect("append delegate turn");
-        append_turn_direct("telegram:456", "user", "ping", &config).expect("append telegram turn");
+        append_session_turn_direct("telegram:456", "user", "ping", &config)
+            .expect("append telegram turn");
 
         let repo = SessionRepository::new(&config).expect("repository");
         let delegate_session = repo
@@ -4819,7 +4818,7 @@ mod tests {
         })
         .expect("create child");
 
-        append_turn_direct(
+        append_session_turn_direct(
             "child-session",
             "assistant",
             "Deploy freeze window is Friday and migration starts Saturday.",
