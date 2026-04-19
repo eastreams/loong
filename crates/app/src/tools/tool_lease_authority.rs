@@ -261,9 +261,24 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
     let mut attempt_index = 0usize;
 
     while attempt_index < retry_attempts {
-        let existing_secret = read_tool_lease_secret_file(secret_path)?;
-        if let Some(existing_secret) = existing_secret {
-            return Ok(existing_secret);
+        let raw_secret = match fs::read_to_string(secret_path) {
+            Ok(raw_secret) => Some(raw_secret),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                let message = format!(
+                    "tool_lease_authority_unavailable: failed to read secret file {}: {error}",
+                    secret_path.display()
+                );
+                return Err(message);
+            }
+        };
+
+        if let Some(raw_secret) = raw_secret {
+            let trimmed_secret = raw_secret.trim();
+            if !trimmed_secret.is_empty() {
+                let normalized_secret = parse_tool_lease_secret_text(trimmed_secret, secret_path)?;
+                return Ok(normalized_secret);
+            }
         }
 
         attempt_index += 1;
@@ -319,6 +334,14 @@ fn read_tool_lease_secret_file(secret_path: &Path) -> Result<Option<String>, Str
         return Err(message);
     }
 
+    let normalized_secret = parse_tool_lease_secret_text(trimmed_secret, secret_path)?;
+    Ok(Some(normalized_secret))
+}
+
+fn parse_tool_lease_secret_text(
+    trimmed_secret: &str,
+    secret_path: &Path,
+) -> Result<String, String> {
     let decoded_secret = hex::decode(trimmed_secret).map_err(|error| {
         format!(
             "tool_lease_authority_unavailable: secret file {} is not valid hex: {error}",
@@ -339,7 +362,7 @@ fn read_tool_lease_secret_file(secret_path: &Path) -> Result<Option<String>, Str
     }
 
     let normalized_secret = trimmed_secret.to_owned();
-    Ok(Some(normalized_secret))
+    Ok(normalized_secret)
 }
 
 fn generate_tool_lease_secret() -> String {
@@ -526,6 +549,9 @@ mod tests {
         let publisher = std::thread::spawn(move || {
             let publish_delay = std::time::Duration::from_millis(10);
             std::thread::park_timeout(publish_delay);
+            std::fs::write(&publisher_path, "").expect("publish empty secret placeholder");
+            let settle_delay = std::time::Duration::from_millis(10);
+            std::thread::park_timeout(settle_delay);
             let secret_body = format!("{publisher_secret}\n");
             std::fs::write(&publisher_path, secret_body).expect("publish secret file");
         });
