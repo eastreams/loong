@@ -154,7 +154,7 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
         .load_production_turn_checkpoint_diagnostics(
             &runtime.config,
             &runtime.session_id,
-            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            runtime.conversation_binding(),
         )
         .await
     {
@@ -204,7 +204,7 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
         .load_production_turn_checkpoint_diagnostics(
             &runtime.config,
             &runtime.session_id,
-            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            runtime.conversation_binding(),
         )
         .await
     {
@@ -789,7 +789,7 @@ pub(super) fn print_help() {
 pub(super) async fn print_manual_compaction(runtime: &CliTurnRuntime) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let binding = ConversationRuntimeBinding::kernel(&runtime.kernel_ctx);
+        let binding = runtime.conversation_binding();
         let result = load_manual_compaction_result(
             &runtime.config,
             &runtime.session_id,

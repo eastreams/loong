@@ -11,8 +11,8 @@ use crate::chat::{
 };
 use crate::config::load as load_config;
 use crate::conversation::{
-    ConversationIngressContext, ConversationRuntimeBinding, ConversationSessionAddress,
-    PromptFrameEventSummary, load_prompt_frame_event_summary,
+    ConversationIngressContext, ConversationSessionAddress, PromptFrameEventSummary,
+    load_prompt_frame_event_summary,
 };
 use crate::tools;
 use loong_contracts::ToolCoreRequest;
@@ -264,10 +264,7 @@ impl AgentRuntime {
                         session_id: runtime.session_id.clone(),
                         output_text: success.result.output_text,
                         turn_mode: request.turn_mode,
-                        governed_session_mode: ConversationRuntimeBinding::kernel(
-                            &runtime.kernel_ctx,
-                        )
-                        .session_mode(),
+                        governed_session_mode: runtime.conversation_binding().session_mode(),
                         state: Some(acp_session_state_label(success.result.state).to_owned()),
                         stop_reason: success
                             .result
@@ -308,8 +305,7 @@ impl AgentRuntime {
             session_id: runtime.session_id.clone(),
             output_text: turn_outcome.reply,
             turn_mode: request.turn_mode,
-            governed_session_mode: ConversationRuntimeBinding::kernel(&runtime.kernel_ctx)
-                .session_mode(),
+            governed_session_mode: runtime.conversation_binding().session_mode(),
             state: None,
             stop_reason: None,
             usage: turn_outcome.usage,
@@ -642,7 +638,7 @@ async fn load_runtime_prompt_frame_summary(
         return load_prompt_frame_event_summary(
             &runtime.session_id,
             32,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            runtime.conversation_binding(),
             &runtime.memory_config,
         )
         .await
