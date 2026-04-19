@@ -2022,7 +2022,7 @@ impl ChatSessionSurface {
                         #[cfg(feature = "memory-sqlite")]
                         {
                             let binding =
-                                ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx);
+                                self.runtime.conversation_binding();
                             let result = operator_surfaces::load_manual_compaction_result(
                                 &self.runtime.config,
                                 &self.runtime.session_id,
@@ -2055,7 +2055,7 @@ impl ChatSessionSurface {
                                 let history_lines = operator_surfaces::load_history_lines(
                                     &self.runtime.session_id,
                                     self.runtime.config.memory.sliding_window,
-                                    ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx),
+                                    self.runtime.conversation_binding(),
                                     &self.runtime.memory_config,
                                 )
                                 .await?;
@@ -2242,9 +2242,7 @@ impl ChatSessionSurface {
                                                 .repair_turn_checkpoint_tail(
                                                     &self.runtime.config,
                                                     &self.runtime.session_id,
-                                                    ConversationRuntimeBinding::kernel(
-                                                        &self.runtime.kernel_ctx,
-                                                    ),
+                                                    self.runtime.conversation_binding(),
                                                 )
                                                 .await?;
                                             render_turn_checkpoint_repair_lines_with_width(

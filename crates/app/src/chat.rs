@@ -14,7 +14,6 @@ use crate::CliResult;
 use crate::acp::{
     AcpConversationTurnOptions, AcpTurnEventSink, AcpTurnProvenance, JsonlAcpTurnEventSink,
 };
-use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 mod cli_input;
 mod cli_render;
@@ -260,13 +259,19 @@ pub(crate) struct CliTurnRuntime {
     pub(crate) session_id: String,
     pub(crate) session_address: ConversationSessionAddress,
     pub(crate) turn_coordinator: ConversationTurnCoordinator,
-    pub(crate) kernel_ctx: crate::KernelContext,
+    pub(crate) runtime_kernel: crate::runtime_bridge::RuntimeKernelOwner,
     pub(crate) explicit_acp_request: bool,
     pub(crate) effective_bootstrap_mcp_servers: Vec<String>,
     pub(crate) effective_working_directory: Option<PathBuf>,
     pub(crate) memory_label: String,
     #[cfg(feature = "memory-sqlite")]
     pub(crate) memory_config: SessionStoreConfig,
+}
+
+impl CliTurnRuntime {
+    pub(crate) fn conversation_binding(&self) -> ConversationRuntimeBinding<'_> {
+        self.runtime_kernel.conversation_binding()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -545,8 +550,9 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config(
     if initialize_runtime_environment {
         crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
     }
-    let kernel_ctx =
-        bootstrap_kernel_context_with_config(kernel_scope, DEFAULT_TOKEN_TTL_S, &config)?;
+    let runtime_kernel =
+        crate::runtime_bridge::RuntimeKernelOwner::bootstrap(kernel_scope, &config)?;
+    let kernel_ctx = runtime_kernel.cloned_kernel_context();
     initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         resolved_path,
         config,
@@ -605,6 +611,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
 
     let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
+    let runtime_kernel = crate::runtime_bridge::RuntimeKernelOwner::new(kernel_ctx);
 
     Ok(CliTurnRuntime {
         resolved_path,
@@ -612,7 +619,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         session_id,
         session_address,
         turn_coordinator: ConversationTurnCoordinator::new(),
-        kernel_ctx,
+        runtime_kernel,
         explicit_acp_request,
         effective_bootstrap_mcp_servers,
         effective_working_directory,
@@ -793,7 +800,7 @@ async fn process_cli_chat_input(
             print_history(
                 &runtime.session_id,
                 runtime.config.memory.sliding_window,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
                 &runtime.memory_config,
             )
             .await?;
@@ -801,7 +808,7 @@ async fn process_cli_chat_input(
             print_history(
                 &runtime.session_id,
                 runtime.config.memory.sliding_window,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
             )
             .await?;
             return Ok(CliChatLoopControl::Continue);
@@ -824,17 +831,13 @@ async fn process_cli_chat_input(
             print_fast_lane_summary(
                 &runtime.session_id,
                 limit,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
                 &runtime.memory_config,
             )
             .await?;
             #[cfg(not(feature = "memory-sqlite"))]
-            print_fast_lane_summary(
-                &runtime.session_id,
-                limit,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            )
-            .await?;
+            print_fast_lane_summary(&runtime.session_id, limit, runtime.conversation_binding())
+                .await?;
             return Ok(CliChatLoopControl::Continue);
         }
         Ok(None) => {}
@@ -857,7 +860,7 @@ async fn process_cli_chat_input(
                 &runtime.session_id,
                 limit,
                 &runtime.config.conversation,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
                 &runtime.memory_config,
             )
             .await?;
@@ -866,7 +869,7 @@ async fn process_cli_chat_input(
                 &runtime.session_id,
                 limit,
                 &runtime.config.conversation,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
             )
             .await?;
             return Ok(CliChatLoopControl::Continue);
@@ -892,7 +895,7 @@ async fn process_cli_chat_input(
                 &runtime.config,
                 &runtime.session_id,
                 limit,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
                 &runtime.memory_config,
             )
             .await?;
@@ -902,7 +905,7 @@ async fn process_cli_chat_input(
                 &runtime.config,
                 &runtime.session_id,
                 limit,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
             )
             .await?;
             return Ok(CliChatLoopControl::Continue);
@@ -923,7 +926,7 @@ async fn process_cli_chat_input(
                 &runtime.turn_coordinator,
                 &runtime.config,
                 &runtime.session_id,
-                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
             )
             .await?;
             return Ok(CliChatLoopControl::Continue);
@@ -1076,7 +1079,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 input,
                 provider_error_mode,
                 &acp_options,
-                crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
                 Some(ingress),
                 live_surface_observer,
             )
@@ -1092,7 +1095,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 provider_error_mode,
                 &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
                 &acp_options,
-                crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                runtime.conversation_binding(),
                 None,
                 live_surface_observer,
             )
@@ -3402,6 +3405,11 @@ mod tests {
             false,
         )
         .expect("concurrent host runtime");
+        assert!(runtime.conversation_binding().is_kernel_bound());
+        assert_eq!(
+            runtime.runtime_kernel.kernel_context().agent_id(),
+            "cli-chat-concurrent-test"
+        );
         let shutdown = ConcurrentCliShutdown::new();
         shutdown.request_shutdown();
 
