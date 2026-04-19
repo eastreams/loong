@@ -635,9 +635,7 @@ pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
 fn resolved_workspace_root(config: &LoongConfig) -> Option<std::path::PathBuf> {
     let tool_runtime_config =
         tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let workspace_root = tool_runtime_config.effective_workspace_root()?;
-    let workspace_root = workspace_root.to_path_buf();
-    Some(workspace_root)
+    tool_runtime_config.effective_memory_workspace_root()
 }
 
 pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(

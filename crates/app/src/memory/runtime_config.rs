@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::config::{
@@ -17,10 +17,12 @@ pub struct MemoryRuntimeConfig {
     pub profile: MemoryProfile,
     pub system: MemorySystemKind,
     pub resolved_system_id: Option<String>,
+    pub agent_id: Option<String>,
     pub mode: MemoryMode,
     pub fail_open: bool,
     pub ingest_mode: MemoryIngestMode,
     pub sqlite_path: Option<PathBuf>,
+    pub workspace_root: Option<PathBuf>,
     pub sliding_window: usize,
     pub summary_max_chars: usize,
     pub profile_note: Option<String>,
@@ -35,10 +37,12 @@ impl Default for MemoryRuntimeConfig {
             profile: defaults.profile,
             system: defaults.system,
             resolved_system_id: Some(defaults.resolved_system_id()),
+            agent_id: defaults.normalized_agent_id(),
             mode: defaults.resolved_mode(),
             fail_open: defaults.fail_open,
             ingest_mode: defaults.ingest_mode,
             sqlite_path: None,
+            workspace_root: None,
             sliding_window: defaults.sliding_window,
             summary_max_chars: defaults.summary_char_budget(),
             profile_note: defaults.trimmed_profile_note(),
@@ -54,10 +58,12 @@ impl MemoryRuntimeConfig {
             profile: config.resolved_profile(),
             system: config.resolved_system(),
             resolved_system_id: Some(config.resolved_system_id()),
+            agent_id: config.normalized_agent_id(),
             mode: config.resolved_mode(),
             fail_open: config.fail_open,
             ingest_mode: config.ingest_mode,
-            sqlite_path: Some(config.resolved_sqlite_path()),
+            sqlite_path: Some(crate::config::expand_path(&config.sqlite_path)),
+            workspace_root: None,
             sliding_window: config.sliding_window,
             summary_max_chars: config.summary_char_budget(),
             profile_note: config.trimmed_profile_note(),
@@ -86,6 +92,10 @@ impl MemoryRuntimeConfig {
         if let Some(system_id) = crate::memory::registered_memory_system_id_from_env() {
             self.system = MemorySystemKind::parse_id(system_id.as_str()).unwrap_or_default();
             self.resolved_system_id = Some(system_id);
+        }
+
+        if let Ok(agent_id) = std::env::var("LOONG_MEMORY_AGENT_ID") {
+            self.agent_id = crate::config::normalize_memory_agent_id(Some(agent_id));
         }
 
         if let Some(fail_open) = parse_bool(std::env::var("LOONG_MEMORY_FAIL_OPEN").ok()) {
@@ -169,6 +179,35 @@ impl MemoryRuntimeConfig {
 
     pub const fn effective_fail_open(&self) -> bool {
         !self.strict_mode_active()
+    }
+
+    pub fn with_agent_id(mut self, agent_id: Option<&str>) -> Self {
+        self.agent_id = crate::config::normalize_memory_agent_id(agent_id.map(str::to_owned));
+        self
+    }
+
+    pub fn with_workspace_root(mut self, workspace_root: Option<PathBuf>) -> Self {
+        self.workspace_root = workspace_root;
+        self
+    }
+
+    pub fn effective_workspace_root(&self) -> Option<&Path> {
+        self.workspace_root.as_deref()
+    }
+
+    pub fn resolved_workspace_root_from(&self, base_workspace_root: &Path) -> PathBuf {
+        crate::config::scoped_memory_workspace_root_for_agent(
+            base_workspace_root,
+            self.agent_id.as_deref(),
+        )
+    }
+
+    pub fn resolved_sqlite_path(&self) -> PathBuf {
+        let base_path = self
+            .sqlite_path
+            .clone()
+            .unwrap_or_else(|| crate::config::default_loong_home().join("memory.sqlite3"));
+        crate::config::scoped_sqlite_path_for_agent(base_path.as_path(), self.agent_id.as_deref())
     }
 
     pub fn selected_system_id(&self) -> &str {
@@ -281,10 +320,12 @@ mod tests {
             profile: MemoryProfile::WindowOnly,
             system: MemorySystemKind::Builtin,
             resolved_system_id: Some(crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned()),
+            agent_id: None,
             mode: MemoryMode::WindowOnly,
             fail_open: true,
             ingest_mode: MemoryIngestMode::SyncMinimal,
             sqlite_path: Some(PathBuf::from("/tmp/test-memory.sqlite3")),
+            workspace_root: None,
             sliding_window: 12,
             summary_max_chars: 1200,
             profile_note: None,
@@ -293,6 +334,10 @@ mod tests {
         assert_eq!(
             config.sqlite_path,
             Some(PathBuf::from("/tmp/test-memory.sqlite3"))
+        );
+        assert_eq!(
+            config.resolved_sqlite_path(),
+            PathBuf::from("/tmp/test-memory.sqlite3")
         );
     }
 
@@ -384,6 +429,7 @@ mod tests {
         env.set("LOONG_MEMORY_PROFILE", "profile_plus_window");
         env.set("LOONG_MEMORY_FAIL_OPEN", "true");
         env.set("LOONG_MEMORY_INGEST_MODE", "async_background");
+        env.set("LOONG_MEMORY_AGENT_ID", "health");
         env.set("LOONG_SLIDING_WINDOW", "24");
         env.set("LOONG_MEMORY_SUMMARY_MAX_CHARS", "2048");
         env.set("LOONG_MEMORY_PROFILE_NOTE", "  env profile note  ");
@@ -411,7 +457,51 @@ mod tests {
             runtime.sqlite_path,
             Some(PathBuf::from("/tmp/env-memory.sqlite3"))
         );
+        assert_eq!(runtime.agent_id.as_deref(), Some("health"));
+        assert_eq!(
+            runtime.resolved_sqlite_path(),
+            PathBuf::from("/tmp/agents/health/env-memory.sqlite3")
+        );
         assert_eq!(runtime.profile_note.as_deref(), Some("env profile note"));
+    }
+
+    #[test]
+    fn runtime_config_resolves_agent_scoped_sqlite_path() {
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(PathBuf::from("/tmp/loong/memory.sqlite3")),
+            agent_id: Some("investment".to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        assert_eq!(
+            config.resolved_sqlite_path(),
+            PathBuf::from("/tmp/loong/agents/investment/memory.sqlite3")
+        );
+    }
+
+    #[test]
+    fn runtime_config_workspace_root_override_is_reported() {
+        let workspace_root = PathBuf::from("/tmp/topic-health");
+        let config =
+            MemoryRuntimeConfig::default().with_workspace_root(Some(workspace_root.clone()));
+
+        assert_eq!(
+            config.effective_workspace_root(),
+            Some(workspace_root.as_path())
+        );
+    }
+
+    #[test]
+    fn runtime_config_resolves_agent_scoped_workspace_root() {
+        let config = MemoryRuntimeConfig {
+            agent_id: Some("health".to_owned()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        assert_eq!(
+            config.resolved_workspace_root_from(Path::new("/tmp/workspace")),
+            PathBuf::from("/tmp/workspace/.loong/agents/health")
+        );
     }
 
     #[test]

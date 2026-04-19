@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Map, Value, json};
@@ -75,17 +75,17 @@ pub(super) fn execute_memory_search_tool_with_config(
     let query_tokens = tokenize_memory_query(query_normalized.as_str());
 
     let mut results = Vec::new();
-    if let Some(workspace_root) = config.file_root.as_deref() {
+    if let Some(workspace_root) = config.effective_memory_workspace_root() {
         if let Some(indexed_results) = search_indexed_workspace_memory_results(
             query_normalized.as_str(),
             query_tokens.as_slice(),
             max_results,
             config,
-            workspace_root,
+            workspace_root.as_path(),
         )? {
             results.extend(indexed_results);
         } else {
-            let locations = collect_workspace_memory_document_locations(workspace_root)?;
+            let locations = collect_workspace_memory_document_locations(workspace_root.as_path())?;
             for location in locations {
                 let maybe_result = search_memory_location(
                     query_normalized.as_str(),
@@ -163,14 +163,14 @@ pub(super) fn execute_memory_get_tool_with_config(
     )?;
 
     let workspace_root = workspace_root_from_config(config)?;
-    let locations = collect_workspace_memory_document_locations(workspace_root)?;
-    let resolved_path = super::file::resolve_safe_file_path_with_config(raw_path, config)?;
-    let matched_location = find_memory_location_for_path(&locations, resolved_path.as_path())?
-        .ok_or_else(|| {
-            format!(
-                "memory_get path `{raw_path}` is not part of the workspace durable memory corpus"
-            )
-        })?;
+    let locations = collect_workspace_memory_document_locations(workspace_root.as_path())?;
+    let matched_location = match resolve_memory_corpus_path(raw_path, workspace_root.as_path()) {
+        Ok(resolved_path) => find_memory_location_for_path(&locations, resolved_path.as_path())?,
+        Err(_) => None,
+    }
+    .ok_or_else(|| {
+        format!("memory_get path `{raw_path}` is not part of the workspace durable memory corpus")
+    })?;
 
     let raw_content = read_workspace_memory_text_lossy(matched_location.path.as_path())?;
     let maybe_parsed_document = parse_workspace_memory_document(
@@ -248,19 +248,57 @@ pub(super) fn workspace_memory_corpus_available(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> bool {
     config
-        .file_root
-        .as_deref()
-        .and_then(|workspace_root| collect_workspace_memory_document_locations(workspace_root).ok())
+        .effective_memory_workspace_root()
+        .and_then(|workspace_root| {
+            collect_workspace_memory_document_locations(workspace_root.as_path()).ok()
+        })
         .is_some_and(|locations| !locations.is_empty())
 }
 
 fn workspace_root_from_config(
     config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<&Path, String> {
-    config.file_root.as_deref().ok_or_else(|| {
+) -> Result<PathBuf, String> {
+    config.effective_memory_workspace_root().ok_or_else(|| {
         "memory tools require a configured safe file root before they can access workspace durable memory"
             .to_owned()
     })
+}
+
+fn resolve_memory_corpus_path(raw_path: &str, workspace_root: &Path) -> Result<PathBuf, String> {
+    let requested_path = Path::new(raw_path.trim());
+    if requested_path.as_os_str().is_empty() {
+        return Err("memory_get requires a non-empty path".to_owned());
+    }
+
+    let joined_path = if requested_path.is_absolute() {
+        requested_path.to_path_buf()
+    } else {
+        workspace_root.join(requested_path)
+    };
+    let canonical_workspace_root = dunce::canonicalize(workspace_root).map_err(|error| {
+        format!(
+            "failed to canonicalize memory workspace root {}: {error}",
+            workspace_root.display()
+        )
+    })?;
+    let resolved_path = if joined_path.exists() {
+        dunce::canonicalize(&joined_path).map_err(|error| {
+            format!(
+                "memory_get path `{}` could not be resolved: {error}",
+                raw_path.trim()
+            )
+        })?
+    } else {
+        super::normalize_without_fs(&joined_path)
+    };
+    if !resolved_path.starts_with(&canonical_workspace_root) {
+        return Err(format!(
+            "memory_get path `{}` escapes the scoped memory workspace root",
+            raw_path.trim()
+        ));
+    }
+
+    Ok(resolved_path)
 }
 
 fn read_memory_file_window(
@@ -1127,6 +1165,44 @@ mod tests {
         assert_eq!(results[0]["scope"], "workspace");
         assert_eq!(results[0]["kind"], "procedure");
         assert_eq!(results[0]["metadata"]["trust_level"], "workspace_curated");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_search_tool_uses_scoped_memory_workspace_root() {
+        let root = unique_temp_dir("loong-memory-search-scoped-workspace");
+        let scoped_root = root.join(".loong/agents/health");
+
+        std::fs::create_dir_all(&scoped_root).expect("create scoped root dir");
+        std::fs::write(scoped_root.join("MEMORY.md"), "topic-only memory").expect("write memory");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            memory_agent_id: Some("health".to_owned()),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "topic-only",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1, "results={results:?}");
+        assert_eq!(results[0]["source"], "workspace_file");
+        assert_eq!(results[0]["path"], "MEMORY.md");
+        assert!(
+            results[0]["snippet"]
+                .as_str()
+                .is_some_and(|value| value.contains("topic-only memory")),
+            "results={results:?}"
+        );
     }
 
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]

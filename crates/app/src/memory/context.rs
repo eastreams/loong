@@ -87,6 +87,22 @@ fn read_context_runtime_config(
         runtime_config.resolved_system_id = normalized_system_id;
     }
 
+    if let Some(agent_id_value) = payload.get("agent_id") {
+        let agent_id = match agent_id_value {
+            Value::Null => None,
+            Value::String(raw_value) => {
+                crate::config::normalize_memory_agent_id(Some(raw_value.clone()))
+            }
+            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+                return Err(
+                    "memory.read_context payload.agent_id must be a string or null".to_owned(),
+                );
+            }
+        };
+
+        runtime_config = runtime_config.with_agent_id(agent_id.as_deref());
+    }
+
     if let Some(sliding_window_value) = payload.get("sliding_window") {
         let sliding_window = sliding_window_value.as_u64().ok_or_else(|| {
             "memory.read_context payload.sliding_window must be a positive integer".to_owned()
@@ -140,6 +156,28 @@ fn read_context_runtime_config(
         runtime_config.profile_note = profile_note;
     }
 
+    if let Some(workspace_root_value) = payload.get("workspace_root") {
+        let workspace_root = match workspace_root_value {
+            Value::Null => None,
+            Value::String(raw_path) => {
+                let trimmed_path = raw_path.trim();
+                if trimmed_path.is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(trimmed_path))
+                }
+            }
+            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+                return Err(
+                    "memory.read_context payload.workspace_root must be a string or null"
+                        .to_owned(),
+                );
+            }
+        };
+
+        runtime_config = runtime_config.with_workspace_root(workspace_root);
+    }
+
     Ok(runtime_config)
 }
 
@@ -158,28 +196,9 @@ pub(crate) fn read_stage_envelope(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory.read_stage_envelope requires payload.session_id".to_owned())?;
     let runtime_config = read_context_runtime_config(payload, config)?;
-    let workspace_root = payload
-        .get("workspace_root")
-        .map(|value| match value {
-            Value::Null => Ok(None),
-            Value::String(raw_path) => {
-                let trimmed_path = raw_path.trim();
-                if trimmed_path.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(std::path::PathBuf::from(trimmed_path)))
-                }
-            }
-            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => Err(
-                "memory.read_stage_envelope payload.workspace_root must be a string or null"
-                    .to_owned(),
-            ),
-        })
-        .transpose()?
-        .flatten();
     let envelope = hydrate_stage_envelope_with_workspace_root(
         session_id,
-        workspace_root.as_deref(),
+        runtime_config.effective_workspace_root(),
         &runtime_config,
     )?;
     let mut response_payload = encode_stage_envelope_payload(&envelope);

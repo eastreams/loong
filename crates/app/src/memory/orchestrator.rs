@@ -387,8 +387,11 @@ pub async fn run_compact_stage(
     config: &MemoryRuntimeConfig,
 ) -> Result<StageDiagnostics, String> {
     let runtime = resolve_memory_system_runtime(config)?;
+    let effective_workspace_root = workspace_root.or(config.effective_workspace_root());
 
-    runtime.run_compact_stage(session_id, workspace_root).await
+    runtime
+        .run_compact_stage(session_id, effective_workspace_root)
+        .await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -524,7 +527,11 @@ pub fn hydrate_memory_context(
     session_id: &str,
     config: &MemoryRuntimeConfig,
 ) -> Result<HydratedMemoryContext, String> {
-    hydrate_memory_context_with_workspace_root(session_id, None, config)
+    hydrate_memory_context_with_workspace_root(
+        session_id,
+        config.effective_workspace_root(),
+        config,
+    )
 }
 
 pub fn hydrate_memory_context_with_workspace_root(
@@ -539,7 +546,11 @@ pub fn hydrate_stage_envelope(
     session_id: &str,
     config: &MemoryRuntimeConfig,
 ) -> Result<StageEnvelope, String> {
-    hydrate_stage_envelope_with_workspace_root(session_id, None, config)
+    hydrate_stage_envelope_with_workspace_root(
+        session_id,
+        config.effective_workspace_root(),
+        config,
+    )
 }
 
 pub(crate) fn hydrate_stage_envelope_with_workspace_root(
@@ -548,8 +559,9 @@ pub(crate) fn hydrate_stage_envelope_with_workspace_root(
     config: &MemoryRuntimeConfig,
 ) -> Result<StageEnvelope, String> {
     let runtime = resolve_memory_system_runtime(config)?;
+    let effective_workspace_root = workspace_root.or(config.effective_workspace_root());
 
-    runtime.hydrate_stage_envelope(session_id, workspace_root)
+    runtime.hydrate_stage_envelope(session_id, effective_workspace_root)
 }
 
 pub(crate) fn hydrate_stage_envelope_without_execution_adapter(
@@ -614,7 +626,7 @@ fn recent_window_records(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::MemoryProfile;
+    use crate::config::{MemoryMode, MemoryProfile};
     use crate::memory::{
         DEFAULT_MEMORY_SYSTEM_ID, DerivedMemoryKind, MemoryContextKind, MemoryRecallMode,
         MemoryScope, MemoryStageFamily, MemorySystem, MemorySystemCapability, MemorySystemMetadata,
@@ -1000,6 +1012,45 @@ mod tests {
                 .source_path
                 .as_deref(),
             Some(memory_file_path_text.as_str())
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_uses_runtime_workspace_root_when_present() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-runtime-workspace-root");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("runtime-workspace-root.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_dir = tmp.join("memory");
+        let _ = std::fs::create_dir_all(&memory_dir);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "runtime scoped durable note")
+            .expect("write memory file");
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        }
+        .with_workspace_root(Some(tmp.clone()));
+
+        let envelope = hydrate_stage_envelope("stage-runtime-workspace-root", &config)
+            .expect("hydrate staged envelope");
+
+        let has_runtime_workspace_recall = envelope.hydrated.entries.iter().any(|entry| {
+            entry.kind == crate::memory::MemoryContextKind::RetrievedMemory
+                && entry.content.contains("runtime scoped durable note")
+        });
+
+        assert!(
+            has_runtime_workspace_recall,
+            "expected runtime workspace root to surface durable recall"
         );
 
         let _ = std::fs::remove_file(&db_path);

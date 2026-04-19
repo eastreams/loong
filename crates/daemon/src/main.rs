@@ -363,6 +363,15 @@ async fn run_command(command: Commands) -> CliResult<()> {
             .await
         }
         Commands::Personalize { config } => personalize_cli::run_personalize_cli(config.as_deref()),
+        Commands::Memory {
+            config,
+            json,
+            command,
+        } => memory_cli::run_memory_cli(memory_cli::MemoryCommandOptions {
+            config,
+            json,
+            command,
+        }),
         Commands::Import {
             output,
             force,

@@ -7,14 +7,11 @@ use crate::config::LoongConfig;
 use crate::{CliResult, KernelContext};
 
 #[cfg(feature = "memory-sqlite")]
-use crate::memory;
-use std::collections::BTreeSet;
-#[cfg(feature = "memory-sqlite")]
-use std::path::Path;
-
-#[cfg(feature = "memory-sqlite")]
 use super::compaction::{CompactPolicy, compact_window};
 use super::runtime_binding::ConversationRuntimeBinding;
+#[cfg(feature = "memory-sqlite")]
+use crate::memory;
+use std::collections::BTreeSet;
 
 pub const CONTEXT_ENGINE_API_VERSION: u16 = 1;
 
@@ -597,9 +594,7 @@ async fn load_stage_envelope(
     if let Some(ctx) = binding.kernel_context() {
         let tool_runtime_config =
             crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-        let workspace_root = tool_runtime_config
-            .effective_workspace_root()
-            .map(Path::to_path_buf);
+        let workspace_root = tool_runtime_config.effective_memory_workspace_root();
         let request = memory::build_read_stage_envelope_request_for_memory_config(
             session_id,
             workspace_root.as_deref(),
@@ -623,8 +618,15 @@ async fn load_stage_envelope(
             .ok_or_else(|| "decode staged memory envelope via kernel failed".to_owned());
     }
 
-    memory::hydrate_stage_envelope_for_memory_config(session_id, None, &config.memory)
-        .map_err(|error| format!("load staged memory envelope failed: {error}"))
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    let workspace_root = tool_runtime_config.effective_memory_workspace_root();
+    memory::hydrate_stage_envelope_for_memory_config(
+        session_id,
+        workspace_root.as_deref(),
+        &config.memory,
+    )
+    .map_err(|error| format!("load staged memory envelope failed: {error}"))
 }
 
 #[cfg(test)]

@@ -660,6 +660,7 @@ impl ToolExecutionConfig {
 pub struct ToolRuntimeConfig {
     pub file_root: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
+    pub memory_agent_id: Option<String>,
     pub memory_sqlite_path: Option<PathBuf>,
     pub selected_memory_system_id: String,
     pub shell_allow: BTreeSet<String>,
@@ -688,6 +689,7 @@ impl Default for ToolRuntimeConfig {
         Self {
             file_root: None,
             workspace_root: None,
+            memory_agent_id: None,
             memory_sqlite_path: None,
             selected_memory_system_id: crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
             shell_allow: crate::config::DEFAULT_SHELL_ALLOW
@@ -735,6 +737,14 @@ impl ToolRuntimeConfig {
         configured_workspace_root.or(fallback_file_root)
     }
 
+    pub fn effective_memory_workspace_root(&self) -> Option<PathBuf> {
+        let workspace_root = self.effective_workspace_root()?;
+        Some(crate::config::scoped_memory_workspace_root_for_agent(
+            workspace_root,
+            self.memory_agent_id.as_deref(),
+        ))
+    }
+
     pub fn default_working_directory(&self) -> PathBuf {
         let configured_root = self.file_root.clone();
         let fallback_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -747,6 +757,10 @@ impl ToolRuntimeConfig {
             .tools
             .configured_runtime_workspace_root()
             .or_else(|| file_root.clone());
+        let memory_agent_id = std::env::var("LOONG_MEMORY_AGENT_ID")
+            .ok()
+            .and_then(|value| crate::config::normalize_memory_agent_id(Some(value)))
+            .or_else(|| config.memory.normalized_agent_id());
         let memory_system_selection = crate::memory::resolve_memory_system_selection(config);
         let selected_memory_system_id = memory_system_selection.id;
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
@@ -775,6 +789,7 @@ impl ToolRuntimeConfig {
         Self {
             file_root,
             workspace_root,
+            memory_agent_id,
             memory_sqlite_path: Some(config.memory.resolved_sqlite_path()),
             selected_memory_system_id,
             shell_allow,
@@ -915,12 +930,17 @@ impl ToolRuntimeConfig {
     pub fn from_env() -> Self {
         let file_root = parse_env_path("LOONG_FILE_ROOT");
         let workspace_root = parse_env_path("LOONG_WORKSPACE_ROOT").or_else(|| file_root.clone());
-        let memory_sqlite_path = std::env::var_os("LOONG_SQLITE_PATH")
+        let memory_agent_id = parse_env_string("LOONG_MEMORY_AGENT_ID")
+            .and_then(|value| crate::config::normalize_memory_agent_id(Some(value)));
+        let base_memory_sqlite_path = std::env::var_os("LOONG_SQLITE_PATH")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
-        let memory_sqlite_path = memory_sqlite_path.or_else(|| {
+        let base_memory_sqlite_path = base_memory_sqlite_path.or_else(|| {
             let default_config = crate::config::LoongConfig::default();
             Some(default_config.memory.resolved_sqlite_path())
+        });
+        let memory_sqlite_path = base_memory_sqlite_path.map(|path| {
+            crate::config::scoped_sqlite_path_for_agent(path.as_path(), memory_agent_id.as_deref())
         });
         let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
@@ -1073,6 +1093,7 @@ impl ToolRuntimeConfig {
         Self {
             file_root,
             workspace_root,
+            memory_agent_id,
             memory_sqlite_path,
             selected_memory_system_id,
             shell_allow,
@@ -1749,6 +1770,7 @@ mod tests {
             "LOONG_CONFIG_PATH",
             "LOONG_FILE_ROOT",
             "LOONG_WORKSPACE_ROOT",
+            "LOONG_MEMORY_AGENT_ID",
             "LOONG_SQLITE_PATH",
             "LOONG_TOOL_SESSIONS_ENABLED",
             "LOONG_TOOL_SESSIONS_ALLOW_MUTATION",
@@ -2256,6 +2278,20 @@ mod tests {
     }
 
     #[test]
+    fn tool_runtime_config_derives_memory_workspace_root_from_agent_scope() {
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.file_root = Some("/tmp/workspace".to_owned());
+        config.memory.agent_id = Some("health".to_owned());
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(
+            runtime.effective_memory_workspace_root(),
+            Some(PathBuf::from("/tmp/workspace/.loong/agents/health"))
+        );
+    }
+
+    #[test]
     fn selected_memory_system_id_uses_injected_config() {
         let mut config = crate::config::LoongConfig::default();
         config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
@@ -2276,6 +2312,23 @@ mod tests {
         assert_eq!(
             runtime.memory_sqlite_path,
             Some(PathBuf::from("/tmp/tool-runtime-memory.sqlite3"))
+        );
+    }
+
+    #[test]
+    fn memory_sqlite_path_from_env_honors_memory_agent_scope() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_SQLITE_PATH", "/tmp/tool-runtime-memory.sqlite3");
+        env.set("LOONG_MEMORY_AGENT_ID", "health");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.memory_sqlite_path,
+            Some(PathBuf::from(
+                "/tmp/agents/health/tool-runtime-memory.sqlite3"
+            ))
         );
     }
 
