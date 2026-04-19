@@ -20,7 +20,7 @@ release review. It is not part of the primary public release trail.
   repository's current architecture boundaries
 
 ## Summary
-- Generated at: 2026-04-19T11:38:12Z
+- Generated at: 2026-04-19T16:46:41Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/support/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -43,7 +43,7 @@ release review. It is not part of the primary public release trail.
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 2111 | 6400 | 4289 | 0 | 110 | 110 | 33.0% | HEALTHY | 1779 | 18.7% | BREACH | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 9592 | 11200 | 1608 | 50 | 120 | 70 | 85.6% | WATCH | 10831 | -11.4% | PASS | 98 |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 1556 | 15000 | 13444 | 45 | 70 | 25 | 64.3% | HEALTHY | 14472 | -89.2% | PASS | 54 |
-| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 4877 | 6500 | 1623 | 162 | 210 | 48 | 77.1% | HEALTHY | 6324 | -22.9% | PASS | 210 |
+| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 4884 | 6500 | 1616 | 162 | 210 | 48 | 77.1% | HEALTHY | 6324 | -22.8% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 5783 | 9800 | 4017 | 209 | 250 | 41 | 83.6% | HEALTHY | 9519 | -39.2% | PASS | 228 |
 
 ## Prioritization Signals
@@ -97,7 +97,7 @@ release review. It is not part of the primary public release trail.
 <!-- arch-hotspot key=channel_mod lines=2111 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=9592 functions=50 -->
 <!-- arch-hotspot key=tools_mod lines=1556 functions=45 -->
-<!-- arch-hotspot key=daemon_lib lines=4877 functions=162 -->
+<!-- arch-hotspot key=daemon_lib lines=4884 functions=162 -->
 <!-- arch-hotspot key=onboard_cli lines=5783 functions=209 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
