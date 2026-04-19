@@ -146,7 +146,10 @@ loong onboard                # 交互式初始化，配置 provider 和 model
 loong ask --message "用一句话总结这个仓库"  # 单轮提问，验证配置是否生效
 loong chat                   # 进入多轮对话
 loong doctor --fix           # 检查环境并自动修复常见问题
+loong update                 # 把当前安装升级到最新稳定版 GitHub Release
 ```
+
+`loong update` 只会安装最新稳定版 GitHub Release，绝不会切到 pre-release。
 
 走完 `onboard` 就够了 —— 它会把一份能跑的配置写到 `~/.loong/config.toml`，不需要你手写 TOML。如果你想再加一个 provider 或接入频道，下面几段是 dev 分支当前的实际形态。
 
