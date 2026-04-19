@@ -397,6 +397,17 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_runtime_kernel_overrides_pi_local_stub_harness() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        let home = std::env::temp_dir().join(format!(
+            "loong-daemon-runtime-harness-home-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&home).expect("create isolated daemon home");
+        env.set("HOME", &home);
+        env.remove("LOONG_HOME");
+        env.remove("LOONG_CONFIG_PATH");
+        env.remove("LOONGCLAW_CONFIG_PATH");
+
         let kernel = build_daemon_runtime_kernel();
         let token = kernel
             .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
