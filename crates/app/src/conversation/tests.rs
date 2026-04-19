@@ -43,7 +43,7 @@ use crate::session::repository::{
     TransitionApprovalRequestIfCurrentRequest,
 };
 #[cfg(feature = "memory-sqlite")]
-use crate::session::store::SessionStoreConfig as MemoryRuntimeConfig;
+use crate::session::store::SessionStoreConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::test_support::unique_temp_dir;
 
@@ -51,7 +51,7 @@ use crate::test_support::unique_temp_dir;
 const DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
 
 #[cfg(feature = "memory-sqlite")]
-fn session_store_config_from_config(config: &LoongConfig) -> MemoryRuntimeConfig {
+fn session_store_config_from_config(config: &LoongConfig) -> SessionStoreConfig {
     crate::session::store::session_store_config_from_memory_config(&config.memory)
 }
 
@@ -60,7 +60,7 @@ fn append_session_turn_direct(
     session_id: &str,
     role: &str,
     content: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
 ) -> Result<(), String> {
     crate::session::store::append_session_turn_direct(session_id, role, content, config)
 }
@@ -69,7 +69,7 @@ fn append_session_turn_direct(
 fn window_session_turns(
     session_id: &str,
     limit: usize,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
 ) -> Result<Vec<crate::session::store::SessionTranscriptTurn>, String> {
     crate::session::store::window_session_turns(session_id, limit, config)
 }
@@ -158,7 +158,7 @@ struct FakeRuntime {
     after_turn_result: Result<(), String>,
     compact_result: Result<(), String>,
     #[cfg(feature = "memory-sqlite")]
-    durable_memory_config: Option<MemoryRuntimeConfig>,
+    durable_memory_config: Option<SessionStoreConfig>,
     #[cfg(feature = "memory-sqlite")]
     async_delegate_spawner_override: Option<Arc<dyn crate::conversation::AsyncDelegateSpawner>>,
     persisted: Mutex<Vec<(String, String, String)>>,
@@ -369,7 +369,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
             timeout_seconds,
             binding,
         } = request;
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+        let memory_config = SessionStoreConfig::from_memory_config(&self.config.memory);
         let repo = crate::session::repository::SessionRepository::new(&memory_config)?;
         let runtime = self
             .runtime
@@ -428,7 +428,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
 #[cfg(feature = "memory-sqlite")]
 struct ApprovalFinalizationConflictRuntime {
     inner: FakeRuntime,
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     approval_request_id: String,
     replay_error: String,
 }
@@ -437,7 +437,7 @@ struct ApprovalFinalizationConflictRuntime {
 impl ApprovalFinalizationConflictRuntime {
     fn new(
         inner: FakeRuntime,
-        memory_config: MemoryRuntimeConfig,
+        memory_config: SessionStoreConfig,
         approval_request_id: &str,
         replay_error: &str,
     ) -> Self {
@@ -1141,7 +1141,7 @@ impl FakeRuntime {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn with_durable_memory_config(mut self, config: MemoryRuntimeConfig) -> Self {
+    fn with_durable_memory_config(mut self, config: SessionStoreConfig) -> Self {
         self.durable_memory_config = Some(config);
         self
     }
@@ -1886,7 +1886,7 @@ fn collect_markdown_file_paths(root: &std::path::Path) -> Vec<PathBuf> {
 #[cfg(feature = "memory-sqlite")]
 fn test_kernel_context_with_memory(
     agent_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> KernelContext {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
@@ -17091,7 +17091,7 @@ fn prepare_discovery_first_summary_test(
     db_scope: &str,
     direct_session_id: &str,
     payloads: &[String],
-) -> (PathBuf, MemoryRuntimeConfig) {
+) -> (PathBuf, SessionStoreConfig) {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id(db_scope, "binding")
