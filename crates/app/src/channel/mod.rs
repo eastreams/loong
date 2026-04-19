@@ -115,7 +115,12 @@ pub use registry::{
     resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
     resolve_channel_runtime_command_descriptor, validate_plugin_channel_bridge_manifest,
 };
-pub use runtime::state::{ChannelOperationRuntime, ChannelOperationRuntimeTracker};
+pub use runtime::state::{
+    ChannelOperationDuplicateCleanupOutcome, ChannelOperationDuplicateCleanupResult,
+    ChannelOperationRuntime, ChannelOperationRuntimeIncident, ChannelOperationRuntimeIncidentKind,
+    ChannelOperationRuntimeTracker, ChannelOperationStopRequestOutcome,
+    request_channel_operation_duplicate_cleanup, request_channel_operation_stop,
+};
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",

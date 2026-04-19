@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -1673,6 +1673,158 @@ fn snapshot_has_external_plugin_bridge_owner(
     bridge_runtime_owner == Some("external_plugin")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManagedBridgeRuntimeAttention<'a> {
+    channel_id: &'static str,
+    channel_label: &'a str,
+    account_ids: BTreeSet<String>,
+    reasons: BTreeSet<&'static str>,
+    preferred_owner_pids: BTreeSet<u32>,
+    cleanup_owner_pids: BTreeSet<u32>,
+    last_duplicate_reclaim_at: Option<u64>,
+    last_duplicate_reclaim_cleanup_owner_pids: BTreeSet<u32>,
+    recent_incidents: Vec<DoctorRuntimeIncident>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DoctorRuntimeIncident {
+    account_id: Option<String>,
+    account_label: Option<String>,
+    kind: &'static str,
+    at_ms: u64,
+    detail: Option<String>,
+    owner_pids: Vec<u32>,
+}
+
+fn managed_bridge_runtime_attention_surfaces<'a>(
+    channel_surfaces: &'a [mvp::channel::ChannelSurface],
+) -> Vec<ManagedBridgeRuntimeAttention<'a>> {
+    let mut surfaces = Vec::new();
+
+    for surface in channel_surfaces {
+        let mut reasons = BTreeSet::new();
+        let mut account_ids = BTreeSet::new();
+        let mut preferred_owner_pids = BTreeSet::new();
+        let mut cleanup_owner_pids = BTreeSet::new();
+        let mut last_duplicate_reclaim_at = None;
+        let mut last_duplicate_reclaim_cleanup_owner_pids = BTreeSet::new();
+        let mut recent_incidents = Vec::new();
+
+        for snapshot in surface
+            .configured_accounts
+            .iter()
+            .filter(|snapshot| snapshot.enabled)
+            .filter(|snapshot| snapshot_has_external_plugin_bridge_owner(snapshot))
+        {
+            let Some(runtime) = snapshot
+                .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)
+                .and_then(|operation| operation.runtime.as_ref())
+            else {
+                continue;
+            };
+
+            if runtime.consecutive_failures > 0 {
+                reasons.insert("retrying");
+            }
+            if runtime.stale {
+                reasons.insert("stale");
+            }
+            if runtime.running_instances > 1 {
+                reasons.insert("duplicate_runtime_instances");
+                if let Some(pid) = runtime.pid {
+                    preferred_owner_pids.insert(pid);
+                }
+                for owner_pid in &runtime.duplicate_owner_pids {
+                    if Some(*owner_pid) == runtime.pid {
+                        continue;
+                    }
+                    cleanup_owner_pids.insert(*owner_pid);
+                }
+            }
+            if runtime.last_duplicate_reclaim_at.is_some_and(|value| {
+                last_duplicate_reclaim_at
+                    .map(|current| value > current)
+                    .unwrap_or(true)
+            }) {
+                last_duplicate_reclaim_at = runtime.last_duplicate_reclaim_at;
+                last_duplicate_reclaim_cleanup_owner_pids.clear();
+                for owner_pid in &runtime.last_duplicate_reclaim_cleanup_owner_pids {
+                    last_duplicate_reclaim_cleanup_owner_pids.insert(*owner_pid);
+                }
+            }
+            recent_incidents.extend(runtime.recent_incidents.iter().map(|incident| {
+                DoctorRuntimeIncident {
+                    account_id: runtime.account_id.clone(),
+                    account_label: runtime.account_label.clone(),
+                    kind: match incident.kind {
+                        mvp::channel::ChannelOperationRuntimeIncidentKind::Failure => "failure",
+                        mvp::channel::ChannelOperationRuntimeIncidentKind::Recovery => "recovery",
+                        mvp::channel::ChannelOperationRuntimeIncidentKind::DuplicateReclaim => {
+                            "duplicate_reclaim"
+                        }
+                    },
+                    at_ms: incident.at_ms,
+                    detail: incident.detail.clone(),
+                    owner_pids: incident.owner_pids.clone(),
+                }
+            }));
+            if runtime.stale || runtime.running_instances > 1 || runtime.consecutive_failures > 0 {
+                account_ids.insert(snapshot.configured_account_id.clone());
+            }
+        }
+
+        if reasons.is_empty() {
+            continue;
+        }
+
+        recent_incidents.sort_by(|left, right| right.at_ms.cmp(&left.at_ms));
+        recent_incidents.truncate(5);
+        surfaces.push(ManagedBridgeRuntimeAttention {
+            channel_id: surface.catalog.id,
+            channel_label: surface.catalog.label,
+            account_ids,
+            reasons,
+            preferred_owner_pids,
+            cleanup_owner_pids,
+            last_duplicate_reclaim_at,
+            last_duplicate_reclaim_cleanup_owner_pids,
+            recent_incidents,
+        });
+    }
+
+    surfaces
+}
+
+fn managed_bridge_runtime_serve_control_command(
+    attention: &ManagedBridgeRuntimeAttention<'_>,
+    config_path_display: &str,
+    duplicate_cleanup: bool,
+) -> Option<String> {
+    let family =
+        mvp::channel::resolve_channel_catalog_command_family_descriptor(attention.channel_id)?;
+    let command = crate::cli_handoff::format_subcommand_with_config(
+        family.serve.command,
+        config_path_display,
+    );
+    let control_flag = if duplicate_cleanup {
+        "--stop-duplicates"
+    } else {
+        "--stop"
+    };
+    let account_id = attention.account_ids.iter().next().cloned();
+    let needs_explicit_account = attention.account_ids.len() == 1;
+
+    if !needs_explicit_account {
+        return Some(format!("{command} {control_flag}"));
+    }
+
+    let account_id = account_id?;
+    Some(format!(
+        "{command} {control_flag} --account {}",
+        crate::cli_handoff::shell_quote_argument(&account_id)
+    ))
+}
+
 fn build_channel_runtime_check(
     name: &str,
     operation: &mvp::channel::ChannelOperationStatus,
@@ -1686,7 +1838,7 @@ fn build_channel_runtime_check(
     };
 
     let detail_tail = format!(
-        "account={} account_id={} pid={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={}",
+        "account={} account_id={} pid={} busy={} active_runs={} consecutive_failures={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} last_failure_at={} last_recovery_at={} last_error={} duplicate_owner_pids={} last_duplicate_reclaim_at={} last_duplicate_reclaim_cleanup_owner_pids={} recent_incidents={}",
         runtime.account_label.as_deref().unwrap_or("-"),
         runtime.account_id.as_deref().unwrap_or("-"),
         runtime
@@ -1695,6 +1847,7 @@ fn build_channel_runtime_check(
             .unwrap_or_else(|| "-".to_owned()),
         runtime.busy,
         runtime.active_runs,
+        runtime.consecutive_failures,
         runtime.instance_count,
         runtime.running_instances,
         runtime.stale_instances,
@@ -1706,6 +1859,22 @@ fn build_channel_runtime_check(
             .last_heartbeat_at
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_owned()),
+        runtime
+            .last_failure_at
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        runtime
+            .last_recovery_at
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        runtime.last_error.as_deref().unwrap_or("-"),
+        render_u32_list(&runtime.duplicate_owner_pids),
+        runtime
+            .last_duplicate_reclaim_at
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        render_u32_list(&runtime.last_duplicate_reclaim_cleanup_owner_pids),
+        render_runtime_incident_summary(runtime.recent_incidents.as_slice()),
     );
 
     if runtime.stale {
@@ -1722,6 +1891,14 @@ fn build_channel_runtime_check(
                 name: name.to_owned(),
                 level: DoctorCheckLevel::Warn,
                 detail: format!("multiple runtime instances detected ({detail_tail})"),
+            };
+        }
+
+        if runtime.consecutive_failures > 0 {
+            return DoctorCheck {
+                name: name.to_owned(),
+                level: DoctorCheckLevel::Warn,
+                detail: format!("runtime is retrying after transient failures ({detail_tail})"),
             };
         }
 
@@ -2181,11 +2358,106 @@ fn check_level_json(level: DoctorCheckLevel) -> &'static str {
     }
 }
 
+fn render_u32_list(values: &[u32]) -> String {
+    if values.is_empty() {
+        return "-".to_owned();
+    }
+
+    values
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn render_runtime_incident_summary(
+    incidents: &[mvp::channel::ChannelOperationRuntimeIncident],
+) -> String {
+    if incidents.is_empty() {
+        return "-".to_owned();
+    }
+
+    incidents
+        .iter()
+        .map(|incident| {
+            let kind = match incident.kind {
+                mvp::channel::ChannelOperationRuntimeIncidentKind::Failure => "failure",
+                mvp::channel::ChannelOperationRuntimeIncidentKind::Recovery => "recovery",
+                mvp::channel::ChannelOperationRuntimeIncidentKind::DuplicateReclaim => {
+                    "duplicate_reclaim"
+                }
+            };
+            format!("{kind}@{}", incident.at_ms)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DoctorRuntimeAttentionReason {
+    Retrying,
+    Stale,
+    DuplicateRuntimeInstances,
+}
+
+impl DoctorRuntimeAttentionReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Retrying => "retrying",
+            Self::Stale => "stale",
+            Self::DuplicateRuntimeInstances => "duplicate_runtime_instances",
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::Retrying => "inspect_bridge_connectivity",
+            Self::Stale => "restart_stale_runtime",
+            Self::DuplicateRuntimeInstances => "stop_duplicate_runtime_instances",
+        }
+    }
+}
+
+fn doctor_runtime_attention_reason(check: &DoctorCheck) -> Option<DoctorRuntimeAttentionReason> {
+    if check
+        .detail
+        .contains("runtime is retrying after transient failures")
+    {
+        return Some(DoctorRuntimeAttentionReason::Retrying);
+    }
+    if check.detail.contains("stale runtime detected") {
+        return Some(DoctorRuntimeAttentionReason::Stale);
+    }
+    if check.detail.contains("multiple runtime instances detected") {
+        return Some(DoctorRuntimeAttentionReason::DuplicateRuntimeInstances);
+    }
+
+    None
+}
+
+fn doctor_runtime_attention_channel_id(check: &DoctorCheck) -> Option<String> {
+    for suffix in [
+        " bridge serve runtime",
+        " serve runtime",
+        " channel runtime",
+    ] {
+        if let Some(channel_id) = check.name.strip_suffix(suffix) {
+            let trimmed = channel_id.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+
+    None
+}
+
 fn doctor_checks_json_payload(
     checks: &[DoctorCheck],
     channel_surfaces: &[mvp::channel::ChannelSurface],
 ) -> Vec<serde_json::Value> {
     let account_summaries = doctor_plugin_bridge_account_summaries(channel_surfaces);
+    let runtime_attention_surfaces = managed_bridge_runtime_attention_surfaces(channel_surfaces);
     let mut payload = Vec::with_capacity(checks.len());
 
     for check in checks {
@@ -2207,6 +2479,78 @@ fn doctor_checks_json_payload(
             object.insert(
                 "plugin_bridge_account_summary".to_owned(),
                 serde_json::Value::String(account_summary.clone()),
+            );
+        }
+
+        if let Some(reason) = doctor_runtime_attention_reason(check) {
+            let mut runtime_attention = serde_json::Map::new();
+            runtime_attention.insert(
+                "reason".to_owned(),
+                serde_json::Value::String(reason.as_str().to_owned()),
+            );
+            runtime_attention.insert(
+                "remediation".to_owned(),
+                serde_json::Value::String(reason.remediation().to_owned()),
+            );
+            if let Some(channel_id) = doctor_runtime_attention_channel_id(check) {
+                runtime_attention.insert(
+                    "channel_id".to_owned(),
+                    serde_json::Value::String(channel_id.clone()),
+                );
+                if let Some(surface) = runtime_attention_surfaces
+                    .iter()
+                    .find(|surface| surface.channel_id == channel_id.as_str())
+                {
+                    if !surface.preferred_owner_pids.is_empty() {
+                        runtime_attention.insert(
+                            "preferred_owner_pids".to_owned(),
+                            serde_json::json!(surface.preferred_owner_pids),
+                        );
+                    }
+                    if !surface.cleanup_owner_pids.is_empty() {
+                        runtime_attention.insert(
+                            "cleanup_owner_pids".to_owned(),
+                            serde_json::json!(surface.cleanup_owner_pids),
+                        );
+                    }
+                    if let Some(last_duplicate_reclaim_at) = surface.last_duplicate_reclaim_at {
+                        runtime_attention.insert(
+                            "last_duplicate_reclaim_at".to_owned(),
+                            serde_json::json!(last_duplicate_reclaim_at),
+                        );
+                    }
+                    if !surface.last_duplicate_reclaim_cleanup_owner_pids.is_empty() {
+                        runtime_attention.insert(
+                            "last_duplicate_reclaim_cleanup_owner_pids".to_owned(),
+                            serde_json::json!(surface.last_duplicate_reclaim_cleanup_owner_pids),
+                        );
+                    }
+                    if !surface.recent_incidents.is_empty() {
+                        runtime_attention.insert(
+                            "recent_incidents".to_owned(),
+                            serde_json::Value::Array(
+                                surface
+                                    .recent_incidents
+                                    .iter()
+                                    .map(|incident| {
+                                        serde_json::json!({
+                                            "account_id": incident.account_id,
+                                            "account_label": incident.account_label,
+                                            "kind": incident.kind,
+                                            "at_ms": incident.at_ms,
+                                            "detail": incident.detail,
+                                            "owner_pids": incident.owner_pids,
+                                        })
+                                    })
+                                    .collect(),
+                            ),
+                        );
+                    }
+                }
+            }
+            object.insert(
+                "runtime_attention".to_owned(),
+                serde_json::Value::Object(runtime_attention),
             );
         }
 
@@ -2318,6 +2662,95 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             push_unique_step(
                 &mut steps,
                 format!("Set provider credentials in env: {}", hints.join(" or ")),
+            );
+        }
+    }
+
+    for surface in managed_bridge_runtime_attention_surfaces(channel_surfaces) {
+        if surface.reasons.contains("retrying") {
+            push_unique_step(
+                &mut steps,
+                format!(
+                    "Inspect {} bridge connectivity, upstream session health, and external bridge logs, then rerun diagnostics: {rerun_command}",
+                    surface.channel_label
+                ),
+            );
+        }
+        if surface.reasons.contains("stale") {
+            let stop_command = managed_bridge_runtime_serve_control_command(
+                &surface,
+                config_path_display.as_str(),
+                false,
+            );
+            push_unique_step(
+                &mut steps,
+                match stop_command {
+                    Some(stop_command) => format!(
+                        "Restart the stale {} runtime or external bridge owner: {stop_command}",
+                        surface.channel_label
+                    ),
+                    None => format!(
+                        "Restart the stale {} runtime or external bridge owner, then rerun diagnostics: {rerun_command}",
+                        surface.channel_label
+                    ),
+                },
+            );
+        }
+        if surface.reasons.contains("duplicate_runtime_instances") {
+            let stop_command = managed_bridge_runtime_serve_control_command(
+                &surface,
+                config_path_display.as_str(),
+                true,
+            );
+            let keep_pid_note = if surface.preferred_owner_pids.len() == 1 {
+                let pid = surface
+                    .preferred_owner_pids
+                    .first()
+                    .copied()
+                    .unwrap_or_default();
+                format!("keep pid={pid}; ")
+            } else {
+                String::new()
+            };
+            let cleanup_pid_note = if surface.cleanup_owner_pids.is_empty() {
+                String::new()
+            } else {
+                let rendered_cleanup = surface
+                    .cleanup_owner_pids
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("cleanup pids={rendered_cleanup}; ")
+            };
+            let auto_reclaim_note = if let Some(last_duplicate_reclaim_at) =
+                surface.last_duplicate_reclaim_at
+            {
+                let rendered_cleanup = render_u32_list(
+                    &surface
+                        .last_duplicate_reclaim_cleanup_owner_pids
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>(),
+                );
+                format!(
+                    "last auto reclaim at={last_duplicate_reclaim_at}; last auto cleanup pids={rendered_cleanup}; "
+                )
+            } else {
+                String::new()
+            };
+            push_unique_step(
+                &mut steps,
+                match stop_command {
+                    Some(stop_command) => format!(
+                        "Stop duplicate {} runtime instances so only one serve owner remains ({auto_reclaim_note}{keep_pid_note}{cleanup_pid_note}run {stop_command})",
+                        surface.channel_label
+                    ),
+                    None => format!(
+                        "Stop duplicate {} runtime instances so only one serve owner remains ({auto_reclaim_note}{keep_pid_note}{cleanup_pid_note}then rerun diagnostics: {rerun_command})",
+                        surface.channel_label
+                    ),
+                },
             );
         }
     }
@@ -4734,14 +5167,22 @@ mod tests {
                     stale: false,
                     busy: false,
                     active_runs: 0,
+                    consecutive_failures: 0,
                     last_run_activity_at: None,
                     last_heartbeat_at: None,
+                    last_failure_at: None,
+                    last_recovery_at: None,
+                    last_error: None,
+                    last_duplicate_reclaim_at: None,
                     pid: None,
                     account_id: Some("bot_123456".to_owned()),
                     account_label: Some("bot:123456".to_owned()),
                     instance_count: 1,
                     running_instances: 0,
                     stale_instances: 0,
+                    duplicate_owner_pids: Vec::new(),
+                    last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+                    recent_incidents: Vec::new(),
                 }),
             }],
         }];
@@ -4788,14 +5229,22 @@ mod tests {
                     stale: true,
                     busy: true,
                     active_runs: 1,
+                    consecutive_failures: 0,
                     last_run_activity_at: Some(1_700_000_000_000),
                     last_heartbeat_at: Some(1_700_000_005_000),
+                    last_failure_at: None,
+                    last_recovery_at: None,
+                    last_error: None,
+                    last_duplicate_reclaim_at: None,
                     pid: Some(4242),
                     account_id: Some("feishu_cli_a1b2c3".to_owned()),
                     account_label: Some("feishu:cli_a1b2c3".to_owned()),
                     instance_count: 1,
                     running_instances: 0,
                     stale_instances: 1,
+                    duplicate_owner_pids: Vec::new(),
+                    last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+                    recent_incidents: Vec::new(),
                 }),
             }],
         }];
@@ -4843,14 +5292,22 @@ mod tests {
                     stale: false,
                     busy: true,
                     active_runs: 1,
+                    consecutive_failures: 0,
                     last_run_activity_at: Some(1_700_000_000_000),
                     last_heartbeat_at: Some(1_700_000_005_000),
+                    last_failure_at: None,
+                    last_recovery_at: None,
+                    last_error: None,
+                    last_duplicate_reclaim_at: Some(1_700_000_007_000),
                     pid: Some(3003),
                     account_id: Some("bot_123456".to_owned()),
                     account_label: Some("bot:123456".to_owned()),
                     instance_count: 2,
                     running_instances: 2,
                     stale_instances: 0,
+                    duplicate_owner_pids: vec![3003, 3004],
+                    last_duplicate_reclaim_cleanup_owner_pids: vec![3004],
+                    recent_incidents: Vec::new(),
                 }),
             }],
         }];
@@ -4865,6 +5322,69 @@ mod tests {
                     && check.detail.contains("running_instances=2")
             }),
             "duplicate running telegram runtimes should emit runtime warning"
+        );
+    }
+
+    #[test]
+    fn build_channel_surface_checks_warns_when_runtime_is_retrying() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "weixin",
+            configured_account_id: "default".to_owned(),
+            configured_account_label: "default".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::RuntimeIdentity,
+            label: "Weixin",
+            aliases: vec!["wechat", "wx"],
+            transport: "wechat_clawbot_ilink_bridge",
+            compiled: true,
+            enabled: true,
+            api_base_url: None,
+            notes: vec!["bridge_runtime_owner=external_plugin".to_owned()],
+            reserved_runtime_fields: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "managed bridge reply loop",
+                command: "weixin-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: true,
+                    stale: false,
+                    busy: false,
+                    active_runs: 0,
+                    consecutive_failures: 2,
+                    last_run_activity_at: Some(1_700_000_000_000),
+                    last_heartbeat_at: Some(1_700_000_005_000),
+                    last_failure_at: Some(1_700_000_006_000),
+                    last_recovery_at: None,
+                    last_error: Some("temporary bridge timeout".to_owned()),
+                    last_duplicate_reclaim_at: None,
+                    pid: Some(5151),
+                    account_id: Some("default".to_owned()),
+                    account_label: Some("default".to_owned()),
+                    instance_count: 1,
+                    running_instances: 1,
+                    stale_instances: 0,
+                    duplicate_owner_pids: Vec::new(),
+                    last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+                    recent_incidents: Vec::new(),
+                }),
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "weixin bridge serve runtime"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("retrying after transient failures")
+                    && check.detail.contains("consecutive_failures=2")
+                    && check.detail.contains("last_error=temporary bridge timeout")
+            }),
+            "retrying runtime should surface failure metadata instead of passing silently: {checks:#?}"
         );
     }
 
@@ -4905,14 +5425,22 @@ mod tests {
                     stale: false,
                     busy: false,
                     active_runs: 1,
+                    consecutive_failures: 0,
                     last_run_activity_at: Some(1_700_000_000_000),
                     last_heartbeat_at: Some(1_700_000_005_000),
+                    last_failure_at: None,
+                    last_recovery_at: None,
+                    last_error: None,
+                    last_duplicate_reclaim_at: None,
                     pid: Some(4242),
                     account_id: Some("feishu_main".to_owned()),
                     account_label: Some("feishu:main".to_owned()),
                     instance_count: 1,
                     running_instances: 1,
                     stale_instances: 0,
+                    duplicate_owner_pids: Vec::new(),
+                    last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+                    recent_incidents: Vec::new(),
                 }),
             }],
         }];
@@ -5028,14 +5556,22 @@ mod tests {
                         stale: false,
                         busy: false,
                         active_runs: 0,
+                        consecutive_failures: 0,
                         last_run_activity_at: None,
                         last_heartbeat_at: None,
+                        last_failure_at: None,
+                        last_recovery_at: None,
+                        last_error: None,
+                        last_duplicate_reclaim_at: None,
                         pid: Some(2001),
                         account_id: Some("bot_123456".to_owned()),
                         account_label: Some("bot:123456".to_owned()),
                         instance_count: 1,
                         running_instances: 1,
                         stale_instances: 0,
+                        duplicate_owner_pids: Vec::new(),
+                        last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+                        recent_incidents: Vec::new(),
                     }),
                 }],
             },
@@ -5066,14 +5602,22 @@ mod tests {
                         stale: false,
                         busy: false,
                         active_runs: 0,
+                        consecutive_failures: 0,
                         last_run_activity_at: None,
                         last_heartbeat_at: None,
+                        last_failure_at: None,
+                        last_recovery_at: None,
+                        last_error: None,
+                        last_duplicate_reclaim_at: None,
                         pid: None,
                         account_id: Some("bot_654321".to_owned()),
                         account_label: Some("bot:654321".to_owned()),
                         instance_count: 0,
                         running_instances: 0,
                         stale_instances: 0,
+                        duplicate_owner_pids: Vec::new(),
+                        last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+                        recent_incidents: Vec::new(),
                     }),
                 }],
             },
@@ -5165,6 +5709,99 @@ mod tests {
         assert!(checks.is_empty());
     }
 
+    fn build_weixin_runtime_attention_surfaces(
+        stale: bool,
+        running_instances: usize,
+        consecutive_failures: usize,
+    ) -> (mvp::config::LoongConfig, Vec<mvp::channel::ChannelSurface>) {
+        let mut config = mvp::config::LoongConfig::default();
+        config.weixin.enabled = true;
+        config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+        config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
+            "weixin-token".to_owned(),
+        ));
+        config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+        let mut inventory = mvp::channel::channel_inventory(&config);
+        let surface = inventory
+            .channel_surfaces
+            .iter_mut()
+            .find(|surface| surface.catalog.id == "weixin")
+            .expect("weixin surface");
+        let snapshot = surface
+            .configured_accounts
+            .iter_mut()
+            .find(|snapshot| snapshot.configured_account_id == "default")
+            .expect("weixin default account");
+        let serve = snapshot
+            .operations
+            .iter_mut()
+            .find(|operation| operation.id == mvp::channel::CHANNEL_OPERATION_SERVE_ID)
+            .expect("weixin serve operation");
+        serve.runtime = Some(mvp::channel::ChannelOperationRuntime {
+            running: !stale,
+            stale,
+            busy: false,
+            active_runs: 0,
+            consecutive_failures,
+            last_run_activity_at: Some(1_700_000_000_000),
+            last_heartbeat_at: Some(1_700_000_005_000),
+            last_failure_at: if consecutive_failures > 0 {
+                Some(1_700_000_006_000)
+            } else {
+                None
+            },
+            last_recovery_at: None,
+            last_error: if consecutive_failures > 0 {
+                Some("temporary bridge timeout".to_owned())
+            } else {
+                None
+            },
+            last_duplicate_reclaim_at: if running_instances > 1 {
+                Some(1_700_000_007_000)
+            } else {
+                None
+            },
+            pid: Some(5151),
+            account_id: Some("default".to_owned()),
+            account_label: Some("default".to_owned()),
+            instance_count: running_instances.max(1),
+            running_instances,
+            stale_instances: usize::from(stale),
+            duplicate_owner_pids: if running_instances > 1 {
+                vec![5151, 6262]
+            } else {
+                Vec::new()
+            },
+            last_duplicate_reclaim_cleanup_owner_pids: if running_instances > 1 {
+                vec![6262]
+            } else {
+                Vec::new()
+            },
+            recent_incidents: if consecutive_failures > 0 {
+                vec![mvp::channel::ChannelOperationRuntimeIncident {
+                    at_ms: 1_700_000_006_000,
+                    kind: mvp::channel::ChannelOperationRuntimeIncidentKind::Failure,
+                    detail: Some("temporary bridge timeout".to_owned()),
+                    owner_pids: Vec::new(),
+                }]
+            } else if running_instances > 1 {
+                vec![mvp::channel::ChannelOperationRuntimeIncident {
+                    at_ms: 1_700_000_007_000,
+                    kind: mvp::channel::ChannelOperationRuntimeIncidentKind::DuplicateReclaim,
+                    detail: Some(
+                        "requested cooperative shutdown for duplicate runtime owners".to_owned(),
+                    ),
+                    owner_pids: vec![6262],
+                }]
+            } else {
+                Vec::new()
+            },
+        });
+
+        (config, inventory.channel_surfaces)
+    }
+
     #[test]
     fn build_doctor_next_steps_guides_fix_and_provider_credentials() {
         let checks = vec![
@@ -5204,6 +5841,84 @@ mod tests {
                 .iter()
                 .any(|step| step == "Re-run diagnostics: loong doctor --config '/tmp/loong.toml'"),
             "doctor should tell the operator how to confirm the repair path: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_runtime_retry_diagnostics() {
+        let checks = vec![DoctorCheck {
+            name: "weixin bridge serve runtime".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "runtime is retrying after transient failures (account=default account_id=default pid=5151 busy=false active_runs=0 consecutive_failures=2 instance_count=1 running_instances=1 stale_instances=0 last_run_activity_at=1700000000000 last_heartbeat_at=1700000005000 last_failure_at=1700000006000 last_recovery_at=- last_error=temporary bridge timeout)".to_owned(),
+        }];
+        let (config, channel_surfaces) = build_weixin_runtime_attention_surfaces(false, 1, 2);
+
+        let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+            &checks,
+            Path::new("/tmp/loong.toml"),
+            &config,
+            &channel_surfaces,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Inspect Weixin bridge connectivity, upstream session health, and external bridge logs, then rerun diagnostics: loong doctor --config '/tmp/loong.toml'"
+            }),
+            "retrying runtime should produce a concrete bridge diagnostics step: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_stale_runtime_recovery() {
+        let checks = vec![DoctorCheck {
+            name: "weixin bridge serve runtime".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "stale runtime detected (account=default account_id=default pid=5151 busy=false active_runs=0 consecutive_failures=0 instance_count=1 running_instances=0 stale_instances=1 last_run_activity_at=1700000000000 last_heartbeat_at=1700000005000 last_failure_at=- last_recovery_at=- last_error=-)".to_owned(),
+        }];
+        let (config, channel_surfaces) = build_weixin_runtime_attention_surfaces(true, 0, 0);
+
+        let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+            &checks,
+            Path::new("/tmp/loong.toml"),
+            &config,
+            &channel_surfaces,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Restart the stale Weixin runtime or external bridge owner: loong weixin-serve --config '/tmp/loong.toml' --stop --account 'default'"
+            }),
+            "stale runtime should produce a restart-oriented recovery step: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_duplicate_runtime_cleanup() {
+        let checks = vec![DoctorCheck {
+            name: "weixin bridge serve runtime".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "multiple runtime instances detected (account=default account_id=default pid=5151 busy=false active_runs=0 consecutive_failures=0 instance_count=2 running_instances=2 stale_instances=0 last_run_activity_at=1700000000000 last_heartbeat_at=1700000005000 last_failure_at=- last_recovery_at=- last_error=-)".to_owned(),
+        }];
+        let (config, channel_surfaces) = build_weixin_runtime_attention_surfaces(false, 2, 0);
+
+        let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+            &checks,
+            Path::new("/tmp/loong.toml"),
+            &config,
+            &channel_surfaces,
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Stop duplicate Weixin runtime instances so only one serve owner remains (last auto reclaim at=1700000007000; last auto cleanup pids=6262; keep pid=5151; cleanup pids=6262; run loong weixin-serve --config '/tmp/loong.toml' --stop-duplicates --account 'default')"
+            }),
+            "duplicate runtime attention should produce a cleanup-oriented recovery step: {next_steps:#?}"
         );
     }
 
@@ -5452,6 +6167,43 @@ mod tests {
                 .as_str()
                 .expect("plugin bridge account summary string"),
             "configured_account=ops (default): ready; configured_account=backup: bridge_url is missing"
+        );
+    }
+
+    #[test]
+    fn doctor_json_checks_include_runtime_attention_metadata() {
+        let checks = vec![DoctorCheck {
+            name: "weixin bridge serve runtime".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "runtime is retrying after transient failures (account=default account_id=default pid=5151 busy=false active_runs=0 consecutive_failures=2 instance_count=1 running_instances=1 stale_instances=0 last_run_activity_at=1700000000000 last_heartbeat_at=1700000005000 last_failure_at=1700000006000 last_recovery_at=- last_error=temporary bridge timeout)".to_owned(),
+        }];
+        let (_config, channel_surfaces) = build_weixin_runtime_attention_surfaces(false, 1, 2);
+        let payload = doctor_checks_json_payload(&checks, &channel_surfaces);
+        let runtime_check = payload.first().expect("runtime check payload");
+
+        assert_eq!(
+            runtime_check["runtime_attention"]["channel_id"]
+                .as_str()
+                .expect("runtime attention channel id"),
+            "weixin"
+        );
+        assert_eq!(
+            runtime_check["runtime_attention"]["reason"]
+                .as_str()
+                .expect("runtime attention reason"),
+            "retrying"
+        );
+        assert_eq!(
+            runtime_check["runtime_attention"]["remediation"]
+                .as_str()
+                .expect("runtime attention remediation"),
+            "inspect_bridge_connectivity"
+        );
+        assert_eq!(
+            runtime_check["runtime_attention"]["recent_incidents"][0]["kind"]
+                .as_str()
+                .expect("runtime attention incident kind"),
+            "failure"
         );
     }
 

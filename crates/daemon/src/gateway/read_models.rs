@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
@@ -302,6 +302,16 @@ pub struct GatewayOperatorControlSurfaceReadModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorRuntimeIncidentReadModel {
+    pub account_id: Option<String>,
+    pub account_label: Option<String>,
+    pub kind: String,
+    pub at_ms: u64,
+    pub detail: Option<String>,
+    pub owner_pids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayOperatorChannelSurfaceReadModel {
     pub channel_id: String,
     pub label: String,
@@ -316,6 +326,17 @@ pub struct GatewayOperatorChannelSurfaceReadModel {
     pub mention_gated_account_count: usize,
     pub default_configured_account_id: Option<String>,
     pub plugin_bridge_account_summary: Option<String>,
+    pub runtime_attention_account_count: usize,
+    pub runtime_attention_reasons: Vec<String>,
+    pub runtime_attention_remediations: Vec<String>,
+    pub retrying_runtime_account_count: usize,
+    pub stale_runtime_account_count: usize,
+    pub duplicate_runtime_account_count: usize,
+    pub preferred_runtime_owner_pids: Vec<u32>,
+    pub duplicate_runtime_cleanup_owner_pids: Vec<u32>,
+    pub last_duplicate_runtime_auto_reclaim_at: Option<u64>,
+    pub last_duplicate_runtime_auto_cleanup_owner_pids: Vec<u32>,
+    pub recent_runtime_incidents: Vec<GatewayOperatorRuntimeIncidentReadModel>,
     pub service_enabled: bool,
     pub service_ready: bool,
 }
@@ -336,6 +357,14 @@ pub struct GatewayOperatorChannelsSummaryReadModel {
     pub enabled_outbound_only_channel_count: usize,
     pub enabled_service_channel_count: usize,
     pub ready_service_channel_count: usize,
+    pub runtime_attention_surface_count: usize,
+    pub retrying_runtime_surface_count: usize,
+    pub stale_runtime_surface_count: usize,
+    pub duplicate_runtime_surface_count: usize,
+    pub runtime_attention_surface_ids: Vec<String>,
+    pub retrying_runtime_surface_ids: Vec<String>,
+    pub stale_runtime_surface_ids: Vec<String>,
+    pub duplicate_runtime_surface_ids: Vec<String>,
     pub surfaces: Vec<GatewayOperatorChannelSurfaceReadModel>,
 }
 
@@ -973,6 +1002,42 @@ fn build_operator_channels_summary_read_model(
         .iter()
         .filter(|surface| surface.service_ready)
         .count();
+    let runtime_attention_surface_count = surfaces
+        .iter()
+        .filter(|surface| surface.runtime_attention_account_count > 0)
+        .count();
+    let retrying_runtime_surface_count = surfaces
+        .iter()
+        .filter(|surface| surface.retrying_runtime_account_count > 0)
+        .count();
+    let stale_runtime_surface_count = surfaces
+        .iter()
+        .filter(|surface| surface.stale_runtime_account_count > 0)
+        .count();
+    let duplicate_runtime_surface_count = surfaces
+        .iter()
+        .filter(|surface| surface.duplicate_runtime_account_count > 0)
+        .count();
+    let runtime_attention_surface_ids = surfaces
+        .iter()
+        .filter(|surface| surface.runtime_attention_account_count > 0)
+        .map(|surface| surface.channel_id.clone())
+        .collect::<Vec<_>>();
+    let retrying_runtime_surface_ids = surfaces
+        .iter()
+        .filter(|surface| surface.retrying_runtime_account_count > 0)
+        .map(|surface| surface.channel_id.clone())
+        .collect::<Vec<_>>();
+    let stale_runtime_surface_ids = surfaces
+        .iter()
+        .filter(|surface| surface.stale_runtime_account_count > 0)
+        .map(|surface| surface.channel_id.clone())
+        .collect::<Vec<_>>();
+    let duplicate_runtime_surface_ids = surfaces
+        .iter()
+        .filter(|surface| surface.duplicate_runtime_account_count > 0)
+        .map(|surface| surface.channel_id.clone())
+        .collect::<Vec<_>>();
 
     GatewayOperatorChannelsSummaryReadModel {
         catalog_channel_count,
@@ -989,6 +1054,14 @@ fn build_operator_channels_summary_read_model(
         enabled_outbound_only_channel_count,
         enabled_service_channel_count,
         ready_service_channel_count,
+        runtime_attention_surface_count,
+        retrying_runtime_surface_count,
+        stale_runtime_surface_count,
+        duplicate_runtime_surface_count,
+        runtime_attention_surface_ids,
+        retrying_runtime_surface_ids,
+        stale_runtime_surface_ids,
+        duplicate_runtime_surface_ids,
         surfaces,
     }
 }
@@ -1067,8 +1140,43 @@ fn build_operator_channel_surface_read_model(
         .count();
     let default_configured_account_id = surface.default_configured_account_id.clone();
     let plugin_bridge_account_summary = channel_surface.plugin_bridge_account_summary.clone();
+    let runtime_attention_account_count = surface
+        .configured_accounts
+        .iter()
+        .filter(|account| channel_account_has_runtime_attention(account))
+        .count();
+    let runtime_attention_reasons = collect_channel_surface_runtime_attention_reasons(surface);
+    let runtime_attention_remediations = runtime_attention_reasons
+        .iter()
+        .map(|reason| runtime_attention_reason_remediation(reason.as_str()).to_owned())
+        .collect::<Vec<_>>();
+    let retrying_runtime_account_count = surface
+        .configured_accounts
+        .iter()
+        .filter(|account| channel_account_has_retrying_runtime(account))
+        .count();
+    let stale_runtime_account_count = surface
+        .configured_accounts
+        .iter()
+        .filter(|account| channel_account_has_stale_runtime(account))
+        .count();
+    let duplicate_runtime_account_count = surface
+        .configured_accounts
+        .iter()
+        .filter(|account| channel_account_has_duplicate_runtime(account))
+        .count();
+    let preferred_runtime_owner_pids =
+        collect_channel_surface_preferred_runtime_owner_pids(surface);
+    let duplicate_runtime_cleanup_owner_pids =
+        collect_channel_surface_duplicate_runtime_cleanup_owner_pids(surface);
+    let last_duplicate_runtime_auto_reclaim_at =
+        collect_channel_surface_last_duplicate_runtime_auto_reclaim_at(surface);
+    let last_duplicate_runtime_auto_cleanup_owner_pids =
+        collect_channel_surface_last_duplicate_runtime_auto_cleanup_owner_pids(surface);
+    let recent_runtime_incidents = collect_channel_surface_recent_runtime_incidents(surface);
     let service_enabled = enabled_service_channel_ids.contains(&channel_id);
-    let service_ready = service_enabled && ready_serve_account_count > 0;
+    let service_ready =
+        service_enabled && ready_serve_account_count > 0 && runtime_attention_account_count == 0;
 
     GatewayOperatorChannelSurfaceReadModel {
         channel_id,
@@ -1084,6 +1192,17 @@ fn build_operator_channel_surface_read_model(
         mention_gated_account_count,
         default_configured_account_id,
         plugin_bridge_account_summary,
+        runtime_attention_account_count,
+        runtime_attention_reasons,
+        runtime_attention_remediations,
+        retrying_runtime_account_count,
+        stale_runtime_account_count,
+        duplicate_runtime_account_count,
+        preferred_runtime_owner_pids,
+        duplicate_runtime_cleanup_owner_pids,
+        last_duplicate_runtime_auto_reclaim_at,
+        last_duplicate_runtime_auto_cleanup_owner_pids,
+        recent_runtime_incidents,
         service_enabled,
         service_ready,
     }
@@ -1212,6 +1331,197 @@ fn channel_account_operation_is_ready(
     operation.health == mvp::channel::ChannelOperationHealth::Ready
 }
 
+fn channel_account_serve_runtime(
+    account: &mvp::channel::ChannelStatusSnapshot,
+) -> Option<&mvp::channel::ChannelOperationRuntime> {
+    account
+        .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)
+        .and_then(|operation| operation.runtime.as_ref())
+}
+
+fn channel_account_has_runtime_attention(account: &mvp::channel::ChannelStatusSnapshot) -> bool {
+    channel_account_has_retrying_runtime(account)
+        || channel_account_has_stale_runtime(account)
+        || channel_account_has_duplicate_runtime(account)
+}
+
+fn collect_channel_surface_runtime_attention_reasons(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+
+    if surface
+        .configured_accounts
+        .iter()
+        .any(channel_account_has_retrying_runtime)
+    {
+        reasons.push("retrying".to_owned());
+    }
+    if surface
+        .configured_accounts
+        .iter()
+        .any(channel_account_has_stale_runtime)
+    {
+        reasons.push("stale".to_owned());
+    }
+    if surface
+        .configured_accounts
+        .iter()
+        .any(channel_account_has_duplicate_runtime)
+    {
+        reasons.push("duplicate_runtime_instances".to_owned());
+    }
+
+    reasons
+}
+
+fn runtime_attention_reason_remediation(reason: &str) -> &'static str {
+    match reason {
+        "retrying" => "inspect_bridge_connectivity",
+        "stale" => "restart_stale_runtime",
+        "duplicate_runtime_instances" => "stop_duplicate_runtime_instances",
+        _ => "inspect_runtime_attention",
+    }
+}
+
+fn channel_account_has_retrying_runtime(account: &mvp::channel::ChannelStatusSnapshot) -> bool {
+    channel_account_serve_runtime(account)
+        .map(|runtime| runtime.running && runtime.consecutive_failures > 0)
+        .unwrap_or(false)
+}
+
+fn channel_account_has_stale_runtime(account: &mvp::channel::ChannelStatusSnapshot) -> bool {
+    channel_account_serve_runtime(account)
+        .map(|runtime| runtime.stale)
+        .unwrap_or(false)
+}
+
+fn channel_account_has_duplicate_runtime(account: &mvp::channel::ChannelStatusSnapshot) -> bool {
+    channel_account_serve_runtime(account)
+        .map(|runtime| runtime.running_instances > 1)
+        .unwrap_or(false)
+}
+
+fn collect_channel_surface_preferred_runtime_owner_pids(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<u32> {
+    let mut owner_pids = BTreeSet::new();
+
+    for account in &surface.configured_accounts {
+        let Some(runtime) = channel_account_serve_runtime(account) else {
+            continue;
+        };
+        if runtime.duplicate_owner_pids.is_empty() {
+            continue;
+        }
+        let Some(pid) = runtime.pid else {
+            continue;
+        };
+        owner_pids.insert(pid);
+    }
+
+    owner_pids.into_iter().collect()
+}
+
+fn collect_channel_surface_duplicate_runtime_cleanup_owner_pids(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<u32> {
+    let mut owner_pids = BTreeSet::new();
+
+    for account in &surface.configured_accounts {
+        let Some(runtime) = channel_account_serve_runtime(account) else {
+            continue;
+        };
+        if runtime.duplicate_owner_pids.is_empty() {
+            continue;
+        }
+        let preferred_pid = runtime.pid;
+        for owner_pid in &runtime.duplicate_owner_pids {
+            if Some(*owner_pid) == preferred_pid {
+                continue;
+            }
+            owner_pids.insert(*owner_pid);
+        }
+    }
+
+    owner_pids.into_iter().collect()
+}
+
+fn collect_channel_surface_last_duplicate_runtime_auto_reclaim_at(
+    surface: &mvp::channel::ChannelSurface,
+) -> Option<u64> {
+    surface
+        .configured_accounts
+        .iter()
+        .filter_map(channel_account_serve_runtime)
+        .filter_map(|runtime| runtime.last_duplicate_reclaim_at)
+        .max()
+}
+
+fn collect_channel_surface_last_duplicate_runtime_auto_cleanup_owner_pids(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<u32> {
+    let latest_reclaim_at = collect_channel_surface_last_duplicate_runtime_auto_reclaim_at(surface);
+    let Some(latest_reclaim_at) = latest_reclaim_at else {
+        return Vec::new();
+    };
+
+    let mut owner_pids = BTreeSet::new();
+    for runtime in surface
+        .configured_accounts
+        .iter()
+        .filter_map(channel_account_serve_runtime)
+        .filter(|runtime| runtime.last_duplicate_reclaim_at == Some(latest_reclaim_at))
+    {
+        for owner_pid in &runtime.last_duplicate_reclaim_cleanup_owner_pids {
+            owner_pids.insert(*owner_pid);
+        }
+    }
+
+    owner_pids.into_iter().collect()
+}
+
+fn collect_channel_surface_recent_runtime_incidents(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<GatewayOperatorRuntimeIncidentReadModel> {
+    let mut incidents = surface
+        .configured_accounts
+        .iter()
+        .filter_map(|account| {
+            let runtime = channel_account_serve_runtime(account)?;
+            Some(
+                runtime
+                    .recent_incidents
+                    .iter()
+                    .map(|incident| GatewayOperatorRuntimeIncidentReadModel {
+                        account_id: runtime.account_id.clone(),
+                        account_label: runtime.account_label.clone(),
+                        kind: match incident.kind {
+                            mvp::channel::ChannelOperationRuntimeIncidentKind::Failure => {
+                                "failure".to_owned()
+                            }
+                            mvp::channel::ChannelOperationRuntimeIncidentKind::Recovery => {
+                                "recovery".to_owned()
+                            }
+                            mvp::channel::ChannelOperationRuntimeIncidentKind::DuplicateReclaim => {
+                                "duplicate_reclaim".to_owned()
+                            }
+                        },
+                        at_ms: incident.at_ms,
+                        detail: incident.detail.clone(),
+                        owner_pids: incident.owner_pids.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+
+    incidents.sort_by(|left, right| right.at_ms.cmp(&left.at_ms));
+    incidents.truncate(5);
+    incidents
+}
+
 fn gateway_owner_base_url(owner_status: &GatewayOwnerStatus) -> Option<String> {
     let bind_address = owner_status.bind_address.as_deref()?;
     let port = owner_status.port?;
@@ -1285,6 +1595,10 @@ mod tests {
         assert_eq!(operator_surface.implementation_status, "plugin_backed");
         assert_eq!(operator_surface.conversation_gated_account_count, 0);
         assert_eq!(operator_surface.sender_gated_account_count, 0);
+        assert_eq!(operator_surface.runtime_attention_account_count, 0);
+        assert!(operator_surface.runtime_attention_reasons.is_empty());
+        assert!(operator_surface.runtime_attention_remediations.is_empty());
+        assert_eq!(operator_surface.retrying_runtime_account_count, 0);
         assert_eq!(
             operator_surface.plugin_bridge_account_summary.as_deref(),
             Some(
@@ -1318,7 +1632,277 @@ mod tests {
         assert_eq!(operator_surface.implementation_status, "runtime_backed");
         assert_eq!(operator_surface.conversation_gated_account_count, 1);
         assert_eq!(operator_surface.sender_gated_account_count, 0);
+        assert_eq!(operator_surface.runtime_attention_account_count, 0);
+        assert!(operator_surface.runtime_attention_reasons.is_empty());
+        assert!(operator_surface.runtime_attention_remediations.is_empty());
         assert_eq!(operator_surface.plugin_bridge_account_summary, None);
+    }
+
+    #[test]
+    fn operator_channel_surface_read_model_counts_retrying_runtime_attention() {
+        let config = mvp::config::LoongConfig::default();
+        let mut inventory = mvp::channel::channel_inventory(&config);
+        let surface = inventory
+            .channel_surfaces
+            .iter_mut()
+            .find(|surface| surface.catalog.id == "weixin")
+            .expect("weixin surface");
+        let account = surface
+            .configured_accounts
+            .iter_mut()
+            .find(|account| account.configured_account_id == "default")
+            .expect("default weixin account");
+        let serve = account
+            .operations
+            .iter_mut()
+            .find(|operation| operation.id == "serve")
+            .expect("weixin serve operation");
+        serve.runtime = Some(mvp::channel::ChannelOperationRuntime {
+            running: true,
+            stale: false,
+            busy: false,
+            active_runs: 0,
+            consecutive_failures: 2,
+            last_run_activity_at: Some(1_700_000_000_000),
+            last_heartbeat_at: Some(1_700_000_005_000),
+            last_failure_at: Some(1_700_000_006_000),
+            last_recovery_at: None,
+            last_error: Some("temporary bridge timeout".to_owned()),
+            last_duplicate_reclaim_at: None,
+            pid: Some(5151),
+            account_id: Some("default".to_owned()),
+            account_label: Some("default".to_owned()),
+            instance_count: 1,
+            running_instances: 1,
+            stale_instances: 0,
+            duplicate_owner_pids: Vec::new(),
+            last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+            recent_incidents: Vec::new(),
+        });
+
+        let read_model = build_channel_surface_read_model(surface.clone());
+        let operator_surface = build_operator_channel_surface_read_model(
+            &read_model,
+            &inventory.channel_access_policies,
+            &["weixin".to_owned()],
+        );
+
+        assert_eq!(operator_surface.runtime_attention_account_count, 1);
+        assert_eq!(
+            operator_surface.runtime_attention_reasons,
+            vec!["retrying".to_owned()]
+        );
+        assert_eq!(
+            operator_surface.runtime_attention_remediations,
+            vec!["inspect_bridge_connectivity".to_owned()]
+        );
+        assert_eq!(operator_surface.retrying_runtime_account_count, 1);
+        assert_eq!(operator_surface.stale_runtime_account_count, 0);
+        assert_eq!(operator_surface.duplicate_runtime_account_count, 0);
+        assert!(operator_surface.preferred_runtime_owner_pids.is_empty());
+        assert!(
+            operator_surface
+                .duplicate_runtime_cleanup_owner_pids
+                .is_empty()
+        );
+        assert!(
+            operator_surface
+                .last_duplicate_runtime_auto_reclaim_at
+                .is_none()
+        );
+        assert!(
+            operator_surface
+                .last_duplicate_runtime_auto_cleanup_owner_pids
+                .is_empty()
+        );
+        assert!(operator_surface.service_enabled);
+        assert!(!operator_surface.service_ready);
+    }
+
+    #[test]
+    fn operator_channel_surface_read_model_collects_duplicate_runtime_owner_pids() {
+        let config = mvp::config::LoongConfig::default();
+        let mut inventory = mvp::channel::channel_inventory(&config);
+        let surface = inventory
+            .channel_surfaces
+            .iter_mut()
+            .find(|surface| surface.catalog.id == "weixin")
+            .expect("weixin surface");
+        let account = surface
+            .configured_accounts
+            .iter_mut()
+            .find(|account| account.configured_account_id == "default")
+            .expect("default weixin account");
+        let serve = account
+            .operations
+            .iter_mut()
+            .find(|operation| operation.id == "serve")
+            .expect("weixin serve operation");
+        serve.runtime = Some(mvp::channel::ChannelOperationRuntime {
+            running: true,
+            stale: false,
+            busy: false,
+            active_runs: 0,
+            consecutive_failures: 0,
+            last_run_activity_at: Some(1_700_000_000_000),
+            last_heartbeat_at: Some(1_700_000_005_000),
+            last_failure_at: None,
+            last_recovery_at: None,
+            last_error: None,
+            last_duplicate_reclaim_at: Some(1_700_000_007_000),
+            pid: Some(6262),
+            account_id: Some("default".to_owned()),
+            account_label: Some("default".to_owned()),
+            instance_count: 2,
+            running_instances: 2,
+            stale_instances: 0,
+            duplicate_owner_pids: vec![5151, 6262],
+            last_duplicate_reclaim_cleanup_owner_pids: vec![5151],
+            recent_incidents: vec![mvp::channel::ChannelOperationRuntimeIncident {
+                at_ms: 1_700_000_007_000,
+                kind: mvp::channel::ChannelOperationRuntimeIncidentKind::DuplicateReclaim,
+                detail: Some(
+                    "requested cooperative shutdown for duplicate runtime owners".to_owned(),
+                ),
+                owner_pids: vec![5151],
+            }],
+        });
+
+        let read_model = build_channel_surface_read_model(surface.clone());
+        let operator_surface = build_operator_channel_surface_read_model(
+            &read_model,
+            &inventory.channel_access_policies,
+            &["weixin".to_owned()],
+        );
+
+        assert_eq!(operator_surface.runtime_attention_account_count, 1);
+        assert_eq!(
+            operator_surface.runtime_attention_reasons,
+            vec!["duplicate_runtime_instances".to_owned()]
+        );
+        assert_eq!(
+            operator_surface.runtime_attention_remediations,
+            vec!["stop_duplicate_runtime_instances".to_owned()]
+        );
+        assert_eq!(operator_surface.duplicate_runtime_account_count, 1);
+        assert_eq!(operator_surface.preferred_runtime_owner_pids, vec![6262]);
+        assert_eq!(
+            operator_surface.duplicate_runtime_cleanup_owner_pids,
+            vec![5151]
+        );
+        assert_eq!(
+            operator_surface.last_duplicate_runtime_auto_reclaim_at,
+            Some(1_700_000_007_000)
+        );
+        assert_eq!(
+            operator_surface.last_duplicate_runtime_auto_cleanup_owner_pids,
+            vec![5151]
+        );
+        assert_eq!(operator_surface.recent_runtime_incidents.len(), 1);
+        assert_eq!(
+            operator_surface.recent_runtime_incidents[0].kind,
+            "duplicate_reclaim"
+        );
+        assert_eq!(
+            operator_surface.recent_runtime_incidents[0].owner_pids,
+            vec![5151]
+        );
+        assert!(!operator_surface.service_ready);
+    }
+
+    #[test]
+    fn operator_channels_summary_read_model_collects_runtime_attention_surface_ids() {
+        let config = mvp::config::LoongConfig::default();
+        let mut inventory = mvp::channel::channel_inventory(&config);
+        let surface = inventory
+            .channel_surfaces
+            .iter_mut()
+            .find(|surface| surface.catalog.id == "weixin")
+            .expect("weixin surface");
+        let account = surface
+            .configured_accounts
+            .iter_mut()
+            .find(|account| account.configured_account_id == "default")
+            .expect("default weixin account");
+        let serve = account
+            .operations
+            .iter_mut()
+            .find(|operation| operation.id == "serve")
+            .expect("weixin serve operation");
+        serve.runtime = Some(mvp::channel::ChannelOperationRuntime {
+            running: true,
+            stale: false,
+            busy: false,
+            active_runs: 0,
+            consecutive_failures: 2,
+            last_run_activity_at: Some(1_700_000_000_000),
+            last_heartbeat_at: Some(1_700_000_005_000),
+            last_failure_at: Some(1_700_000_006_000),
+            last_recovery_at: None,
+            last_error: Some("temporary bridge timeout".to_owned()),
+            last_duplicate_reclaim_at: None,
+            pid: Some(5151),
+            account_id: Some("default".to_owned()),
+            account_label: Some("default".to_owned()),
+            instance_count: 1,
+            running_instances: 1,
+            stale_instances: 0,
+            duplicate_owner_pids: Vec::new(),
+            last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+            recent_incidents: Vec::new(),
+        });
+
+        let channel_inventory = build_channel_inventory_read_model("/tmp/loong.toml", &inventory);
+        let runtime_snapshot = GatewayRuntimeSnapshotReadModel {
+            config: "/tmp/loong.toml".to_owned(),
+            schema: GatewayRuntimeSnapshotSchema {
+                version: 1,
+                surface: "runtime_snapshot",
+                purpose: "test",
+            },
+            provider: serde_json::json!({}),
+            context_engine: serde_json::json!({}),
+            memory_system: serde_json::json!({}),
+            acp: serde_json::json!({}),
+            channels: GatewayRuntimeSnapshotChannelsReadModel {
+                enabled_channel_ids: vec!["weixin".to_owned()],
+                enabled_runtime_backed_channel_ids: Vec::new(),
+                enabled_service_channel_ids: vec!["weixin".to_owned()],
+                enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
+                enabled_outbound_only_channel_ids: Vec::new(),
+                inventory: channel_inventory.clone(),
+            },
+            tool_runtime: serde_json::json!({}),
+            tools: GatewayRuntimeSnapshotToolsReadModel {
+                visible_tool_count: 0,
+                visible_tool_names: Vec::new(),
+                capability_snapshot_sha256: "abc123".to_owned(),
+                capability_snapshot: "{}".to_owned(),
+                tool_calling: GatewayToolCallingReadModel {
+                    availability: "ready".to_owned(),
+                    structured_tool_schema_enabled: true,
+                    effective_tool_schema_mode: "enabled".to_owned(),
+                    active_model: "gpt-4.1-mini".to_owned(),
+                    reason: "test".to_owned(),
+                },
+            },
+            runtime_plugins: serde_json::json!({}),
+            external_skills: serde_json::json!({}),
+        };
+
+        let summary =
+            build_operator_channels_summary_read_model(&channel_inventory, &runtime_snapshot);
+
+        assert_eq!(
+            summary.runtime_attention_surface_ids,
+            vec!["weixin".to_owned()]
+        );
+        assert_eq!(
+            summary.retrying_runtime_surface_ids,
+            vec!["weixin".to_owned()]
+        );
+        assert!(summary.stale_runtime_surface_ids.is_empty());
+        assert!(summary.duplicate_runtime_surface_ids.is_empty());
     }
 
     #[test]

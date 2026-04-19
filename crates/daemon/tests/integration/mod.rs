@@ -1295,6 +1295,12 @@ fn render_channel_surfaces_text_reports_plugin_backed_stable_targets() {
 
     assert!(
         rendered.contains(
+            "plugin_bridge_contract required_setup_surface=channel runtime_owner=external_plugin supported_operations=\"send,serve\""
+        ),
+        "rendered channel surfaces should expose plugin bridge contract ownership: {rendered}"
+    );
+    assert!(
+        rendered.contains(
             "stable_targets=\"weixin:<account>:contact:<id>[conversation]:direct contact conversation,weixin:<account>:room:<id>[conversation]:group room conversation\""
         ),
         "rendered channel surfaces should expose weixin stable target templates: {rendered}"
@@ -1822,6 +1828,17 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
             .any(|entry| {
                 entry.get("id").and_then(serde_json::Value::as_str) == Some("weixin")
                     && entry
+                        .get("operations")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|operations| {
+                            operations
+                                .iter()
+                                .filter_map(|operation| operation.get("availability"))
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["managed_bridge", "managed_bridge"])
+                    && entry
                         .get("plugin_bridge_contract")
                         .and_then(|contract| contract.get("manifest_channel_id"))
                         .and_then(serde_json::Value::as_str)
@@ -2064,6 +2081,103 @@ fn build_channels_cli_json_payload_includes_managed_plugin_bridge_guidance_field
             .as_str()
             .expect("setup remediation should be string"),
         "Run the ClawBot setup flow before enabling this bridge."
+    );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_runtime_retry_metadata() {
+    let config = mvp::config::LoongConfig::default();
+    let mut inventory = mvp::channel::channel_inventory(&config);
+    let weixin = inventory
+        .channels
+        .iter_mut()
+        .find(|snapshot| snapshot.id == "weixin")
+        .expect("weixin snapshot");
+    let serve = weixin
+        .operations
+        .iter_mut()
+        .find(|operation| operation.id == "serve")
+        .expect("weixin serve operation");
+
+    serve.detail = "managed bridge runtime ready via plugin weixin-managed-runtime; runtime retrying after transient failures".to_owned();
+    serve.issues = vec![
+        "runtime retrying after transient failures; consecutive_failures=2; last_error=temporary bridge timeout".to_owned(),
+    ];
+    serve.runtime = Some(mvp::channel::ChannelOperationRuntime {
+        running: true,
+        stale: false,
+        busy: false,
+        active_runs: 0,
+        consecutive_failures: 2,
+        last_run_activity_at: Some(1_700_000_000_000),
+        last_heartbeat_at: Some(1_700_000_005_000),
+        last_failure_at: Some(1_700_000_006_000),
+        last_recovery_at: None,
+        last_error: Some("temporary bridge timeout".to_owned()),
+        last_duplicate_reclaim_at: None,
+        pid: Some(5151),
+        account_id: Some("default".to_owned()),
+        account_label: Some("default".to_owned()),
+        instance_count: 1,
+        running_instances: 1,
+        stale_instances: 0,
+        duplicate_owner_pids: Vec::new(),
+        last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+        recent_incidents: Vec::new(),
+    });
+
+    let payload = build_channels_cli_json_payload("/tmp/loong.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert!(
+        encoded["channels"]
+            .as_array()
+            .expect("channels array")
+            .iter()
+            .any(|snapshot| {
+                snapshot.get("id").and_then(serde_json::Value::as_str) == Some("weixin")
+                    && snapshot
+                        .get("operations")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|operations| {
+                            operations.iter().any(|operation| {
+                                operation.get("id").and_then(serde_json::Value::as_str)
+                                    == Some("serve")
+                                    && operation
+                                        .get("detail")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(|detail| {
+                                            detail.contains(
+                                                "runtime retrying after transient failures",
+                                            )
+                                        })
+                                        == Some(true)
+                                    && operation
+                                        .get("issues")
+                                        .and_then(serde_json::Value::as_array)
+                                        .map(|issues| {
+                                            issues.iter().any(|issue| {
+                                                issue.as_str().map(|issue| {
+                                                    issue.contains("consecutive_failures=2")
+                                                }) == Some(true)
+                                            })
+                                        })
+                                        == Some(true)
+                                    && operation
+                                        .get("runtime")
+                                        .and_then(|runtime| runtime.get("consecutive_failures"))
+                                        .and_then(serde_json::Value::as_u64)
+                                        == Some(2)
+                                    && operation
+                                        .get("runtime")
+                                        .and_then(|runtime| runtime.get("last_error"))
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some("temporary bridge timeout")
+                            })
+                        })
+                        == Some(true)
+            }),
+        "channels json should preserve runtime retry metadata: {encoded:#?}"
     );
 }
 

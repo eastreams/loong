@@ -4,10 +4,11 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use tokio::sync::Notify;
+use tokio::time::sleep;
 
 use super::super::types::ChannelPlatform;
 use super::state;
@@ -37,6 +38,11 @@ pub struct ChannelServeStopHandle {
     requested: Arc<AtomicBool>,
     stop: Arc<Notify>,
 }
+
+#[cfg(test)]
+const CHANNEL_RUNTIME_DUPLICATE_RECLAIM_POLL_MS: u64 = 25;
+#[cfg(not(test))]
+const CHANNEL_RUNTIME_DUPLICATE_RECLAIM_POLL_MS: u64 = 500;
 
 impl ChannelServeStopHandle {
     pub fn new() -> Self {
@@ -185,6 +191,144 @@ where
     merge_runtime_result(result, shutdown_result)
 }
 
+async fn with_channel_serve_runtime_stop_tasks<F, Fut>(
+    runtime_dir: &std::path::Path,
+    spec: ChannelServeRuntimeSpec<'_>,
+    runtime: Arc<ChannelOperationRuntimeTracker>,
+    stop: ChannelServeStopHandle,
+    run: F,
+) -> CliResult<()>
+where
+    F: FnOnce(Arc<ChannelOperationRuntimeTracker>, ChannelServeStopHandle) -> Fut,
+    Fut: Future<Output = CliResult<()>>,
+{
+    let duplicate_reclaim_platform = spec.platform;
+    let duplicate_reclaim_operation_id = spec.operation_id;
+    let duplicate_reclaim_account_id = spec.account_id.to_owned();
+    let runtime_for_stop_request = runtime.clone();
+    let stop_for_stop_request = stop.clone();
+    let stop_request_task = tokio::spawn(async move {
+        let wait_result = runtime_for_stop_request.wait_for_stop_request().await;
+        if wait_result.is_ok() {
+            stop_for_stop_request.request_stop();
+        }
+    });
+    let runtime_for_duplicate_reclaim = runtime.clone();
+    let stop_for_duplicate_reclaim = stop.clone();
+    let duplicate_reclaim_runtime_dir = runtime_dir.to_path_buf();
+    let duplicate_reclaim_task = tokio::spawn(async move {
+        loop {
+            if stop_for_duplicate_reclaim.is_requested() {
+                break;
+            }
+            sleep(Duration::from_millis(
+                CHANNEL_RUNTIME_DUPLICATE_RECLAIM_POLL_MS,
+            ))
+            .await;
+            if stop_for_duplicate_reclaim.is_requested() {
+                break;
+            }
+            let reclaim_result = maybe_reclaim_duplicate_runtime_owners_for_preferred_owner(
+                duplicate_reclaim_runtime_dir.as_path(),
+                duplicate_reclaim_platform,
+                duplicate_reclaim_operation_id,
+                duplicate_reclaim_account_id.as_str(),
+                runtime_for_duplicate_reclaim.pid(),
+            );
+            match reclaim_result {
+                Ok(Some(result)) => {
+                    let record_result = runtime_for_duplicate_reclaim
+                        .record_duplicate_reclaim(result.targeted_owner_pids.as_slice())
+                        .await;
+                    if let Err(error) = record_result {
+                        tracing::warn!(
+                            target: "loong.channel.runtime",
+                            platform = duplicate_reclaim_platform.as_str(),
+                            operation_id = duplicate_reclaim_operation_id,
+                            account_id = duplicate_reclaim_account_id.as_str(),
+                            "duplicate runtime auto-reclaim persisted cleanup request poorly: {error}"
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        target: "loong.channel.runtime",
+                        platform = duplicate_reclaim_platform.as_str(),
+                        operation_id = duplicate_reclaim_operation_id,
+                        account_id = duplicate_reclaim_account_id.as_str(),
+                        "duplicate runtime auto-reclaim failed: {error}"
+                    );
+                }
+            }
+        }
+    });
+    let result = run(runtime, stop).await;
+    stop_request_task.abort();
+    duplicate_reclaim_task.abort();
+    result
+}
+
+fn maybe_reclaim_duplicate_runtime_owners_for_preferred_owner(
+    runtime_dir: &std::path::Path,
+    platform: ChannelPlatform,
+    operation_id: &'static str,
+    account_id: &str,
+    current_pid: Option<u32>,
+) -> CliResult<Option<state::ChannelOperationDuplicateCleanupResult>> {
+    let Some(current_pid) = current_pid else {
+        return Ok(None);
+    };
+    let now = channel_runtime_now_ms();
+    let Some(runtime) = state::load_channel_operation_runtime_for_account_from_dir(
+        runtime_dir,
+        platform,
+        operation_id,
+        account_id,
+        now,
+    ) else {
+        return Ok(None);
+    };
+    if runtime.running_instances <= 1 || runtime.pid != Some(current_pid) {
+        return Ok(None);
+    }
+
+    let result = state::request_channel_operation_duplicate_cleanup_in_dir(
+        runtime_dir,
+        platform,
+        operation_id,
+        Some(account_id),
+    )?;
+    if matches!(
+        result.outcome,
+        state::ChannelOperationDuplicateCleanupOutcome::Requested
+    ) {
+        tracing::info!(
+            target: "loong.channel.runtime",
+            platform = platform.as_str(),
+            operation_id = operation_id,
+            account_id = account_id,
+            preferred_owner_pid = result.preferred_owner_pid.unwrap_or_default(),
+            cleanup_owner_pids = %render_runtime_owner_pid_list(result.targeted_owner_pids.as_slice()),
+            "duplicate runtime auto-reclaim requested cooperative shutdown for non-preferred owners"
+        );
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
+fn render_runtime_owner_pid_list(owner_pids: &[u32]) -> String {
+    if owner_pids.is_empty() {
+        return "-".to_owned();
+    }
+
+    owner_pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Variant of `with_channel_serve_runtime` that forwards a cooperative stop
 /// handle into the serve loop.
 #[cfg(any(
@@ -206,7 +350,17 @@ where
     F: FnOnce(Arc<ChannelOperationRuntimeTracker>, ChannelServeStopHandle) -> Fut,
     Fut: Future<Output = CliResult<()>>,
 {
-    with_channel_serve_runtime(spec, move |runtime| run(runtime, stop)).await
+    with_channel_serve_runtime(spec, move |runtime| async move {
+        with_channel_serve_runtime_stop_tasks(
+            state::default_channel_runtime_state_dir().as_path(),
+            spec,
+            runtime,
+            stop,
+            run,
+        )
+        .await
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -229,8 +383,8 @@ where
     F: FnOnce(Arc<ChannelOperationRuntimeTracker>, ChannelServeStopHandle) -> Fut,
     Fut: Future<Output = CliResult<()>>,
 {
-    with_channel_serve_runtime_in_dir(runtime_dir, process_id, spec, move |runtime| {
-        run(runtime, stop)
+    with_channel_serve_runtime_in_dir(runtime_dir, process_id, spec, move |runtime| async move {
+        with_channel_serve_runtime_stop_tasks(runtime_dir, spec, runtime, stop, run).await
     })
     .await
 }
@@ -284,7 +438,27 @@ fn merge_runtime_result<T>(result: CliResult<T>, shutdown_result: CliResult<()>)
 
 #[cfg(test)]
 mod tests {
-    use super::merge_runtime_result;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use super::{
+        ChannelServeRuntimeSpec, channel_runtime_now_ms,
+        maybe_reclaim_duplicate_runtime_owners_for_preferred_owner, merge_runtime_result,
+    };
+    use crate::channel::CHANNEL_OPERATION_SERVE_ID;
+    use crate::channel::ChannelPlatform;
+    use crate::channel::runtime::state;
+
+    fn temp_runtime_dir(suffix: &str) -> PathBuf {
+        let unique = format!(
+            "loong-channel-serve-{suffix}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        );
+        std::env::temp_dir().join(unique)
+    }
 
     #[test]
     fn merge_runtime_result_returns_value_when_both_steps_succeed() {
@@ -317,5 +491,71 @@ mod tests {
 
         assert!(error.contains("run failed"));
         assert!(error.contains("shutdown failed"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_auto_reclaim_requests_cleanup_only_for_preferred_owner() {
+        let runtime_dir = temp_runtime_dir("duplicate-auto-reclaim");
+        let spec = ChannelServeRuntimeSpec {
+            platform: ChannelPlatform::Weixin,
+            operation_id: CHANNEL_OPERATION_SERVE_ID,
+            account_id: "default",
+            account_label: "default",
+        };
+        let first = state::start_channel_operation_runtime_tracker_for_test(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            spec.account_label,
+            5151,
+        )
+        .await
+        .expect("start first runtime");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let second = state::start_channel_operation_runtime_tracker_for_test(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            spec.account_label,
+            6262,
+        )
+        .await
+        .expect("start second runtime");
+
+        let reclaim_result = maybe_reclaim_duplicate_runtime_owners_for_preferred_owner(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            second.pid(),
+        )
+        .expect("preferred runtime can trigger duplicate cleanup");
+        assert!(reclaim_result.is_some());
+        tokio::time::timeout(Duration::from_millis(200), first.wait_for_stop_request())
+            .await
+            .expect("first stop request should become visible")
+            .expect("wait for first stop request");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), second.wait_for_stop_request())
+                .await
+                .is_err(),
+            "preferred runtime owner should not receive duplicate cleanup stop request"
+        );
+        let runtime = state::load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            channel_runtime_now_ms(),
+        )
+        .expect("load preferred runtime state");
+        assert_eq!(runtime.pid, Some(6262));
+        assert!(runtime.last_duplicate_reclaim_cleanup_owner_pids.is_empty());
+        assert!(runtime.last_duplicate_reclaim_at.is_none());
+
+        first.shutdown().await.expect("shutdown first runtime");
+        second.shutdown().await.expect("shutdown second runtime");
     }
 }
