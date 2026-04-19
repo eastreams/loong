@@ -6124,10 +6124,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             qqbot_serve_checks,
-            vec![(
-                "qqbot bridge serve contract",
-                ChannelDoctorCheckTrigger::PluginBridgeHealth,
-            )]
+            vec![
+                (
+                    "qqbot bridge serve contract",
+                    ChannelDoctorCheckTrigger::PluginBridgeHealth,
+                ),
+                (
+                    "qqbot bridge serve runtime",
+                    ChannelDoctorCheckTrigger::ReadyRuntime,
+                ),
+            ]
         );
 
         let onebot_serve =
@@ -6139,10 +6145,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             onebot_serve_checks,
-            vec![(
-                "onebot bridge serve contract",
-                ChannelDoctorCheckTrigger::PluginBridgeHealth,
-            )]
+            vec![
+                (
+                    "onebot bridge serve contract",
+                    ChannelDoctorCheckTrigger::PluginBridgeHealth,
+                ),
+                (
+                    "onebot bridge serve runtime",
+                    ChannelDoctorCheckTrigger::ReadyRuntime,
+                ),
+            ]
         );
     }
 

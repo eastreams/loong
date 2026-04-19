@@ -60,8 +60,8 @@ What success looks like:
 | --- | --- | --- |
 | managed bridge contract check | `loong doctor` | current readiness and remediation surface |
 | inventory + discovery inspection | `loong channels` | current operator inventory surface |
-| native send | `qqbot-send` | planned native command; not implemented in Loong today |
-| native serve | `qqbot-serve` | planned native command; runtime stays in the external bridge today |
+| bridge-backed send | `qqbot-send` | executes through the selected managed bridge runtime; target contract stays `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, or `qqbot:<account>:channel:<id>` |
+| bridge-backed serve | `qqbot-serve` | starts the selected managed bridge reply loop; upstream session ownership still stays in the external bridge |
 
 ## Required Fields For Bridge Send Contract
 
@@ -95,6 +95,7 @@ QQ Bot openids are scoped to the selected account. Keep account ids stable so ro
 ## Managed Bridge Discovery Notes
 
 - Compatible managed bridges can advertise required config keys and setup docs URLs that Loong then surfaces through `doctor`.
+- Managed bridge execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`.
 - If discovery finds several compatible bridges, `managed_bridge_plugin_id` is the correct tie-breaker.
 - If bridge metadata is incomplete, Loong keeps the surface visible and reports the missing fields instead of flattening everything into one generic placeholder.
 
@@ -105,6 +106,12 @@ This surface does **not** join `multi-channel-serve` or `gateway run` today. The
 ## Operator Notes
 
 - Keep `allowed_peer_ids` explicit and narrow.
+- Loong validates `allowed_peer_ids` locally before forwarding a managed bridge send, so a mistyped openid is rejected before it reaches the external bridge.
+- `qqbot-serve` retries transient managed bridge runtime failures with bounded backoff; repeated failures still bubble up as a hard error for operator inspection.
+- `qqbot-serve --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
+- When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
+- `qqbot-serve --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
+- While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
 - Treat QQ Bot as a multi-account surface from the start if you expect separate direct, group, or guild identities.
 - Prefer one selected managed bridge per environment rather than leaving ambiguity unresolved.
 

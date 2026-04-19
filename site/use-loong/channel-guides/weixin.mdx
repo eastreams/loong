@@ -60,8 +60,8 @@ What success looks like:
 | --- | --- | --- |
 | managed bridge contract check | `loong doctor` | current readiness and remediation surface |
 | inventory + discovery inspection | `loong channels` | current operator inventory surface |
-| native send | `weixin-send` | planned native command; not implemented in Loong today |
-| native serve | `weixin-serve` | planned native command; runtime stays in the external bridge today |
+| bridge-backed send | `weixin-send` | executes through the selected managed bridge runtime; target contract stays `weixin:<account>:contact:<id>` or `weixin:<account>:room:<id>` |
+| bridge-backed serve | `weixin-serve` | starts the selected managed bridge reply loop; upstream session ownership still stays in the external bridge |
 
 ## Required Fields For Bridge Send Contract
 
@@ -92,6 +92,7 @@ Use these templates when you need one bridge implementation and later tooling to
 ## Managed Bridge Discovery Notes
 
 - Loong scans the configured managed install root for compatible bridge manifests.
+- Managed bridge execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`.
 - If exactly one compatible bridge is found, `loong doctor` and `loong channels` can surface it as the selected plugin.
 - If several compatible bridges are found, set `managed_bridge_plugin_id` to make the selection explicit.
 - If discovery is incomplete, Loong keeps the bridge-owned surface visible and reports the missing fields instead of pretending the channel is ready.
@@ -110,6 +111,12 @@ Use Loong here for:
 ## Operator Notes
 
 - Keep `allowed_contact_ids` tight. Treat it as the trust boundary, not a convenience list.
+- Loong validates `allowed_contact_ids` locally before forwarding a contact send through the managed bridge runtime.
+- `weixin-serve` retries transient managed bridge runtime failures with bounded backoff; repeated failures still surface as a hard error so the bridge can be inspected.
+- `weixin-serve --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
+- When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
+- `weixin-serve --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
+- While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
 - Prefer one explicit managed bridge per environment. If discovery is ambiguous, fix the ambiguity instead of relying on accidental selection.
 - If you need multiple bridge identities, move to `default_account` plus `accounts.<id>` before inventing ad-hoc routes.
 
