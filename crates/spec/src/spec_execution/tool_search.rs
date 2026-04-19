@@ -1,17 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel::{
-    IntegrationCatalog, PluginActivationCandidate, PluginActivationInventoryEntry,
-    PluginActivationPlan, PluginBridgeKind, PluginCompatibility, PluginCompatibilityMode,
-    PluginCompatibilityShim, PluginContractDialect, PluginDiagnosticFinding, PluginScanReport,
-    PluginSetupReadinessContext, PluginSlotClaim, PluginTranslationReport, PluginTrustTier,
+    AuditEventKind, IntegrationCatalog, LoongKernel, PluginActivationCandidate,
+    PluginActivationInventoryEntry, PluginActivationPlan, PluginBridgeKind, PluginCompatibility,
+    PluginCompatibilityMode, PluginCompatibilityShim, PluginContractDialect,
+    PluginDiagnosticFinding, PluginScanReport, PluginSetupReadinessContext, PluginSlotClaim,
+    PluginTranslationReport, PluginTrustTier, StaticPolicyEngine,
     evaluate_plugin_setup_requirements, plugin_provenance_summary_for_descriptor,
 };
 use serde_json::Value;
 
 use super::descriptor_bridge_kind;
 use crate::spec_runtime::{
-    ToolSearchEntry, ToolSearchResult, ToolSearchTrustFilterSummary, detect_provider_bridge_kind,
+    ToolSearchEntry, ToolSearchOperationSummary, ToolSearchOperationSummaryEntry, ToolSearchResult,
+    ToolSearchTrustFilterSummary, detect_provider_bridge_kind,
     provider_plugin_activation_attestation_result,
 };
 
@@ -33,6 +35,176 @@ struct ToolSearchTranslationSnapshot {
     channel_bridge_account_scope: Option<String>,
     channel_bridge_ready: Option<bool>,
     channel_bridge_missing_fields: Vec<String>,
+}
+
+pub(super) fn build_tool_search_operation_summary(
+    outcome: &Value,
+) -> Option<ToolSearchOperationSummary> {
+    let payload = outcome.as_object()?;
+    let results = payload.get("results")?.as_array()?;
+    let top_results = results
+        .iter()
+        .take(3)
+        .filter_map(build_tool_search_operation_summary_entry)
+        .collect::<Vec<_>>();
+    let trust_filter_summary = payload
+        .get("trust_filter_summary")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ToolSearchTrustFilterSummary>(value).ok())
+        .unwrap_or_default();
+    let query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let returned = payload
+        .get("returned")
+        .and_then(Value::as_u64)
+        .map_or(results.len(), |value| value as usize);
+    let trust_tiers = payload
+        .get("trust_tiers")
+        .and_then(Value::as_array)
+        .map(|tiers| {
+            tiers
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Some(ToolSearchOperationSummary {
+        headline: build_tool_search_operation_headline(
+            &query,
+            returned,
+            &trust_tiers,
+            &trust_filter_summary,
+            &top_results,
+        ),
+        query,
+        returned,
+        trust_tiers,
+        trust_filter_summary,
+        top_results,
+    })
+}
+
+fn build_tool_search_operation_summary_entry(
+    value: &Value,
+) -> Option<ToolSearchOperationSummaryEntry> {
+    let entry = value.as_object()?;
+    Some(ToolSearchOperationSummaryEntry {
+        tool_id: entry.get("tool_id")?.as_str()?.to_owned(),
+        provider_id: entry.get("provider_id")?.as_str()?.to_owned(),
+        connector_name: entry.get("connector_name")?.as_str()?.to_owned(),
+        trust_tier: entry
+            .get("trust_tier")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        bridge_kind: entry.get("bridge_kind")?.as_str()?.to_owned(),
+        score: entry
+            .get("score")
+            .and_then(Value::as_u64)
+            .map_or(0, |value| value as u32),
+        setup_ready: entry
+            .get("setup_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        deferred: entry
+            .get("deferred")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        loaded: entry
+            .get("loaded")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn build_tool_search_operation_headline(
+    query: &str,
+    returned: usize,
+    trust_tiers: &[String],
+    trust_filter_summary: &ToolSearchTrustFilterSummary,
+    top_results: &[ToolSearchOperationSummaryEntry],
+) -> String {
+    let result_noun = if returned == 1 { "result" } else { "results" };
+    let mut parts = vec![format!("returned {returned} {result_noun}")];
+
+    if trust_filter_summary.applied {
+        let scope = if trust_filter_summary.effective_tiers.is_empty() {
+            "none".to_owned()
+        } else {
+            trust_filter_summary.effective_tiers.join(",")
+        };
+        parts.push(format!("trust_scope={scope}"));
+        if trust_filter_summary.filtered_out_candidates > 0 {
+            let filtered_noun = if trust_filter_summary.filtered_out_candidates == 1 {
+                "candidate"
+            } else {
+                "candidates"
+            };
+            parts.push(format!(
+                "filtered_out={} {filtered_noun}",
+                trust_filter_summary.filtered_out_candidates
+            ));
+        }
+        if trust_filter_summary.conflicting_requested_tiers {
+            parts.push("conflicting_trust_filters=true".to_owned());
+        }
+    } else if !trust_tiers.is_empty() {
+        parts.push(format!("requested_tiers={}", trust_tiers.join(",")));
+    }
+
+    if let Some(first) = top_results.first() {
+        parts.push(format!("top_match={}", first.provider_id));
+    }
+
+    if query.is_empty() {
+        parts.join("; ")
+    } else {
+        format!("query=\"{query}\"; {}", parts.join("; "))
+    }
+}
+
+pub(super) fn emit_tool_search_audit_event(
+    kernel: &LoongKernel<StaticPolicyEngine>,
+    pack_id: &str,
+    agent_id: &str,
+    summary: &ToolSearchOperationSummary,
+) -> Result<(), String> {
+    let top_provider_ids = summary
+        .top_results
+        .iter()
+        .map(|entry| entry.provider_id.clone())
+        .collect::<Vec<_>>();
+
+    kernel
+        .record_audit_event(
+            Some(agent_id),
+            AuditEventKind::ToolSearchEvaluated {
+                pack_id: pack_id.to_owned(),
+                query: summary.query.clone(),
+                returned: summary.returned,
+                trust_filter_applied: summary.trust_filter_summary.applied,
+                query_requested_tiers: summary.trust_filter_summary.query_requested_tiers.clone(),
+                structured_requested_tiers: summary
+                    .trust_filter_summary
+                    .structured_requested_tiers
+                    .clone(),
+                effective_tiers: summary.trust_filter_summary.effective_tiers.clone(),
+                conflicting_requested_tiers: summary
+                    .trust_filter_summary
+                    .conflicting_requested_tiers,
+                filtered_out_candidates: summary.trust_filter_summary.filtered_out_candidates,
+                filtered_out_tier_counts: summary
+                    .trust_filter_summary
+                    .filtered_out_tier_counts
+                    .clone(),
+                top_provider_ids,
+            },
+        )
+        .map_err(|error| format!("failed to record tool search audit event: {error}"))
 }
 
 pub(super) fn execute_tool_search(

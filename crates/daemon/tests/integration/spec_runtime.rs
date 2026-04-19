@@ -3,6 +3,7 @@ use loong_daemon::kernel::{
     PluginActivationStatus, PluginBridgeKind, PluginCompatibilityMode, PluginCompatibilityShim,
     PluginCompatibilityShimSupport, PluginContractDialect,
 };
+use loong_spec::hex_lower;
 
 fn render_cli_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -6886,7 +6887,10 @@ async fn execute_spec_denylist_overrides_other_approvals() {
 
 #[tokio::test]
 async fn execute_spec_one_time_full_access_expired_is_rejected() {
-    let now = current_epoch_s();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_secs();
     let spec = RunnerSpec {
         pack: VerticalPackManifest {
             pack_id: "spec-approval-full-expired".to_owned(),
