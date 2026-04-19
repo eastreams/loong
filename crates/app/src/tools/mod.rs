@@ -22,7 +22,6 @@ use tool_search::{
 
 use crate::KernelContext;
 use crate::config::ToolConfig;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::session::store::SessionStoreConfig;
 use provider_schema::provider_definition_for_view;
 use routing::{
@@ -31,8 +30,7 @@ use routing::{
 };
 #[cfg(test)]
 use routing::{
-    route_direct_browser_tool_name, route_direct_web_tool_name,
-    route_direct_web_tool_name_for_view,
+    route_direct_browser_tool_name, route_direct_web_tool_name, route_direct_web_tool_name_for_view,
 };
 
 pub(crate) mod approval;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct SafeLaneAdaptiveVerifyPolicyState {
