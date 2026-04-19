@@ -20,7 +20,7 @@ release review. It is not part of the primary public release trail.
   repository's current architecture boundaries
 
 ## Summary
-- Generated at: 2026-04-19T08:28:03Z
+- Generated at: 2026-04-19T08:28:27Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/support/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -42,13 +42,13 @@ release review. It is not part of the primary public release trail.
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6137 | 7300 | 1163 | 58 | 160 | 102 | 84.1% | HEALTHY | 6936 | -11.5% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 2111 | 6400 | 4289 | 0 | 110 | 110 | 33.0% | HEALTHY | 1779 | 18.7% | BREACH | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 9529 | 11200 | 1671 | 50 | 120 | 70 | 85.1% | WATCH | 10831 | -12.0% | PASS | 98 |
-| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14625 | 15000 | 375 | 45 | 70 | 25 | 97.5% | TIGHT | 14472 | 1.1% | PASS | 54 |
+| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 1558 | 15000 | 13442 | 45 | 70 | 25 | 64.3% | HEALTHY | 14472 | -89.2% | PASS | 54 |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 4877 | 6500 | 1623 | 162 | 210 | 48 | 77.1% | HEALTHY | 6324 | -22.9% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 5705 | 9800 | 4095 | 206 | 250 | 44 | 82.4% | HEALTHY | 9519 | -40.1% | PASS | 228 |
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.6%), tools_mod (97.5%)
+- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.6%)
 - WATCH hotspots (>=85% and <95% of any tracked budget): turn_coordinator (85.1%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
@@ -96,7 +96,7 @@ release review. It is not part of the primary public release trail.
 <!-- arch-hotspot key=chat_runtime lines=6137 functions=58 -->
 <!-- arch-hotspot key=channel_mod lines=2111 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=9529 functions=50 -->
-<!-- arch-hotspot key=tools_mod lines=14625 functions=45 -->
+<!-- arch-hotspot key=tools_mod lines=1558 functions=45 -->
 <!-- arch-hotspot key=daemon_lib lines=4877 functions=162 -->
 <!-- arch-hotspot key=onboard_cli lines=5705 functions=206 -->
 <!-- arch-boundary key=memory_literals status=PASS -->

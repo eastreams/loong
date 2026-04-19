@@ -78,9 +78,31 @@ fn tool_function_name(tool: &Value) -> &str {
 
 pub(super) fn provider_definition_for_view(descriptor: &ToolDescriptor, view: &ToolView) -> Value {
     let definition = descriptor.provider_definition();
+    let definition = if descriptor.name == "web" {
+        direct_web_provider_definition_for_view(definition, view)
+    } else {
+        definition
+    };
 
-    if descriptor.name == "web" {
-        return direct_web_provider_definition_for_view(definition, view);
+    sanitize_provider_parameter_combinators(definition)
+}
+
+fn sanitize_provider_parameter_combinators(mut definition: Value) -> Value {
+    let Some(function) = definition
+        .get_mut("function")
+        .and_then(Value::as_object_mut)
+    else {
+        return definition;
+    };
+    let Some(parameters) = function
+        .get_mut("parameters")
+        .and_then(Value::as_object_mut)
+    else {
+        return definition;
+    };
+
+    for key in ["allOf", "anyOf", "oneOf"] {
+        parameters.remove(key);
     }
 
     definition

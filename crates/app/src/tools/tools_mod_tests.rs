@@ -736,6 +736,16 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     for item in &defs {
         assert_eq!(item["type"], "function");
         assert_eq!(item["function"]["parameters"]["type"], "object");
+
+        let parameters = item["function"]["parameters"]
+            .as_object()
+            .expect("provider parameters should be an object");
+        for combinator_key in ["allOf", "anyOf", "oneOf"] {
+            assert!(
+                !parameters.contains_key(combinator_key),
+                "provider parameters should not expose `{combinator_key}`: {item:?}"
+            );
+        }
     }
 
     let tool_search = defs

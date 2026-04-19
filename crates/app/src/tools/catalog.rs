@@ -2375,7 +2375,6 @@ fn feishu_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
-
 #[cfg(test)]
 #[path = "catalog_tests.rs"]
 mod tests;

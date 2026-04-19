@@ -28,7 +28,9 @@ pub fn summarize_tool_request_for_display(tool_name: &str, payload: Value) -> Va
     let canonical_tool_name = super::canonical_tool_name(tool_name);
     let normalized_payload = normalize_shell_payload_for_request(canonical_tool_name, payload);
 
-    if canonical_tool_name != super::SHELL_EXEC_TOOL_NAME {
+    let is_shell_like_request =
+        canonical_tool_name == super::SHELL_EXEC_TOOL_NAME || canonical_tool_name == "bash.exec";
+    if !is_shell_like_request {
         return normalized_payload;
     }
 
@@ -228,5 +230,28 @@ pub(crate) fn inject_tool_lease_binding(
             TOOL_LEASE_TURN_ID_FIELD.to_owned(),
             Value::String(turn_id.to_owned()),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_tool_request_for_display;
+    use serde_json::json;
+
+    #[test]
+    fn summarize_tool_request_for_display_redacts_bash_exec_arguments() {
+        let summary = summarize_tool_request_for_display(
+            "bash.exec",
+            json!({
+                "command": "git",
+                "args": ["status", "--short"],
+                "timeout_ms": 3000
+            }),
+        );
+
+        assert_eq!(summary["command"], "git");
+        assert_eq!(summary["timeout_ms"], 3000);
+        assert_eq!(summary["args_redacted"], 2);
+        assert!(summary.get("args").is_none());
     }
 }

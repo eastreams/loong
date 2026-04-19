@@ -80,6 +80,7 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         "feishu.calendar.list" => {
             "account_id?:string,open_id?:string,primary?:boolean,page_size?:integer,page_token?:string,sync_token?:string"
         }
+        "feishu.calendar.primary.get" => "account_id?:string,open_id?:string,user_id_type?:string",
         "feishu.card.update" => {
             "account_id?:string,callback_token?:string,card?:object,markdown?:string,shared?:boolean,open_ids?:string[]"
         }
@@ -429,6 +430,11 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("page_token", "string"),
             ("sync_token", "string"),
         ],
+        "feishu.calendar.primary.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("user_id_type", "string"),
+        ],
         "feishu.card.update" => &[
             ("account_id", "string"),
             ("callback_token", "string"),
@@ -717,6 +723,7 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "feishu.bitable.view.patch" => &["app_token", "table_id", "view_id", "view_name"],
         "feishu.bitable.record.search" => &["app_token", "table_id"],
         "feishu.calendar.freebusy" => &["time_min", "time_max"],
+        "feishu.calendar.primary.get" => &[],
         "feishu.doc.append" | "feishu.doc.read" => &["url"],
         "feishu.messages.get" => &["message_id"],
         "feishu.messages.reply" => &["message_id"],
@@ -795,7 +802,9 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
         "feishu.bitable.view.create" | "feishu.bitable.view.patch" => {
             &["feishu", "bitable", "view", "write"]
         }
-        "feishu.calendar.freebusy" | "feishu.calendar.list" => &["feishu", "calendar", "read"],
+        "feishu.calendar.freebusy" | "feishu.calendar.list" | "feishu.calendar.primary.get" => {
+            &["feishu", "calendar", "read"]
+        }
         "feishu.card.update" => &["feishu", "card", "update", "callback"],
         "feishu.doc.read" => &["feishu", "docs", "read"],
         "feishu.doc.create" | "feishu.doc.append" => &["feishu", "docs", "write"],
