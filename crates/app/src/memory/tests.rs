@@ -48,6 +48,13 @@ fn sqlite_memory_config_with_profile(
     config
 }
 
+fn selected_memory_system_config(system_id: &str) -> runtime_config::MemoryRuntimeConfig {
+    runtime_config::MemoryRuntimeConfig {
+        resolved_system_id: Some(system_id.to_owned()),
+        ..runtime_config::MemoryRuntimeConfig::default()
+    }
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn cleanup_memory_workspace(workspace_root: &std::path::Path, db_path: &std::path::Path) {
     let _ = drop_cached_sqlite_runtime(db_path);
@@ -753,10 +760,7 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
 
     ensure_registry_runtime_executing_system_registered();
 
-    let config = runtime_config::MemoryRuntimeConfig {
-        resolved_system_id: Some("registry-runtime-executing".to_owned()),
-        ..runtime_config::MemoryRuntimeConfig::default()
-    };
+    let config = selected_memory_system_config("registry-runtime-executing");
 
     let request = MemoryCoreRequest {
         operation: "noop".to_owned(),
@@ -856,10 +860,7 @@ async fn registry_selected_system_can_use_compact_stage_hook_without_custom_runt
         .set(workspace_root.clone())
         .ok();
 
-    let config = runtime_config::MemoryRuntimeConfig {
-        resolved_system_id: Some("registry-compact-hook".to_owned()),
-        ..runtime_config::MemoryRuntimeConfig::default()
-    };
+    let config = selected_memory_system_config("registry-compact-hook");
     let diagnostics = run_compact_stage(
         "compact-hook-session",
         Some(workspace_root.as_path()),
