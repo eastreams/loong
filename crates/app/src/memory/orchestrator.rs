@@ -614,7 +614,7 @@ fn recent_window_records(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{MemoryMode, MemoryProfile};
+    use crate::config::MemoryProfile;
     use crate::memory::{
         DEFAULT_MEMORY_SYSTEM_ID, DerivedMemoryKind, MemoryContextKind, MemoryRecallMode,
         MemoryScope, MemoryStageFamily, MemorySystem, MemorySystemCapability, MemorySystemMetadata,
@@ -649,6 +649,26 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
+    fn sqlite_memory_config(
+        db_path: std::path::PathBuf,
+    ) -> crate::memory::runtime_config::MemoryRuntimeConfig {
+        crate::memory::runtime_config::MemoryRuntimeConfig::for_sqlite_path(db_path)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn sqlite_memory_config_with_profile(
+        db_path: std::path::PathBuf,
+        profile: MemoryProfile,
+        sliding_window: usize,
+    ) -> crate::memory::runtime_config::MemoryRuntimeConfig {
+        let mut config = sqlite_memory_config(db_path);
+        config.profile = profile;
+        config.mode = profile.mode();
+        config.sliding_window = sliding_window;
+        config
+    }
+
+    #[cfg(feature = "memory-sqlite")]
     #[test]
     fn hydrated_memory_builtin_orchestrator_returns_recent_window_records() {
         let tmp = hydrated_memory_temp_dir("loong-hydrated-window");
@@ -656,13 +676,8 @@ mod tests {
         let db_path = tmp.join("window.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         append_turn_direct("hydrated-window", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -690,10 +705,7 @@ mod tests {
         let db_path = tmp.join("diagnostics.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_memory_config(db_path.clone());
 
         let hydrated = hydrate_memory_context("hydrated-diagnostics", &config)
             .expect("hydrate memory context");
@@ -721,13 +733,8 @@ mod tests {
         let db_path = tmp.join("summary.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         append_turn_direct("hydrated-summary", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -768,13 +775,8 @@ mod tests {
         let db_path = tmp.join("cross-session-recall.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 8,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 8);
 
         append_turn_direct(
             "prior-session",
@@ -829,14 +831,9 @@ mod tests {
         let db_path = tmp.join("profile.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::ProfilePlusWindow,
-            mode: MemoryMode::ProfilePlusWindow,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            profile_note: Some("Imported ZeroClaw preferences".to_owned()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::ProfilePlusWindow, 2);
+        config.profile_note = Some("Imported ZeroClaw preferences".to_owned());
 
         let hydrated =
             hydrate_memory_context("hydrated-profile", &config).expect("hydrate memory context");
@@ -868,13 +865,8 @@ mod tests {
         let db_path = tmp.join("stage-order.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         append_turn_direct("stage-order", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -924,13 +916,8 @@ mod tests {
         let db_path = tmp.join("stage-fallback.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         append_turn_direct(session_id, "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -974,13 +961,8 @@ mod tests {
             .display()
             .to_string();
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 4,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 4);
 
         let envelope = hydrate_stage_envelope_with_workspace_root(
             "stage-window-plus-summary",
@@ -1088,13 +1070,8 @@ mod tests {
         let db_path = tmp.join("retrieval-query.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 4,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 4);
 
         append_turn_direct(
             "stage-retrieval-query",
@@ -1151,13 +1128,8 @@ mod tests {
         let db_path = tmp.join("window-only.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 4,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 4);
 
         let envelope =
             hydrate_stage_envelope("stage-window-only", &config).expect("hydrate staged envelope");
@@ -1185,14 +1157,9 @@ mod tests {
             .display()
             .to_string();
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::ProfilePlusWindow,
-            mode: MemoryMode::ProfilePlusWindow,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 4,
-            profile_note: Some("Imported ZeroClaw preferences".to_owned()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::ProfilePlusWindow, 4);
+        config.profile_note = Some("Imported ZeroClaw preferences".to_owned());
 
         let envelope = hydrate_stage_envelope_with_workspace_root(
             "stage-profile-plus-window",
@@ -1250,13 +1217,8 @@ mod tests {
         let db_path = tmp.join("registry-selected.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
         config.resolved_system_id = Some(REGISTRY_RETRIEVE_ONLY_SYSTEM_ID.to_owned());
 
         append_turn_direct("registry-selected", "user", "turn 1", &config)
@@ -1332,13 +1294,8 @@ mod tests {
         let db_path = tmp.join("workspace-recall.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
         config.resolved_system_id = Some(WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
 
         append_turn_direct("workspace-recall", "user", "turn 1", &config)
@@ -1441,13 +1398,8 @@ mod tests {
         let memory_file_path = tmp.join("MEMORY.md");
         std::fs::write(&memory_file_path, "curated workspace fact").expect("write memory file");
 
-        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
         config.resolved_system_id =
             Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
 
@@ -1494,13 +1446,8 @@ mod tests {
         let db_path = tmp.join("unknown-selected.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
         config.resolved_system_id = Some("lucid".to_owned());
 
         append_turn_direct("unknown-selected", "user", "turn 1", &config)
@@ -1538,13 +1485,8 @@ mod tests {
         let db_path = tmp.join("compact-stage.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         append_turn_direct("compact-stage-succeeded", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1574,13 +1516,8 @@ mod tests {
         let db_path = tmp.join("compact-stage-skipped.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         append_turn_direct("compact-stage-skipped", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1607,13 +1544,8 @@ mod tests {
         let db_path = tmp.join("compact-stage-duplicate.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         append_turn_direct("compact-stage-duplicate", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1654,13 +1586,8 @@ mod tests {
         let db_path = tmp.join("compact-stage-registry-selected.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
         config.resolved_system_id = Some(REGISTRY_RETRIEVE_ONLY_COMPACT_SYSTEM_ID.to_owned());
 
         append_turn_direct("compact-stage-registry-selected", "user", "turn 1", &config)
@@ -1705,13 +1632,8 @@ mod tests {
         let db_path = tmp.join("derivation.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         append_turn_direct(session_id, "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1756,13 +1678,8 @@ mod tests {
         let db_path = tmp.join("retrieval.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         append_turn_direct(session_id, "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1807,13 +1724,8 @@ mod tests {
         let db_path = tmp.join("rank.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         append_turn_direct(session_id, "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1858,13 +1770,8 @@ mod tests {
         let db_path = tmp.join("strict-reserved.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
         config.fail_open = false;
 
         append_turn_direct(session_id, "assistant", "turn 1", &config)

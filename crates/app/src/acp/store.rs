@@ -122,10 +122,11 @@ impl AcpSqliteSessionStore {
     }
 
     fn resolved_path(&self) -> CliResult<PathBuf> {
-        let runtime_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: self.path.clone(),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
+        let runtime_config = self
+            .path
+            .clone()
+            .map(crate::memory::runtime_config::MemoryRuntimeConfig::for_sqlite_path)
+            .unwrap_or_default();
         crate::memory::ensure_memory_db_ready(self.path.clone(), &runtime_config)
             .map_err(|error| format!("resolve ACP sqlite store path failed: {error}"))
     }
