@@ -56,6 +56,30 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
 }
 
 #[test]
+fn update_subcommand_help_mentions_latest_stable_release_only() {
+    let help = render_cli_help(["update"]);
+
+    assert!(
+        help.contains("latest stable GitHub release"),
+        "update help should describe the stable release channel: {help}"
+    );
+    assert!(
+        help.contains("prereleases are excluded"),
+        "update help should explicitly say prereleases are not used: {help}"
+    );
+}
+
+#[test]
+fn update_subcommand_parses_without_flags() {
+    let cli = try_parse_cli(["loong", "update"]).expect("`loong update` should parse");
+
+    match cli.command {
+        Some(Commands::Update) => {}
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn setup_subcommand_is_removed() {
     let error = try_parse_cli(["loong", "setup"])
         .expect_err("`setup` should no longer parse as a valid subcommand");

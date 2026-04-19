@@ -209,6 +209,7 @@ async fn run_command(command: Commands) -> CliResult<()> {
     match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
+        Commands::Update => run_update_cli().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
         Commands::Turn { command } => match command {
             loong_daemon::TurnCommands::Run {
