@@ -118,6 +118,15 @@ fn expected_tool_request_error_classifies_validation_failures() {
     assert!(super::is_expected_tool_request_error(
         "tool `tool.invoke` payload._loong is reserved for trusted internal tool context; retry without that field"
     ));
+    assert!(super::is_expected_tool_request_error(
+        "direct_exec_ambiguous: provide either `command` or `script`, not both"
+    ));
+    assert!(super::is_expected_tool_request_error(
+        "tool_surface_unavailable: `browser` cannot route to `managed browser actions` in this runtime; read-only browser inspection is still available"
+    ));
+    assert!(super::is_expected_tool_request_error(
+        "web.fetch response exceeded max_bytes limit (120000 bytes); retry with a smaller `max_bytes` or a narrower web request"
+    ));
 }
 
 #[test]

@@ -26,8 +26,9 @@ impl ByteBudget {
         }
 
         Err(format!(
-            "{surface_name} Content-Length ({content_length}) exceeds max_bytes limit ({} bytes)",
-            self.max_bytes
+            "{surface_name} Content-Length ({content_length}) exceeds max_bytes limit ({} bytes){}",
+            self.max_bytes,
+            byte_budget_retry_hint(surface_name)
         ))
     }
 
@@ -36,8 +37,9 @@ impl ByteBudget {
 
         if next_consumed > self.max_bytes {
             return Err(format!(
-                "{surface_name} exceeded max_bytes limit ({} bytes)",
-                self.max_bytes
+                "{surface_name} exceeded max_bytes limit ({} bytes){}",
+                self.max_bytes,
+                byte_budget_retry_hint(surface_name)
             ));
         }
 
@@ -47,5 +49,44 @@ impl ByteBudget {
 
     pub(crate) fn consumed(&self) -> usize {
         self.consumed
+    }
+}
+
+fn byte_budget_retry_hint(surface_name: &str) -> &'static str {
+    if surface_name.contains("browser") {
+        return "; retry with a smaller `max_bytes` or a more focused browser extract";
+    }
+
+    if surface_name.contains("web") {
+        return "; retry with a smaller `max_bytes` or a narrower web request";
+    }
+
+    "; retry with a smaller `max_bytes` or a narrower read"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ByteBudget;
+
+    #[test]
+    fn content_length_exceed_error_includes_retry_hint() {
+        let budget = ByteBudget::new(16);
+        let error = budget
+            .reject_if_content_length_exceeds(Some(32), "web.fetch response")
+            .expect_err("content length over limit should fail");
+
+        assert!(error.contains("max_bytes limit"));
+        assert!(error.contains("narrower web request"));
+    }
+
+    #[test]
+    fn streaming_overflow_error_includes_retry_hint() {
+        let mut budget = ByteBudget::new(16);
+        let error = budget
+            .try_consume(32, "browser response")
+            .expect_err("stream overrun should fail");
+
+        assert!(error.contains("max_bytes limit"));
+        assert!(error.contains("focused browser extract"));
     }
 }

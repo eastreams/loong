@@ -935,6 +935,21 @@ fn is_expected_tool_request_error(error: &str) -> bool {
     if error.starts_with("invalid_internal_runtime_narrowing:") {
         return true;
     }
+    if error.starts_with("tool_surface_unavailable:") {
+        return true;
+    }
+    if error.starts_with("direct_") {
+        return true;
+    }
+    if error.contains("max_bytes limit") {
+        return true;
+    }
+    if error.contains("browser tools are disabled by config.tools.browser.enabled=false") {
+        return true;
+    }
+    if error.contains("web.fetch is disabled by config.tools.web.enabled=false") {
+        return true;
+    }
     error.contains("reserved for trusted internal tool context")
 }
 

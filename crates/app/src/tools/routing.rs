@@ -16,6 +16,7 @@ pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &
             .and_then(|tool_id| route_hidden_discoverable_tool_name(tool_id, inner_arguments).ok());
         let inner_tool_name = resolved_hidden_tool_name
             .or_else(|| inner_tool_id.map(canonical_tool_name))
+            .map(display_inner_tool_name_for_logs)
             .unwrap_or("-");
         return inner_tool_name.to_owned();
     }
@@ -30,7 +31,9 @@ pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &
 
     let direct_tool_name = canonical_name;
     let resolved_tool_name = route_direct_tool_name(direct_tool_name, payload).ok();
-    let resolved_tool_name = resolved_tool_name.unwrap_or("-");
+    let resolved_tool_name = resolved_tool_name
+        .map(display_inner_tool_name_for_logs)
+        .unwrap_or("-");
     resolved_tool_name.to_owned()
 }
 
@@ -53,9 +56,11 @@ fn route_direct_tool_request(
         route_direct_tool_name_for_view(tool_name.as_str(), &payload, &runtime_view)?;
     let tool_visible = runtime_view.contains(routed_tool_name);
     if !tool_visible {
+        let routed_tool_display = routed_tool_display_name(routed_tool_name);
+        let unavailable_hint = unavailable_runtime_hint(routed_tool_name, &runtime_view);
         return Err(format!(
-            "tool_surface_unavailable: `{}` cannot route to `{}` in this runtime",
-            tool_name, routed_tool_name
+            "tool_surface_unavailable: `{}` cannot route to `{}` in this runtime{}",
+            tool_name, routed_tool_display, unavailable_hint
         ));
     }
 
@@ -92,10 +97,18 @@ pub(crate) fn route_direct_tool_name(
 }
 
 fn route_direct_exec_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_command = payload_has_non_null_field(payload, "command");
+    let command = payload
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let script = payload
+        .get("script")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let has_args = payload_has_non_null_field(payload, "args");
-    let has_script = payload_has_non_null_field(payload, "script");
-    let mode_count = count_true([has_command, has_script]);
+    let mode_count = count_true([command.is_some(), script.is_some()]);
 
     if mode_count == 0 {
         return Err(
@@ -105,25 +118,40 @@ fn route_direct_exec_tool_name(payload: &Value) -> Result<&'static str, String> 
     }
 
     if mode_count > 1 {
+        if command == script
+            && let Some(value) = command
+        {
+            return Ok(if !has_args && command_uses_shell_syntax(value) {
+                BASH_EXEC_TOOL_NAME
+            } else {
+                SHELL_EXEC_TOOL_NAME
+            });
+        }
+
         return Err(
             "direct_exec_ambiguous: provide either `command` or `script`, not both".to_owned(),
         );
     }
 
-    if has_script {
+    if script.is_some() {
         return Ok(BASH_EXEC_TOOL_NAME);
     }
 
-    let command = payload
-        .get("command")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            "direct_exec_requires_command_or_script: expected `command` for argv mode, or `script` for raw shell mode"
-                .to_owned()
-        })?;
-    let uses_shell_syntax = command.contains('\n')
+    let command = command.ok_or_else(|| {
+        "direct_exec_requires_command_or_script: expected `command` for argv mode, or `script` for raw shell mode"
+            .to_owned()
+    })?;
+    let uses_shell_syntax = command_uses_shell_syntax(command);
+
+    if !has_args && uses_shell_syntax {
+        return Ok(BASH_EXEC_TOOL_NAME);
+    }
+
+    Ok(SHELL_EXEC_TOOL_NAME)
+}
+
+fn command_uses_shell_syntax(command: &str) -> bool {
+    command.contains('\n')
         || command.contains("&&")
         || command.contains("||")
         || command.contains('|')
@@ -131,13 +159,7 @@ fn route_direct_exec_tool_name(payload: &Value) -> Result<&'static str, String> 
         || command.contains('>')
         || command.contains('<')
         || command.contains("$(")
-        || command.contains('`');
-
-    if !has_args && uses_shell_syntax {
-        return Ok(BASH_EXEC_TOOL_NAME);
-    }
-
-    Ok(SHELL_EXEC_TOOL_NAME)
+        || command.contains('`')
 }
 
 fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> {
@@ -857,4 +879,101 @@ pub(super) fn count_true<const N: usize>(values: [bool; N]) -> usize {
     }
 
     count
+}
+
+fn unavailable_runtime_hint(routed_tool_name: &str, runtime_view: &ToolView) -> &'static str {
+    if !routed_tool_name.starts_with("browser.companion.") {
+        return "";
+    }
+
+    if runtime_view.contains("browser.open") || runtime_view.contains("browser.extract") {
+        return "; read-only browser inspection is still available";
+    }
+
+    "; browser interaction is unavailable in this runtime"
+}
+
+fn routed_tool_display_name(routed_tool_name: &str) -> &str {
+    if routed_tool_name.starts_with("browser.companion.") {
+        return "managed browser actions";
+    }
+
+    routed_tool_name
+}
+
+fn display_inner_tool_name_for_logs(tool_name: &str) -> &str {
+    if tool_name.starts_with("browser.companion.") {
+        return "browser";
+    }
+
+    tool_name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn direct_exec_normalizes_duplicate_command_and_script_sources() {
+        let routed = route_direct_exec_tool_name(&json!({
+            "command": "echo hello",
+            "script": "echo hello"
+        }))
+        .expect("equivalent exec sources should normalize");
+
+        assert_eq!(routed, SHELL_EXEC_TOOL_NAME);
+    }
+
+    #[test]
+    fn direct_exec_ignores_blank_aliases() {
+        let routed = route_direct_exec_tool_name(&json!({
+            "command": "   ",
+            "script": "echo hello"
+        }))
+        .expect("blank command alias should be ignored");
+
+        assert_eq!(routed, BASH_EXEC_TOOL_NAME);
+    }
+
+    #[test]
+    fn browser_surface_unavailable_hint_mentions_read_only_fallbacks() {
+        let runtime_view = ToolView::from_tool_names(["browser.open", "browser.extract"]);
+        let payload = json!({
+            "session_id": "browser-companion-1",
+            "selector": "#submit",
+            "text": "hello"
+        });
+        let request = loong_contracts::ToolCoreRequest {
+            tool_name: "browser".to_owned(),
+            payload: payload.clone(),
+        };
+        let managed_browser_route =
+            route_direct_browser_tool_name(&payload).expect("managed browser payload should route");
+
+        let error =
+            route_direct_tool_request(request, &runtime_config::ToolRuntimeConfig::default())
+                .expect_err("managed browser type should be unavailable in default runtime");
+
+        assert!(error.contains("managed browser actions"));
+        assert!(error.contains("read-only browser inspection"));
+        assert!(
+            unavailable_runtime_hint(managed_browser_route, &runtime_view)
+                .contains("read-only browser inspection")
+        );
+    }
+
+    #[test]
+    fn browser_companion_routes_collapse_to_browser_in_logs() {
+        let logged_tool_name = resolved_inner_tool_name_for_logs(
+            "browser",
+            &json!({
+                "session_id": "browser-companion-1",
+                "selector": "#submit",
+                "text": "hello"
+            }),
+        );
+
+        assert_eq!(logged_tool_name, "browser");
+    }
 }
