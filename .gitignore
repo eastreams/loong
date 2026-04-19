@@ -3,6 +3,7 @@
 /.docs
 /.loong.local.toml
 /.env.local
+harbor/jobs/
 .worktrees/
 .idea
 .vscode
