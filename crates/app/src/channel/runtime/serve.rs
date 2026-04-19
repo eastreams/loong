@@ -43,6 +43,10 @@ pub struct ChannelServeStopHandle {
 const CHANNEL_RUNTIME_DUPLICATE_RECLAIM_POLL_MS: u64 = 25;
 #[cfg(not(test))]
 const CHANNEL_RUNTIME_DUPLICATE_RECLAIM_POLL_MS: u64 = 500;
+#[cfg(test)]
+const CHANNEL_RUNTIME_DUPLICATE_RECLAIM_COOLDOWN_MS: u64 = 50;
+#[cfg(not(test))]
+const CHANNEL_RUNTIME_DUPLICATE_RECLAIM_COOLDOWN_MS: u64 = 5_000;
 
 impl ChannelServeStopHandle {
     pub fn new() -> Self {
@@ -154,7 +158,8 @@ pub fn ensure_channel_operation_runtime_slot_available_in_dir(
 ///
 /// The helper prunes stale runtime state, rejects duplicate active serve loops
 /// for the same platform/operation/account triple, starts a tracker before
-/// invoking `run`, and always attempts shutdown bookkeeping afterward.
+/// invoking `run`, auto-reclaims duplicate owners conservatively, and always
+/// attempts shutdown bookkeeping afterward.
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
@@ -290,6 +295,14 @@ fn maybe_reclaim_duplicate_runtime_owners_for_preferred_owner(
         return Ok(None);
     };
     if runtime.running_instances <= 1 || runtime.pid != Some(current_pid) {
+        return Ok(None);
+    }
+    if runtime
+        .last_duplicate_reclaim_at
+        .is_some_and(|last_reclaim_at| {
+            now.saturating_sub(last_reclaim_at) < CHANNEL_RUNTIME_DUPLICATE_RECLAIM_COOLDOWN_MS
+        })
+    {
         return Ok(None);
     }
 
@@ -442,8 +455,9 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        ChannelServeRuntimeSpec, channel_runtime_now_ms,
-        maybe_reclaim_duplicate_runtime_owners_for_preferred_owner, merge_runtime_result,
+        CHANNEL_RUNTIME_DUPLICATE_RECLAIM_COOLDOWN_MS, ChannelServeRuntimeSpec,
+        channel_runtime_now_ms, maybe_reclaim_duplicate_runtime_owners_for_preferred_owner,
+        merge_runtime_result,
     };
     use crate::channel::CHANNEL_OPERATION_SERVE_ID;
     use crate::channel::ChannelPlatform;
@@ -554,6 +568,84 @@ mod tests {
         assert_eq!(runtime.pid, Some(6262));
         assert!(runtime.last_duplicate_reclaim_cleanup_owner_pids.is_empty());
         assert!(runtime.last_duplicate_reclaim_at.is_none());
+
+        first.shutdown().await.expect("shutdown first runtime");
+        second.shutdown().await.expect("shutdown second runtime");
+    }
+
+    #[tokio::test]
+    async fn duplicate_auto_reclaim_respects_cooldown_before_retrying() {
+        let runtime_dir = temp_runtime_dir("duplicate-auto-reclaim-cooldown");
+        let spec = ChannelServeRuntimeSpec {
+            platform: ChannelPlatform::Weixin,
+            operation_id: CHANNEL_OPERATION_SERVE_ID,
+            account_id: "default",
+            account_label: "default",
+        };
+        let first = state::start_channel_operation_runtime_tracker_for_test(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            spec.account_label,
+            5151,
+        )
+        .await
+        .expect("start first runtime");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let second = state::start_channel_operation_runtime_tracker_for_test(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            spec.account_label,
+            6262,
+        )
+        .await
+        .expect("start second runtime");
+
+        second
+            .record_duplicate_reclaim(&[5151])
+            .await
+            .expect("seed duplicate reclaim cooldown");
+
+        let within_cooldown = maybe_reclaim_duplicate_runtime_owners_for_preferred_owner(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            second.pid(),
+        )
+        .expect("preferred runtime can inspect duplicate cleanup state");
+        assert!(
+            within_cooldown.is_none(),
+            "duplicate auto-reclaim should skip retries while the cooldown is active"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), first.wait_for_stop_request())
+                .await
+                .is_err(),
+            "cooldown should prevent a new duplicate cleanup stop request"
+        );
+
+        tokio::time::sleep(Duration::from_millis(
+            CHANNEL_RUNTIME_DUPLICATE_RECLAIM_COOLDOWN_MS + 20,
+        ))
+        .await;
+
+        let after_cooldown = maybe_reclaim_duplicate_runtime_owners_for_preferred_owner(
+            &runtime_dir,
+            spec.platform,
+            spec.operation_id,
+            spec.account_id,
+            second.pid(),
+        )
+        .expect("preferred runtime can retry duplicate cleanup after cooldown");
+        assert!(after_cooldown.is_some());
+        tokio::time::timeout(Duration::from_millis(200), first.wait_for_stop_request())
+            .await
+            .expect("first stop request should become visible after cooldown")
+            .expect("wait for first stop request after cooldown");
 
         first.shutdown().await.expect("shutdown first runtime");
         second.shutdown().await.expect("shutdown second runtime");
