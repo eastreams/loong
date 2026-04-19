@@ -8247,7 +8247,7 @@ mod tests {
     async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confirmation() {
         let coordinator = ConversationTurnCoordinator::new();
         let runtime = ApprovalControlRuntime::default();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let memory_config = sqlite_memory_config("approval-control-run-once-success");
         let sqlite_path = memory_config
             .sqlite_path
