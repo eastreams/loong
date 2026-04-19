@@ -759,8 +759,20 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         "resolve_request"
     );
     assert_eq!(
+        execution.payload["task"]["tool_policy"]["requested_tool_ids"][0],
+        "file.read"
+    );
+    assert_eq!(
+        execution.payload["task"]["tool_policy"]["visible_requested_tool_ids"][0],
+        "read"
+    );
+    assert_eq!(
         execution.payload["task"]["tool_policy"]["effective_tool_ids"][0],
         "file.read"
+    );
+    assert_eq!(
+        execution.payload["task"]["tool_policy"]["visible_effective_tool_ids"][0],
+        "read"
     );
     assert_eq!(
         execution.payload["task"]["prompt_frame"]["summary"]["latest_phase"],
@@ -818,8 +830,12 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         "status render should surface workflow worktree id: {rendered}"
     );
     assert!(
-        rendered.contains("effective_tool_ids: file.read"),
-        "status render should surface effective tool ids: {rendered}"
+        rendered.contains("requested_tool_ids: read"),
+        "status render should surface visible requested tool ids: {rendered}"
+    );
+    assert!(
+        rendered.contains("effective_tool_ids: read"),
+        "status render should surface visible effective tool ids: {rendered}"
     );
     assert!(
         rendered.contains("prompt_frame: phase=initial total_tokens=64"),

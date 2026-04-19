@@ -2244,6 +2244,7 @@ fn template_web_search_usage_comment() -> String {
         "# Web search provider notes:\n\
 # - `[tools.web_search].default_provider` accepts {WEB_SEARCH_PROVIDER_VALID_VALUES}.\n\
 # - The default provider is `{DEFAULT_WEB_SEARCH_PROVIDER}`.\n\
+# - These settings affect only `web {{ query }}` / `web.search`; plain `web {{ url }}`, low-level HTTP request mode, browser sessions, and other networked tools use their own runtime policy.\n\
 # - Brave credentials can use `tools.web_search.brave_api_key = \"${{{WEB_SEARCH_BRAVE_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_BRAVE_API_KEY_ENV}` environment variable.\n\
 # - Tavily credentials can use `tools.web_search.tavily_api_key = \"${{{WEB_SEARCH_TAVILY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_TAVILY_API_KEY_ENV}` environment variable.\n\
 # - Perplexity credentials can use `tools.web_search.perplexity_api_key = \"${{{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}` environment variable.\n\
@@ -2370,6 +2371,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains(WEB_SEARCH_FIRECRAWL_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
+        assert!(raw.contains("These settings affect only `web { query }` / `web.search`"));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -3756,17 +3758,14 @@ model = "gpt-5"
         let raw = fs::read_to_string(&path).expect("read written config");
         assert!(raw.contains("[external_skills]"));
         assert!(raw.contains("enabled = false"));
-        assert!(raw.contains("require_download_approval = true"));
+        assert!(raw.contains("require_download_approval = false"));
         assert!(raw.contains("auto_expose_installed = false"));
 
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
         assert!(!loaded.external_skills.enabled);
-        assert!(loaded.external_skills.require_download_approval);
+        assert!(!loaded.external_skills.require_download_approval);
         assert!(loaded.external_skills.allowed_domains.is_empty());
-        assert_eq!(
-            loaded.external_skills.blocked_domains,
-            vec!["*.clawhub.io".to_owned()]
-        );
+        assert!(loaded.external_skills.blocked_domains.is_empty());
         assert!(loaded.external_skills.install_root.is_none());
         assert!(!loaded.external_skills.auto_expose_installed);
 

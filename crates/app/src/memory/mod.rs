@@ -1,4 +1,6 @@
 #[cfg(feature = "memory-sqlite")]
+use std::path::Path;
+#[cfg(feature = "memory-sqlite")]
 use std::path::PathBuf;
 #[cfg(test)]
 use std::{
@@ -21,6 +23,7 @@ mod protocol;
 pub mod runtime_config;
 #[cfg(feature = "memory-sqlite")]
 mod sqlite;
+mod sqlite_core;
 mod stage;
 mod system;
 mod system_registry;
@@ -61,6 +64,7 @@ pub use protocol::{
 pub(crate) use sqlite::{CanonicalMemorySearchHit, WorkspaceMemoryIndexedSearchHit};
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
+use sqlite_core::{append_turn, clear_session, load_window, replace_turns};
 pub use stage::{
     DerivedMemoryKind, MemoryAuthority, MemoryContextProvenance, MemoryProvenanceSourceKind,
     MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryStageFamily,
@@ -168,78 +172,6 @@ pub(crate) fn execute_builtin_backend_memory_core(
     }
 }
 
-fn append_turn(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::append_turn(request, config)
-    }
-}
-
-fn load_window(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::load_window(request, config)
-    }
-}
-
-fn clear_session(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::clear_session(request, config)
-    }
-}
-
-fn replace_turns(
-    request: MemoryCoreRequest,
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (request, config);
-        return Err(
-            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
-        );
-    }
-
-    #[cfg(feature = "memory-sqlite")]
-    {
-        sqlite::replace_turns(request, config)
-    }
-}
-
 #[cfg(feature = "memory-sqlite")]
 pub fn append_turn_direct(
     session_id: &str,
@@ -248,6 +180,18 @@ pub fn append_turn_direct(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<(), String> {
     sqlite::append_turn_direct(session_id, role, content, config)
+}
+
+#[cfg(all(test, feature = "memory-sqlite"))]
+#[allow(dead_code)]
+pub(crate) fn append_turn_direct_with_sqlite_path(
+    session_id: &str,
+    role: &str,
+    content: &str,
+    sqlite_path: &Path,
+) -> Result<(), String> {
+    let config = runtime_config::MemoryRuntimeConfig::for_sqlite_path(sqlite_path.to_path_buf());
+    append_turn_direct(session_id, role, content, &config)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -339,6 +283,17 @@ pub(crate) fn search_canonical_memory(
 }
 
 #[cfg(feature = "memory-sqlite")]
+pub(crate) fn search_canonical_memory_with_sqlite_path(
+    query: &str,
+    limit: usize,
+    exclude_session_id: Option<&str>,
+    sqlite_path: &Path,
+) -> Result<Vec<CanonicalMemorySearchHit>, String> {
+    let config = runtime_config::MemoryRuntimeConfig::for_sqlite_path(sqlite_path.to_path_buf());
+    search_canonical_memory(query, limit, exclude_session_id, &config)
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub(crate) fn search_workspace_memory_documents(
     query: &str,
     limit: usize,
@@ -352,6 +307,34 @@ pub(crate) fn search_workspace_memory_documents(
         workspace_root,
         memory_system_id,
         config,
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn build_read_stage_envelope_request_for_memory_config(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &crate::config::MemoryConfig,
+) -> MemoryCoreRequest {
+    let runtime_config = runtime_config::MemoryRuntimeConfig::from_memory_config(config);
+    build_read_stage_envelope_request_with_workspace_root(
+        session_id,
+        workspace_root,
+        &runtime_config,
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn hydrate_stage_envelope_for_memory_config(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &crate::config::MemoryConfig,
+) -> Result<StageEnvelope, String> {
+    let runtime_config = runtime_config::MemoryRuntimeConfig::from_memory_config(config);
+    orchestrator::hydrate_stage_envelope_with_workspace_root(
+        session_id,
+        workspace_root,
+        &runtime_config,
     )
 }
 

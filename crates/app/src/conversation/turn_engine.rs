@@ -16,7 +16,6 @@ use crate::config::{
     GovernedToolApprovalMode, LoongConfig, SessionVisibility, ToolConfig, ToolConsentMode,
 };
 use crate::context::KernelContext;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
 #[cfg(feature = "memory-sqlite")]
@@ -27,6 +26,7 @@ use crate::operator::session_graph::OperatorSessionGraph;
 use crate::session::repository::{
     NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };
+use crate::session::store::{self, SessionStoreConfig};
 use crate::tools::runtime_events::{
     ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
@@ -50,7 +50,7 @@ use super::turn_observer::{ConversationTurnObserverHandle, ConversationTurnRunti
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
 use super::tool_input_contract::detect_repairable_tool_request_issue;
-use super::turn_shared::effective_followup_tool_name;
+use super::turn_shared::effective_followup_visible_tool_name;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderTurn {
@@ -568,13 +568,13 @@ impl ToolExecutionPreflight {
 
 #[derive(Clone)]
 pub struct DefaultAppToolDispatcher {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     tool_config: ToolConfig,
     app_config: Option<Arc<LoongConfig>>,
 }
 
 impl DefaultAppToolDispatcher {
-    pub fn new(memory_config: MemoryRuntimeConfig, tool_config: ToolConfig) -> Self {
+    pub fn new(memory_config: SessionStoreConfig, tool_config: ToolConfig) -> Self {
         Self {
             memory_config,
             tool_config,
@@ -582,7 +582,7 @@ impl DefaultAppToolDispatcher {
         }
     }
 
-    pub fn with_config(memory_config: MemoryRuntimeConfig, app_config: LoongConfig) -> Self {
+    pub fn with_config(memory_config: SessionStoreConfig, app_config: LoongConfig) -> Self {
         Self {
             memory_config,
             tool_config: app_config.tools.clone(),
@@ -592,7 +592,7 @@ impl DefaultAppToolDispatcher {
 
     pub fn runtime() -> Self {
         Self::new(
-            crate::memory::runtime_config::get_memory_runtime_config().clone(),
+            store::current_session_store_config().clone(),
             ToolConfig::default(),
         )
     }
@@ -1223,8 +1223,9 @@ impl DefaultAppToolDispatcher {
 
         let approval_request_id =
             governed_approval_request_id(session_context, descriptor.name, intent);
+        let visible_tool_name = crate::tools::model_visible_tool_name(descriptor.name);
         let reason = format!(
-            "operator approval required before running shell command `{normalized_command}` via `shell.exec`"
+            "operator approval required before running shell command `{normalized_command}` via `{visible_tool_name}`"
         );
         let rule_id = crate::tools::shell_policy_ext::SHELL_EXEC_APPROVAL_RULE_ID;
         let request_payload_json = Self::approval_request_payload_json(
@@ -2210,24 +2211,26 @@ fn payload_looks_like_external_skill_context(payload: &serde_json::Value) -> boo
 
 pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
     let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
-    if canonical_tool_name != "tool.invoke" {
-        return canonical_tool_name.to_owned();
-    }
-    intent
-        .args_json
-        .get("tool_id")
-        .and_then(serde_json::Value::as_str)
-        .map(crate::tools::canonical_tool_name)
-        .and_then(|tool_name| {
-            crate::tools::resolve_tool_execution(tool_name).map(|resolved| resolved.canonical_name)
-        })
-        .filter(|tool_name| !crate::tools::is_provider_exposed_tool_name(tool_name))
-        .unwrap_or(canonical_tool_name)
-        .to_owned()
+    let effective_canonical_tool_name = if canonical_tool_name != "tool.invoke" {
+        canonical_tool_name
+    } else if let Some((tool_name, _arguments)) =
+        crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+    {
+        tool_name
+    } else {
+        intent
+            .args_json
+            .get("tool_id")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::tools::canonical_tool_name)
+            .unwrap_or(canonical_tool_name)
+    };
+
+    crate::tools::user_visible_tool_name(effective_canonical_tool_name)
 }
 
 fn effective_denied_tool_name(intent: &ToolIntent) -> String {
-    effective_followup_tool_name(intent)
+    effective_followup_visible_tool_name(intent)
 }
 
 fn build_tool_decision_trace_record(
@@ -2398,17 +2401,8 @@ fn effective_visible_tool_name(
         return descriptor.name.to_owned();
     }
 
-    intent
-        .args_json
-        .get("tool_id")
-        .and_then(serde_json::Value::as_str)
-        .map(crate::tools::canonical_tool_name)
-        .and_then(|tool_name| {
-            tool_catalog()
-                .descriptor(tool_name)
-                .filter(|target| !target.is_provider_core())
-                .map(|target| target.name.to_owned())
-        })
+    crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+        .map(|(tool_name, _arguments)| tool_name.to_owned())
         .unwrap_or_else(|| descriptor.name.to_owned())
 }
 
@@ -2421,7 +2415,7 @@ fn provider_tool_denial_should_conceal_name(
         return false;
     }
 
-    if !descriptor.is_provider_core() {
+    if !descriptor.is_provider_exposed() {
         return true;
     }
 
@@ -2456,13 +2450,18 @@ fn tool_intent_is_visible(
     intent: &ToolIntent,
     descriptor: &crate::tools::ToolDescriptor,
 ) -> bool {
-    if descriptor.is_provider_core() {
+    if descriptor.is_provider_exposed() {
         if descriptor.name != "tool.invoke" {
             return true;
         }
         let effective_name = effective_visible_tool_name(intent, descriptor);
         return effective_name == descriptor.name
             || session_context.tool_view.contains(effective_name.as_str());
+    }
+
+    let provider_origin = intent.source.starts_with("provider_");
+    if provider_origin {
+        return false;
     }
 
     session_context.tool_view.contains(descriptor.name)
@@ -3969,7 +3968,7 @@ mod tests {
         SessionRepository, SessionState,
     };
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
             "loong-turn-engine-approval-{test_name}-{}",
             std::process::id()
@@ -3977,9 +3976,9 @@ mod tests {
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -5187,6 +5186,7 @@ mod tests {
 
         let mut tool_config = ToolConfig::default();
         tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
@@ -5210,10 +5210,7 @@ mod tests {
         let approval_request_id = match result {
             TurnResult::NeedsApproval(requirement) => {
                 assert_eq!(requirement.tool_name.as_deref(), Some("shell.exec"));
-                assert_eq!(
-                    requirement.approval_key.as_deref(),
-                    Some("tool:shell.exec:cargo")
-                );
+                assert_eq!(requirement.approval_key.as_deref(), Some("tool:shell.exec"));
                 requirement
                     .approval_request_id
                     .expect("approval request id should be present")
@@ -5236,7 +5233,7 @@ mod tests {
         assert_eq!(stored.tool_name, "shell.exec");
         assert_eq!(stored.turn_id, "turn-shell-discovered");
         assert_eq!(stored.tool_call_id, "call-shell-discovered");
-        assert_eq!(stored.approval_key, "tool:shell.exec:cargo");
+        assert_eq!(stored.approval_key, "tool:shell.exec");
         assert_eq!(stored.request_payload_json["tool_name"], "shell.exec");
         assert_eq!(stored.request_payload_json["execution_kind"], "core");
         assert_eq!(
@@ -5263,6 +5260,7 @@ mod tests {
 
         let mut tool_config = ToolConfig::default();
         tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
 
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
@@ -5689,8 +5687,8 @@ mod tests {
             }
         };
         assert!(
-            reply.contains("\"tool\":\"browser.companion.click\""),
-            "reply should include the executed companion tool: {reply}"
+            reply.contains("\"tool\":\"browser\""),
+            "reply should include the executed browser surface output: {reply}"
         );
         assert!(
             reply.contains("\"status\":\"ok\""),
@@ -5790,8 +5788,8 @@ mod tests {
             }
         };
         assert!(
-            reply.contains("\"tool\":\"browser.companion.click\""),
-            "reply should include the executed companion tool: {reply}"
+            reply.contains("\"tool\":\"browser\""),
+            "reply should include the executed browser surface output: {reply}"
         );
         assert!(
             reply.contains("\"status\":\"ok\""),
@@ -5893,8 +5891,8 @@ mod tests {
             }
         };
         assert!(
-            reply.contains("\"tool\":\"browser.companion.click\""),
-            "reply should include the executed companion tool: {reply}"
+            reply.contains("\"tool\":\"browser\""),
+            "reply should include the executed browser surface output: {reply}"
         );
         assert!(
             reply.contains("\"status\":\"ok\""),
@@ -6192,7 +6190,7 @@ mod tests {
 
         let record = build_success_tool_outcome_trace_record(&intent, &outcome);
 
-        assert_eq!(record.outcome.tool_name, "file.read");
+        assert_eq!(record.outcome.tool_name, "read");
         assert_eq!(record.outcome.status, "ok");
         assert_eq!(record.turn_id, "turn-bounded-payload");
         assert_eq!(record.tool_call_id, "call-bounded-payload");

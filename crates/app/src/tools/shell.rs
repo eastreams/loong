@@ -4,7 +4,7 @@ use super::process_exec;
 use super::runtime_events::current_tool_runtime_event_sink;
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
-use serde_json::{Value, json};
+use serde_json::Value;
 #[cfg(feature = "tool-shell")]
 use std::path::PathBuf;
 pub(super) fn execute_shell_tool_with_config(
@@ -84,25 +84,16 @@ pub(super) fn execute_shell_tool_with_config(
             cwd.as_path(),
             timeout_ms,
             runtime_event_sink.clone(),
+            config.file_root.as_deref(),
         ))??;
 
-        Ok(ToolCoreOutcome {
-            status: if output.status.success() {
-                "ok".to_owned()
-            } else {
-                "failed".to_owned()
-            },
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "command": command,
-                "args": args,
-                "cwd": cwd.display().to_string(),
-                "exit_code": output.status.code(),
-                "stdout": String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }),
-        })
+        Ok(process_exec::build_process_tool_outcome(
+            request.tool_name.as_str(),
+            command,
+            Some(args.as_slice()),
+            cwd.as_path(),
+            output,
+        ))
     }
 }
 
@@ -144,7 +135,8 @@ async fn run_shell_command_with_timeout(
     runtime_event_sink: Option<
         std::sync::Arc<dyn crate::tools::runtime_events::ToolRuntimeEventSink>,
     >,
-) -> Result<std::process::Output, String> {
+    accessible_output_root: Option<&std::path::Path>,
+) -> Result<process_exec::ProcessExecOutcome, String> {
     process_exec::run_process_with_timeout_with_sink(
         command,
         args,
@@ -152,6 +144,7 @@ async fn run_shell_command_with_timeout(
         timeout_ms,
         "shell command",
         runtime_event_sink,
+        accessible_output_root,
     )
     .await
 }

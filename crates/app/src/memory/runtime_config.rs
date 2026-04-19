@@ -157,6 +157,18 @@ impl MemoryRuntimeConfig {
         Self::from_memory_config_base(config)
     }
 
+    /// Build a minimal runtime config bound to one explicit SQLite path.
+    ///
+    /// This is intended for tooling and tests that need to inspect canonical
+    /// memory records through the same runtime surface without constructing a
+    /// full `MemoryConfig`.
+    pub fn for_sqlite_path(sqlite_path: impl Into<PathBuf>) -> Self {
+        Self {
+            sqlite_path: Some(sqlite_path.into()),
+            ..Self::default()
+        }
+    }
+
     pub const fn strict_mode_requested(&self) -> bool {
         !self.fail_open
     }
@@ -327,6 +339,17 @@ mod tests {
             config.resolved_sqlite_path(),
             PathBuf::from("/tmp/test-memory.sqlite3")
         );
+    }
+
+    #[test]
+    fn runtime_config_for_sqlite_path_sets_only_explicit_sqlite_override() {
+        let config = MemoryRuntimeConfig::for_sqlite_path("/tmp/helper-memory.sqlite3");
+
+        assert_eq!(
+            config.sqlite_path,
+            Some(PathBuf::from("/tmp/helper-memory.sqlite3"))
+        );
+        assert_eq!(config.backend, MemoryBackendKind::Sqlite);
     }
 
     #[test]

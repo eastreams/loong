@@ -2007,12 +2007,10 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .and_then(|value| value.get("needs_attention_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let effective_tool_ids = task
-        .get("tool_policy")
-        .and_then(|value| value.get("effective_tool_ids"))
-        .and_then(Value::as_array)
-        .map(|values| render_string_array(values))
-        .unwrap_or_else(|| "-".to_owned());
+    let requested_tool_ids =
+        render_task_tool_policy_tool_ids(task, "visible_requested_tool_ids", "requested_tool_ids");
+    let effective_tool_ids =
+        render_task_tool_policy_tool_ids(task, "visible_effective_tool_ids", "effective_tool_ids");
     let effective_runtime_narrowing = task
         .get("tool_policy")
         .and_then(|value| value.get("effective_runtime_narrowing"))
@@ -2035,6 +2033,8 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     let sanitized_scope_session_id = crate::sessions_cli::sanitize_terminal_text(scope_session_id);
     let sanitized_label = crate::sessions_cli::sanitize_terminal_text(label);
     let sanitized_last_error = crate::sessions_cli::sanitize_terminal_text(last_error);
+    let sanitized_requested_tool_ids =
+        crate::sessions_cli::sanitize_terminal_text(requested_tool_ids.as_str());
     let sanitized_effective_tool_ids =
         crate::sessions_cli::sanitize_terminal_text(effective_tool_ids.as_str());
     let sanitized_runtime_narrowing =
@@ -2089,6 +2089,11 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("last_error: {sanitized_last_error}"));
     lines.push(format!("approval_requests: {approval_total}"));
     lines.push(format!("approval_attention: {approval_attention}"));
+    if requested_tool_ids != "-" {
+        lines.push(format!(
+            "requested_tool_ids: {sanitized_requested_tool_ids}"
+        ));
+    }
     lines.push(format!(
         "effective_tool_ids: {sanitized_effective_tool_ids}"
     ));
@@ -2118,6 +2123,22 @@ fn append_task_lookup_error_line(payload: &Value, lines: &mut Vec<String>) {
     let sanitized_task_lookup_error =
         crate::sessions_cli::sanitize_terminal_text(task_lookup_error);
     lines.push(format!("task_lookup_error: {sanitized_task_lookup_error}"));
+}
+
+fn render_task_tool_policy_tool_ids(task: &Value, visible_field: &str, raw_field: &str) -> String {
+    task.get("tool_policy")
+        .and_then(|value| value.get(visible_field))
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty())
+        .map(|values| render_string_array(values))
+        .or_else(|| {
+            task.get("tool_policy")
+                .and_then(|value| value.get(raw_field))
+                .and_then(Value::as_array)
+                .filter(|values| !values.is_empty())
+                .map(|values| render_string_array(values))
+        })
+        .unwrap_or_else(|| "-".to_owned())
 }
 
 fn render_string_array(values: &[Value]) -> String {

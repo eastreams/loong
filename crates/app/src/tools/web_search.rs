@@ -17,6 +17,24 @@ const FIRECRAWL_SEARCH_ENDPOINT: &str = "https://api.firecrawl.dev/v2/search";
 const FIRECRAWL_SOURCE_WEB: &str = "web";
 #[cfg(feature = "tool-websearch")]
 const FIRECRAWL_MARKDOWN_SNIPPET_MAX_CHARS: usize = 800;
+#[cfg(feature = "tool-websearch")]
+const WEB_SEARCH_NETWORK_MODE_NOTE: &str = "Query search mode is separate from plain `web { url }`, `web.fetch`, or low-level HTTP request network access.";
+
+#[cfg(feature = "tool-websearch")]
+fn web_search_mode_only_error(message: impl Into<String>) -> String {
+    format!("{} {WEB_SEARCH_NETWORK_MODE_NOTE}", message.into())
+}
+
+#[cfg(feature = "tool-websearch")]
+fn missing_web_search_provider_credential_error(
+    provider_label: &str,
+    config_field: &str,
+    env_hint: &str,
+) -> String {
+    web_search_mode_only_error(format!(
+        "{provider_label} API key not configured. Set {config_field} in config or {env_hint} environment variable."
+    ))
+}
 
 pub(super) fn execute_web_search_tool_with_config(
     request: ToolCoreRequest,
@@ -26,7 +44,7 @@ pub(super) fn execute_web_search_tool_with_config(
     {
         let _ = (request, config);
         return Err(
-            "web.search tool is disabled in this build (enable feature `tool-websearch`)"
+            "web.search tool is disabled in this build (enable feature `tool-websearch`). Plain `web { url }`, `web.fetch`, or low-level HTTP request mode may still be available."
                 .to_owned(),
         );
     }
@@ -43,7 +61,9 @@ fn execute_web_search_tool_enabled(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     if !config.web_search.enabled {
-        return Err("web.search is disabled by config.tools.web_search.enabled=false".to_owned());
+        return Err(web_search_mode_only_error(
+            "web.search is disabled by config.tools.web_search.enabled=false",
+        ));
     }
 
     let payload = request
@@ -317,9 +337,10 @@ async fn search_brave(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            format!(
-                "Brave API key not configured. Set tools.web_search.brave_api_key in config or {} environment variable.",
-                crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV
+            missing_web_search_provider_credential_error(
+                "Brave",
+                "tools.web_search.brave_api_key",
+                crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV,
             )
         })?;
 
@@ -393,9 +414,10 @@ async fn search_tavily(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            format!(
-                "Tavily API key not configured. Set tools.web_search.tavily_api_key in config or {} environment variable.",
-                crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV
+            missing_web_search_provider_credential_error(
+                "Tavily",
+                "tools.web_search.tavily_api_key",
+                crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV,
             )
         })?;
 
@@ -468,9 +490,10 @@ async fn search_perplexity(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            format!(
-                "Perplexity API key not configured. Set tools.web_search.perplexity_api_key in config or {} environment variable.",
-                crate::config::WEB_SEARCH_PERPLEXITY_API_KEY_ENV
+            missing_web_search_provider_credential_error(
+                "Perplexity",
+                "tools.web_search.perplexity_api_key",
+                crate::config::WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
             )
         })?;
 
@@ -542,9 +565,10 @@ async fn search_exa(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            format!(
-                "Exa API key not configured. Set tools.web_search.exa_api_key in config or {} environment variable.",
-                crate::config::WEB_SEARCH_EXA_API_KEY_ENV
+            missing_web_search_provider_credential_error(
+                "Exa",
+                "tools.web_search.exa_api_key",
+                crate::config::WEB_SEARCH_EXA_API_KEY_ENV,
             )
         })?;
 
@@ -643,9 +667,10 @@ async fn search_firecrawl(
     api_key: Option<&str>,
 ) -> Result<Value, String> {
     let trimmed_api_key = api_key.and_then(trim_non_empty);
-    let missing_api_key_message = format!(
-        "Firecrawl API key not configured. Set tools.web_search.firecrawl_api_key in config or {} environment variable.",
-        crate::config::WEB_SEARCH_FIRECRAWL_API_KEY_ENV
+    let missing_api_key_message = missing_web_search_provider_credential_error(
+        "Firecrawl",
+        "tools.web_search.firecrawl_api_key",
+        crate::config::WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
     );
     let api_key = trimmed_api_key.ok_or(missing_api_key_message)?;
 
@@ -831,10 +856,14 @@ async fn search_jina(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            format!(
-                "Jina API key not configured. Set tools.web_search.jina_api_key in config or {} / {} environment variable.",
-                crate::config::WEB_SEARCH_JINA_API_KEY_ENV,
-                crate::config::WEB_SEARCH_JINA_AUTH_TOKEN_ENV
+            missing_web_search_provider_credential_error(
+                "Jina",
+                "tools.web_search.jina_api_key",
+                &format!(
+                    "{} / {}",
+                    crate::config::WEB_SEARCH_JINA_API_KEY_ENV,
+                    crate::config::WEB_SEARCH_JINA_AUTH_TOKEN_ENV
+                ),
             )
         })?;
 
@@ -1264,6 +1293,10 @@ mod tests {
             error.contains("disabled by config"),
             "unexpected error: {error}"
         );
+        assert!(
+            error.contains("Query search mode is separate from plain `web { url }`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1314,6 +1347,10 @@ mod tests {
         .expect_err("should require brave API key");
         assert!(
             error.contains("Brave API key not configured"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("Query search mode is separate from plain `web { url }`"),
             "unexpected error: {error}"
         );
     }

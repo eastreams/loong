@@ -4,19 +4,18 @@ use serde_json::{Value, json};
 use super::payload::required_payload_string;
 
 use crate::config::{LoongConfig, ToolConfig};
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository,
 };
+use crate::session::store::SessionStoreConfig;
 
 const SESSION_MESSAGE_SENT_EVENT_KIND: &str = "session_message_sent";
 
 pub(crate) async fn execute_sessions_send_with_config(
     payload: Value,
     current_session_id: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     app_config: &LoongConfig,
 ) -> Result<ToolCoreOutcome, String> {

@@ -18,10 +18,10 @@ use crate::conversation::collect_context_engine_runtime_snapshot;
 use crate::conversation::resolve_context_engine_selection;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::memory;
-#[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::runtime_self_continuity;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store::SessionStoreConfig;
 use crate::tui_surface::TuiActionSpec;
 use crate::tui_surface::TuiCalloutTone;
 use crate::tui_surface::TuiChoiceSpec;
@@ -823,7 +823,7 @@ pub(super) async fn print_history(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
+    #[cfg(feature = "memory-sqlite")] memory_config: &SessionStoreConfig,
 ) -> CliResult<()> {
     #[cfg(feature = "memory-sqlite")]
     {
@@ -1055,7 +1055,7 @@ pub(super) async fn load_history_lines(
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) -> CliResult<Vec<String>> {
     if let Some(ctx) = binding.kernel_context() {
         let request = memory::build_window_request(session_id, limit);

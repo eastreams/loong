@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
-use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::session::store;
 
 use super::super::config::LoongConfig;
 use super::ProviderErrorMode;
@@ -120,7 +120,7 @@ impl ConversationTurnLoop {
         let session_context = runtime.session_context(config, session_id, binding)?;
         let tool_view = session_context.tool_view.clone();
         let app_dispatcher = DefaultAppToolDispatcher::with_config(
-            MemoryRuntimeConfig::from_memory_config(&config.memory),
+            store::session_store_config_from_memory_config(&config.memory),
             config.clone(),
         );
         let turn_id = super::turn_shared::next_conversation_turn_id();
@@ -1025,7 +1025,7 @@ mod tests {
         )
         .expect("file.read payload summary should stay valid json");
 
-        assert_eq!(envelope["tool"], "file.read");
+        assert_eq!(envelope["tool"], "read");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["path"], "/repo/README.md");
         assert_eq!(summary["bytes"], 8_192);
@@ -1119,7 +1119,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
 
-        assert!(user_prompt.contains("Repair guidance for shell.exec:"));
+        assert!(user_prompt.contains("Repair guidance for exec:"));
         assert!(user_prompt.contains("CMD.EXE"));
         assert!(user_prompt.contains("cmd.exe"));
     }
@@ -1270,7 +1270,7 @@ mod tests {
         let (envelope, summary) =
             crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
-        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["command"], "cargo");
         assert_eq!(summary["exit_code"], 0);
@@ -1468,7 +1468,7 @@ mod tests {
         let (envelope, summary) =
             crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
-        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["command"], "cargo");
         assert_eq!(summary["exit_code"], 0);

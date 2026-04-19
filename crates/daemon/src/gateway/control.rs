@@ -127,6 +127,10 @@ impl GatewayControlAppState {
             tools: GatewayRuntimeSnapshotToolsReadModel {
                 visible_tool_count: 0,
                 visible_tool_names: vec![],
+                visible_direct_tool_names: vec![],
+                hidden_tool_count: 0,
+                hidden_tool_tags: vec![],
+                hidden_tool_surfaces: vec![],
                 capability_snapshot_sha256: String::new(),
                 capability_snapshot: String::new(),
                 tool_calling: super::read_models::GatewayToolCallingReadModel {
@@ -135,6 +139,13 @@ impl GatewayControlAppState {
                     effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
                     active_model: String::new(),
                     reason: "no runtime-visible tools are enabled".to_owned(),
+                },
+                web_access: super::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: false,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
             runtime_plugins: json!({}),

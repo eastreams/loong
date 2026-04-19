@@ -604,6 +604,9 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
         )
     );
     assert!(rendered.contains("acp_mcp docs status=pending"));
+    assert!(rendered.contains("tool_runtime web_access ordinary_network_enabled="));
+    assert!(rendered.contains("query_search_default_provider=duckduckgo"));
+    assert!(rendered.contains("query_search_credential_ready=true"));
     assert!(rendered.contains("tools visible_count="));
     assert!(rendered.contains("runtime_plugins inventory_status=ok enabled=true"));
     assert!(rendered.contains("readiness_evaluation=default_bridge_support_matrix"));

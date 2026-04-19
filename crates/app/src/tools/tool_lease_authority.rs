@@ -261,7 +261,15 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
     let mut attempt_index = 0usize;
 
     while attempt_index < retry_attempts {
-        let existing_secret = read_tool_lease_secret_file(secret_path)?;
+        let existing_secret = match read_tool_lease_secret_file(secret_path) {
+            Ok(existing_secret) => existing_secret,
+            Err(error)
+                if transient_tool_lease_secret_publication_error(error.as_str(), secret_path) =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(existing_secret) = existing_secret {
             return Ok(existing_secret);
         }
@@ -281,6 +289,19 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
         secret_path.display()
     );
     Err(message)
+}
+
+fn transient_tool_lease_secret_publication_error(error: &str, secret_path: &Path) -> bool {
+    let secret_path = secret_path.display();
+    let empty_prefix =
+        format!("tool_lease_authority_unavailable: secret file {secret_path} is empty");
+    let invalid_hex_prefix =
+        format!("tool_lease_authority_unavailable: secret file {secret_path} is not valid hex:");
+    let wrong_length_prefix =
+        format!("tool_lease_authority_unavailable: secret file {secret_path} has ");
+    error == empty_prefix
+        || error.starts_with(invalid_hex_prefix.as_str())
+        || error.starts_with(wrong_length_prefix.as_str())
 }
 
 fn ensure_tool_lease_secret_parent_dir(secret_path: &Path) -> Result<(), String> {
@@ -319,6 +340,14 @@ fn read_tool_lease_secret_file(secret_path: &Path) -> Result<Option<String>, Str
         return Err(message);
     }
 
+    let normalized_secret = parse_tool_lease_secret_text(trimmed_secret, secret_path)?;
+    Ok(Some(normalized_secret))
+}
+
+fn parse_tool_lease_secret_text(
+    trimmed_secret: &str,
+    secret_path: &Path,
+) -> Result<String, String> {
     let decoded_secret = hex::decode(trimmed_secret).map_err(|error| {
         format!(
             "tool_lease_authority_unavailable: secret file {} is not valid hex: {error}",
@@ -339,7 +368,7 @@ fn read_tool_lease_secret_file(secret_path: &Path) -> Result<Option<String>, Str
     }
 
     let normalized_secret = trimmed_secret.to_owned();
-    Ok(Some(normalized_secret))
+    Ok(normalized_secret)
 }
 
 fn generate_tool_lease_secret() -> String {
@@ -526,6 +555,38 @@ mod tests {
         let publisher = std::thread::spawn(move || {
             let publish_delay = std::time::Duration::from_millis(10);
             std::thread::park_timeout(publish_delay);
+            std::fs::write(&publisher_path, "").expect("publish transient empty secret file");
+            std::thread::park_timeout(std::time::Duration::from_millis(10));
+            let secret_body = format!("{publisher_secret}\n");
+            std::fs::write(&publisher_path, secret_body).expect("publish secret file");
+        });
+
+        let observed_secret =
+            read_tool_lease_secret_after_competitor_publish(secret_path.as_path())
+                .expect("wait for visible secret");
+
+        publisher.join().expect("join publisher thread");
+
+        assert_eq!(observed_secret, expected_secret);
+    }
+
+    #[test]
+    fn read_tool_lease_secret_after_competitor_publish_retries_partial_hex_secret() {
+        let _home = scoped_tool_lease_home("loong-tool-lease-partial-hex-home");
+        let secret_path = default_tool_lease_secret_path();
+        let parent_dir = secret_path.parent().expect("secret parent").to_path_buf();
+        std::fs::create_dir_all(&parent_dir).expect("create secret parent");
+
+        let expected_secret = generate_tool_lease_secret();
+        let publisher_path = secret_path.clone();
+        let publisher_secret = expected_secret.clone();
+
+        let publisher = std::thread::spawn(move || {
+            let publish_delay = std::time::Duration::from_millis(10);
+            std::thread::park_timeout(publish_delay);
+            std::fs::write(&publisher_path, "deadbeef\n")
+                .expect("publish transient partial secret file");
+            std::thread::park_timeout(std::time::Duration::from_millis(10));
             let secret_body = format!("{publisher_secret}\n");
             std::fs::write(&publisher_path, secret_body).expect("publish secret file");
         });

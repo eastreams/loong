@@ -1,8 +1,9 @@
 use crate::CliResult;
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{ApprovalRequestRecord, SessionRepository};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store::SessionStoreConfig;
+use serde_json::Value;
 
 pub(crate) const CHAT_SESSION_KIND_DELEGATE_CHILD: &str = "delegate_child";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -10,6 +11,8 @@ pub(crate) struct ChatControlPlaneApprovalSummary {
     pub(crate) approval_request_id: String,
     pub(crate) status: String,
     pub(crate) tool_name: String,
+    pub(crate) visible_tool_name: String,
+    pub(crate) request_summary: Value,
     pub(crate) turn_id: String,
     pub(crate) requested_at: i64,
     pub(crate) reason: Option<String>,
@@ -67,11 +70,23 @@ impl ChatControlPlaneApprovalSummary {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
         let status = record.status.as_str().to_owned();
+        let raw_request = record
+            .request_payload_json
+            .as_object()
+            .and_then(|payload| payload.get("args_json"))
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let request_summary = crate::tools::summarize_tool_request_for_display(
+            record.tool_name.as_str(),
+            raw_request,
+        );
 
         Self {
             approval_request_id: record.approval_request_id.clone(),
             status,
             tool_name: record.tool_name.clone(),
+            visible_tool_name: crate::tools::user_visible_tool_name(record.tool_name.as_str()),
+            request_summary,
             turn_id: record.turn_id.clone(),
             requested_at: record.requested_at,
             reason,
@@ -106,7 +121,7 @@ impl ChatControlPlaneSessionSummary {
 
 impl ChatControlPlaneStore {
     #[cfg(feature = "memory-sqlite")]
-    pub(crate) fn new(memory_config: &MemoryRuntimeConfig) -> CliResult<Self> {
+    pub(crate) fn new(memory_config: &SessionStoreConfig) -> CliResult<Self> {
         let repo = SessionRepository::new(memory_config)?;
         Ok(Self { repo })
     }
@@ -343,5 +358,41 @@ mod tests {
 
         assert_eq!(excerpt, "abc…");
         assert_eq!(short, "abc");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_summary_from_record_pairs_raw_and_visible_tool_names() {
+        let record = ApprovalRequestRecord {
+            approval_request_id: "apr-1".to_owned(),
+            session_id: "child-session".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            tool_call_id: "call-1".to_owned(),
+            tool_name: "shell.exec".to_owned(),
+            approval_key: "tool:shell.exec".to_owned(),
+            status: crate::session::repository::ApprovalRequestStatus::Pending,
+            decision: None,
+            request_payload_json: serde_json::json!({}),
+            governance_snapshot_json: serde_json::json!({
+                "reason": "operator approval required",
+                "rule_id": "shell-gate",
+            }),
+            requested_at: 42,
+            resolved_at: None,
+            resolved_by_session_id: None,
+            executed_at: None,
+            last_error: None,
+        };
+
+        let summary = ChatControlPlaneApprovalSummary::from_record(&record);
+
+        assert_eq!(summary.tool_name, "shell.exec");
+        assert_eq!(summary.visible_tool_name, "exec");
+        assert_eq!(summary.request_summary, serde_json::json!({}));
+        assert_eq!(
+            summary.reason.as_deref(),
+            Some("operator approval required")
+        );
+        assert_eq!(summary.rule_id.as_deref(), Some("shell-gate"));
     }
 }

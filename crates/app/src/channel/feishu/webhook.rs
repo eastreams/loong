@@ -1400,14 +1400,13 @@ data: [DONE]\n\n",
                             // tool_invoke with the lease obtained from tool_search.
                             // Extract the lease from the tool_search result in the
                             // request body.
-                            let lease = extract_lease_from_provider_request_body(
-                                &body_text,
-                                "feishu.card.update",
-                            );
+                            let lease =
+                                extract_lease_from_provider_request_body(&body_text, "channel");
                             let arguments = json!({
-                                "tool_id": "feishu.card.update",
+                                "tool_id": "channel",
                                 "lease": lease,
                                 "arguments": {
+                                    "operation": "card.update",
                                     "card": {
                                         "config": {"wide_screen_mode": true},
                                         "elements": [{"tag": "markdown", "content": "callback updated"}]
@@ -1494,9 +1493,9 @@ data: [DONE]\n\n",
         let payload_summary = serde_json::to_string(&json!({
             "query": "feishu card update callback token markdown",
             "results": [{
-                "tool_id": "feishu.card.update",
-                "summary": "Update a Feishu interactive card after a card callback.",
-                "argument_hint": "callback_token?:string,card?:object,markdown?:string",
+                "tool_id": "channel",
+                "summary": "Operate channel-specific capabilities such as Feishu through one separate addon tool.",
+                "argument_hint": "operation:string,account_id?:string,open_id?:string,receive_id?:string,message_id?:string,url?:string,query?:string",
                 "lease": "lease-feishu-card-update"
             }]
         }))
@@ -1520,7 +1519,7 @@ data: [DONE]\n\n",
         .expect("encode provider request body");
 
         assert_eq!(
-            extract_lease_from_provider_request_body(body.as_str(), "feishu.card.update"),
+            extract_lease_from_provider_request_body(body.as_str(), "channel"),
             "lease-feishu-card-update"
         );
     }
@@ -1529,7 +1528,7 @@ data: [DONE]\n\n",
     fn extract_lease_from_provider_request_body_ignores_non_search_envelopes() {
         let misleading_summary = serde_json::to_string(&json!({
             "results": [{
-                "tool_id": "feishu.card.update",
+                "tool_id": "channel",
                 "lease": "lease-from-non-search"
             }]
         }))
@@ -1537,9 +1536,9 @@ data: [DONE]\n\n",
         let search_summary = serde_json::to_string(&json!({
             "query": "feishu card update callback token markdown",
             "results": [{
-                "tool_id": "feishu.card.update",
-                "summary": "Update a Feishu interactive card after a card callback.",
-                "argument_hint": "callback_token?:string,card?:object,markdown?:string",
+                "tool_id": "channel",
+                "summary": "Operate channel-specific capabilities such as Feishu through one separate addon tool.",
+                "argument_hint": "operation:string,account_id?:string,open_id?:string,receive_id?:string,message_id?:string,url?:string,query?:string",
                 "lease": "lease-from-search"
             }]
         }))
@@ -1571,7 +1570,7 @@ data: [DONE]\n\n",
         .expect("encode provider request body");
 
         assert_eq!(
-            extract_lease_from_provider_request_body(body.as_str(), "feishu.card.update"),
+            extract_lease_from_provider_request_body(body.as_str(), "channel"),
             "lease-from-search"
         );
     }

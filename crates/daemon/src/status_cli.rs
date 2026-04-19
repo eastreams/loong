@@ -322,7 +322,21 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let active_provider_label_option = runtime.active_provider_label.as_deref();
     let active_provider_label = active_provider_label_option.unwrap_or("-");
     let capability_snapshot_sha256 = runtime.capability_snapshot_sha256.as_str();
+    let visible_direct_tools = if runtime.visible_direct_tool_names.is_empty() {
+        "-".to_owned()
+    } else {
+        runtime.visible_direct_tool_names.join(",")
+    };
+    let hidden_tool_surfaces = if runtime.hidden_tool_surface_ids.is_empty() {
+        "-".to_owned()
+    } else {
+        runtime.hidden_tool_surface_ids.join(",")
+    };
     let tool_calling = &runtime.tool_calling;
+    let web_access = &runtime.web_access;
+    let ordinary_network_detail = render_web_ordinary_network_detail(web_access);
+    let query_search_detail = render_web_query_search_detail(web_access);
+    let web_boundary_note = web_access.separation_note.clone();
     let mut sections = Vec::new();
 
     if let Some(primary_action) = status.next_actions.first() {
@@ -391,6 +405,20 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                 label: "work units".to_owned(),
                 detail: format!("availability={}", status.work_units.availability),
             },
+            loong_app::tui_surface::TuiChecklistItemSpec {
+                status: if web_access.ordinary_network_access_enabled {
+                    loong_app::tui_surface::TuiChecklistStatus::Pass
+                } else {
+                    loong_app::tui_surface::TuiChecklistStatus::Warn
+                },
+                label: "ordinary network".to_owned(),
+                detail: ordinary_network_detail.clone(),
+            },
+            loong_app::tui_surface::TuiChecklistItemSpec {
+                status: query_search_checklist_status(web_access),
+                label: "query search".to_owned(),
+                detail: query_search_detail.clone(),
+            },
         ],
     });
 
@@ -441,6 +469,26 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "visible tools".to_owned(),
                 value: runtime.visible_tool_count.to_string(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "direct tools".to_owned(),
+                value: visible_direct_tools,
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "hidden surfaces".to_owned(),
+                value: hidden_tool_surfaces,
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "ordinary network".to_owned(),
+                value: ordinary_network_detail,
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "query search".to_owned(),
+                value: query_search_detail,
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "web boundary".to_owned(),
+                value: web_boundary_note,
             },
         ],
     });
@@ -684,6 +732,33 @@ fn render_optional_usize(value: Option<usize>) -> String {
     value.unwrap_or_else(|| "-".to_owned())
 }
 
+fn render_web_ordinary_network_detail(
+    web_access: &crate::gateway::read_models::GatewayWebAccessReadModel,
+) -> String {
+    format!("enabled={}", web_access.ordinary_network_access_enabled)
+}
+
+fn render_web_query_search_detail(
+    web_access: &crate::gateway::read_models::GatewayWebAccessReadModel,
+) -> String {
+    format!(
+        "enabled={} · provider={} · credential_ready={}",
+        web_access.query_search_enabled,
+        web_access.query_search_default_provider,
+        web_access.query_search_credential_ready,
+    )
+}
+
+fn query_search_checklist_status(
+    web_access: &crate::gateway::read_models::GatewayWebAccessReadModel,
+) -> loong_app::tui_surface::TuiChecklistStatus {
+    if !web_access.query_search_enabled || web_access.query_search_credential_ready {
+        loong_app::tui_surface::TuiChecklistStatus::Pass
+    } else {
+        loong_app::tui_surface::TuiChecklistStatus::Warn
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,6 +767,33 @@ mod tests {
         GatewayOperatorRuntimeSummaryReadModel,
     };
     use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus};
+
+    #[test]
+    fn query_search_checklist_status_treats_disabled_mode_as_non_degraded() {
+        let disabled = crate::gateway::read_models::GatewayWebAccessReadModel {
+            ordinary_network_access_enabled: true,
+            query_search_enabled: false,
+            query_search_default_provider: "duckduckgo".to_owned(),
+            query_search_credential_ready: false,
+            separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+        };
+        assert_eq!(
+            query_search_checklist_status(&disabled),
+            loong_app::tui_surface::TuiChecklistStatus::Pass
+        );
+
+        let enabled_missing_credential = crate::gateway::read_models::GatewayWebAccessReadModel {
+            ordinary_network_access_enabled: true,
+            query_search_enabled: true,
+            query_search_default_provider: "brave".to_owned(),
+            query_search_credential_ready: false,
+            separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+        };
+        assert_eq!(
+            query_search_checklist_status(&enabled_missing_credential),
+            loong_app::tui_surface::TuiChecklistStatus::Warn
+        );
+    }
 
     #[test]
     fn render_status_cli_text_surfaces_drill_down_recipes() {
@@ -745,6 +847,8 @@ mod tests {
                 enabled_plugin_backed_channel_ids: Vec::new(),
                 enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
@@ -756,6 +860,13 @@ mod tests {
                     reason:
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
+                },
+                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
         };
@@ -809,10 +920,25 @@ mod tests {
         );
         assert!(rendered.contains("runtime posture"));
         assert!(rendered.contains("[OK] tool calling"));
-        assert!(rendered.contains("configured channels"));
-        assert!(rendered.contains("enabled channels"));
-        assert!(rendered.contains("service enabled ids"));
+        assert!(rendered.contains("[OK] ordinary network"));
+        assert!(rendered.contains("[OK] query search"));
         assert!(rendered.contains("saved runtime"));
+        assert!(rendered.contains("gateway summary"));
+        assert!(rendered.contains("visible tools: 4"));
+        assert!(rendered.contains("direct tools: read,exec"));
+        assert!(rendered.contains("hidden surfaces: agent,web"));
+        assert!(rendered.contains("ordinary network"));
+        assert!(rendered.contains("enabled=true"));
+        assert!(rendered.contains("query search"));
+        assert!(rendered.contains("provider=duckduckgo"));
+        assert!(rendered.contains("credential_ready=true"));
+        assert!(rendered.contains("web boundary"));
+        assert!(rendered.contains("ordinary network access stays separately governed"));
+        assert!(rendered.contains("channel and recovery detail"));
+        assert!(rendered.contains("enabled channels: telegram"));
+        assert!(rendered.contains("service enabled ids: telegram"));
+        assert!(rendered.contains("capability snapshot: abc123"));
+        assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
         assert!(rendered.contains("deep dives"));
         assert!(rendered.contains("- recipe: loong gateway status"));
     }

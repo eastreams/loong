@@ -428,6 +428,8 @@ struct ApprovalQueueItemSummary {
     approval_request_id: String,
     status: String,
     tool_name: String,
+    raw_tool_name: String,
+    request_summary: Option<String>,
     turn_id: String,
     requested_at: i64,
     reason: Option<String>,
@@ -549,10 +551,18 @@ impl ApprovalSurfaceSummary {
 
 impl ApprovalQueueItemSummary {
     fn from_control_plane_summary(summary: &ChatControlPlaneApprovalSummary) -> Self {
+        let request_summary = if summary.request_summary.is_null() {
+            None
+        } else {
+            serde_json::to_string(&summary.request_summary).ok()
+        };
+
         Self {
             approval_request_id: summary.approval_request_id.clone(),
             status: summary.status.clone(),
-            tool_name: summary.tool_name.clone(),
+            tool_name: summary.visible_tool_name.clone(),
+            raw_tool_name: summary.tool_name.clone(),
+            request_summary,
             turn_id: summary.turn_id.clone(),
             requested_at: summary.requested_at,
             reason: summary.reason.clone(),
@@ -563,10 +573,15 @@ impl ApprovalQueueItemSummary {
 
     fn list_line(&self) -> String {
         let reason = self.reason.as_deref().unwrap_or("-");
-        format!(
+        let mut line = format!(
             "{} status={} tool={} reason={}",
             self.approval_request_id, self.status, self.tool_name, reason
-        )
+        );
+        if let Some(request_summary) = self.request_summary.as_deref() {
+            line.push_str(" request=");
+            line.push_str(request_summary);
+        }
+        line
     }
 
     fn detail_lines(&self) -> Vec<String> {
@@ -577,6 +592,12 @@ impl ApprovalQueueItemSummary {
             format!("turn_id={}", self.turn_id),
             format!("requested_at={}", self.requested_at),
         ];
+        if self.raw_tool_name != self.tool_name {
+            lines.push(format!("raw_tool_name={}", self.raw_tool_name));
+        }
+        if let Some(request_summary) = self.request_summary.as_deref() {
+            lines.push(format!("request_summary={request_summary}"));
+        }
         if let Some(reason) = self.reason.as_deref() {
             lines.push(format!("reason={reason}"));
         }
@@ -5206,7 +5227,11 @@ mod tests {
         let item = ApprovalQueueItemSummary {
             approval_request_id: "apr_123".to_owned(),
             status: "pending".to_owned(),
-            tool_name: "shell.exec".to_owned(),
+            tool_name: "exec".to_owned(),
+            raw_tool_name: "shell.exec".to_owned(),
+            request_summary: Some(
+                "{\"command\":\"git\",\"timeout_ms\":3000,\"args_redacted\":1}".to_owned(),
+            ),
             turn_id: "turn_9".to_owned(),
             requested_at: 42,
             reason: Some("governed tool requires approval".to_owned()),
@@ -5214,10 +5239,19 @@ mod tests {
             last_error: Some("still waiting".to_owned()),
         };
 
-        assert!(item.list_line().contains("apr_123"));
+        let list_line = item.list_line();
+        assert!(list_line.contains("apr_123"));
+        assert!(
+            list_line
+                .contains("request={\"command\":\"git\",\"timeout_ms\":3000,\"args_redacted\":1}")
+        );
         let detail = item.detail_lines().join("\n");
         assert!(detail.contains("approval_request_id=apr_123"));
-        assert!(detail.contains("tool_name=shell.exec"));
+        assert!(detail.contains("tool_name=exec"));
+        assert!(detail.contains("raw_tool_name=shell.exec"));
+        assert!(detail.contains(
+            "request_summary={\"command\":\"git\",\"timeout_ms\":3000,\"args_redacted\":1}"
+        ));
         assert!(detail.contains("rule_id=approval-visible"));
         assert!(detail.contains("last_error=still waiting"));
     }

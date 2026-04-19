@@ -512,7 +512,13 @@ pub struct ControlPlaneTaskSummary {
     pub approval_request_count: usize,
     pub approval_attention_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_tool_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_requested_tool_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effective_tool_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_effective_tool_ids: Vec<String>,
     pub effective_runtime_narrowing: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
@@ -583,6 +589,10 @@ pub struct ControlPlaneApprovalSummary {
     pub turn_id: String,
     pub tool_call_id: String,
     pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_summary: Option<Value>,
     pub approval_key: String,
     pub status: ControlPlaneApprovalRequestStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]

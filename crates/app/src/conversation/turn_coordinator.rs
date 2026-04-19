@@ -14,10 +14,14 @@ use tokio::sync::Mutex;
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, timeout};
 
+#[path = "turn_coordinator/pending_approval.rs"]
+mod pending_approval;
 #[path = "turn_coordinator/safe_lane_events.rs"]
 mod safe_lane_events;
 #[path = "turn_coordinator/safe_lane_execution.rs"]
 mod safe_lane_execution;
+#[path = "turn_coordinator/safe_lane_governor.rs"]
+mod safe_lane_governor;
 #[path = "turn_coordinator/safe_lane_routing.rs"]
 mod safe_lane_routing;
 #[path = "turn_coordinator_support.rs"]
@@ -31,15 +35,17 @@ use crate::acp::{
     AcpConversationTurnOptions, AcpTurnEventSink, evaluate_acp_conversation_turn_entry_for_address,
     execute_acp_conversation_turn_for_address,
 };
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
     DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed,
 };
 use crate::runtime_self_continuity;
+use crate::session::store::{self, SessionStoreConfig};
 
+use self::pending_approval::*;
 use self::safe_lane_events::*;
 use self::safe_lane_execution::*;
+use self::safe_lane_governor::*;
 pub(crate) use self::safe_lane_routing::SafeLaneFailureRoute;
 use self::safe_lane_routing::*;
 use super::super::config::{LoongConfig, ToolConsentMode};
@@ -139,7 +145,8 @@ use super::turn_shared::{
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
     build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, effective_followup_tool_name,
-    format_approval_required_reply, next_conversation_turn_id, reduce_followup_payload_for_model,
+    effective_followup_visible_tool_name, format_approval_required_reply,
+    next_conversation_turn_id, reduce_followup_payload_for_model,
     request_completion_with_raw_fallback, summarize_provider_lane_tool_request,
     summarize_single_tool_followup_request, tool_driven_followup_payload,
     tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
@@ -313,142 +320,6 @@ impl SafeLaneExecutionMetrics {
             "tool_output_aggregate_truncation_ratio_milli": self.aggregate_tool_truncation_ratio_milli(),
         })
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct SafeLaneAdaptiveVerifyPolicyState {
-    min_anchor_matches: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct SafeLaneToolOutputStats {
-    output_lines: usize,
-    result_lines: usize,
-    truncated_result_lines: usize,
-}
-
-impl SafeLaneToolOutputStats {
-    fn truncation_ratio_milli(self) -> usize {
-        if self.result_lines == 0 {
-            return 0;
-        }
-        self.truncated_result_lines
-            .saturating_mul(1000)
-            .saturating_div(self.result_lines)
-    }
-
-    fn as_json(self) -> Value {
-        json!({
-            "output_lines": self.output_lines,
-            "result_lines": self.result_lines,
-            "truncated_result_lines": self.truncated_result_lines,
-            "any_truncated": self.truncated_result_lines > 0,
-            "truncation_ratio_milli": self.truncation_ratio_milli(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SafeLaneRuntimeHealthSignal {
-    severity: &'static str,
-    flags: Vec<String>,
-}
-
-impl SafeLaneRuntimeHealthSignal {
-    fn as_json(&self) -> Value {
-        json!({
-            "severity": self.severity,
-            "flags": self.flags,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum SafeLaneGovernorHistoryLoadStatus {
-    #[default]
-    Disabled,
-    Loaded,
-    Unavailable,
-}
-
-impl SafeLaneGovernorHistoryLoadStatus {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Loaded => "loaded",
-            Self::Unavailable => "unavailable",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-struct SafeLaneSessionGovernorDecision {
-    engaged: bool,
-    history_window_turns: usize,
-    history_load_status: SafeLaneGovernorHistoryLoadStatus,
-    history_load_error: Option<AssistantHistoryLoadErrorCode>,
-    failed_final_status_events: u32,
-    failed_final_status_threshold: u32,
-    failed_threshold_triggered: bool,
-    backpressure_failure_events: u32,
-    backpressure_failure_threshold: u32,
-    backpressure_threshold_triggered: bool,
-    trend_enabled: bool,
-    trend_samples: usize,
-    trend_min_samples: usize,
-    trend_failure_ewma: Option<f64>,
-    trend_failure_ewma_threshold: f64,
-    trend_backpressure_ewma: Option<f64>,
-    trend_backpressure_ewma_threshold: f64,
-    trend_threshold_triggered: bool,
-    recovery_success_streak: u32,
-    recovery_success_streak_threshold: u32,
-    recovery_failure_ewma_threshold: f64,
-    recovery_backpressure_ewma_threshold: f64,
-    recovery_threshold_triggered: bool,
-    force_no_replan: bool,
-    forced_node_max_attempts: Option<u8>,
-}
-
-impl SafeLaneSessionGovernorDecision {
-    fn as_json(&self) -> Value {
-        json!({
-            "engaged": self.engaged,
-            "history_window_turns": self.history_window_turns,
-            "history_load_status": self.history_load_status.as_str(),
-            "history_load_error": self.history_load_error.map(|error| error.as_str()),
-            "failed_final_status_events": self.failed_final_status_events,
-            "failed_final_status_threshold": self.failed_final_status_threshold,
-            "failed_threshold_triggered": self.failed_threshold_triggered,
-            "backpressure_failure_events": self.backpressure_failure_events,
-            "backpressure_failure_threshold": self.backpressure_failure_threshold,
-            "backpressure_threshold_triggered": self.backpressure_threshold_triggered,
-            "trend_enabled": self.trend_enabled,
-            "trend_samples": self.trend_samples,
-            "trend_min_samples": self.trend_min_samples,
-            "trend_failure_ewma": self.trend_failure_ewma,
-            "trend_failure_ewma_threshold": self.trend_failure_ewma_threshold,
-            "trend_backpressure_ewma": self.trend_backpressure_ewma,
-            "trend_backpressure_ewma_threshold": self.trend_backpressure_ewma_threshold,
-            "trend_threshold_triggered": self.trend_threshold_triggered,
-            "recovery_success_streak": self.recovery_success_streak,
-            "recovery_success_streak_threshold": self.recovery_success_streak_threshold,
-            "recovery_failure_ewma_threshold": self.recovery_failure_ewma_threshold,
-            "recovery_backpressure_ewma_threshold": self.recovery_backpressure_ewma_threshold,
-            "recovery_threshold_triggered": self.recovery_threshold_triggered,
-            "force_no_replan": self.force_no_replan,
-            "forced_node_max_attempts": self.forced_node_max_attempts,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct SafeLaneGovernorHistorySignals {
-    history_load_status: SafeLaneGovernorHistoryLoadStatus,
-    history_load_error: Option<AssistantHistoryLoadErrorCode>,
-    summary: SafeLaneEventSummary,
-    final_status_failed_samples: Vec<bool>,
-    backpressure_failure_samples: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1064,48 +935,6 @@ fn build_resolved_provider_checkpoint(
     }
 }
 
-#[cfg(feature = "memory-sqlite")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PendingApprovalInputDecision {
-    RunOnce,
-    SessionAuto,
-    SessionFull,
-    Cancel,
-}
-
-#[cfg(feature = "memory-sqlite")]
-impl PendingApprovalInputDecision {
-    fn approval_decision(self) -> ApprovalDecision {
-        match self {
-            Self::RunOnce | Self::SessionAuto | Self::SessionFull => ApprovalDecision::ApproveOnce,
-            Self::Cancel => ApprovalDecision::Deny,
-        }
-    }
-
-    fn session_mode(self) -> Option<ToolConsentMode> {
-        match self {
-            Self::RunOnce | Self::Cancel => None,
-            Self::SessionAuto => Some(ToolConsentMode::Auto),
-            Self::SessionFull => Some(ToolConsentMode::Full),
-        }
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn normalize_pending_approval_control_input(input: &str) -> String {
-    super::turn_shared::normalize_approval_prompt_control_input(input)
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn parse_pending_approval_input_decision(input: &str) -> Option<PendingApprovalInputDecision> {
-    match parse_approval_prompt_action_input(input)? {
-        ApprovalPromptActionId::Yes => Some(PendingApprovalInputDecision::RunOnce),
-        ApprovalPromptActionId::Auto => Some(PendingApprovalInputDecision::SessionAuto),
-        ApprovalPromptActionId::Full => Some(PendingApprovalInputDecision::SessionFull),
-        ApprovalPromptActionId::Esc => Some(PendingApprovalInputDecision::Cancel),
-    }
-}
-
 #[allow(dead_code)]
 impl ConversationTurnCoordinator {
     pub fn new() -> Self {
@@ -1684,7 +1513,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+            let memory_config = store::session_store_config_from_memory_config(&config.memory);
             let Some(entry) = load_latest_turn_checkpoint_entry(
                 session_id,
                 config.memory.sliding_window,
@@ -1718,7 +1547,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<TurnCheckpointDiagnostics> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+            let memory_config = store::session_store_config_from_memory_config(&config.memory);
             let (summary, latest_entry) =
                 load_turn_checkpoint_history_snapshot(session_id, limit, binding, &memory_config)
                     .await?
@@ -2153,7 +1982,7 @@ impl ConversationTurnCoordinator {
             runtime.bootstrap(config, session_id, kernel_ctx).await?;
         }
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config)?;
         let Some(pending_request) = repo
             .list_approval_requests_for_session(session_id, Some(ApprovalRequestStatus::Pending))?
@@ -2252,18 +2081,9 @@ impl ConversationTurnCoordinator {
             let payload = if canonical_tool_name == "provider.switch" {
                 intent.args_json.as_object()
             } else if canonical_tool_name == "tool.invoke" {
-                intent
-                    .args_json
-                    .as_object()
-                    .filter(|payload| {
-                        payload
-                            .get("tool_id")
-                            .and_then(Value::as_str)
-                            .map(crate::tools::canonical_tool_name)
-                            == Some("provider.switch")
-                    })
-                    .and_then(|payload| payload.get("arguments"))
-                    .and_then(Value::as_object)
+                crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+                    .filter(|(tool_name, _arguments)| *tool_name == "provider.switch")
+                    .and_then(|(_tool_name, arguments)| arguments.as_object())
             } else {
                 None
             };
@@ -2459,13 +2279,14 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
             ));
         }
 
-        let workspace_root = config
-            .tools
-            .configured_runtime_workspace_root()
-            .or_else(|| config.tools.configured_file_root());
+        let workspace_root = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
+            config, None,
+        )
+        .effective_memory_workspace_root();
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory)
-            .with_workspace_root(workspace_root.clone());
+        let memory_config =
+            store::session_store_config_from_memory_config(&config.memory)
+                .with_workspace_root(workspace_root.clone());
         let compact_stage_result =
             crate::memory::run_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
                 .await;
@@ -2514,7 +2335,7 @@ fn persist_runtime_self_continuity_for_compaction(
     config: &LoongConfig,
     session_id: &str,
 ) -> Result<(), String> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
     ensure_session_exists_for_runtime_self_continuity(&repo, session_id)?;
@@ -3801,7 +3622,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_entry_with_limit<
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let Some(entry) =
         load_latest_turn_checkpoint_entry(session_id, limit, binding, &memory_config).await?
     else {
@@ -4096,8 +3917,7 @@ where
 
                 #[cfg(feature = "memory-sqlite")]
                 {
-                    let memory_config =
-                        MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+                    let memory_config = SessionStoreConfig::from_memory_config(&self.config.memory);
                     let effective_tool_config =
                         effective_tool_config_for_session(&self.config.tools, session_context);
                     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
@@ -4273,7 +4093,9 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
+    let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
+        &config.memory,
+    ))?;
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -4465,7 +4287,7 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 struct PreparedAsyncDelegateEnqueue {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     request: AsyncDelegateSpawnRequest,
     outcome: loong_contracts::ToolCoreOutcome,
 }
@@ -4485,7 +4307,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
     ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
@@ -4691,7 +4513,9 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     // been created. The remaining job is to run the child turn with the shared
     // runtime/binding, enforce timeout + unwind containment, and then finalize
     // the persisted delegate session/announcement state from the outcome.
-    let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
+    let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
+        &config.memory,
+    ))?;
     let start = Instant::now();
     let child_coordinator = ConversationTurnCoordinator::new();
     let child_turn_future = child_coordinator.handle_turn_with_runtime(
@@ -5018,7 +4842,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         }
     };
     let base_app_dispatcher = DefaultAppToolDispatcher::with_config(
-        MemoryRuntimeConfig::from_memory_config(&config.memory),
+        store::session_store_config_from_memory_config(&config.memory),
         config.clone(),
     );
     let app_dispatcher = CoordinatorAppToolDispatcher {
@@ -5632,11 +5456,12 @@ fn build_safe_lane_plan_graph(
     let node_risk_tier = select_safe_lane_risk_tier(config, lane_decision);
     let normalized_start = start_tool_index.min(turn.tool_intents.len());
     for (index, intent) in turn.tool_intents.iter().enumerate().skip(normalized_start) {
+        let visible_tool_name = effective_followup_visible_tool_name(intent);
         nodes.push(PlanNode {
             id: format!("tool-{}", index + 1),
             kind: PlanNodeKind::Tool,
-            label: format!("invoke `{}`", intent.tool_name),
-            tool_name: Some(intent.tool_name.clone()),
+            label: format!("invoke `{visible_tool_name}`"),
+            tool_name: Some(visible_tool_name),
             timeout_ms: 3_000,
             max_attempts: tool_node_max_attempts,
             risk_tier: node_risk_tier,
@@ -5692,122 +5517,6 @@ fn build_safe_lane_plan_graph(
     }
 }
 
-fn summarize_safe_lane_tool_output_stats(outputs: &[String]) -> SafeLaneToolOutputStats {
-    let mut stats = SafeLaneToolOutputStats::default();
-    for output in outputs {
-        for line in output
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            stats.output_lines = stats.output_lines.saturating_add(1);
-            if !line.starts_with('[') {
-                continue;
-            }
-            stats.result_lines = stats.result_lines.saturating_add(1);
-            if tool_result_contains_truncation_signal(line) {
-                stats.truncated_result_lines = stats.truncated_result_lines.saturating_add(1);
-            }
-        }
-    }
-    stats
-}
-
-fn derive_safe_lane_runtime_health_signal(
-    config: &LoongConfig,
-    metrics: SafeLaneExecutionMetrics,
-    final_status_failed: bool,
-    final_failure_code: Option<&str>,
-) -> SafeLaneRuntimeHealthSignal {
-    let rounds_started = metrics.rounds_started as f64;
-    let replan_rate = if rounds_started > 0.0 {
-        metrics.replans_triggered as f64 / rounds_started
-    } else {
-        0.0
-    };
-    let verify_failure_rate = if rounds_started > 0.0 {
-        metrics.verify_failures as f64 / rounds_started
-    } else {
-        0.0
-    };
-    let aggregate_truncation_ratio = metrics
-        .aggregate_tool_truncation_ratio_milli()
-        .map(|milli| (milli as f64) / 1000.0);
-    let truncation_warn_threshold = config
-        .conversation
-        .safe_lane_health_truncation_warn_threshold();
-    let truncation_critical_threshold = config
-        .conversation
-        .safe_lane_health_truncation_critical_threshold();
-    let verify_failure_warn_threshold = config
-        .conversation
-        .safe_lane_health_verify_failure_warn_threshold();
-    let replan_warn_threshold = config.conversation.safe_lane_health_replan_warn_threshold();
-
-    let mut flags = Vec::new();
-    let mut has_critical = false;
-
-    if let Some(ratio) = aggregate_truncation_ratio {
-        if ratio >= truncation_critical_threshold {
-            flags.push(format!("truncation_severe({ratio:.3})"));
-            has_critical = true;
-        } else if ratio >= truncation_warn_threshold {
-            flags.push(format!("truncation_pressure({ratio:.3})"));
-        }
-    }
-
-    if verify_failure_rate >= verify_failure_warn_threshold {
-        flags.push(format!("verify_failure_pressure({verify_failure_rate:.3})"));
-    }
-    if replan_rate >= replan_warn_threshold {
-        flags.push(format!("replan_pressure({replan_rate:.3})"));
-    }
-
-    let terminal_instability = final_status_failed
-        && final_failure_code
-            .map(|code| {
-                code.contains("verify_failed")
-                    || code.contains("backpressure")
-                    || code.contains("session_governor")
-            })
-            .unwrap_or(false);
-    if terminal_instability {
-        flags.push("terminal_instability".to_owned());
-        has_critical = true;
-    }
-
-    SafeLaneRuntimeHealthSignal {
-        severity: if has_critical {
-            "critical"
-        } else if flags.is_empty() {
-            "ok"
-        } else {
-            "warn"
-        },
-        flags,
-    }
-}
-
-fn select_safe_lane_risk_tier(config: &LoongConfig, lane_decision: &LaneDecision) -> RiskTier {
-    let high_risk_bar = config
-        .conversation
-        .safe_lane_risk_threshold
-        .saturating_mul(2);
-    let high_complexity_bar = config
-        .conversation
-        .safe_lane_complexity_threshold
-        .saturating_mul(2);
-    if lane_decision.risk_score >= high_risk_bar
-        || lane_decision.complexity_score >= high_complexity_bar
-    {
-        RiskTier::High
-    } else if lane_decision.risk_score > 0 || lane_decision.complexity_score > 0 {
-        RiskTier::Medium
-    } else {
-        RiskTier::Low
-    }
-}
-
 fn verify_safe_lane_final_output(
     config: &LoongConfig,
     output: &str,
@@ -5833,242 +5542,6 @@ fn verify_safe_lane_final_output(
         min_anchor_matches: adaptive_policy.min_anchor_matches,
     };
     verify_output(output, &context, &policy)
-}
-
-fn compute_safe_lane_verify_min_anchor_matches(
-    config: &LoongConfig,
-    verify_failures: u32,
-) -> usize {
-    if !config
-        .conversation
-        .safe_lane_verify_adaptive_anchor_escalation
-    {
-        return 0;
-    }
-    if verify_failures
-        < config
-            .conversation
-            .safe_lane_verify_anchor_escalation_after_failures()
-    {
-        return 0;
-    }
-    config
-        .conversation
-        .safe_lane_verify_anchor_escalation_min_matches()
-}
-
-fn decide_safe_lane_session_governor(
-    config: &LoongConfig,
-    history: &SafeLaneGovernorHistorySignals,
-) -> SafeLaneSessionGovernorDecision {
-    let summary = &history.summary;
-    let history_window_turns = config
-        .conversation
-        .safe_lane_session_governor_window_turns();
-    let failed_final_status_events = summary.failed_final_status_events();
-    let backpressure_failure_events = summary.backpressure_failure_events();
-    let failed_final_status_threshold = config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold();
-    let backpressure_failure_threshold = config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold();
-    let failed_threshold_triggered = failed_final_status_events >= failed_final_status_threshold;
-    let backpressure_threshold_triggered =
-        backpressure_failure_events >= backpressure_failure_threshold;
-    let trend_enabled = config.conversation.safe_lane_session_governor_trend_enabled;
-    let trend_samples = history.final_status_failed_samples.len();
-    let trend_min_samples = config
-        .conversation
-        .safe_lane_session_governor_trend_min_samples();
-    let trend_failure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_trend_failure_ewma_threshold();
-    let trend_backpressure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_trend_backpressure_ewma_threshold();
-    let trend_ewma_alpha = config
-        .conversation
-        .safe_lane_session_governor_trend_ewma_alpha();
-    let trend_ready = trend_enabled && trend_samples >= trend_min_samples;
-    let trend_failure_ewma = if trend_ready {
-        compute_ewma_bool(
-            history.final_status_failed_samples.as_slice(),
-            trend_ewma_alpha,
-        )
-    } else {
-        None
-    };
-    let trend_backpressure_ewma = if trend_ready {
-        compute_ewma_bool(
-            history.backpressure_failure_samples.as_slice(),
-            trend_ewma_alpha,
-        )
-    } else {
-        None
-    };
-    let trend_threshold_triggered = trend_failure_ewma
-        .map(|value| value >= trend_failure_ewma_threshold)
-        .unwrap_or(false)
-        || trend_backpressure_ewma
-            .map(|value| value >= trend_backpressure_ewma_threshold)
-            .unwrap_or(false);
-
-    let recovery_success_streak = if trend_ready {
-        trailing_success_streak(history.final_status_failed_samples.as_slice())
-    } else {
-        0
-    };
-    let recovery_success_streak_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_success_streak();
-    let recovery_failure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_max_failure_ewma();
-    let recovery_backpressure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_max_backpressure_ewma();
-    let recovery_threshold_triggered = trend_ready
-        && recovery_success_streak >= recovery_success_streak_threshold
-        && trend_failure_ewma
-            .map(|value| value <= recovery_failure_ewma_threshold)
-            .unwrap_or(false)
-        && trend_backpressure_ewma
-            .map(|value| value <= recovery_backpressure_ewma_threshold)
-            .unwrap_or(false);
-
-    let engaged = config.conversation.safe_lane_session_governor_enabled
-        && (failed_threshold_triggered
-            || backpressure_threshold_triggered
-            || trend_threshold_triggered)
-        && !recovery_threshold_triggered;
-
-    SafeLaneSessionGovernorDecision {
-        engaged,
-        history_window_turns,
-        history_load_status: history.history_load_status,
-        history_load_error: history.history_load_error,
-        failed_final_status_events,
-        failed_final_status_threshold,
-        failed_threshold_triggered,
-        backpressure_failure_events,
-        backpressure_failure_threshold,
-        backpressure_threshold_triggered,
-        trend_enabled,
-        trend_samples,
-        trend_min_samples,
-        trend_failure_ewma,
-        trend_failure_ewma_threshold,
-        trend_backpressure_ewma,
-        trend_backpressure_ewma_threshold,
-        trend_threshold_triggered,
-        recovery_success_streak,
-        recovery_success_streak_threshold,
-        recovery_failure_ewma_threshold,
-        recovery_backpressure_ewma_threshold,
-        recovery_threshold_triggered,
-        force_no_replan: engaged
-            && config
-                .conversation
-                .safe_lane_session_governor_force_no_replan,
-        forced_node_max_attempts: engaged.then(|| {
-            config
-                .conversation
-                .safe_lane_session_governor_force_node_max_attempts()
-        }),
-    }
-}
-
-async fn load_safe_lane_history_signals_for_governor(
-    config: &LoongConfig,
-    session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> SafeLaneGovernorHistorySignals {
-    if !config.conversation.safe_lane_session_governor_enabled {
-        return SafeLaneGovernorHistorySignals::default();
-    }
-
-    let window_turns = config
-        .conversation
-        .safe_lane_session_governor_window_turns();
-    #[cfg(feature = "memory-sqlite")]
-    {
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        return match load_assistant_contents_from_session_window_detailed(
-            session_id,
-            window_turns,
-            binding,
-            &memory_config,
-        )
-        .await
-        {
-            Ok(assistant_contents) => {
-                summarize_governor_history_signals(assistant_contents.iter().map(String::as_str))
-            }
-            Err(error) => SafeLaneGovernorHistorySignals {
-                history_load_status: SafeLaneGovernorHistoryLoadStatus::Unavailable,
-                history_load_error: Some(error.code()),
-                ..SafeLaneGovernorHistorySignals::default()
-            },
-        };
-    }
-
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        SafeLaneGovernorHistorySignals::default()
-    }
-}
-
-fn summarize_governor_history_signals<'a, I>(
-    assistant_contents: I,
-) -> SafeLaneGovernorHistorySignals
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let projection = summarize_safe_lane_history(assistant_contents);
-    SafeLaneGovernorHistorySignals {
-        history_load_status: SafeLaneGovernorHistoryLoadStatus::Loaded,
-        history_load_error: None,
-        summary: projection.summary,
-        final_status_failed_samples: projection.final_status_failed_samples,
-        backpressure_failure_samples: projection.backpressure_failure_samples,
-    }
-}
-
-fn compute_ewma_bool(samples: &[bool], alpha: f64) -> Option<f64> {
-    let mut iter = samples.iter();
-    let first = iter.next().copied()?;
-    let mut ewma = if first { 1.0 } else { 0.0 };
-    for sample in iter {
-        let value = if *sample { 1.0 } else { 0.0 };
-        ewma = (alpha * value) + ((1.0 - alpha) * ewma);
-    }
-    Some(ewma)
-}
-
-fn trailing_success_streak(failed_samples: &[bool]) -> u32 {
-    let mut streak = 0u32;
-    for failed in failed_samples.iter().rev() {
-        if *failed {
-            break;
-        }
-        streak = streak.saturating_add(1);
-    }
-    streak
-}
-
-fn safe_lane_backpressure_budget(config: &LoongConfig) -> Option<SafeLaneBackpressureBudget> {
-    config
-        .conversation
-        .safe_lane_backpressure_guard_enabled
-        .then(|| {
-            SafeLaneBackpressureBudget::new(
-                config
-                    .conversation
-                    .safe_lane_backpressure_max_total_attempts(),
-                config.conversation.safe_lane_backpressure_max_replans(),
-            )
-        })
 }
 
 #[cfg(test)]
@@ -6402,12 +5875,12 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn sqlite_memory_config(label: &str) -> MemoryRuntimeConfig {
+    fn sqlite_memory_config(label: &str) -> SessionStoreConfig {
         let path = unique_sqlite_path(label);
         let _ = std::fs::remove_file(&path);
         let mut config = LoongConfig::default();
         config.memory.sqlite_path = path.display().to_string();
-        MemoryRuntimeConfig::from_memory_config(&config.memory)
+        store::session_store_config_from_memory_config(&config.memory)
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -7417,7 +6890,7 @@ mod tests {
     }
 
     #[test]
-    fn build_provider_turn_tool_terminal_events_attach_canonical_shell_request_summary() {
+    fn build_provider_turn_tool_terminal_events_attach_visible_shell_request_summary() {
         let turn = ProviderTurn {
             assistant_text: String::new(),
             tool_intents: vec![ToolIntent {
@@ -7447,7 +6920,7 @@ mod tests {
         assert_eq!(
             request_summary_json,
             json!({
-                "tool": "shell.exec",
+                "tool": "exec",
                 "request": {"command": "ls", "args_redacted": 1}
             })
         );
@@ -7491,8 +6964,8 @@ mod tests {
             .expect("multi-intent request summary should be an array");
 
         assert_eq!(request_entries.len(), 2);
-        assert_eq!(request_entries[0]["tool"], "file.read");
-        assert_eq!(request_entries[1]["tool"], "shell.exec");
+        assert_eq!(request_entries[0]["tool"], "read");
+        assert_eq!(request_entries[1]["tool"], "exec");
         assert_eq!(request_entries[1]["request"]["command"], "ls");
         assert_eq!(request_entries[1]["request"]["args_redacted"], 1);
     }
@@ -8173,15 +7646,15 @@ mod tests {
         config.conversation.compact_trigger_estimated_tokens = Some(1);
         config.conversation.compact_fail_open = true;
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "session-durable-flush-fail-open",
             "user",
             "remember the deployment cutoff",
             &memory_config,
         )
         .expect("append user turn");
-        crate::memory::append_turn_direct(
+        crate::session::store::append_session_turn_direct(
             "session-durable-flush-fail-open",
             "assistant",
             "deployment cutoff is tonight",
@@ -8229,8 +7702,8 @@ mod tests {
         let _ = std::fs::remove_file(&sqlite_path);
         config.memory.sqlite_path = sqlite_path.display().to_string();
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "compact-session-build-messages",
             "user",
             "remember this detail",
@@ -8286,8 +7759,8 @@ mod tests {
         let _ = std::fs::remove_file(&sqlite_path);
         config.memory.sqlite_path = sqlite_path.display().to_string();
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "compact-session-readback-fail",
             "user",
             "keep the context intact",
@@ -8327,6 +7800,46 @@ mod tests {
         assert_eq!(build_messages_calls.len(), 2);
 
         let _ = std::fs::remove_file(&sqlite_path);
+    }
+
+    #[test]
+    fn build_safe_lane_plan_graph_uses_precise_visible_names_for_grouped_hidden_invokes() {
+        let config = LoongConfig::default();
+        let lane_decision = LaneDecision {
+            lane: ExecutionLane::Safe,
+            risk_score: 0,
+            complexity_score: 0,
+            reasons: Vec::new(),
+        };
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "tool.invoke".to_owned(),
+                args_json: json!({
+                    "tool_id": "agent",
+                    "lease": "lease-agent",
+                    "arguments": {
+                        "operation": "delegate-background",
+                        "task": "summarize the repo"
+                    }
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-a".to_owned(),
+                turn_id: "turn-a".to_owned(),
+                tool_call_id: "call-agent".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+
+        let plan = build_safe_lane_plan_graph(&config, &lane_decision, &turn, 2, 0);
+        let tool_node = plan
+            .nodes
+            .iter()
+            .find(|node| node.kind == PlanNodeKind::Tool)
+            .expect("plan should include a tool node");
+
+        assert_eq!(tool_node.label, "invoke `delegate_async`");
+        assert_eq!(tool_node.tool_name.as_deref(), Some("delegate_async"));
     }
 
     #[test]
@@ -8394,7 +7907,7 @@ mod tests {
         )
         .expect("file.read payload summary should stay valid json");
 
-        assert_eq!(envelope["tool"], "file.read");
+        assert_eq!(envelope["tool"], "read");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["path"], "/repo/README.md");
         assert_eq!(summary["bytes"], 8_192);
@@ -8447,7 +7960,7 @@ mod tests {
         let (envelope, summary) =
             crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
-        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["command"], "cargo");
         assert_eq!(summary["exit_code"], 0);

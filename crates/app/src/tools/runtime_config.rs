@@ -208,7 +208,7 @@ pub(crate) fn merge_runtime_narrowing_sources(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExternalSkillsRuntimePolicy {
     pub enabled: bool,
     pub require_download_approval: bool,
@@ -216,22 +216,6 @@ pub struct ExternalSkillsRuntimePolicy {
     pub blocked_domains: BTreeSet<String>,
     pub install_root: Option<PathBuf>,
     pub auto_expose_installed: bool,
-}
-
-impl Default for ExternalSkillsRuntimePolicy {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            require_download_approval: true,
-            allowed_domains: BTreeSet::new(),
-            blocked_domains: crate::config::DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            install_root: None,
-            auto_expose_installed: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,6 +545,9 @@ impl AutonomyPolicySnapshot {
     }
 }
 
+// General network fetch/request policy for `web { url }`, low-level HTTP requests,
+// and shared SSRF helpers reused by browser. This is separate from web-search
+// provider selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebFetchRuntimePolicy {
     pub enabled: bool,
@@ -588,6 +575,9 @@ impl Default for WebFetchRuntimePolicy {
     }
 }
 
+// Query-style web search policy for `web { query }` / `web.search` only. Keep
+// this separate from normal network egress so missing web-search credentials do
+// not imply that plain fetch/request or browser access is unavailable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSearchRuntimePolicy {
     pub enabled: bool,
@@ -707,10 +697,10 @@ impl Default for ToolRuntimeConfig {
                 .map(|s| (*s).to_owned())
                 .collect(),
             shell_deny: BTreeSet::new(),
-            shell_default_mode: ShellPolicyDefault::Deny,
+            shell_default_mode: ShellPolicyDefault::Allow,
             config_path: None,
             sessions_enabled: true,
-            sessions_allow_mutation: false,
+            sessions_allow_mutation: true,
             messages_enabled: false,
             delegate_enabled: true,
             runtime_self: RuntimeSelfRuntimePolicy::default(),
@@ -965,7 +955,7 @@ impl ToolRuntimeConfig {
         let shell_deny = BTreeSet::new();
         let sessions_enabled = parse_env_bool("LOONG_TOOL_SESSIONS_ENABLED").unwrap_or(true);
         let sessions_allow_mutation =
-            parse_env_bool("LOONG_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(false);
+            parse_env_bool("LOONG_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(true);
         let messages_enabled = parse_env_bool("LOONG_TOOL_MESSAGES_ENABLED").unwrap_or(false);
         let delegate_enabled = parse_env_bool("LOONG_TOOL_DELEGATE_ENABLED").unwrap_or(true);
         let runtime_self_max_source_chars = parse_env_usize("LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS")
@@ -1058,7 +1048,7 @@ impl ToolRuntimeConfig {
         let autonomy_profile = resolve_autonomy_profile_from_env();
         let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
         let require_download_approval =
-            parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
+            parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(false);
         let allowed_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
         let blocked_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
         let install_root = std::env::var("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT")
@@ -1108,7 +1098,7 @@ impl ToolRuntimeConfig {
             selected_memory_system_id,
             shell_allow,
             shell_deny,
-            shell_default_mode: ShellPolicyDefault::Deny,
+            shell_default_mode: ShellPolicyDefault::Allow,
             config_path,
             sessions_enabled,
             sessions_allow_mutation,
@@ -1244,6 +1234,19 @@ impl ToolRuntimeConfig {
         narrowed
     }
 
+    fn visible_child_tool_allowlist(tool_names: &[String]) -> Vec<String> {
+        let mut visible_tool_names = Vec::new();
+
+        for tool_name in tool_names {
+            let visible_tool_name = super::model_visible_tool_name(tool_name.as_str());
+            if !visible_tool_names.contains(&visible_tool_name) {
+                visible_tool_names.push(visible_tool_name);
+            }
+        }
+
+        visible_tool_names
+    }
+
     #[must_use]
     pub(crate) fn delegate_child_prompt_summary(
         &self,
@@ -1252,6 +1255,10 @@ impl ToolRuntimeConfig {
         let subagent_contract = subagent_contract?;
         let narrowing = &subagent_contract.runtime_narrowing;
         let effective = self.narrowed(narrowing);
+        let child_exec_label = super::model_visible_tool_name(super::SHELL_EXEC_TOOL_NAME);
+        let child_allowlist =
+            Self::visible_child_tool_allowlist(&subagent_contract.child_tool_allowlist);
+        let web_network_label = format!("{} network", super::model_visible_tool_name("web.fetch"));
         let mut lines = vec![
             "[delegate_child_runtime_contract]".to_owned(),
             "Plan within these child-session runtime limits:".to_owned(),
@@ -1302,7 +1309,7 @@ impl ToolRuntimeConfig {
         if let Some(allow_shell_in_child) = subagent_contract.allow_shell_in_child {
             rendered_any = true;
             lines.push(format!(
-                "- child shell.exec: {}",
+                "- child {child_exec_label}: {}",
                 if allow_shell_in_child {
                     "allowed"
                 } else {
@@ -1313,10 +1320,10 @@ impl ToolRuntimeConfig {
 
         if !subagent_contract.child_tool_allowlist.is_empty() || subagent_contract.mode.is_some() {
             rendered_any = true;
-            let tool_allowlist = if subagent_contract.child_tool_allowlist.is_empty() {
+            let tool_allowlist = if child_allowlist.is_empty() {
                 "none".to_owned()
             } else {
-                subagent_contract.child_tool_allowlist.join(", ")
+                child_allowlist.join(", ")
             };
             lines.push(format!("- child tool allowlist: {tool_allowlist}"));
         }
@@ -1350,7 +1357,7 @@ impl ToolRuntimeConfig {
             if narrowing.web_fetch.allow_private_hosts.is_some() {
                 rendered_any = true;
                 lines.push(format!(
-                    "- web.fetch private hosts: {}",
+                    "- {web_network_label} private hosts: {}",
                     if effective.web_fetch.allow_private_hosts {
                         "allowed"
                     } else {
@@ -1364,12 +1371,13 @@ impl ToolRuntimeConfig {
                     && effective.web_fetch.allowed_domains.is_empty()
                 {
                     lines.push(
-                        "- web.fetch allowed domains: none (effective intersection is empty)"
-                            .to_owned(),
+                        format!(
+                            "- {web_network_label} allowed domains: none (effective intersection is empty)"
+                        ),
                     );
                 } else {
                     lines.push(format!(
-                        "- web.fetch allowed domains: {}",
+                        "- {web_network_label} allowed domains: {}",
                         effective
                             .web_fetch
                             .allowed_domains
@@ -1383,7 +1391,7 @@ impl ToolRuntimeConfig {
             if !narrowing.web_fetch.blocked_domains.is_empty() {
                 rendered_any = true;
                 lines.push(format!(
-                    "- web.fetch blocked domains: {}",
+                    "- {web_network_label} blocked domains: {}",
                     effective
                         .web_fetch
                         .blocked_domains
@@ -1396,21 +1404,21 @@ impl ToolRuntimeConfig {
             if narrowing.web_fetch.timeout_seconds.is_some() {
                 rendered_any = true;
                 lines.push(format!(
-                    "- web.fetch timeout seconds: {}",
+                    "- {web_network_label} timeout seconds: {}",
                     effective.web_fetch.timeout_seconds
                 ));
             }
             if narrowing.web_fetch.max_bytes.is_some() {
                 rendered_any = true;
                 lines.push(format!(
-                    "- web.fetch max bytes: {}",
+                    "- {web_network_label} max bytes: {}",
                     effective.web_fetch.max_bytes
                 ));
             }
             if narrowing.web_fetch.max_redirects.is_some() {
                 rendered_any = true;
                 lines.push(format!(
-                    "- web.fetch max redirects: {}",
+                    "- {web_network_label} max redirects: {}",
                     effective.web_fetch.max_redirects
                 ));
             }
@@ -1825,7 +1833,7 @@ mod tests {
         assert!(config.workspace_root.is_none());
         assert!(config.config_path.is_none());
         assert!(config.sessions_enabled);
-        assert!(!config.sessions_allow_mutation);
+        assert!(config.sessions_allow_mutation);
         assert!(!config.messages_enabled);
         assert!(config.delegate_enabled);
         assert_eq!(
@@ -1870,14 +1878,9 @@ mod tests {
             crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS
         );
         assert!(!config.external_skills.enabled);
-        assert!(config.external_skills.require_download_approval);
+        assert!(!config.external_skills.require_download_approval);
         assert!(config.external_skills.allowed_domains.is_empty());
-        assert!(
-            config
-                .external_skills
-                .blocked_domains
-                .contains("*.clawhub.io")
-        );
+        assert!(config.external_skills.blocked_domains.is_empty());
         assert!(config.external_skills.install_root.is_none());
         assert!(!config.external_skills.auto_expose_installed);
     }
@@ -3423,17 +3426,17 @@ Plan within these child-session runtime limits:\n\
 - subagent depth budget: 1/2\n\
 - subagent active-child budget snapshot: 0/3\n\
 - child timeout seconds: 60\n\
-- child shell.exec: denied\n\
-- child tool allowlist: web.fetch\n\
+- child exec: denied\n\
+- child tool allowlist: web\n\
 - child runtime binding: direct\n\
 - subagent role: orchestrator\n\
 - subagent control scope: children\n\
-- web.fetch private hosts: denied\n\
-- web.fetch allowed domains: none (effective intersection is empty)\n\
-- web.fetch blocked domains: base-block.example.com, deny.example.com\n\
-- web.fetch timeout seconds: 3\n\
-- web.fetch max bytes: 2048\n\
-- web.fetch max redirects: 1\n\
+- web network private hosts: denied\n\
+- web network allowed domains: none (effective intersection is empty)\n\
+- web network blocked domains: base-block.example.com, deny.example.com\n\
+- web network timeout seconds: 3\n\
+- web network max bytes: 2048\n\
+- web network max redirects: 1\n\
 - browser max sessions: 1\n\
 - browser max links: 4\n\
 - browser max text chars: 512\n\
@@ -3532,7 +3535,7 @@ Treat these as enforced limits for this child session."
             "disabled browser fields should not appear in prompt summary: {summary}"
         );
         assert!(
-            summary.contains("- web.fetch timeout seconds: 5"),
+            summary.contains("- web network timeout seconds: 5"),
             "enabled web_fetch fields should still appear: {summary}"
         );
     }

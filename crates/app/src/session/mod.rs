@@ -5,6 +5,9 @@ pub mod recovery;
 pub mod repository;
 
 #[cfg(feature = "memory-sqlite")]
+pub mod store;
+
+#[cfg(feature = "memory-sqlite")]
 pub mod trajectory;
 
 #[cfg(feature = "memory-sqlite")]
@@ -15,9 +18,9 @@ pub const LATEST_SESSION_SELECTOR: &str = "latest";
 
 #[cfg(feature = "memory-sqlite")]
 pub fn latest_resumable_root_session_id(
-    memory_config: &crate::memory::runtime_config::MemoryRuntimeConfig,
+    store_config: &store::SessionStoreConfig,
 ) -> crate::CliResult<Option<String>> {
-    let repo = repository::SessionRepository::new(memory_config)?;
+    let repo = repository::SessionRepository::new(store_config)?;
     let latest_session = repo.latest_resumable_root_session_summary()?;
     let latest_session_id = latest_session.map(|summary| summary.session_id);
     Ok(latest_session_id)
@@ -73,29 +76,28 @@ mod delegate_cancelled_reason_tests {
 mod latest_cli_session_selector_tests {
     use super::LATEST_SESSION_SELECTOR;
     use super::latest_resumable_root_session_id;
-    use crate::memory;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::NewSessionRecord;
     use crate::session::repository::SessionKind;
     use crate::session::repository::SessionRepository;
     use crate::session::repository::SessionState;
+    use crate::session::store;
     use crate::test_support::unique_temp_dir;
     use rusqlite::Connection;
     use rusqlite::params;
     use std::path::Path;
     use std::path::PathBuf;
 
-    fn init_selector_test_memory(label: &str) -> (PathBuf, MemoryRuntimeConfig) {
+    fn init_selector_test_memory(label: &str) -> (PathBuf, store::SessionStoreConfig) {
         let root = unique_temp_dir(label);
         std::fs::create_dir_all(&root).expect("create selector test workspace");
 
         let sqlite_path = root.join("memory.sqlite3");
-        let config = MemoryRuntimeConfig {
+        let config = store::SessionStoreConfig {
             sqlite_path: Some(sqlite_path.clone()),
-            ..MemoryRuntimeConfig::default()
+            ..store::SessionStoreConfig::default()
         };
 
-        memory::ensure_memory_db_ready(Some(sqlite_path), &config)
+        store::ensure_session_store_ready(Some(sqlite_path), &config)
             .expect("initialize selector test memory");
 
         (root, config)
@@ -117,12 +119,12 @@ mod latest_cli_session_selector_tests {
     }
 
     fn append_session_turn(
-        memory_config: &MemoryRuntimeConfig,
+        store_config: &store::SessionStoreConfig,
         session_id: &str,
         role: &str,
         content: &str,
     ) {
-        memory::append_turn_direct(session_id, role, content, memory_config)
+        store::append_session_turn_direct(session_id, role, content, store_config)
             .expect("append selector test turn");
     }
 

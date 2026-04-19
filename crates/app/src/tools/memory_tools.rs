@@ -587,11 +587,12 @@ fn search_canonical_memory_results(
         return Ok(Vec::new());
     }
 
-    let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-        sqlite_path: Some(sqlite_path.clone()),
-        ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-    };
-    let hits = crate::memory::search_canonical_memory(query, max_results, None, &memory_config)?;
+    let hits = crate::memory::search_canonical_memory_with_sqlite_path(
+        query,
+        max_results,
+        None,
+        sqlite_path,
+    )?;
 
     Ok(hits
         .into_iter()
@@ -914,15 +915,11 @@ mod tests {
 
         std::fs::create_dir_all(&root).expect("create root dir");
 
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
-        crate::memory::append_turn_direct(
+        crate::memory::append_turn_direct_with_sqlite_path(
             "release-session",
             "assistant",
             "Deployment cutoff is 17:00 Beijing time and requires a release note.",
-            &memory_config,
+            &db_path,
         )
         .expect("append canonical assistant turn");
 
@@ -984,10 +981,6 @@ mod tests {
 
         std::fs::create_dir_all(&root).expect("create root dir");
 
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
         let payload = json!({
             "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
             "_loong_internal": true,
@@ -999,11 +992,11 @@ mod tests {
             },
         })
         .to_string();
-        crate::memory::append_turn_direct(
+        crate::memory::append_turn_direct_with_sqlite_path(
             "metadata-session",
             "assistant",
             &payload,
-            &memory_config,
+            &db_path,
         )
         .expect("append structured canonical turn");
 

@@ -2,6 +2,7 @@ use super::tests::{cleanup_chat_test_memory, init_chat_test_memory};
 use super::*;
 use crate::conversation::ConversationRuntimeBinding;
 use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
+use crate::session::store;
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
@@ -35,9 +36,9 @@ fn append_session_turn(
     session_id: &str,
     role: &str,
     content: &str,
-    memory_config: &MemoryRuntimeConfig,
+    memory_config: &SessionStoreConfig,
 ) {
-    crate::memory::append_turn_direct(session_id, role, content, memory_config)
+    store::append_session_turn_direct(session_id, role, content, memory_config)
         .expect("append session turn");
 }
 

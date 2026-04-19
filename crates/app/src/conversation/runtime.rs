@@ -46,12 +46,12 @@ use super::turn_middleware_registry::{
 use super::{PromptFragment, PromptFrameAuthority, PromptLane};
 
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     SessionKind, SessionRepository, SessionState, SessionToolPolicyRecord,
     TransitionSessionWithEventIfCurrentRequest,
 };
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContext {
@@ -466,7 +466,7 @@ struct PersistedSessionSnapshot {
 
 #[cfg(feature = "memory-sqlite")]
 fn open_session_repository(config: &LoongConfig) -> CliResult<SessionRepository> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     SessionRepository::new(&memory_config)
         .map_err(|error| format!("open session repository failed: {error}"))
 }
@@ -796,7 +796,7 @@ pub async fn execute_async_delegate_spawn_request(
         ));
     }
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
     let runtime = load_default_conversation_runtime(config)?;
     let runtime_ref = &runtime;
@@ -1901,11 +1901,11 @@ where
 
         #[cfg(feature = "memory-sqlite")]
         {
-            memory::append_turn_direct(
+            store::append_session_turn_direct(
                 session_id,
                 role,
                 content,
-                memory::runtime_config::get_memory_runtime_config(),
+                store::current_session_store_config(),
             )
             .map_err(|error| format!("persist {role} turn failed: {error}"))?;
         }

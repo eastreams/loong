@@ -1,13 +1,9 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
-use std::sync::OnceLock;
+use std::collections::{BTreeMap, BTreeSet};
 
 use loong_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::Value;
 use serde_json::json;
-use unicode_normalization::UnicodeNormalization;
-use unicode_normalization::char::is_combining_mark;
-use unicode_segmentation::UnicodeSegmentation;
 
 use super::catalog::{ToolDescriptor, ToolView};
 use super::runtime_config;
@@ -16,12 +12,17 @@ use super::{
     TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, canonical_tool_name, issue_tool_lease, memory_tools,
 };
 
+#[path = "tool_search_query_support.rs"]
+mod query_support;
+use query_support::*;
+
 const COARSE_FALLBACK_DISCOVERY_CONCEPTS: &[&str] =
     &["fetch", "inspect", "list", "read", "search", "status"];
 const MAX_SEARCH_WHY_REASONS: usize = 4;
 
 #[derive(Debug, Clone)]
 pub(super) struct SearchableToolEntry {
+    pub(super) tool_id: String,
     pub(super) canonical_name: String,
     pub(super) summary: String,
     pub(super) search_hint: String,
@@ -30,6 +31,9 @@ pub(super) struct SearchableToolEntry {
     pub(super) required_field_groups: Vec<Vec<String>>,
     pub(super) schema_preview: Value,
     pub(super) tags: Vec<String>,
+    pub(super) surface_id: Option<String>,
+    pub(super) usage_guidance: Option<String>,
+    pub(super) requires_lease: bool,
     search_document: SearchDocument,
 }
 
@@ -76,8 +80,8 @@ pub(super) fn execute_tool_search_tool_with_config(
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
 
-    let searchable_entries =
-        super::runtime_discoverable_tool_entries(config, Some(&visible_tool_view))
+    let exact_match_entries =
+        super::runtime_tool_search_entries(config, Some(&visible_tool_view), false)
             .into_iter()
             .filter(|entry| {
                 tool_search_entry_is_capability_usable(
@@ -86,11 +90,35 @@ pub(super) fn execute_tool_search_tool_with_config(
                 )
             })
             .collect::<Vec<_>>();
+    let searchable_entries = collapse_hidden_surface_search_entries(exact_match_entries.clone());
     let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
+        let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
+        let direct_tool_id = direct_tool_id.map(str::to_owned);
+
         searchable_entries
             .iter()
-            .find(|entry| entry.canonical_name == *exact_tool_id)
+            .find(|entry| {
+                let canonical_match = entry.canonical_name == *exact_tool_id;
+                let tool_id_match = entry.tool_id == *exact_tool_id;
+                let direct_match = direct_tool_id.as_ref().is_some_and(|direct_tool_id| {
+                    entry.canonical_name == *direct_tool_id || entry.tool_id == *direct_tool_id
+                });
+                canonical_match || tool_id_match || direct_match
+            })
             .cloned()
+            .or_else(|| {
+                exact_match_entries
+                    .iter()
+                    .find(|entry| {
+                        let canonical_match = entry.canonical_name == *exact_tool_id;
+                        let tool_id_match = entry.tool_id == *exact_tool_id;
+                        let direct_match = direct_tool_id
+                            .as_ref()
+                            .is_some_and(|direct_tool_id| entry.canonical_name == *direct_tool_id);
+                        canonical_match || tool_id_match || direct_match
+                    })
+                    .cloned()
+            })
     });
     let exact_match_found = exact_match_entry.is_some();
     let mut diagnostics_reason = None;
@@ -156,19 +184,37 @@ fn tool_search_result_entry_json(
     why: Vec<String>,
     payload: &serde_json::Map<String, Value>,
 ) -> Result<Value, String> {
-    let lease = issue_tool_lease(entry.canonical_name.as_str(), payload)?;
-    Ok(json!({
-        "tool_id": entry.canonical_name,
-        "summary": entry.summary,
-        "search_hint": entry.search_hint,
-        "argument_hint": entry.argument_hint,
-        "required_fields": entry.required_fields,
-        "required_field_groups": entry.required_field_groups,
-        "schema_preview": entry.schema_preview,
-        "tags": entry.tags,
-        "why": why,
-        "lease": lease,
-    }))
+    let mut result = serde_json::Map::from_iter([
+        ("tool_id".to_owned(), json!(entry.tool_id)),
+        ("summary".to_owned(), json!(entry.summary)),
+        ("search_hint".to_owned(), json!(entry.search_hint)),
+        ("argument_hint".to_owned(), json!(entry.argument_hint)),
+        ("required_fields".to_owned(), json!(entry.required_fields)),
+        (
+            "required_field_groups".to_owned(),
+            json!(entry.required_field_groups),
+        ),
+        ("schema_preview".to_owned(), json!(entry.schema_preview)),
+        ("tags".to_owned(), json!(entry.tags)),
+        ("why".to_owned(), json!(why)),
+    ]);
+    if entry.requires_lease {
+        let lease = issue_tool_lease(entry.canonical_name.as_str(), payload)?;
+        result.insert("lease".to_owned(), json!(lease));
+    }
+    if let Some(surface_id) = entry.surface_id.as_deref() {
+        result.insert(
+            "surface_id".to_owned(),
+            Value::String(surface_id.to_owned()),
+        );
+    }
+    if let Some(usage_guidance) = entry.usage_guidance.as_deref() {
+        result.insert(
+            "usage_guidance".to_owned(),
+            Value::String(usage_guidance.to_owned()),
+        );
+    }
+    Ok(Value::Object(result))
 }
 
 fn tool_search_diagnostics_json(
@@ -328,25 +374,12 @@ pub(super) fn search_tool_view_from_payload(
 }
 
 #[derive(Debug, Clone)]
-struct SearchSignalSet {
-    normalized_text: String,
-    tokens: BTreeSet<String>,
-}
-
-#[derive(Debug, Clone)]
 struct SearchDocument {
     name: SearchSignalSet,
     summary: SearchSignalSet,
     arguments: SearchSignalSet,
     schema: SearchSignalSet,
     tags: SearchSignalSet,
-    concepts: BTreeSet<String>,
-    categories: BTreeSet<String>,
-}
-
-#[derive(Debug, Clone)]
-struct SearchQuery {
-    signal: SearchSignalSet,
     concepts: BTreeSet<String>,
     categories: BTreeSet<String>,
 }
@@ -372,874 +405,10 @@ struct SchemaArgumentField {
     preferred_index: usize,
 }
 
-struct SearchConceptDefinition {
-    id: &'static str,
-    categories: &'static [&'static str],
-    forms: &'static [&'static str],
-}
-
-struct NormalizedSearchConcept {
-    id: &'static str,
-    categories: &'static [&'static str],
-    forms: Vec<String>,
-}
-
 impl SchemaArgumentField {
     fn format(self) -> String {
         let suffix = if self.required { "" } else { "?" };
         format!("{}{}:{}", self.name, suffix, self.schema_type)
-    }
-}
-
-const SEARCH_CONCEPT_DEFINITIONS: &[SearchConceptDefinition] = &[
-    SearchConceptDefinition {
-        id: "search",
-        categories: &["discovery"],
-        forms: &[
-            "search",
-            "find",
-            "discover",
-            "lookup",
-            "query",
-            "buscar",
-            "busqueda",
-            "rechercher",
-            "recherche",
-            "suchen",
-            "suche",
-            "искать",
-            "поиск",
-            "найти",
-            "بحث",
-            "ابحث",
-            "खोज",
-            "तलाश",
-            "搜索",
-            "搜寻",
-            "查找",
-            "查询",
-            "检索",
-            "検索",
-            "探す",
-            "調べる",
-            "검색",
-            "찾기",
-            "조회",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "fetch",
-        categories: &["network", "retrieval"],
-        forms: &[
-            "fetch",
-            "download",
-            "retrieve",
-            "obtain",
-            "descargar",
-            "telecharger",
-            "скачать",
-            "получить",
-            "جلب",
-            "تنزيل",
-            "डाउनलोड",
-            "获取",
-            "抓取",
-            "拉取",
-            "取得",
-            "取得する",
-            "가져오기",
-            "다운로드",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "read",
-        categories: &["retrieval"],
-        forms: &[
-            "read",
-            "view",
-            "show",
-            "display",
-            "open",
-            "leer",
-            "lire",
-            "anzeigen",
-            "читать",
-            "открыть",
-            "قراءة",
-            "عرض",
-            "पढ़",
-            "देख",
-            "खोल",
-            "读取",
-            "阅读",
-            "查看",
-            "打开",
-            "読む",
-            "表示",
-            "開く",
-            "읽기",
-            "보기",
-            "열기",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "inspect",
-        categories: &["discovery", "retrieval"],
-        forms: &[
-            "inspect",
-            "detail",
-            "details",
-            "metadata",
-            "describe",
-            "detalle",
-            "detalles",
-            "details",
-            "metadonnees",
-            "метаданные",
-            "подробности",
-            "تفاصيل",
-            "بيانات وصفية",
-            "विवरण",
-            "मेटाडेटा",
-            "详情",
-            "元数据",
-            "详细",
-            "詳細",
-            "メタデータ",
-            "상세",
-            "메타데이터",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "list",
-        categories: &["discovery"],
-        forms: &[
-            "list",
-            "enumerate",
-            "browse",
-            "listar",
-            "liste",
-            "zeigen",
-            "список",
-            "показать",
-            "قائمة",
-            "اعرض",
-            "सूची",
-            "दिखा",
-            "列表",
-            "列出",
-            "浏览",
-            "一覧",
-            "参照",
-            "목록",
-            "나열",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "write",
-        categories: &["mutation"],
-        forms: &[
-            "write",
-            "create",
-            "save",
-            "append",
-            "record",
-            "escribir",
-            "crear",
-            "guardar",
-            "ecrire",
-            "creer",
-            "enregistrer",
-            "создать",
-            "записать",
-            "сохранить",
-            "كتابة",
-            "إنشاء",
-            "احفظ",
-            "लिख",
-            "बन",
-            "सहेज",
-            "写入",
-            "创建",
-            "保存",
-            "追加",
-            "作成",
-            "保存する",
-            "쓰기",
-            "저장",
-            "생성",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "edit",
-        categories: &["mutation"],
-        forms: &[
-            "edit",
-            "modify",
-            "update",
-            "replace",
-            "patch",
-            "editar",
-            "modifier",
-            "mettre a jour",
-            "изменить",
-            "обновить",
-            "заменить",
-            "تحرير",
-            "تعديل",
-            "تحديث",
-            "संपादित",
-            "बदल",
-            "अपडेट",
-            "编辑",
-            "修改",
-            "更新",
-            "替换",
-            "編集",
-            "修正",
-            "変更",
-            "편집",
-            "수정",
-            "업데이트",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "file",
-        categories: &["workspace"],
-        forms: &[
-            "file",
-            "files",
-            "filesystem",
-            "path",
-            "repo",
-            "repository",
-            "workspace",
-            "archivo",
-            "fichier",
-            "datei",
-            "файл",
-            "путь",
-            "репозиторий",
-            "ملف",
-            "مسار",
-            "مستودع",
-            "फ़ाइल",
-            "पथ",
-            "रिपॉजिटरी",
-            "वर्कस्पेस",
-            "文件",
-            "档案",
-            "路径",
-            "仓库",
-            "工作区",
-            "ファイル",
-            "パス",
-            "リポジトリ",
-            "ワークスペース",
-            "파일",
-            "경로",
-            "저장소",
-            "작업공간",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "directory",
-        categories: &["workspace", "discovery"],
-        forms: &[
-            "directory",
-            "directories",
-            "folder",
-            "folders",
-            "current directory",
-            "current folder",
-            "dir",
-            "directory tree",
-            "folder tree",
-            "carpeta",
-            "repertoire",
-            "dossier",
-            "ordner",
-            "verzeichnis",
-            "папка",
-            "каталог",
-            "текущая папка",
-            "دليل",
-            "مجلد",
-            "المجلد الحالي",
-            "फ़ोल्डर",
-            "डायरेक्टरी",
-            "वर्तमान फ़ोल्डर",
-            "目录",
-            "目录树",
-            "文件夹",
-            "当前目录",
-            "当前文件夹",
-            "フォルダ",
-            "ディレクトリ",
-            "カレントディレクトリ",
-            "폴더",
-            "디렉터리",
-            "현재 디렉터리",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "memory",
-        categories: &["workspace"],
-        forms: &[
-            "memory",
-            "note",
-            "notes",
-            "memo",
-            "recall",
-            "durable",
-            "knowledge",
-            "memoria",
-            "memoire",
-            "заметки",
-            "память",
-            "ملاحظات",
-            "ذاكرة",
-            "नोट",
-            "स्मृति",
-            "याद",
-            "记忆",
-            "笔记",
-            "备忘",
-            "回忆",
-            "メモ",
-            "記憶",
-            "ノート",
-            "메모",
-            "기억",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "web",
-        categories: &["network"],
-        forms: &[
-            "web",
-            "website",
-            "site",
-            "url",
-            "http",
-            "https",
-            "internet",
-            "page",
-            "pagina web",
-            "site web",
-            "страница",
-            "веб",
-            "сайт",
-            "ويب",
-            "موقع",
-            "صفحة",
-            "वेब",
-            "साइट",
-            "पेज",
-            "网页",
-            "页面",
-            "网址",
-            "网络",
-            "ウェブ",
-            "サイト",
-            "ページ",
-            "웹",
-            "사이트",
-            "웹페이지",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "browser",
-        categories: &["interactive", "network"],
-        forms: &[
-            "browser",
-            "browse",
-            "navigate",
-            "click",
-            "type",
-            "selector",
-            "tab",
-            "navegador",
-            "naviguer",
-            "браузер",
-            "клик",
-            "переход",
-            "متصفح",
-            "انقر",
-            "اكتب",
-            "ब्राउज़र",
-            "क्लिक",
-            "टाइप",
-            "浏览器",
-            "导航",
-            "点击",
-            "输入",
-            "ブラウザ",
-            "クリック",
-            "入力",
-            "브라우저",
-            "클릭",
-            "입력",
-            "탐색",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "session",
-        categories: &["coordination"],
-        forms: &[
-            "session",
-            "thread",
-            "conversation",
-            "chat",
-            "history",
-            "event",
-            "status",
-            "queue",
-            "session_id",
-            "sesion",
-            "conversation",
-            "histoire",
-            "сессия",
-            "чат",
-            "история",
-            "событие",
-            "статус",
-            "جلسة",
-            "محادثة",
-            "سجل",
-            "حالة",
-            "सत्र",
-            "चैट",
-            "इतिहास",
-            "स्थिति",
-            "会话",
-            "对话",
-            "聊天",
-            "历史",
-            "事件",
-            "状态",
-            "セッション",
-            "会話",
-            "履歴",
-            "状態",
-            "세션",
-            "대화",
-            "이력",
-            "상태",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "message",
-        categories: &["communication"],
-        forms: &[
-            "message",
-            "messages",
-            "send",
-            "post",
-            "reply",
-            "mensaje",
-            "enviar",
-            "reponse",
-            "envoyer",
-            "сообщение",
-            "отправить",
-            "ответить",
-            "رسالة",
-            "إرسال",
-            "رد",
-            "संदेश",
-            "भेज",
-            "जवाब",
-            "消息",
-            "发送",
-            "回复",
-            "メッセージ",
-            "送信",
-            "返信",
-            "메시지",
-            "보내기",
-            "답장",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "delegate",
-        categories: &["coordination"],
-        forms: &[
-            "delegate",
-            "delegation",
-            "child",
-            "background",
-            "async",
-            "subtask",
-            "delegar",
-            "deleguer",
-            "делегировать",
-            "фоновый",
-            "تفويض",
-            "خلفية",
-            "उपकार्य",
-            "पृष्ठभूमि",
-            "委派",
-            "后台",
-            "子任务",
-            "委任",
-            "バックグラウンド",
-            "子タスク",
-            "비동기",
-            "위임",
-            "하위 작업",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "skill",
-        categories: &["extension"],
-        forms: &[
-            "skill",
-            "skills",
-            "plugin",
-            "extension",
-            "package",
-            "skillset",
-            "plugin",
-            "extension",
-            "плагин",
-            "расширение",
-            "مهارة",
-            "ملحق",
-            "إضافة",
-            "कौशल",
-            "प्लगइन",
-            "एक्सटेंशन",
-            "技能",
-            "插件",
-            "扩展",
-            "包",
-            "スキル",
-            "プラグイン",
-            "拡張",
-            "패키지",
-            "플러그인",
-            "확장",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "install",
-        categories: &["extension", "mutation"],
-        forms: &[
-            "install",
-            "setup",
-            "enable",
-            "configure",
-            "instalar",
-            "installer",
-            "einrichten",
-            "установить",
-            "настроить",
-            "включить",
-            "تثبيت",
-            "إعداد",
-            "تمكين",
-            "स्थापित",
-            "इंस्टॉल",
-            "सक्षम",
-            "सेटअप",
-            "安装",
-            "启用",
-            "配置",
-            "インストール",
-            "セットアップ",
-            "有効",
-            "설치",
-            "설정",
-            "활성화",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "remove",
-        categories: &["extension", "mutation"],
-        forms: &[
-            "remove",
-            "delete",
-            "uninstall",
-            "disable",
-            "erase",
-            "quitar",
-            "supprimer",
-            "удалить",
-            "деинсталлировать",
-            "выключить",
-            "إزالة",
-            "حذف",
-            "تعطيل",
-            "हट",
-            "मिटा",
-            "अनइंस्टॉल",
-            "删除",
-            "移除",
-            "卸载",
-            "禁用",
-            "削除",
-            "アンインストール",
-            "無効",
-            "제거",
-            "삭제",
-            "비활성화",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "provider",
-        categories: &["runtime"],
-        forms: &[
-            "provider",
-            "model",
-            "runtime",
-            "profile",
-            "engine",
-            "backend",
-            "proveedor",
-            "fournisseur",
-            "провайдер",
-            "модель",
-            "рантайм",
-            "مزود",
-            "نموذج",
-            "وقت التشغيل",
-            "प्रदाता",
-            "मॉडल",
-            "रनटाइम",
-            "प्रोफाइल",
-            "供应商",
-            "模型",
-            "运行时",
-            "配置档",
-            "プロバイダ",
-            "モデル",
-            "ランタイム",
-            "프로바이더",
-            "모델",
-            "런타임",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "switch",
-        categories: &["mutation", "runtime"],
-        forms: &[
-            "switch",
-            "change",
-            "select",
-            "swap",
-            "choose",
-            "toggle",
-            "cambiar",
-            "changer",
-            "wechseln",
-            "переключить",
-            "сменить",
-            "выбрать",
-            "تبديل",
-            "تغيير",
-            "اختر",
-            "बदल",
-            "बदलें",
-            "चुन",
-            "स्विच",
-            "切换",
-            "更换",
-            "选择",
-            "切り替え",
-            "変更",
-            "選択",
-            "전환",
-            "변경",
-            "선택",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "approval",
-        categories: &["governance"],
-        forms: &[
-            "approval",
-            "approve",
-            "permission",
-            "policy",
-            "security",
-            "allow",
-            "deny",
-            "aprobacion",
-            "autorisation",
-            "politique",
-            "одобрение",
-            "разрешение",
-            "политика",
-            "безопасность",
-            "موافقة",
-            "إذن",
-            "سياسة",
-            "أمان",
-            "अनुमति",
-            "स्वीकृति",
-            "नीति",
-            "सुरक्षा",
-            "审批",
-            "批准",
-            "权限",
-            "策略",
-            "安全",
-            "承認",
-            "許可",
-            "ポリシー",
-            "セキュリティ",
-            "승인",
-            "권한",
-            "정책",
-            "보안",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "wait",
-        categories: &["coordination"],
-        forms: &[
-            "wait",
-            "poll",
-            "watch",
-            "monitor",
-            "until",
-            "esperar",
-            "sonder",
-            "ждать",
-            "следить",
-            "انتظر",
-            "مراقبة",
-            "प्रतीक्षा",
-            "निगरानी",
-            "等待",
-            "轮询",
-            "监控",
-            "待つ",
-            "監視",
-            "대기",
-            "감시",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "cancel",
-        categories: &["coordination", "mutation"],
-        forms: &[
-            "cancel",
-            "stop",
-            "abort",
-            "kill",
-            "terminate",
-            "cancelar",
-            "arreter",
-            "остановить",
-            "отменить",
-            "прервать",
-            "إلغاء",
-            "إيقاف",
-            "إنهاء",
-            "रोक",
-            "रद्द",
-            "समाप्त",
-            "取消",
-            "停止",
-            "终止",
-            "キャンセル",
-            "停止する",
-            "취소",
-            "중지",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "archive",
-        categories: &["coordination"],
-        forms: &[
-            "archive",
-            "store",
-            "retain",
-            "archivar",
-            "archiver",
-            "архив",
-            "архивировать",
-            "أرشفة",
-            "حفظ",
-            "संग्रह",
-            "अभिलेख",
-            "归档",
-            "存档",
-            "アーカイブ",
-            "보관",
-        ],
-    },
-    SearchConceptDefinition {
-        id: "recover",
-        categories: &["coordination"],
-        forms: &[
-            "recover",
-            "restore",
-            "resume",
-            "repair",
-            "fix",
-            "recuperar",
-            "restaurer",
-            "восстановить",
-            "починить",
-            "استعادة",
-            "إصلاح",
-            "पुनर्प्राप्त",
-            "बहाल",
-            "मरम्मत",
-            "恢复",
-            "还原",
-            "復旧",
-            "復元",
-            "복구",
-        ],
-    },
-];
-
-impl SearchSignalSet {
-    fn from_fragments(fragments: &[String]) -> Self {
-        let mut normalized_fragments = Vec::new();
-        let mut tokens = BTreeSet::new();
-
-        for fragment in fragments {
-            let normalized_fragment = normalize_search_text(fragment);
-            if normalized_fragment.is_empty() {
-                continue;
-            }
-
-            let fragment_tokens = tokenize_normalized_text(normalized_fragment.as_str());
-            tokens.extend(fragment_tokens);
-            normalized_fragments.push(normalized_fragment);
-        }
-
-        let normalized_text = normalized_fragments.join(" ");
-
-        Self {
-            normalized_text,
-            tokens,
-        }
-    }
-
-    fn contains_term(&self, normalized_term: &str) -> bool {
-        if normalized_term.is_empty() {
-            return false;
-        }
-
-        let ascii_token_only = normalized_term
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric());
-
-        if ascii_token_only {
-            return self.tokens.contains(normalized_term);
-        }
-
-        if self.tokens.contains(normalized_term) {
-            return true;
-        }
-
-        self.normalized_text.contains(normalized_term)
     }
 }
 
@@ -1279,46 +448,25 @@ impl SearchDocument {
     }
 }
 
-impl SearchQuery {
-    fn new(raw_query: &str) -> Self {
-        let signal = search_query_signal_set(raw_query);
-        let (mut concepts, mut categories) = extract_concepts_and_categories(&signal);
-        apply_structural_query_hints(raw_query, &mut concepts, &mut categories);
-
-        Self {
-            signal,
-            concepts,
-            categories,
-        }
-    }
-}
-
-fn search_query_signal_set(raw_query: &str) -> SearchSignalSet {
-    let cleaned_tokens = raw_query
-        .split_whitespace()
-        .map(trim_structural_token)
-        .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    let mut fragments = Vec::new();
-
-    for token in cleaned_tokens {
-        let has_path_separator = token.contains('/') || token.contains('\\');
-        let host_like_path_token = has_path_separator && token_has_host_like_prefix(token);
-        let url_like_token = token_looks_like_url(token);
-        let skip_token = url_like_token || host_like_path_token;
-
-        if skip_token {
-            continue;
-        }
-
-        fragments.push(token.to_owned());
-    }
-
-    SearchSignalSet::from_fragments(&fragments)
-}
-
 pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> SearchableToolEntry {
-    let definition = descriptor.provider_definition();
+    searchable_entry_from_descriptor_for_view(descriptor, None)
+}
+
+pub(super) fn searchable_entry_from_descriptor_for_runtime_view(
+    descriptor: &ToolDescriptor,
+    view: &ToolView,
+) -> SearchableToolEntry {
+    searchable_entry_from_descriptor_for_view(descriptor, Some(view))
+}
+
+fn searchable_entry_from_descriptor_for_view(
+    descriptor: &ToolDescriptor,
+    view: Option<&ToolView>,
+) -> SearchableToolEntry {
+    let definition = match view {
+        Some(view) => super::provider_definition_for_view(descriptor, view),
+        None => descriptor.provider_definition(),
+    };
     let function = definition.get("function");
 
     let summary_value = function.and_then(|value| value.get("description"));
@@ -1334,29 +482,72 @@ pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> S
         .iter()
         .map(|tag| (*tag).to_owned())
         .collect::<Vec<_>>();
-    let search_hint = descriptor.search_hint().to_owned();
+    let search_hint = direct_search_hint_for_runtime_view(descriptor, view)
+        .unwrap_or_else(|| descriptor.search_hint().to_owned());
+    let surface_id = descriptor.surface_id().map(str::to_owned);
+    let usage_guidance = direct_usage_guidance_for_runtime_view(descriptor, view)
+        .or_else(|| descriptor.usage_guidance().map(str::to_owned));
+    let requires_lease = !descriptor.is_provider_exposed();
+    let tool_id = super::tool_surface::discovery_tool_name_for_tool_name(descriptor.name);
 
     searchable_entry_from_provider_definition(
         descriptor.name,
         descriptor.provider_name,
         descriptor.aliases,
+        tool_id,
         summary,
         search_hint,
         parameters,
         descriptor.parameter_types(),
         tags,
+        surface_id,
+        usage_guidance,
+        requires_lease,
     )
+}
+
+fn direct_search_hint_for_runtime_view(
+    descriptor: &ToolDescriptor,
+    view: Option<&ToolView>,
+) -> Option<String> {
+    let view = view?;
+    if descriptor.name != "web" {
+        return None;
+    }
+
+    let web_runtime_modes = super::tool_surface::direct_web_runtime_modes_for_view(view);
+    let search_hint = web_runtime_modes.search_hint()?;
+    Some(search_hint.to_owned())
+}
+
+fn direct_usage_guidance_for_runtime_view(
+    descriptor: &ToolDescriptor,
+    view: Option<&ToolView>,
+) -> Option<String> {
+    let view = view?;
+    if !descriptor.is_direct() {
+        return None;
+    }
+
+    super::tool_surface::visible_direct_tool_states_for_view(view)
+        .into_iter()
+        .find(|state| state.surface_id == descriptor.name)
+        .map(|state| state.usage_guidance)
 }
 
 pub(super) fn searchable_entry_from_provider_definition(
     canonical_name: &str,
     provider_name: &str,
     aliases: &[&str],
+    tool_id: String,
     summary: String,
     search_hint: String,
     parameters: &Value,
     preferred_parameter_order: &[(&str, &str)],
     tags: Vec<String>,
+    surface_id: Option<String>,
+    usage_guidance: Option<String>,
+    requires_lease: bool,
 ) -> SearchableToolEntry {
     let required_fields = schema_required_fields(parameters);
     let required_field_groups = schema_required_field_groups(parameters);
@@ -1388,7 +579,11 @@ pub(super) fn searchable_entry_from_provider_definition(
         tag_fragments,
     );
 
+    let (surface_id, usage_guidance) =
+        enrich_discovery_prompt_metadata(canonical_name, surface_id, usage_guidance);
+
     SearchableToolEntry {
+        tool_id,
         canonical_name: canonical_name.to_owned(),
         summary,
         search_hint,
@@ -1397,8 +592,30 @@ pub(super) fn searchable_entry_from_provider_definition(
         required_field_groups,
         schema_preview,
         tags,
+        surface_id,
+        usage_guidance,
+        requires_lease,
         search_document,
     }
+}
+
+fn enrich_discovery_prompt_metadata(
+    canonical_name: &str,
+    surface_id: Option<String>,
+    usage_guidance: Option<String>,
+) -> (Option<String>, Option<String>) {
+    (
+        surface_id.or_else(|| discovery_surface_id(canonical_name)),
+        usage_guidance.or_else(|| discovery_usage_guidance(canonical_name)),
+    )
+}
+
+fn discovery_surface_id(canonical_name: &str) -> Option<String> {
+    super::tool_surface::tool_surface_id_for_name(canonical_name).map(str::to_owned)
+}
+
+fn discovery_usage_guidance(canonical_name: &str) -> Option<String> {
+    super::tool_surface::tool_surface_usage_guidance(canonical_name).map(str::to_owned)
 }
 
 fn build_schema_preview(
@@ -1442,6 +659,68 @@ fn build_schema_preview(
     })
 }
 
+pub(super) fn collapse_hidden_surface_search_entries(
+    entries: Vec<SearchableToolEntry>,
+) -> Vec<SearchableToolEntry> {
+    let mut grouped_members = BTreeMap::<String, Vec<SearchableToolEntry>>::new();
+    let mut passthrough_entries = Vec::new();
+
+    for entry in entries {
+        let Some(surface_id) = entry.surface_id.as_deref() else {
+            passthrough_entries.push(entry);
+            continue;
+        };
+        // Collapse grouped hidden lanes into one high-signal card per surface.
+        // `channel` stays separate from `agent`/`skills`, but it is still one
+        // addon surface instead of a long tail of individual ids.
+        let collapse_surface = matches!(surface_id, "agent" | "skills" | "channel");
+        if !collapse_surface {
+            passthrough_entries.push(entry);
+            continue;
+        }
+
+        grouped_members
+            .entry(surface_id.to_owned())
+            .or_default()
+            .push(entry);
+    }
+
+    let mut collapsed_entries = Vec::new();
+    for (surface_id, members) in grouped_members {
+        let Some(summary) = super::tool_surface::hidden_surface_search_summary(surface_id.as_str())
+        else {
+            continue;
+        };
+        let Some(argument_hint) =
+            super::tool_surface::hidden_surface_search_argument_hint(surface_id.as_str())
+        else {
+            continue;
+        };
+        let mut tags = BTreeSet::new();
+        tags.insert(surface_id.clone());
+        for member in &members {
+            tags.insert(member.tool_id.clone());
+            tags.insert(member.canonical_name.clone());
+            for tag in &member.tags {
+                tags.insert(tag.clone());
+            }
+        }
+
+        let entry = searchable_entry_from_manual_definition(
+            surface_id.as_str(),
+            summary,
+            argument_hint,
+            Vec::new(),
+            Vec::new(),
+            tags.into_iter().collect(),
+        );
+        collapsed_entries.push(entry);
+    }
+
+    passthrough_entries.extend(collapsed_entries);
+    passthrough_entries
+}
+
 pub(super) fn searchable_entry_from_manual_definition(
     canonical_name: &str,
     summary: &str,
@@ -1450,7 +729,8 @@ pub(super) fn searchable_entry_from_manual_definition(
     required_field_groups: Vec<Vec<String>>,
     tags: Vec<String>,
 ) -> SearchableToolEntry {
-    let mut name_fragments = vec![canonical_name.to_owned()];
+    let tool_id = super::tool_surface::discovery_tool_name_for_tool_name(canonical_name);
+    let mut name_fragments = vec![canonical_name.to_owned(), tool_id.clone()];
     let canonical_name_variant = identifier_phrase_variant(canonical_name);
     let variant_is_distinct = canonical_name_variant != canonical_name;
     if variant_is_distinct {
@@ -1483,6 +763,7 @@ pub(super) fn searchable_entry_from_manual_definition(
     );
 
     SearchableToolEntry {
+        tool_id,
         canonical_name: canonical_name.to_owned(),
         summary: summary_text,
         search_hint,
@@ -1491,6 +772,9 @@ pub(super) fn searchable_entry_from_manual_definition(
         required_field_groups,
         schema_preview,
         tags,
+        surface_id: discovery_surface_id(canonical_name),
+        usage_guidance: discovery_usage_guidance(canonical_name),
+        requires_lease: true,
         search_document,
     }
 }
@@ -2048,281 +1332,6 @@ fn collect_schema_search_terms_into(schema: &Value, fragments: &mut Vec<String>)
     }
 }
 
-fn identifier_phrase_variant(raw: &str) -> String {
-    let normalized = normalize_search_text(raw);
-    let mut characters = String::new();
-    let mut last_was_space = false;
-
-    for character in normalized.chars() {
-        let replacement = if is_identifier_separator(character) {
-            ' '
-        } else {
-            character
-        };
-
-        if replacement == ' ' {
-            if last_was_space {
-                continue;
-            }
-
-            last_was_space = true;
-            characters.push(' ');
-            continue;
-        }
-
-        last_was_space = false;
-        characters.push(replacement);
-    }
-
-    characters.trim().to_owned()
-}
-
-fn extract_concepts_and_categories(
-    signal: &SearchSignalSet,
-) -> (BTreeSet<String>, BTreeSet<String>) {
-    let mut concepts = BTreeSet::new();
-    let mut categories = BTreeSet::new();
-
-    for concept in normalized_search_concepts() {
-        let mut matched = false;
-
-        for form in &concept.forms {
-            let contains_form = signal.contains_term(form.as_str());
-            if !contains_form {
-                continue;
-            }
-
-            matched = true;
-            break;
-        }
-
-        if !matched {
-            continue;
-        }
-
-        concepts.insert(concept.id.to_owned());
-
-        for category in concept.categories {
-            categories.insert((*category).to_owned());
-        }
-    }
-
-    (concepts, categories)
-}
-
-fn normalized_search_concepts() -> &'static Vec<NormalizedSearchConcept> {
-    static SEARCH_CONCEPTS: OnceLock<Vec<NormalizedSearchConcept>> = OnceLock::new();
-
-    SEARCH_CONCEPTS.get_or_init(|| {
-        SEARCH_CONCEPT_DEFINITIONS
-            .iter()
-            .map(|concept| {
-                let forms = concept
-                    .forms
-                    .iter()
-                    .map(|form| normalize_search_text(form))
-                    .filter(|form| !form.is_empty())
-                    .collect::<Vec<_>>();
-
-                NormalizedSearchConcept {
-                    id: concept.id,
-                    categories: concept.categories,
-                    forms,
-                }
-            })
-            .collect()
-    })
-}
-
-fn apply_structural_query_hints(
-    raw_query: &str,
-    concepts: &mut BTreeSet<String>,
-    categories: &mut BTreeSet<String>,
-) {
-    let looks_like_url = query_looks_like_url(raw_query);
-    if looks_like_url {
-        insert_concept_and_categories("web", concepts, categories);
-    }
-
-    let looks_like_file_reference = query_looks_like_file_reference(raw_query);
-    if looks_like_file_reference {
-        insert_concept_and_categories("file", concepts, categories);
-    }
-}
-
-fn insert_concept_and_categories(
-    concept_id: &str,
-    concepts: &mut BTreeSet<String>,
-    categories: &mut BTreeSet<String>,
-) {
-    concepts.insert(concept_id.to_owned());
-
-    for concept in normalized_search_concepts() {
-        if concept.id != concept_id {
-            continue;
-        }
-
-        for category in concept.categories {
-            categories.insert((*category).to_owned());
-        }
-    }
-}
-
-fn query_looks_like_url(raw_query: &str) -> bool {
-    for token in raw_query.split_whitespace() {
-        let cleaned = trim_structural_token(token);
-        if cleaned.is_empty() {
-            continue;
-        }
-
-        let has_path_separator = cleaned.contains('/') || cleaned.contains('\\');
-        let host_like_path = has_path_separator && token_has_host_like_prefix(cleaned);
-        let looks_like_url = token_looks_like_url(cleaned);
-        if looks_like_url || host_like_path {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn token_looks_like_url(token: &str) -> bool {
-    token.contains("://") || token.starts_with("www.")
-}
-
-fn query_looks_like_file_reference(raw_query: &str) -> bool {
-    let cleaned_tokens = raw_query
-        .split_whitespace()
-        .map(trim_structural_token)
-        .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    let single_token_query = cleaned_tokens.len() == 1;
-
-    for token in cleaned_tokens {
-        let ambiguous_single_dot_token = token_is_ambiguous_single_dot_token(token);
-
-        if single_token_query && ambiguous_single_dot_token {
-            continue;
-        }
-
-        let looks_like_file_reference = token_looks_like_file_reference(token);
-        if looks_like_file_reference {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn token_looks_like_file_reference(token: &str) -> bool {
-    if token_looks_like_url(token) {
-        return false;
-    }
-
-    let has_path_separator = token.contains('/') || token.contains('\\');
-    if has_path_separator {
-        let host_like_prefix = token_has_host_like_prefix(token);
-
-        if host_like_prefix {
-            return false;
-        }
-
-        return true;
-    }
-
-    let Some((stem, extension)) = token.rsplit_once('.') else {
-        return false;
-    };
-
-    let single_dot_count = token.chars().filter(|character| *character == '.').count();
-    let has_single_dot = single_dot_count == 1;
-    if has_single_dot {
-        let stem_has_alpha = stem.chars().any(|character| character.is_alphabetic());
-        let extension_length = extension.chars().count();
-        let extension_length_valid = (2..=4).contains(&extension_length);
-        let extension_characters_valid = extension
-            .chars()
-            .all(|character| character.is_ascii_alphabetic());
-
-        return stem_has_alpha && extension_length_valid && extension_characters_valid;
-    }
-
-    let stem_valid = stem
-        .chars()
-        .any(|character| character.is_alphanumeric() || character == '_' || character == '-');
-    if !stem_valid {
-        return false;
-    }
-
-    let extension_length = extension.chars().count();
-    let extension_length_valid = (1..=8).contains(&extension_length);
-    let extension_characters_valid = extension
-        .chars()
-        .all(|character| character.is_alphanumeric());
-
-    extension_length_valid && extension_characters_valid
-}
-
-fn token_has_host_like_prefix(token: &str) -> bool {
-    let host_candidate = token.split(['/', '\\']).next().unwrap_or(token);
-    let normalized_candidate = host_candidate.to_ascii_lowercase();
-    let Some((stem, extension)) = normalized_candidate.rsplit_once('.') else {
-        return false;
-    };
-    let extension_length = extension.chars().count();
-    let extension_length_valid = (2..=4).contains(&extension_length);
-    let extension_characters_valid = extension
-        .chars()
-        .all(|character| character.is_ascii_lowercase());
-    let stem_has_alpha = stem
-        .chars()
-        .any(|character| character.is_ascii_alphabetic());
-    let stem_characters_valid = stem.chars().all(|character| {
-        character.is_ascii_lowercase()
-            || character.is_ascii_digit()
-            || character == '-'
-            || character == '.'
-    });
-
-    stem_has_alpha && extension_length_valid && extension_characters_valid && stem_characters_valid
-}
-
-fn token_is_ambiguous_single_dot_token(token: &str) -> bool {
-    let has_path_separator = token.contains('/') || token.contains('\\');
-    if has_path_separator {
-        return false;
-    }
-
-    let Some((stem, extension)) = token.rsplit_once('.') else {
-        return false;
-    };
-    let single_dot_count = token.chars().filter(|character| *character == '.').count();
-    let has_single_dot = single_dot_count == 1;
-
-    if !has_single_dot {
-        return false;
-    }
-
-    let stem_has_alpha = stem.chars().any(|character| character.is_alphabetic());
-    let extension_length = extension.chars().count();
-    let extension_length_valid = (2..=4).contains(&extension_length);
-    let extension_characters_valid = extension
-        .chars()
-        .all(|character| character.is_ascii_alphabetic());
-
-    stem_has_alpha && extension_length_valid && extension_characters_valid
-}
-
-fn trim_structural_token(token: &str) -> &str {
-    token.trim_matches(|character: char| {
-        character.is_whitespace()
-            || matches!(
-                character,
-                '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '!' | '?'
-            )
-    })
-}
-
 fn schema_argument_type(schema: &Value) -> String {
     let schema_type = schema
         .get("type")
@@ -2393,97 +1402,19 @@ fn compact_argument_hint_fields(fields: Vec<SchemaArgumentField>) -> Vec<SchemaA
     compacted
 }
 
-fn normalize_search_text(raw: &str) -> String {
-    let compatibility = raw.nfkc().collect::<String>();
-    let lowercased = compatibility.to_lowercase();
-
-    let mut normalized = String::new();
-    let mut last_was_space = false;
-
-    for character in lowercased.nfd() {
-        if is_combining_mark(character) {
-            continue;
-        }
-
-        let normalized_character = if character.is_whitespace() {
-            ' '
-        } else {
-            character
-        };
-        if normalized_character == ' ' {
-            if last_was_space {
-                continue;
-            }
-
-            last_was_space = true;
-            normalized.push(' ');
-            continue;
-        }
-
-        last_was_space = false;
-        normalized.push(normalized_character);
-    }
-
-    normalized.trim().to_owned()
-}
-
-fn tokenize_normalized_text(normalized: &str) -> BTreeSet<String> {
-    let surface = identifier_phrase_variant(normalized);
-    let mut tokens = BTreeSet::new();
-
-    for word in UnicodeSegmentation::unicode_words(surface.as_str()) {
-        let token = word.trim();
-        let keep_token = should_keep_token(token);
-        if !keep_token {
-            continue;
-        }
-
-        tokens.insert(token.to_owned());
-    }
-
-    tokens
-}
-
-fn should_keep_token(token: &str) -> bool {
-    if token.is_empty() {
-        return false;
-    }
-
-    let ascii_token = token
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric());
-
-    if ascii_token {
-        return token.len() >= 2;
-    }
-
-    true
-}
-
-fn is_identifier_separator(character: char) -> bool {
-    matches!(
-        character,
-        '.' | '_' | '-' | '/' | '\\' | ':' | ',' | ';' | '|' | '(' | ')' | '[' | ']'
-    )
-}
-
-fn ordered_overlap(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> {
-    left.intersection(right).cloned().collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn normalize_search_text_folds_diacritics_and_width_variants() {
-        let normalized = normalize_search_text("Ｂúsqueda　网页");
-        assert_eq!(normalized, "busqueda 网页");
+    fn normalize_search_text_keeps_ascii_queries_stable() {
+        let normalized = normalize_search_text("Find README.md");
+        assert_eq!(normalized, "find readme.md");
     }
 
     #[test]
-    fn multilingual_concepts_extract_from_non_latin_queries() {
-        let fragments = vec!["تثبيت مهارة".to_owned()];
+    fn english_concepts_extract_from_prompt_style_queries() {
+        let fragments = vec!["install skill".to_owned()];
         let signal = SearchSignalSet::from_fragments(&fragments);
         let (concepts, categories) = extract_concepts_and_categories(&signal);
 

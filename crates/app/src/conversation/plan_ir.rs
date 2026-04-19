@@ -199,7 +199,7 @@ mod tests {
                     id: "n1".to_owned(),
                     kind: PlanNodeKind::Tool,
                     label: "read context".to_owned(),
-                    tool_name: Some("file.read".to_owned()),
+                    tool_name: Some("read".to_owned()),
                     timeout_ms: 3_000,
                     max_attempts: 2,
                     risk_tier: RiskTier::Low,

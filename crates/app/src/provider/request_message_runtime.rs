@@ -326,37 +326,55 @@ fn render_deferred_tool_text_workflow_section_if_needed(config: &LoongConfig) ->
 }
 
 fn render_deferred_tool_text_workflow_section() -> String {
+    let direct_call_example_lines = [
+        "{",
+        "  \"name\": \"read\",",
+        "  \"arguments\": {",
+        "    \"path\": \"README.md\"",
+        "  }",
+        "}",
+    ];
+    let direct_call_example = direct_call_example_lines.join("\n");
+
     let discovery_call_example_lines = [
         "{",
         "  \"name\": \"tool_search\",",
         "  \"arguments\": {",
-        "    \"query\": \"<natural-language capability description>\",",
+        "    \"query\": \"approval session status\",",
         "    \"limit\": 5",
         "  }",
         "}",
     ];
     let discovery_call_example = discovery_call_example_lines.join("\n");
+
     let invoke_call_example_lines = [
         "{",
         "  \"name\": \"tool_invoke\",",
         "  \"arguments\": {",
-        "    \"tool_id\": \"<tool_id from tool_search>\",",
+        "    \"tool_id\": \"agent\",",
         "    \"lease\": \"<lease from tool_search>\",",
         "    \"arguments\": {",
-        "      \"...\": \"...\"",
+        "      \"operation\": \"session-status\",",
+        "      \"session_id\": \"<session id>\"",
         "    }",
         "  }",
         "}",
     ];
     let invoke_call_example = invoke_call_example_lines.join("\n");
+
     let lines = [
-        "## Deferred Tool Text Workflow".to_owned(),
+        "## Tool Access".to_owned(),
         "Structured provider tool schemas are disabled for this profile.".to_owned(),
-        "In raw JSON tool calls, use the provider tool names `tool_search` and `tool_invoke`.".to_owned(),
-        "When you need a tool, emit a raw JSON tool call instead of only describing the missing capability.".to_owned(),
-        "Discovery example:".to_owned(),
+        "Use the smallest tool that fits: `read`, `write`, `exec`, `web`, `browser`, or `memory`. These direct tools are the normal path.".to_owned(),
+        "For `web`, distinguish search-provider mode from ordinary network mode: `web { query }` uses web-search providers, while `web { url }` or low-level request fields are still normal network access.".to_owned(),
+        "Use `tool_search` only when the task needs a hidden surface such as `agent`, `skills`, or `channel`, and keep the query short and capability-focused.".to_owned(),
+        "Use `tool_invoke` only with a fresh lease returned by `tool_search`; do not route normal direct-tool work through leases.".to_owned(),
+        "When you need a tool, emit the raw JSON call instead of only describing the missing capability.".to_owned(),
+        "Direct tool example:".to_owned(),
+        direct_call_example,
+        "Hidden-tool discovery example:".to_owned(),
         discovery_call_example,
-        "Invocation example:".to_owned(),
+        "Hidden-tool invocation example:".to_owned(),
         invoke_call_example,
     ];
 
@@ -905,7 +923,7 @@ mod tests {
                         "query": "read note.md",
                         "entries": [
                             {
-                                "tool_id": "file.read",
+                                "tool_id": "read",
                                 "summary": "Read a file."
                             }
                         ]
@@ -1124,7 +1142,8 @@ mod tests {
             build_system_message(&config, true).expect("system message when enabled");
         let system_content = system_message["content"].as_str().expect("system content");
 
-        assert!(system_content.contains("## Deferred Tool Text Workflow"));
+        assert!(system_content.contains("## Tool Access"));
+        assert!(system_content.contains("`web { query }` uses web-search providers"));
         assert!(system_content.contains("\"name\": \"tool_search\""));
         assert!(system_content.contains("\"name\": \"tool_invoke\""));
     }
@@ -1145,7 +1164,7 @@ mod tests {
                 build_system_message(&config, true).expect("system message when enabled");
             let system_content = system_message["content"].as_str().expect("system content");
 
-            assert!(!system_content.contains("## Deferred Tool Text Workflow"));
+            assert!(!system_content.contains("## Tool Access"));
         }
     }
 

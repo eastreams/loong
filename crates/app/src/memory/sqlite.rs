@@ -5609,6 +5609,7 @@ pub(super) fn format_summary_block(summary_body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MemoryProfile;
     use serde_json::json;
 
     struct CurrentDirGuard {
@@ -5625,6 +5626,22 @@ mod tests {
         let original = std::env::current_dir().expect("read current dir");
         std::env::set_current_dir(path).expect("set current dir");
         CurrentDirGuard { original }
+    }
+
+    fn sqlite_test_config(db_path: impl Into<PathBuf>) -> MemoryRuntimeConfig {
+        MemoryRuntimeConfig::for_sqlite_path(db_path)
+    }
+
+    fn sqlite_test_config_with_profile(
+        db_path: impl Into<PathBuf>,
+        profile: MemoryProfile,
+        sliding_window: usize,
+    ) -> MemoryRuntimeConfig {
+        let mut config = sqlite_test_config(db_path);
+        config.profile = profile;
+        config.mode = profile.mode();
+        config.sliding_window = sliding_window;
+        config
     }
 
     fn read_summary_checkpoint(
@@ -5738,8 +5755,6 @@ mod tests {
 
     #[test]
     fn load_window_includes_turn_count_in_payload() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -5754,13 +5769,7 @@ mod tests {
         let db_path = tmp.join("window-turn-count.sqlite3");
         let _ = fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         append_turn_direct("window-turn-count-session", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -5826,8 +5835,6 @@ mod tests {
 
     #[test]
     fn replace_turns_uses_turn_rows_when_session_state_metadata_is_missing() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -5842,13 +5849,7 @@ mod tests {
         let db_path = tmp.join("replace-turns-fallback-count.sqlite3");
         let _ = fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 4,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 4);
         let session_id = "replace-turns-fallback-count-session";
 
         append_turn_direct(session_id, "user", "turn 1", &config)
@@ -5906,8 +5907,6 @@ mod tests {
 
     #[test]
     fn memory_operations_reuse_cached_sqlite_runtime_for_same_path() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -5921,13 +5920,7 @@ mod tests {
         let db_path = tmp.join("runtime-reuse.sqlite3");
         let _ = fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         ensure_memory_db_ready(Some(db_path.clone()), &config).expect("ensure memory db ready");
         let turns = window_direct_with_options("runtime-reuse-session", 2, true, &config)
@@ -5946,8 +5939,6 @@ mod tests {
 
     #[test]
     fn concurrent_same_path_bootstrap_reuses_one_cold_runtime() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -5962,13 +5953,7 @@ mod tests {
         let db_path = tmp.join("runtime-concurrent.sqlite3");
         let _ = fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         configure_sqlite_runtime_cache_miss_for_tests(&db_path, 2);
 
@@ -6011,8 +5996,6 @@ mod tests {
 
     #[test]
     fn distinct_sqlite_paths_get_distinct_runtime_bootstraps() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -6028,17 +6011,10 @@ mod tests {
         let _ = fs::remove_file(&db_path_a);
         let _ = fs::remove_file(&db_path_b);
 
-        let config_a = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path_a.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
-        let config_b = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path_b.clone()),
-            ..config_a.clone()
-        };
+        let config_a =
+            sqlite_test_config_with_profile(db_path_a.clone(), MemoryProfile::WindowOnly, 2);
+        let config_b =
+            sqlite_test_config_with_profile(db_path_b.clone(), MemoryProfile::WindowOnly, 2);
 
         ensure_memory_db_ready(Some(db_path_a.clone()), &config_a).expect("ensure db a ready");
         window_direct_with_options("runtime-a-session", 2, true, &config_a)
@@ -6065,8 +6041,6 @@ mod tests {
 
     #[test]
     fn resetting_cached_runtime_forces_runtime_recreation_on_next_access() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -6080,13 +6054,7 @@ mod tests {
         let db_path = tmp.join("runtime-reset.sqlite3");
         let _ = fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         ensure_memory_db_ready(Some(db_path.clone()), &config).expect("ensure memory db ready");
         window_direct_with_options("runtime-reset-session", 2, true, &config)
@@ -6107,8 +6075,6 @@ mod tests {
 
     #[test]
     fn dropping_one_cached_runtime_preserves_other_cached_runtimes() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -6125,17 +6091,10 @@ mod tests {
         let _ = fs::remove_file(&db_path_a);
         let _ = fs::remove_file(&db_path_b);
 
-        let config_a = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path_a.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
-        let config_b = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path_b.clone()),
-            ..config_a.clone()
-        };
+        let config_a =
+            sqlite_test_config_with_profile(db_path_a.clone(), MemoryProfile::WindowOnly, 2);
+        let config_b =
+            sqlite_test_config_with_profile(db_path_b.clone(), MemoryProfile::WindowOnly, 2);
 
         ensure_memory_db_ready(Some(db_path_a.clone()), &config_a).expect("ensure db a ready");
         window_direct_with_options("runtime-drop-a", 2, true, &config_a)
@@ -6169,8 +6128,6 @@ mod tests {
 
     #[test]
     fn equivalent_relative_and_absolute_paths_share_one_runtime() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -6185,17 +6142,10 @@ mod tests {
         let db_path = tmp.join("data").join("alias.sqlite3");
         let _cwd_guard = set_current_dir_for_test(&tmp);
 
-        let relative_config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(PathBuf::from("data/alias.sqlite3")),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
-        let absolute_config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..relative_config.clone()
-        };
+        let relative_config =
+            sqlite_test_config_with_profile("data/alias.sqlite3", MemoryProfile::WindowOnly, 2);
+        let absolute_config =
+            sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         ensure_memory_db_ready(None, &relative_config).expect("ensure relative db ready");
         window_direct_with_options("relative-alias-session", 2, true, &relative_config)
@@ -6222,8 +6172,6 @@ mod tests {
 
     #[test]
     fn dot_dot_aliases_share_one_runtime_after_normalization() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -6239,17 +6187,13 @@ mod tests {
         let db_path = tmp.join("workspace").join("data").join("alias.sqlite3");
         let _cwd_guard = set_current_dir_for_test(&cwd);
 
-        let alias_a = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(PathBuf::from("../data/alias.sqlite3")),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
-        let alias_b = MemoryRuntimeConfig {
-            sqlite_path: Some(PathBuf::from("../nested/../data/./alias.sqlite3")),
-            ..alias_a.clone()
-        };
+        let alias_a =
+            sqlite_test_config_with_profile("../data/alias.sqlite3", MemoryProfile::WindowOnly, 2);
+        let alias_b = sqlite_test_config_with_profile(
+            "../nested/../data/./alias.sqlite3",
+            MemoryProfile::WindowOnly,
+            2,
+        );
 
         ensure_memory_db_ready(None, &alias_a).expect("ensure dot-dot alias a ready");
         window_direct_with_options("dotdot-alias-a", 2, true, &alias_a)
@@ -6276,8 +6220,6 @@ mod tests {
 
     #[test]
     fn ensure_memory_db_ready_stamps_current_schema_version() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let _guard = sqlite_runtime_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -6292,13 +6234,7 @@ mod tests {
         let db_path = tmp.join("schema-version.sqlite3");
         let _ = fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
         ensure_memory_db_ready(Some(db_path.clone()), &config).expect("ensure memory db ready");
 

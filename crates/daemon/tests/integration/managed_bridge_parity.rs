@@ -55,6 +55,10 @@ fn runtime_snapshot_fixture(
         tools: loong_daemon::gateway::read_models::GatewayRuntimeSnapshotToolsReadModel {
             visible_tool_count: 0,
             visible_tool_names: Vec::new(),
+            visible_direct_tool_names: Vec::new(),
+            hidden_tool_count: 0,
+            hidden_tool_tags: Vec::new(),
+            hidden_tool_surfaces: Vec::new(),
             capability_snapshot_sha256: String::new(),
             capability_snapshot: String::new(),
             tool_calling: loong_daemon::gateway::read_models::GatewayToolCallingReadModel {
@@ -63,6 +67,13 @@ fn runtime_snapshot_fixture(
                 effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
                 active_model: "gpt-4.1-mini".to_owned(),
                 reason: "no runtime-visible tools are enabled".to_owned(),
+            },
+            web_access: loong_daemon::gateway::read_models::GatewayWebAccessReadModel {
+                ordinary_network_access_enabled: false,
+                query_search_enabled: false,
+                query_search_default_provider: "duckduckgo".to_owned(),
+                query_search_credential_ready: true,
+                separation_note: "web-search provider settings affect only query search mode; ordinary network access stays separately governed".to_owned(),
             },
         },
         runtime_plugins: serde_json::json!({}),
