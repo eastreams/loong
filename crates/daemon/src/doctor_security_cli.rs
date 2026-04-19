@@ -11,6 +11,15 @@ use serde_json::json;
 
 use crate::doctor_cli::durable_audit_target_issue;
 
+const DOCTOR_SECURITY_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DoctorSecurityCliJsonSchema {
+    pub version: u32,
+    pub surface: &'static str,
+    pub purpose: &'static str,
+}
+
 #[derive(Debug, Clone)]
 pub struct DoctorSecurityCommandOptions {
     pub config: Option<String>,
@@ -161,12 +170,21 @@ pub async fn execute_doctor_security_command(
 
 pub fn doctor_security_cli_json(execution: &DoctorSecurityAuditExecution) -> serde_json::Value {
     json!({
+        "schema": doctor_security_cli_schema(),
         "command": "security",
         "config": execution.resolved_config_path,
         "ok": execution.ok,
         "summary": execution.summary,
         "findings": execution.findings,
     })
+}
+
+fn doctor_security_cli_schema() -> DoctorSecurityCliJsonSchema {
+    DoctorSecurityCliJsonSchema {
+        version: DOCTOR_SECURITY_CLI_JSON_SCHEMA_VERSION,
+        surface: "doctor_security",
+        purpose: "operator_security_posture",
+    }
 }
 
 pub fn render_doctor_security_cli_text(execution: &DoctorSecurityAuditExecution) -> String {
@@ -1933,6 +1951,9 @@ mod tests {
 
         let payload = doctor_security_cli_json(&execution);
 
+        assert_eq!(payload["schema"]["version"], 1);
+        assert_eq!(payload["schema"]["surface"], "doctor_security");
+        assert_eq!(payload["schema"]["purpose"], "operator_security_posture");
         assert_eq!(payload["command"], "security");
         assert_eq!(payload["summary"]["covered"], 1);
         assert_eq!(payload["findings"][0]["id"], "audit_retention");

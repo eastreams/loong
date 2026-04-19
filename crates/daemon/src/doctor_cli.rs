@@ -9,6 +9,7 @@ use kernel::{probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal
 use loong_app as mvp;
 use loong_contracts::SecretRef;
 use loong_spec::CliResult;
+use serde::Serialize;
 use serde_json::json;
 
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
@@ -42,6 +43,15 @@ pub struct DoctorCheck {
     pub name: String,
     pub level: DoctorCheckLevel,
     pub detail: String,
+}
+
+const DOCTOR_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize)]
+struct DoctorCliJsonSchema {
+    version: u32,
+    surface: &'static str,
+    purpose: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -220,6 +230,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     if options.json {
         let checks = doctor_checks_json_payload(&checks, &channel_inventory.channel_surfaces);
         let payload = json!({
+            "schema": doctor_cli_json_schema(),
             "ok": summary.fail == 0,
             "config": config_path.display().to_string(),
             "summary": {
@@ -254,6 +265,14 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         return Err("doctor detected failing checks".to_owned());
     }
     Ok(())
+}
+
+fn doctor_cli_json_schema() -> DoctorCliJsonSchema {
+    DoctorCliJsonSchema {
+        version: DOCTOR_CLI_JSON_SCHEMA_VERSION,
+        surface: "doctor",
+        purpose: "runtime_health_diagnostics",
+    }
 }
 
 fn check_directory_ready(
