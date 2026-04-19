@@ -988,10 +988,7 @@ fn unix_ts_now() -> i64 {
 }
 
 fn resolve_db_path(config: &MemoryRuntimeConfig) -> PathBuf {
-    if let Some(path) = &config.sqlite_path {
-        return path.clone();
-    }
-    crate::config::default_loong_home().join("memory.sqlite3")
+    config.resolved_sqlite_path()
 }
 
 fn absolutize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {

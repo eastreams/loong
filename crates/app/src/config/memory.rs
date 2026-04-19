@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::shared::{
     ConfigValidationIssue, DEFAULT_SQLITE_FILE, default_loong_home, expand_path,
@@ -20,6 +21,8 @@ pub struct MemoryConfig {
     pub system: MemorySystemKind,
     #[serde(default, deserialize_with = "deserialize_memory_system_id")]
     pub system_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_memory_agent_id")]
+    pub agent_id: Option<String>,
     #[serde(default = "default_true")]
     pub fail_open: bool,
     #[serde(default)]
@@ -356,6 +359,7 @@ impl Default for MemoryConfig {
             profile: MemoryProfile::default(),
             system: MemorySystemKind::default(),
             system_id: None,
+            agent_id: None,
             fail_open: default_true(),
             ingest_mode: MemoryIngestMode::default(),
             sqlite_path: default_sqlite_path(),
@@ -369,7 +373,12 @@ impl Default for MemoryConfig {
 
 impl MemoryConfig {
     pub fn resolved_sqlite_path(&self) -> PathBuf {
-        expand_path(&self.sqlite_path)
+        let base_path = expand_path(&self.sqlite_path);
+        scoped_sqlite_path_for_agent(base_path.as_path(), self.normalized_agent_id().as_deref())
+    }
+
+    pub fn normalized_agent_id(&self) -> Option<String> {
+        normalize_memory_agent_id(self.agent_id.clone())
     }
 
     pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
@@ -445,6 +454,14 @@ where
     Ok(raw.and_then(|value| crate::memory::normalize_system_id(value.as_str())))
 }
 
+fn deserialize_memory_agent_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(normalize_memory_agent_id(raw))
+}
+
 fn deserialize_personalization_config<'de, D>(
     deserializer: D,
 ) -> Result<Option<PersonalizationConfig>, D::Error>
@@ -462,6 +479,86 @@ fn trim_optional_text(raw: Option<&str>) -> Option<String> {
         return None;
     }
     Some(trimmed_value.to_owned())
+}
+
+pub(crate) fn normalize_memory_agent_id(raw: Option<String>) -> Option<String> {
+    raw.as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn scoped_sqlite_path_for_agent(base_path: &Path, agent_id: Option<&str>) -> PathBuf {
+    let Some(agent_id) = agent_id else {
+        return base_path.to_path_buf();
+    };
+
+    let sanitized_agent_id = sanitize_memory_agent_id_for_path(agent_id);
+    if sanitized_agent_id.is_empty() {
+        return base_path.to_path_buf();
+    }
+
+    let base_parent = base_path.parent().unwrap_or_else(|| Path::new(""));
+    let file_name = base_path
+        .file_name()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| std::ffi::OsString::from(DEFAULT_SQLITE_FILE));
+
+    base_parent
+        .join("agents")
+        .join(sanitized_agent_id)
+        .join(file_name)
+}
+
+pub(crate) fn scoped_memory_workspace_root_for_agent(
+    base_workspace_root: &Path,
+    agent_id: Option<&str>,
+) -> PathBuf {
+    let Some(agent_id) = agent_id else {
+        return base_workspace_root.to_path_buf();
+    };
+
+    let sanitized_agent_id = sanitize_memory_agent_id_for_path(agent_id);
+    if sanitized_agent_id.is_empty() {
+        return base_workspace_root.to_path_buf();
+    }
+
+    base_workspace_root
+        .join(".loong")
+        .join("agents")
+        .join(sanitized_agent_id)
+}
+
+fn sanitize_memory_agent_id_for_path(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let sanitized = trimmed
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_owned();
+
+    let already_path_safe = !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'));
+    if already_path_safe {
+        return trimmed.to_owned();
+    }
+
+    let digest = Sha256::digest(trimmed.as_bytes());
+    let hash = hex::encode(digest.iter().take(6).copied().collect::<Vec<_>>());
+    if sanitized.is_empty() {
+        return format!("agent_{hash}");
+    }
+
+    format!("{sanitized}_{hash}")
 }
 
 const fn default_personalization_schema_version() -> u32 {
@@ -506,6 +603,7 @@ const fn default_summary_max_chars() -> usize {
 mod tests {
     use super::*;
     use crate::memory::DEFAULT_MEMORY_SYSTEM_ID;
+    use crate::test_support::ScopedEnv;
     use serde_json::json;
 
     #[test]
@@ -583,6 +681,64 @@ mod tests {
             config.trimmed_profile_note().as_deref(),
             Some("imported preferences")
         );
+    }
+
+    #[test]
+    fn memory_agent_id_is_normalized_when_deserialized() {
+        let raw = json!({
+            "agent_id": "  health  "
+        });
+
+        let config: MemoryConfig =
+            serde_json::from_value(raw).expect("memory.agent_id should deserialize");
+
+        assert_eq!(config.agent_id.as_deref(), Some("health"));
+        assert_eq!(config.normalized_agent_id().as_deref(), Some("health"));
+    }
+
+    #[test]
+    fn resolved_sqlite_path_scopes_by_agent_id() {
+        let mut env = ScopedEnv::new();
+        env.remove("LOONG_SQLITE_PATH");
+        env.remove("LOONG_MEMORY_AGENT_ID");
+
+        let config = MemoryConfig {
+            sqlite_path: "/tmp/loong/memory.sqlite3".to_owned(),
+            agent_id: Some("investment".to_owned()),
+            ..MemoryConfig::default()
+        };
+
+        assert_eq!(
+            config.resolved_sqlite_path(),
+            PathBuf::from("/tmp/loong/agents/investment/memory.sqlite3")
+        );
+    }
+
+    #[test]
+    fn resolved_sqlite_path_ignores_env_overrides() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("LOONG_SQLITE_PATH", "/tmp/env-memory.sqlite3");
+        env.set("LOONG_MEMORY_AGENT_ID", "health");
+
+        let config = MemoryConfig {
+            sqlite_path: "/tmp/config-memory.sqlite3".to_owned(),
+            ..MemoryConfig::default()
+        };
+
+        assert_eq!(
+            config.resolved_sqlite_path(),
+            PathBuf::from("/tmp/config-memory.sqlite3")
+        );
+    }
+
+    #[test]
+    fn scoped_sqlite_paths_avoid_collisions_for_different_unsafe_agent_ids() {
+        let path_a =
+            scoped_sqlite_path_for_agent(Path::new("/tmp/loong/memory.sqlite3"), Some("topic/a"));
+        let path_b =
+            scoped_sqlite_path_for_agent(Path::new("/tmp/loong/memory.sqlite3"), Some("topic?a"));
+
+        assert_ne!(path_a, path_b);
     }
 
     #[test]

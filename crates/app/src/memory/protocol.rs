@@ -205,6 +205,7 @@ pub fn build_read_context_request(
             "profile": config.profile.as_str(),
             "system": config.system.as_str(),
             "system_id": config.resolved_system_id.as_deref(),
+            "agent_id": config.agent_id.as_deref(),
             "sliding_window": config.sliding_window,
             "summary_max_chars": config.summary_max_chars,
             "profile_note": config.profile_note,
@@ -264,6 +265,7 @@ pub fn build_read_stage_envelope_request_with_workspace_root(
         "system_id".to_owned(),
         json!(config.resolved_system_id.as_deref()),
     );
+    payload.insert("agent_id".to_owned(), json!(config.agent_id.as_deref()));
     payload.insert("sliding_window".to_owned(), json!(config.sliding_window));
     payload.insert(
         "summary_max_chars".to_owned(),

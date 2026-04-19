@@ -2461,13 +2461,11 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
 
         let workspace_root = config
             .tools
-            .file_root
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|_| config.tools.resolved_file_root());
+            .configured_runtime_workspace_root()
+            .or_else(|| config.tools.configured_file_root());
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory)
+            .with_workspace_root(workspace_root.clone());
         let compact_stage_result =
             crate::memory::run_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
                 .await;

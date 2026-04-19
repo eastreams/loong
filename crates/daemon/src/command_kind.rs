@@ -22,6 +22,7 @@ impl Commands {
             Self::ValidateConfig { .. } => "validate_config",
             Self::Onboard { .. } => "onboard",
             Self::Personalize { .. } => "personalize",
+            Self::Memory { .. } => "memory",
             Self::Import { .. } => "import",
             Self::Migrate { .. } => "migrate",
             Self::Doctor { .. } => "doctor",
@@ -132,6 +133,15 @@ mod tests {
             }
             .command_kind_for_logging(),
             "status"
+        );
+        assert_eq!(
+            Commands::Memory {
+                config: None,
+                json: false,
+                command: crate::memory_cli::MemoryCommands::Current,
+            }
+            .command_kind_for_logging(),
+            "memory"
         );
         assert_eq!(
             Commands::WorkUnit {

@@ -132,6 +132,7 @@ pub mod gateway;
 pub mod import_cli;
 mod managed_plugin_bridge_runtime;
 mod mcp_cli;
+pub mod memory_cli;
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 mod memory_context_benchmark;
 pub mod migrate_cli;
@@ -662,6 +663,20 @@ pub enum Commands {
         /// Config file path to update (defaults to auto-discovery)
         #[arg(long)]
         config: Option<String>,
+    },
+    #[command(
+        about = "Inspect or switch the active topic-scoped memory space",
+        long_about = "Inspect or switch the active topic-scoped memory space.\n\nThis command manages `memory.agent_id`, which isolates durable memory by topic while keeping shared user cognition on the global personalization and profile-note surfaces. Use `memory switch <topic>` to move into a dedicated topic scope, `memory switch --shared` to return to the shared default scope, `memory current` to inspect the active scope, and `memory list` to discover known scopes."
+    )]
+    Memory {
+        /// Config file path to update or inspect (defaults to auto-discovery)
+        #[arg(long)]
+        config: Option<String>,
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        #[command(subcommand)]
+        command: memory_cli::MemoryCommands,
     },
     #[command(
         about = "Preview or apply migration sources explicitly",

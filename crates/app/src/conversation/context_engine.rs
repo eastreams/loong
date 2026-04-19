@@ -7,14 +7,11 @@ use crate::config::LoongConfig;
 use crate::{CliResult, KernelContext};
 
 #[cfg(feature = "memory-sqlite")]
-use crate::memory;
-use std::collections::BTreeSet;
-#[cfg(feature = "memory-sqlite")]
-use std::path::Path;
-
-#[cfg(feature = "memory-sqlite")]
 use super::compaction::{CompactPolicy, compact_window};
 use super::runtime_binding::ConversationRuntimeBinding;
+#[cfg(feature = "memory-sqlite")]
+use crate::memory;
+use std::collections::BTreeSet;
 
 pub const CONTEXT_ENGINE_API_VERSION: u16 = 1;
 
@@ -595,13 +592,12 @@ async fn load_stage_envelope(
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<memory::StageEnvelope> {
     if let Some(ctx) = binding.kernel_context() {
-        let runtime_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let tool_runtime_config =
             crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-        let workspace_root = tool_runtime_config
-            .effective_workspace_root()
-            .map(Path::to_path_buf);
+        let workspace_root = tool_runtime_config.effective_memory_workspace_root();
+        let runtime_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory)
+                .with_workspace_root(workspace_root.clone());
         let request = memory::build_read_stage_envelope_request_with_workspace_root(
             session_id,
             workspace_root.as_deref(),
@@ -625,8 +621,12 @@ async fn load_stage_envelope(
             .ok_or_else(|| "decode staged memory envelope via kernel failed".to_owned());
     }
 
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    let workspace_root = tool_runtime_config.effective_memory_workspace_root();
     let runtime_config =
-        memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory)
+            .with_workspace_root(workspace_root);
     memory::hydrate_stage_envelope(session_id, &runtime_config)
         .map_err(|error| format!("load staged memory envelope failed: {error}"))
 }

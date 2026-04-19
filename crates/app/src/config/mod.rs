@@ -86,6 +86,9 @@ pub use memory::{
     InitiativeLevel, MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile,
     MemorySystemKind, PersonalizationConfig, PersonalizationPromptState, ResponseDensity,
 };
+pub(crate) use memory::{
+    normalize_memory_agent_id, scoped_memory_workspace_root_for_agent, scoped_sqlite_path_for_agent,
+};
 #[allow(unused_imports)]
 pub use outbound_http::OutboundHttpConfig;
 pub(crate) use provider::{
