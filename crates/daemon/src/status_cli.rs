@@ -1,11 +1,13 @@
-use loong_contracts::WorkRuntimeHealthSnapshot;
-use loong_spec::CliResult;
+use loongclaw_contracts::WorkRuntimeHealthSnapshot;
+use loongclaw_spec::CliResult;
 use serde::Serialize;
 use std::path::Path;
 
 use crate::gateway::read_models::{
-    GatewayAcpObservabilityReadModel, GatewayOperatorSummaryReadModel,
-    build_acp_observability_read_model, build_operator_summary_read_model,
+    GatewayAcpObservabilityReadModel, GatewayOperatorNodesSummaryReadModel,
+    GatewayOperatorPairingSummaryReadModel, GatewayOperatorSummaryReadModel,
+    build_acp_observability_read_model, build_node_inventory_read_model,
+    build_operator_nodes_summary_read_model, build_operator_summary_read_model,
     build_runtime_snapshot_read_model,
 };
 use crate::gateway::service::default_gateway_owner_status;
@@ -13,7 +15,7 @@ use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owne
 use crate::mvp;
 use crate::supervisor::LoadedSupervisorConfig;
 
-const STATUS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
+const STATUS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusCliJsonSchema {
@@ -39,22 +41,12 @@ pub struct StatusCliWorkUnitReadModel {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct StatusCliAction {
-    pub label: String,
-    pub command: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct StatusCliReadModel {
     pub config: String,
     pub schema: StatusCliJsonSchema,
-    pub active_provider: String,
-    pub active_model: String,
-    pub memory_profile: String,
     pub gateway: GatewayOperatorSummaryReadModel,
     pub acp: StatusCliAcpReadModel,
     pub work_units: StatusCliWorkUnitReadModel,
-    pub next_actions: Vec<StatusCliAction>,
     pub recipes: Vec<String>,
 }
 
@@ -101,17 +93,23 @@ pub async fn collect_status_cli_read_model(
         config_path_text,
         owner_status_option,
     );
-    let gateway =
-        build_operator_summary_read_model(&owner_status, &channel_inventory, &runtime_snapshot);
+    let gateway_pairing_summary = collect_status_cli_gateway_pairing_summary(&config);
+    let pairing = GatewayOperatorPairingSummaryReadModel {
+        pending_request_count: gateway_pairing_summary.pending_request_count,
+        approved_device_count: gateway_pairing_summary.approved_device_count,
+        last_activity_ms: gateway_pairing_summary.last_activity_ms,
+    };
+    let nodes =
+        collect_status_cli_gateway_nodes_summary(config_path_text, &config, &channel_inventory);
+    let gateway = build_operator_summary_read_model(
+        &owner_status,
+        &channel_inventory,
+        &runtime_snapshot,
+        pairing,
+        nodes,
+    );
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
-    let next_actions = crate::next_actions::collect_setup_next_actions(&config, config_path_text)
-        .into_iter()
-        .map(|action| StatusCliAction {
-            label: action.label,
-            command: action.command,
-        })
-        .collect();
     let recipes = build_status_cli_recipes(config_path_text);
     let schema = StatusCliJsonSchema {
         version: STATUS_CLI_JSON_SCHEMA_VERSION,
@@ -122,13 +120,9 @@ pub async fn collect_status_cli_read_model(
     Ok(StatusCliReadModel {
         config: config_path_display,
         schema,
-        active_provider: crate::provider_presentation::active_provider_detail_label(&config),
-        active_model: config.provider.model.clone(),
-        memory_profile: config.memory.profile.as_str().to_owned(),
         gateway,
         acp,
         work_units,
-        next_actions,
         recipes,
     })
 }
@@ -155,7 +149,7 @@ fn select_gateway_owner_status_for_config(
 
 async fn collect_status_cli_acp_read_model(
     config_path: &str,
-    config: &mvp::config::LoongConfig,
+    config: &mvp::config::LoongClawConfig,
 ) -> StatusCliAcpReadModel {
     let enabled = config.acp.enabled;
     let persisted_session_count = load_persisted_acp_session_count(config);
@@ -211,8 +205,76 @@ fn build_unavailable_acp_read_model(
     }
 }
 
+fn collect_status_cli_gateway_pairing_summary(
+    config: &mvp::config::LoongClawConfig,
+) -> GatewayOperatorPairingSummaryReadModel {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let memory_config =
+            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        match mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config) {
+            Ok(registry) => GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: registry.pending_request_count(),
+                approved_device_count: registry.approved_device_count(),
+                last_activity_ms: registry.last_activity_ms(),
+            },
+            Err(_error) => GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 0,
+                approved_device_count: 0,
+                last_activity_ms: None,
+            },
+        }
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = config;
+        GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 0,
+            approved_device_count: 0,
+            last_activity_ms: None,
+        }
+    }
+}
+
+fn collect_status_cli_gateway_nodes_summary(
+    config_path: &str,
+    config: &mvp::config::LoongClawConfig,
+    channel_inventory: &crate::ChannelsCliJsonPayload,
+) -> GatewayOperatorNodesSummaryReadModel {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let memory_config =
+            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let paired_devices =
+            match mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config)
+            {
+                Ok(registry) => registry.list_approved_devices(256),
+                Err(_error) => Vec::new(),
+            };
+        let node_inventory = build_node_inventory_read_model(
+            config_path,
+            channel_inventory,
+            paired_devices.as_slice(),
+        );
+        build_operator_nodes_summary_read_model(&node_inventory)
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = config_path;
+        let _ = config;
+        let _ = channel_inventory;
+        GatewayOperatorNodesSummaryReadModel {
+            paired_device_count: 0,
+            managed_bridge_count: 0,
+            total_count: 0,
+        }
+    }
+}
+
 fn collect_status_cli_work_unit_read_model(
-    config: &mvp::config::LoongConfig,
+    config: &mvp::config::LoongClawConfig,
 ) -> StatusCliWorkUnitReadModel {
     #[cfg(not(feature = "memory-sqlite"))]
     {
@@ -260,7 +322,7 @@ fn collect_status_cli_work_unit_read_model(
     }
 }
 
-fn load_persisted_acp_session_count(config: &mvp::config::LoongConfig) -> Option<usize> {
+fn load_persisted_acp_session_count(config: &mvp::config::LoongClawConfig) -> Option<usize> {
     #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
     {
         let _ = config;
@@ -308,6 +370,7 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let control_surface = &gateway.control_surface;
     let channels = &gateway.channels;
     let runtime = &gateway.runtime;
+    let pairing = &gateway.pairing;
     let base_url_option = control_surface.base_url.as_deref();
     let base_url = base_url_option.unwrap_or("-");
     let owner_pid = render_optional_u32(owner.pid);
@@ -323,297 +386,78 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let active_provider_label = active_provider_label_option.unwrap_or("-");
     let capability_snapshot_sha256 = runtime.capability_snapshot_sha256.as_str();
     let tool_calling = &runtime.tool_calling;
-    let mut sections = Vec::new();
 
-    if let Some(primary_action) = status.next_actions.first() {
-        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("start here".to_owned()),
-            inline_title_when_wide: false,
-            items: vec![loong_app::tui_surface::TuiActionSpec {
-                label: primary_action.label.clone(),
-                command: primary_action.command.clone(),
-            }],
-        });
-    }
-    if status.next_actions.len() > 1 {
-        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("also useful".to_owned()),
-            inline_title_when_wide: false,
-            items: status
-                .next_actions
-                .iter()
-                .skip(1)
-                .map(|action| loong_app::tui_surface::TuiActionSpec {
-                    label: action.label.clone(),
-                    command: action.command.clone(),
-                })
-                .collect(),
-        });
-    }
-
-    sections.push(loong_app::tui_surface::TuiSectionSpec::Checklist {
-        title: Some("runtime posture".to_owned()),
-        items: vec![
-            loong_app::tui_surface::TuiChecklistItemSpec {
-                status: if tool_calling.availability == "ready" {
-                    loong_app::tui_surface::TuiChecklistStatus::Pass
-                } else {
-                    loong_app::tui_surface::TuiChecklistStatus::Warn
-                },
-                label: "tool calling".to_owned(),
-                detail: format!(
-                    "{} · structured schema={} · mode={}",
-                    tool_calling.availability,
-                    tool_calling.structured_tool_schema_enabled,
-                    tool_calling.effective_tool_schema_mode
-                ),
-            },
-            loong_app::tui_surface::TuiChecklistItemSpec {
-                status: if status.acp.availability == "available"
-                    || status.acp.availability == "disabled"
-                {
-                    loong_app::tui_surface::TuiChecklistStatus::Pass
-                } else {
-                    loong_app::tui_surface::TuiChecklistStatus::Warn
-                },
-                label: "ACP".to_owned(),
-                detail: format!(
-                    "enabled={} · availability={}",
-                    status.acp.enabled, status.acp.availability
-                ),
-            },
-            loong_app::tui_surface::TuiChecklistItemSpec {
-                status: if status.work_units.availability == "available" {
-                    loong_app::tui_surface::TuiChecklistStatus::Pass
-                } else {
-                    loong_app::tui_surface::TuiChecklistStatus::Warn
-                },
-                label: "work units".to_owned(),
-                detail: format!("availability={}", status.work_units.availability),
-            },
-        ],
-    });
-
-    sections.push(loong_app::tui_surface::TuiSectionSpec::KeyValues {
-        title: Some("saved runtime".to_owned()),
-        items: vec![
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "config".to_owned(),
-                value: status.config.clone(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "provider".to_owned(),
-                value: status.active_provider.clone(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "model".to_owned(),
-                value: status.active_model.clone(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "memory profile".to_owned(),
-                value: status.memory_profile.clone(),
-            },
-        ],
-    });
-    sections.push(loong_app::tui_surface::TuiSectionSpec::KeyValues {
-        title: Some("gateway summary".to_owned()),
-        items: vec![
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "phase".to_owned(),
-                value: owner.phase.clone(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "mode".to_owned(),
-                value: owner.mode.as_str().to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "pid".to_owned(),
-                value: owner_pid,
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "attached session".to_owned(),
-                value: owner_session.to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "control base url".to_owned(),
-                value: base_url.to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "visible tools".to_owned(),
-                value: runtime.visible_tool_count.to_string(),
-            },
-        ],
-    });
-    sections.push(loong_app::tui_surface::TuiSectionSpec::KeyValues {
-        title: Some("channel and recovery detail".to_owned()),
-        items: vec![
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "owner config".to_owned(),
-                value: owner.config_path.clone(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "loopback only".to_owned(),
-                value: control_surface.loopback_only.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "configured surfaces".to_owned(),
-                value: owner.configured_surface_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "running surfaces".to_owned(),
-                value: owner.running_surface_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "channel catalog".to_owned(),
-                value: channels.catalog_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "configured accounts".to_owned(),
-                value: channels.configured_account_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "configured channels".to_owned(),
-                value: channels.configured_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "enabled accounts".to_owned(),
-                value: channels.enabled_account_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "misconfigured accounts".to_owned(),
-                value: channels.misconfigured_account_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "runtime-backed channels".to_owned(),
-                value: channels.runtime_backed_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "config-backed channels".to_owned(),
-                value: channels.config_backed_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "plugin-backed channels".to_owned(),
-                value: channels.plugin_backed_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "catalog-only channels".to_owned(),
-                value: channels.catalog_only_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "enabled runtime-backed".to_owned(),
-                value: channels.enabled_runtime_backed_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "enabled service channels".to_owned(),
-                value: channels.enabled_service_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "enabled plugin-backed".to_owned(),
-                value: channels.enabled_plugin_backed_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "enabled outbound-only".to_owned(),
-                value: channels.enabled_outbound_only_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "ready service channels".to_owned(),
-                value: channels.ready_service_channel_count.to_string(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "enabled channels".to_owned(),
-                value: render_status_channel_ids(&runtime.enabled_channel_ids),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "runtime-backed enabled ids".to_owned(),
-                value: render_status_channel_ids(&runtime.enabled_runtime_backed_channel_ids),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "service enabled ids".to_owned(),
-                value: render_status_channel_ids(&runtime.enabled_service_channel_ids),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "plugin-backed enabled ids".to_owned(),
-                value: render_status_channel_ids(&runtime.enabled_plugin_backed_channel_ids),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "outbound-only enabled ids".to_owned(),
-                value: render_status_channel_ids(&runtime.enabled_outbound_only_channel_ids),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "shutdown reason".to_owned(),
-                value: owner_shutdown_reason.to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "last error".to_owned(),
-                value: owner_error.to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "provider profile".to_owned(),
-                value: active_provider_profile_id.to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "provider label".to_owned(),
-                value: active_provider_label.to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "capability snapshot".to_owned(),
-                value: capability_snapshot_sha256.to_owned(),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "ACP".to_owned(),
-                value: render_status_cli_acp_text(&status.acp),
-            },
-            loong_app::tui_surface::TuiKeyValueSpec::Plain {
-                key: "work units".to_owned(),
-                value: render_status_cli_work_units_text(&status.work_units),
-            },
-        ],
-    });
+    let mut lines = Vec::new();
+    lines.push(format!("config={}", status.config));
+    lines.push(format!(
+        "gateway phase={} running={} stale={} mode={} pid={} session={} control_base_url={} owner_config={} loopback_only={} surfaces_configured={} surfaces_running={}",
+        owner.phase,
+        owner.running,
+        owner.stale,
+        owner.mode.as_str(),
+        owner_pid,
+        owner_session,
+        base_url,
+        owner.config_path,
+        control_surface.loopback_only,
+        owner.configured_surface_count,
+        owner.running_surface_count,
+    ));
+    lines.push(format!(
+        "gateway_shutdown_reason={} gateway_last_error={}",
+        owner_shutdown_reason, owner_error,
+    ));
+    lines.push(format!(
+        "channels catalog={} configured={} enabled_accounts={} misconfigured_accounts={} runtime_backed={} enabled_service_channels={} ready_service_channels={}",
+        channels.catalog_channel_count,
+        channels.configured_account_count,
+        channels.enabled_account_count,
+        channels.misconfigured_account_count,
+        channels.runtime_backed_channel_count,
+        channels.enabled_service_channel_count,
+        channels.ready_service_channel_count,
+    ));
+    lines.push(format!(
+        "runtime provider_profile={} provider_label={} visible_tool_count={} capability_snapshot_sha256={}",
+        active_provider_profile_id,
+        active_provider_label,
+        runtime.visible_tool_count,
+        capability_snapshot_sha256,
+    ));
+    lines.push(format!(
+        "tool_calling availability={} structured_tool_schema_enabled={} mode={} active_model={} reason={}",
+        tool_calling.availability,
+        tool_calling.structured_tool_schema_enabled,
+        tool_calling.effective_tool_schema_mode,
+        tool_calling.active_model,
+        tool_calling.reason,
+    ));
+    lines.push(format!(
+        "pairing pending={} approved_devices={} last_activity_ms={}",
+        pairing.pending_request_count,
+        pairing.approved_device_count,
+        pairing
+            .last_activity_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+    ));
+    lines.push(format!(
+        "nodes total={} paired_devices={} managed_bridges={}",
+        gateway.nodes.total_count,
+        gateway.nodes.paired_device_count,
+        gateway.nodes.managed_bridge_count,
+    ));
+    lines.push(render_status_cli_acp_text(&status.acp));
+    lines.push(render_status_cli_work_units_text(&status.work_units));
 
     if !status.recipes.is_empty() {
-        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("deep dives".to_owned()),
-            inline_title_when_wide: false,
-            items: status
-                .recipes
-                .iter()
-                .map(|recipe| loong_app::tui_surface::TuiActionSpec {
-                    label: "recipe".to_owned(),
-                    command: recipe.clone(),
-                })
-                .collect(),
-        });
+        lines.push("recipes:".to_owned());
+        for recipe in &status.recipes {
+            lines.push(format!("- {recipe}"));
+        }
     }
 
-    let screen = loong_app::tui_surface::TuiScreenSpec {
-        header_style: loong_app::tui_surface::TuiHeaderStyle::Compact,
-        subtitle: Some("operator runtime summary".to_owned()),
-        title: Some("status".to_owned()),
-        progress_line: None,
-        intro_lines: vec![
-            "Use this summary to decide the next operator action before drilling into raw runtime detail.".to_owned(),
-        ],
-        sections,
-        choices: Vec::new(),
-        footer_lines: vec![
-            "Use loong status --json for machine-readable automation.".to_owned(),
-        ],
-    };
-
-    loong_app::tui_surface::render_tui_screen_spec_ratatui(
-        &screen,
-        loong_app::presentation::detect_render_width(),
-        false,
-    )
-    .join("\n")
-}
-
-fn render_status_channel_ids(channel_ids: &[String]) -> String {
-    if channel_ids.is_empty() {
-        return "-".to_owned();
-    }
-
-    channel_ids.join(",")
+    lines.join("\n")
 }
 
 fn render_status_cli_acp_text(acp: &StatusCliAcpReadModel) -> String {
@@ -689,9 +533,10 @@ mod tests {
     use super::*;
     use crate::gateway::read_models::{
         GatewayOperatorChannelsSummaryReadModel, GatewayOperatorControlSurfaceReadModel,
+        GatewayOperatorNodesSummaryReadModel, GatewayOperatorPairingSummaryReadModel,
         GatewayOperatorRuntimeSummaryReadModel,
     };
-    use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus};
+    use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus, GatewayPortSource};
 
     #[test]
     fn render_status_cli_text_surfaces_drill_down_recipes() {
@@ -715,6 +560,7 @@ mod tests {
                 running_surface_count: 1,
                 bind_address: Some("127.0.0.1".to_owned()),
                 port: Some(7777),
+                port_source: Some(GatewayPortSource::Default),
                 token_path: Some("/tmp/token".to_owned()),
             },
             control_surface: GatewayOperatorControlSurfaceReadModel {
@@ -728,22 +574,13 @@ mod tests {
                 enabled_account_count: 1,
                 misconfigured_account_count: 0,
                 runtime_backed_channel_count: 1,
-                config_backed_channel_count: 0,
-                plugin_backed_channel_count: 0,
-                catalog_only_channel_count: 0,
-                enabled_runtime_backed_channel_count: 1,
-                enabled_plugin_backed_channel_count: 0,
-                enabled_outbound_only_channel_count: 0,
                 enabled_service_channel_count: 1,
                 ready_service_channel_count: 1,
                 surfaces: Vec::new(),
             },
             runtime: GatewayOperatorRuntimeSummaryReadModel {
                 enabled_channel_ids: vec!["telegram".to_owned()],
-                enabled_runtime_backed_channel_ids: vec!["telegram".to_owned()],
                 enabled_service_channel_ids: vec!["telegram".to_owned()],
-                enabled_plugin_backed_channel_ids: Vec::new(),
-                enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
@@ -758,6 +595,16 @@ mod tests {
                             .to_owned(),
                 },
             },
+            pairing: GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 1,
+                approved_device_count: 2,
+                last_activity_ms: Some(3),
+            },
+            nodes: GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 2,
+                managed_bridge_count: 1,
+                total_count: 3,
+            },
         };
         let status = StatusCliReadModel {
             config: "/tmp/config.toml".to_owned(),
@@ -766,9 +613,6 @@ mod tests {
                 surface: "status",
                 purpose: "operator_runtime_summary",
             },
-            active_provider: "Demo [demo]".to_owned(),
-            active_model: "gpt-4.1-mini".to_owned(),
-            memory_profile: "window_only".to_owned(),
             gateway,
             acp: StatusCliAcpReadModel {
                 enabled: false,
@@ -792,29 +636,18 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
-            next_actions: vec![StatusCliAction {
-                label: "first answer".to_owned(),
-                command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
-            }],
             recipes: vec!["loong gateway status".to_owned()],
         };
 
         let rendered = render_status_cli_text(&status);
 
-        assert!(rendered.contains("start here"));
-        assert!(
-            rendered.contains(
-                "- first answer: loong ask --config '/tmp/config.toml' --message 'hello'"
-            )
-        );
-        assert!(rendered.contains("runtime posture"));
-        assert!(rendered.contains("[OK] tool calling"));
-        assert!(rendered.contains("configured channels"));
-        assert!(rendered.contains("enabled channels"));
-        assert!(rendered.contains("service enabled ids"));
-        assert!(rendered.contains("saved runtime"));
-        assert!(rendered.contains("deep dives"));
-        assert!(rendered.contains("- recipe: loong gateway status"));
+        assert!(rendered.contains("gateway phase=running"));
+        assert!(rendered.contains("tool_calling availability=ready"));
+        assert!(rendered.contains("pairing pending=1 approved_devices=2"));
+        assert!(rendered.contains("nodes total=3 paired_devices=2 managed_bridges=1"));
+        assert!(rendered.contains("acp enabled=false availability=disabled"));
+        assert!(rendered.contains("work_units availability=available total_count=0"));
+        assert!(rendered.contains("recipes:\n- loong gateway status"));
     }
 
     #[test]
@@ -839,6 +672,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         };
 
@@ -875,6 +709,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         };
 

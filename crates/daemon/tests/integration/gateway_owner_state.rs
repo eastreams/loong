@@ -10,7 +10,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use loong_daemon::{
+use base64::Engine as _;
+use ed25519_dalek::{Signer, SigningKey};
+use loongclaw_daemon::{
     gateway::{
         client::{GatewayLocalClient, GatewayStopResponseOutcome},
         service::{
@@ -18,11 +20,15 @@ use loong_daemon::{
             run_multi_channel_serve_gateway_compat_with_hooks_for_test,
         },
         state::{
-            GatewayOwnerMode, GatewayStopRequestOutcome, load_gateway_owner_status,
-            request_gateway_stop,
+            GatewayOwnerMode, GatewayStopRequestOutcome, gateway_pairing_runtime_state_path,
+            load_gateway_owner_status, request_gateway_stop,
         },
     },
     supervisor::{BackgroundChannelRunnerRequest, LoadedSupervisorConfig, SupervisorRuntimeHooks},
+};
+use loongclaw_protocol::{
+    CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneClientIdentity, ControlPlaneConnectRequest,
+    ControlPlaneDeviceIdentity, ControlPlanePairingResolveRequest, ControlPlaneScope,
 };
 use serde_json::Value;
 use tokio::time::{sleep, timeout};
@@ -50,41 +56,66 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
-    let runtime_dir =
-        std::env::temp_dir().join(format!("loong-daemon-gateway-owner-state-{label}-{suffix}"));
+    let runtime_dir = std::env::temp_dir().join(format!(
+        "loongclaw-daemon-gateway-owner-state-{label}-{suffix}"
+    ));
     std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
     runtime_dir
 }
 
-fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongConfig::default();
-    let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
+fn unique_gateway_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port probe");
+    let local_address = listener.local_addr().expect("read ephemeral port probe");
+    local_address.port()
+}
+
+fn headless_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let runtime_root = unique_runtime_dir("headless-config");
+    let config_path = runtime_root.join("loongclaw.toml");
+    let sqlite_path = runtime_root.join("memory.sqlite3");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.gateway.port = 0;
     config.memory.sqlite_path = sqlite_path.display().to_string();
 
     LoadedSupervisorConfig {
-        resolved_path: runtime_dir.join("loong.toml"),
+        resolved_path: config_path,
         config,
     }
 }
 
-fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
-    let mut config = mvp::config::LoongConfig::default();
+fn headless_loaded_config_fixture_for_root(runtime_root: &std::path::Path) -> LoadedSupervisorConfig {
+    let config_path = runtime_root.join("loongclaw.toml");
+    let sqlite_path = runtime_root.join("memory.sqlite3");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.gateway.port = 0;
+    config.memory.sqlite_path = sqlite_path.display().to_string();
+
+    LoadedSupervisorConfig {
+        resolved_path: config_path,
+        config,
+    }
+}
+
+fn telegram_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let runtime_root = unique_runtime_dir("telegram-config");
+    let config_path = runtime_root.join("loongclaw.toml");
+    let sqlite_path = runtime_root.join("memory.sqlite3");
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.gateway.port = 0;
     config.telegram.enabled = true;
-    let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
     LoadedSupervisorConfig {
-        resolved_path: runtime_dir.join("loong.toml"),
+        resolved_path: config_path,
         config,
     }
 }
 
-fn plugin_backed_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
+fn plugin_backed_loaded_config_fixture() -> LoadedSupervisorConfig {
     let mut config = super::mixed_account_weixin_plugin_bridge_config();
-    let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
-    config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
-        resolved_path: runtime_dir.join("loong.toml"),
+        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
         config,
     }
 }
@@ -126,7 +157,7 @@ async fn wait_until(description: &str, predicate: impl Fn() -> bool) {
 
 async fn wait_for_gateway_control_surface(
     runtime_dir: &std::path::Path,
-) -> loong_daemon::gateway::state::GatewayOwnerStatus {
+) -> loongclaw_daemon::gateway::state::GatewayOwnerStatus {
     wait_until("gateway control surface binding", || {
         let status = load_gateway_owner_status(runtime_dir);
         let Some(status) = status else {
@@ -144,14 +175,81 @@ async fn wait_for_gateway_control_surface(
         .expect("gateway control surface status should be present")
 }
 
+fn pairing_complete_signature_message(
+    request: &ControlPlaneConnectRequest,
+    device: &ControlPlaneDeviceIdentity,
+) -> Vec<u8> {
+    let scopes = request
+        .scopes
+        .iter()
+        .map(|scope| scope.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "loongclaw-control-plane-connect-v1\nnonce={}\ndevice_id={}\nclient_id={}\nrole={}\nscopes={}\nsigned_at_ms={}",
+        device.nonce,
+        device.device_id,
+        request.client.id,
+        request.role.as_str(),
+        scopes,
+        device.signed_at_ms
+    )
+    .into_bytes()
+}
+
+fn build_signed_pairing_complete_request(
+    signing_key: &SigningKey,
+    nonce: &str,
+    issued_at_ms: u64,
+    device_token: Option<String>,
+) -> ControlPlaneConnectRequest {
+    let public_key = signing_key.verifying_key();
+    let mut request = ControlPlaneConnectRequest {
+        min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+        max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+        client: ControlPlaneClientIdentity {
+            id: "cli".to_owned(),
+            version: "1.0.0".to_owned(),
+            mode: "operator_ui".to_owned(),
+            platform: "macos".to_owned(),
+            display_name: Some("LoongClaw CLI".to_owned()),
+        },
+        role: loongclaw_protocol::ControlPlaneRole::Operator,
+        scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        caps: std::collections::BTreeSet::new(),
+        commands: std::collections::BTreeSet::new(),
+        permissions: std::collections::BTreeMap::new(),
+        auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            token: None,
+            device_token,
+            bootstrap_token: None,
+            password: None,
+        }),
+        device: Some(ControlPlaneDeviceIdentity {
+            device_id: "device-1".to_owned(),
+            public_key: base64::engine::general_purpose::STANDARD
+                .encode(public_key.as_bytes()),
+            signature: String::new(),
+            signed_at_ms: issued_at_ms.saturating_add(1),
+            nonce: nonce.to_owned(),
+        }),
+    };
+
+    let message = pairing_complete_signature_message(
+        &request,
+        request.device.as_ref().expect("device"),
+    );
+    let signature = signing_key.sign(&message);
+    request.device.as_mut().expect("device").signature =
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
+    request
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request() {
     let runtime_dir = unique_runtime_dir("headless-stop");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -164,6 +262,7 @@ async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -208,12 +307,16 @@ async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn gateway_owner_state_rejects_second_active_owner_slot() {
-    let runtime_dir = unique_runtime_dir("exclusive-slot");
+#[allow(clippy::await_holding_lock)]
+async fn gateway_owner_state_uses_configured_gateway_port_when_no_override_is_present() {
+    let _lock = lock_daemon_test_environment();
+    let runtime_dir = unique_runtime_dir("config-port");
+    let configured_port = unique_gateway_port();
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
+        load_config: Arc::new(move |_| {
+            let mut loaded = headless_loaded_config_fixture();
+            loaded.config.gateway.port = configured_port;
+            Ok(loaded)
         }),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
@@ -227,6 +330,164 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let actual_port = running_status
+        .port
+        .expect("control surface port should be persisted");
+    let port_source = running_status
+        .port_source
+        .expect("port source should be persisted");
+
+    assert_eq!(actual_port, configured_port);
+    assert_eq!(running_status.bind_address.as_deref(), Some("127.0.0.1"));
+    assert_eq!(port_source.as_str(), "config");
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::await_holding_lock)]
+async fn gateway_owner_state_uses_cli_gateway_port_override_when_present() {
+    let _lock = lock_daemon_test_environment();
+    let runtime_dir = unique_runtime_dir("cli-port");
+    let configured_port = unique_gateway_port();
+    let cli_port = unique_gateway_port();
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(move |_| {
+            let mut loaded = headless_loaded_config_fixture();
+            loaded.config.gateway.port = configured_port;
+            Ok(loaded)
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            Some(cli_port),
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let actual_port = running_status
+        .port
+        .expect("control surface port should be persisted");
+    let port_source = running_status
+        .port_source
+        .expect("port source should be persisted");
+
+    assert_eq!(actual_port, cli_port);
+    assert_eq!(port_source.as_str(), "cli");
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::await_holding_lock)]
+async fn gateway_owner_state_marks_explicit_ephemeral_cli_port_source() {
+    let _lock = lock_daemon_test_environment();
+    let runtime_dir = unique_runtime_dir("ephemeral-cli-port");
+    let configured_port = unique_gateway_port();
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(move |_| {
+            let mut loaded = headless_loaded_config_fixture();
+            loaded.config.gateway.port = configured_port;
+            Ok(loaded)
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            Some(0),
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let actual_port = running_status
+        .port
+        .expect("control surface port should be persisted");
+    let port_source = running_status
+        .port_source
+        .expect("port source should be persisted");
+
+    assert!(actual_port > 0);
+    assert_eq!(port_source.as_str(), "ephemeral_cli");
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_owner_state_rejects_second_active_owner_slot() {
+    let runtime_dir = unique_runtime_dir("exclusive-slot");
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -244,10 +505,7 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
     .await;
 
     let second_hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -257,6 +515,7 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
         observe_state: Arc::new(|_| Ok(())),
     };
     let second_result = run_gateway_run_with_hooks_for_test(
+        None,
         None,
         None,
         Vec::new(),
@@ -282,10 +541,7 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
 async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request() {
     let runtime_dir = unique_runtime_dir("duplicate-start-pending-stop");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -298,6 +554,7 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -318,10 +575,7 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
     assert_eq!(stop_result, GatewayStopRequestOutcome::Requested);
 
     let second_hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -331,6 +585,7 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
         observe_state: Arc::new(|_| Ok(())),
     };
     let second_result = run_gateway_run_with_hooks_for_test(
+        None,
         None,
         None,
         Vec::new(),
@@ -361,10 +616,7 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
         telegram_runner,
     )]);
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(telegram_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(telegram_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|options| {
             boxed_cli_result(async move {
@@ -380,6 +632,7 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_multi_channel_serve_gateway_compat_with_hooks_for_test(
+            None,
             None,
             "cli-supervisor",
             Vec::new(),
@@ -421,10 +674,7 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
     let _lock = lock_daemon_test_environment();
     let runtime_dir = unique_runtime_dir("localhost-control");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -437,6 +687,7 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -699,10 +950,7 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
 async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy() {
     let runtime_dir = unique_runtime_dir("turn-policy-disabled");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -715,6 +963,7 @@ async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy()
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -770,10 +1019,7 @@ async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy()
 async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stops_runtime() {
     let runtime_dir = unique_runtime_dir("local-client");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(headless_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -786,6 +1032,7 @@ async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stop
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -877,10 +1124,7 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
 {
     let runtime_dir = unique_runtime_dir("plugin-backed-parity");
     let hooks = SupervisorRuntimeHooks {
-        load_config: Arc::new({
-            let runtime_dir = runtime_dir.clone();
-            move |_| Ok(plugin_backed_loaded_config_fixture(runtime_dir.as_path()))
-        }),
+        load_config: Arc::new(|_| Ok(plugin_backed_loaded_config_fixture())),
         initialize_runtime_environment: Arc::new(|_| {}),
         run_cli_host: Arc::new(|_| {
             panic!("headless gateway run should not start the concurrent CLI host")
@@ -893,6 +1137,7 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
     let runtime_dir_for_run = runtime_dir.clone();
     let run = tokio::spawn(async move {
         run_gateway_run_with_hooks_for_test(
+            None,
             None,
             None,
             Vec::new(),
@@ -952,6 +1197,9 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
             .as_deref(),
         Some(expected_summary)
     );
+    assert_eq!(operator_summary.nodes.managed_bridge_count, 1);
+    assert_eq!(operator_summary.nodes.paired_device_count, 0);
+    assert_eq!(operator_summary.nodes.total_count, 1);
 
     let stop = client.stop().await.expect("request gateway stop");
     assert_eq!(stop.outcome, GatewayStopResponseOutcome::Requested);
@@ -962,4 +1210,258 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
         .expect("join gateway run after local client stop")
         .expect("gateway run should return supervisor state");
     assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_owner_state_restores_pairing_session_continuity_after_restart() {
+    let runtime_dir = unique_runtime_dir("pairing-continuity");
+    let config_root = unique_runtime_dir("pairing-continuity-config");
+    let first_loaded = headless_loaded_config_fixture_for_root(config_root.as_path());
+    let first_hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new({
+            let loaded = first_loaded.clone();
+            move |_| Ok(loaded.clone())
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_first_run = runtime_dir.clone();
+    let first_run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_first_run.as_path(),
+            first_hooks,
+        )
+        .await
+    });
+
+    let first_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let base_url = format!(
+        "http://{}:{}",
+        first_status
+            .bind_address
+            .as_deref()
+            .expect("bind address should exist"),
+        first_status.port.expect("port should exist")
+    );
+    let gateway_token = fs::read_to_string(
+        first_status
+            .token_path
+            .as_deref()
+            .expect("gateway token path should exist"),
+    )
+    .expect("read gateway token");
+    let gateway_token = gateway_token.trim().to_owned();
+    let http_client = reqwest::Client::new();
+
+    let start_response = http_client
+        .post(format!("{base_url}/v1/pairing/start"))
+        .bearer_auth(gateway_token.as_str())
+        .send()
+        .await
+        .expect("send pairing start");
+    assert_eq!(start_response.status(), reqwest::StatusCode::OK);
+    let start_json: Value = start_response.json().await.expect("decode pairing start");
+    let nonce = start_json["challenge"]["nonce"]
+        .as_str()
+        .expect("challenge nonce");
+    let issued_at_ms = start_json["challenge"]["issued_at_ms"]
+        .as_u64()
+        .expect("challenge issued_at_ms");
+    let signing_key = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
+
+    let initial_request =
+        build_signed_pairing_complete_request(&signing_key, nonce, issued_at_ms, None);
+    let initial_complete_response = http_client
+        .post(format!("{base_url}/v1/pairing/complete"))
+        .bearer_auth(gateway_token.as_str())
+        .json(&initial_request)
+        .send()
+        .await
+        .expect("send pairing complete");
+    assert_eq!(initial_complete_response.status(), reqwest::StatusCode::FORBIDDEN);
+    let initial_complete_json: Value = initial_complete_response
+        .json()
+        .await
+        .expect("decode pairing complete error");
+    let pairing_request_id = initial_complete_json["pairing_request_id"]
+        .as_str()
+        .or_else(|| initial_complete_json["error"]["pairing_request_id"].as_str())
+        .expect("pairing request id")
+        .to_owned();
+
+    let resolve_response = http_client
+        .post(format!("{base_url}/v1/pairing/resolve"))
+        .bearer_auth(gateway_token.as_str())
+        .json(&ControlPlanePairingResolveRequest {
+            pairing_request_id,
+            approve: true,
+        })
+        .send()
+        .await
+        .expect("send pairing resolve");
+    assert_eq!(resolve_response.status(), reqwest::StatusCode::OK);
+    let resolve_json: Value = resolve_response.json().await.expect("decode pairing resolve");
+    let device_token = resolve_json["device_token"]
+        .as_str()
+        .expect("device token")
+        .to_owned();
+
+    let second_start_response = http_client
+        .post(format!("{base_url}/v1/pairing/start"))
+        .bearer_auth(gateway_token.as_str())
+        .send()
+        .await
+        .expect("send second pairing start");
+    assert_eq!(second_start_response.status(), reqwest::StatusCode::OK);
+    let second_start_json: Value = second_start_response
+        .json()
+        .await
+        .expect("decode second pairing start");
+    let second_nonce = second_start_json["challenge"]["nonce"]
+        .as_str()
+        .expect("second challenge nonce");
+    let second_issued_at_ms = second_start_json["challenge"]["issued_at_ms"]
+        .as_u64()
+        .expect("second challenge issued_at_ms");
+
+    let authorized_request = build_signed_pairing_complete_request(
+        &signing_key,
+        second_nonce,
+        second_issued_at_ms,
+        Some(device_token),
+    );
+    let authorized_response = http_client
+        .post(format!("{base_url}/v1/pairing/complete"))
+        .bearer_auth(gateway_token.as_str())
+        .json(&authorized_request)
+        .send()
+        .await
+        .expect("send authorized pairing complete");
+    assert_eq!(authorized_response.status(), reqwest::StatusCode::OK);
+    let authorized_json: Value = authorized_response
+        .json()
+        .await
+        .expect("decode authorized pairing complete");
+    let session_token = authorized_json["lease"]["connection_token"]
+        .as_str()
+        .expect("session token")
+        .to_owned();
+
+    let acknowledged_response = http_client
+        .get(format!("{base_url}/v1/pairing/events"))
+        .bearer_auth(session_token.as_str())
+        .query(&[("after_seq", "0"), ("limit", "1"), ("ack_seq", "9")])
+        .send()
+        .await
+        .expect("send pairing events acknowledge");
+    assert_eq!(acknowledged_response.status(), reqwest::StatusCode::OK);
+
+    let pairing_runtime_path = gateway_pairing_runtime_state_path(runtime_dir.as_path());
+    wait_until("gateway pairing runtime snapshot", || pairing_runtime_path.exists()).await;
+    let pairing_runtime_json = fs::read_to_string(pairing_runtime_path.as_path())
+        .expect("read pairing runtime snapshot");
+    let pairing_runtime_value: Value =
+        serde_json::from_str(&pairing_runtime_json).expect("decode pairing runtime snapshot");
+    assert_eq!(pairing_runtime_value["sessions"][0]["token"], session_token);
+    assert_eq!(pairing_runtime_value["sessions"][0]["acknowledged_seq"], 9);
+
+    let stop_result = request_gateway_stop(runtime_dir.as_path()).expect("request stop");
+    assert_eq!(stop_result, GatewayStopRequestOutcome::Requested);
+
+    let first_supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, first_run)
+        .await
+        .expect("first gateway run should stop")
+        .expect("join first gateway run")
+        .expect("first gateway run should return supervisor state");
+    assert!(first_supervisor.final_exit_result().is_ok());
+
+    let second_loaded = headless_loaded_config_fixture_for_root(config_root.as_path());
+    let second_hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new({
+            let loaded = second_loaded.clone();
+            move |_| Ok(loaded.clone())
+        }),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_second_run = runtime_dir.clone();
+    let second_run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_second_run.as_path(),
+            second_hooks,
+        )
+        .await
+    });
+
+    let second_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let second_base_url = format!(
+        "http://{}:{}",
+        second_status
+            .bind_address
+            .as_deref()
+            .expect("second bind address should exist"),
+        second_status.port.expect("second port should exist")
+    );
+    let second_http_client = reqwest::Client::new();
+
+    let resumed_session_response = second_http_client
+        .get(format!("{second_base_url}/v1/pairing/session"))
+        .bearer_auth(session_token.as_str())
+        .send()
+        .await
+        .expect("send resumed pairing session");
+    assert_eq!(resumed_session_response.status(), reqwest::StatusCode::OK);
+    let resumed_session_json: Value = resumed_session_response
+        .json()
+        .await
+        .expect("decode resumed pairing session");
+    assert_eq!(resumed_session_json["last_acknowledged_seq"], 9);
+    assert_eq!(resumed_session_json["resume_status"], "resumed");
+    assert_eq!(resumed_session_json["resume_from_after_seq"], 9);
+
+    let resumed_events_response = second_http_client
+        .get(format!("{second_base_url}/v1/pairing/events"))
+        .bearer_auth(session_token.as_str())
+        .query(&[("after_seq", "9"), ("limit", "1")])
+        .send()
+        .await
+        .expect("send resumed pairing events");
+    assert_eq!(resumed_events_response.status(), reqwest::StatusCode::OK);
+    let resumed_events_json: Value = resumed_events_response
+        .json()
+        .await
+        .expect("decode resumed pairing events");
+    assert_eq!(resumed_events_json["last_acknowledged_seq"], 9);
+    assert_eq!(resumed_events_json["resume_status"], "resumed");
+    assert_eq!(resumed_events_json["next_after_seq"], 9);
+
+    let second_stop = request_gateway_stop(runtime_dir.as_path()).expect("request second stop");
+    assert_eq!(second_stop, GatewayStopRequestOutcome::Requested);
+
+    let second_supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, second_run)
+        .await
+        .expect("second gateway run should stop")
+        .expect("join second gateway run")
+        .expect("second gateway run should return supervisor state");
+    assert!(second_supervisor.final_exit_result().is_ok());
 }

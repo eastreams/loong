@@ -5,16 +5,16 @@ fn render_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn gateway_owner_status_fixture() -> loong_daemon::gateway::state::GatewayOwnerStatus {
-    loong_daemon::gateway::state::GatewayOwnerStatus {
-        runtime_dir: "/tmp/loong-runtime".to_owned(),
+fn gateway_owner_status_fixture() -> loongclaw_daemon::gateway::state::GatewayOwnerStatus {
+    loongclaw_daemon::gateway::state::GatewayOwnerStatus {
+        runtime_dir: "/tmp/loongclaw-runtime".to_owned(),
         phase: "running".to_owned(),
         running: true,
         stale: false,
         pid: Some(12345),
-        mode: loong_daemon::gateway::state::GatewayOwnerMode::GatewayHeadless,
+        mode: loongclaw_daemon::gateway::state::GatewayOwnerMode::GatewayHeadless,
         version: env!("CARGO_PKG_VERSION").to_owned(),
-        config_path: "/tmp/loong.toml".to_owned(),
+        config_path: "/tmp/loongclaw.toml".to_owned(),
         attached_cli_session: None,
         started_at_ms: 1,
         last_heartbeat_at: 1,
@@ -25,16 +25,17 @@ fn gateway_owner_status_fixture() -> loong_daemon::gateway::state::GatewayOwnerS
         running_surface_count: 0,
         bind_address: Some("127.0.0.1".to_owned()),
         port: Some(31337),
-        token_path: Some("/tmp/loong.token".to_owned()),
+        port_source: Some(loongclaw_daemon::gateway::state::GatewayPortSource::Default),
+        token_path: Some("/tmp/loongclaw.token".to_owned()),
     }
 }
 
 fn runtime_snapshot_fixture(
-    inventory: &loong_daemon::ChannelsCliJsonPayload,
-) -> loong_daemon::gateway::read_models::GatewayRuntimeSnapshotReadModel {
-    loong_daemon::gateway::read_models::GatewayRuntimeSnapshotReadModel {
-        config: "/tmp/loong.toml".to_owned(),
-        schema: loong_daemon::gateway::read_models::GatewayRuntimeSnapshotSchema {
+    inventory: &loongclaw_daemon::ChannelsCliJsonPayload,
+) -> loongclaw_daemon::gateway::read_models::GatewayRuntimeSnapshotReadModel {
+    loongclaw_daemon::gateway::read_models::GatewayRuntimeSnapshotReadModel {
+        config: "/tmp/loongclaw.toml".to_owned(),
+        schema: loongclaw_daemon::gateway::read_models::GatewayRuntimeSnapshotSchema {
             version: 1,
             surface: "runtime_snapshot",
             purpose: "test",
@@ -43,21 +44,18 @@ fn runtime_snapshot_fixture(
         context_engine: serde_json::json!({}),
         memory_system: serde_json::json!({}),
         acp: serde_json::json!({}),
-        channels: loong_daemon::gateway::read_models::GatewayRuntimeSnapshotChannelsReadModel {
+        channels: loongclaw_daemon::gateway::read_models::GatewayRuntimeSnapshotChannelsReadModel {
             enabled_channel_ids: vec!["weixin".to_owned()],
-            enabled_runtime_backed_channel_ids: Vec::new(),
             enabled_service_channel_ids: Vec::new(),
-            enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
-            enabled_outbound_only_channel_ids: Vec::new(),
             inventory: inventory.clone(),
         },
         tool_runtime: serde_json::json!({}),
-        tools: loong_daemon::gateway::read_models::GatewayRuntimeSnapshotToolsReadModel {
+        tools: loongclaw_daemon::gateway::read_models::GatewayRuntimeSnapshotToolsReadModel {
             visible_tool_count: 0,
             visible_tool_names: Vec::new(),
             capability_snapshot_sha256: String::new(),
             capability_snapshot: String::new(),
-            tool_calling: loong_daemon::gateway::read_models::GatewayToolCallingReadModel {
+            tool_calling: loongclaw_daemon::gateway::read_models::GatewayToolCallingReadModel {
                 availability: "inactive".to_owned(),
                 structured_tool_schema_enabled: true,
                 effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
@@ -79,16 +77,28 @@ fn managed_bridge_parity_keeps_summary_aligned_across_text_json_and_operator_vie
     config.external_skills.install_root = Some(install_root.display().to_string());
 
     let inventory = mvp::channel::channel_inventory(&config);
-    let rendered = loong_daemon::render_channel_surfaces_text("/tmp/loong.toml", &inventory);
+    let rendered =
+        loongclaw_daemon::render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
     let channels_payload =
-        loong_daemon::build_channels_cli_json_payload("/tmp/loong.toml", &inventory);
+        loongclaw_daemon::build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
     let owner_status = gateway_owner_status_fixture();
     let runtime_snapshot = runtime_snapshot_fixture(&channels_payload);
-    let operator_summary = loong_daemon::gateway::read_models::build_operator_summary_read_model(
-        &owner_status,
-        &channels_payload,
-        &runtime_snapshot,
-    );
+    let operator_summary =
+        loongclaw_daemon::gateway::read_models::build_operator_summary_read_model(
+            &owner_status,
+            &channels_payload,
+            &runtime_snapshot,
+            loongclaw_daemon::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 0,
+                approved_device_count: 0,
+                last_activity_ms: None,
+            },
+            loongclaw_daemon::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 1,
+                total_count: 1,
+            },
+        );
     let weixin_channels_surface = channels_payload
         .channel_surfaces
         .iter()
@@ -123,7 +133,7 @@ fn managed_bridge_parity_keeps_summary_aligned_across_text_json_and_operator_vie
 fn managed_bridge_parity_keeps_doctor_json_and_channels_json_account_summary_in_sync() {
     let root = unique_temp_dir("managed-bridge-parity-cli-json");
     let install_root = root.join("managed-skills");
-    let config_path = root.join("loong.toml");
+    let config_path = root.join("loongclaw.toml");
     let mut config = mixed_account_weixin_plugin_bridge_config();
 
     install_ready_weixin_managed_bridge(install_root.as_path());
@@ -135,7 +145,7 @@ fn managed_bridge_parity_keeps_doctor_json_and_channels_json_account_summary_in_
     )
     .expect("write config");
 
-    let doctor_output = Command::new(env!("CARGO_BIN_EXE_loong"))
+    let doctor_output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
         .arg("doctor")
         .arg("--config")
         .arg(&config_path)
@@ -157,7 +167,7 @@ fn managed_bridge_parity_keeps_doctor_json_and_channels_json_account_summary_in_
         .find(|value| value["name"].as_str() == Some("weixin managed bridge discovery"))
         .expect("weixin doctor check");
 
-    let channels_output = Command::new(env!("CARGO_BIN_EXE_loong"))
+    let channels_output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
         .arg("channels")
         .arg("--config")
         .arg(&config_path)

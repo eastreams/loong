@@ -14,8 +14,8 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 fn write_gateway_test_config(root: &std::path::Path) -> PathBuf {
     fs::create_dir_all(root).expect("create gateway test root");
 
-    let config = mvp::config::LoongConfig::default();
-    let config_path = root.join("loong.toml");
+    let config = mvp::config::LoongClawConfig::default();
+    let config_path = root.join("loongclaw.toml");
     let config_path_text = config_path
         .to_str()
         .expect("config path should be valid utf-8");
@@ -29,40 +29,6 @@ fn legacy_channel_inventory_json(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
 ) -> Value {
-    let total_surface_count = inventory.channel_surfaces.len();
-    let runtime_backed_surface_count = inventory
-        .channel_surfaces
-        .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
-        })
-        .count();
-    let config_backed_surface_count = inventory
-        .channel_surfaces
-        .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
-        })
-        .count();
-    let plugin_backed_surface_count = inventory
-        .channel_surfaces
-        .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
-        })
-        .count();
-    let catalog_only_surface_count = inventory
-        .channel_surfaces
-        .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::Stub
-        })
-        .count();
-
     serde_json::json!({
         "config": config_path,
         "schema": {
@@ -71,18 +37,10 @@ fn legacy_channel_inventory_json(
             "catalog_view": "channel_catalog",
             "legacy_channel_views": CHANNELS_CLI_JSON_LEGACY_VIEWS,
         },
-        "summary": {
-            "total_surface_count": total_surface_count,
-            "runtime_backed_surface_count": runtime_backed_surface_count,
-            "config_backed_surface_count": config_backed_surface_count,
-            "plugin_backed_surface_count": plugin_backed_surface_count,
-            "catalog_only_surface_count": catalog_only_surface_count,
-        },
         "channels": inventory.channels,
         "catalog_only_channels": inventory.catalog_only_channels,
         "channel_catalog": inventory.channel_catalog,
         "channel_surfaces": inventory.channel_surfaces,
-        "channel_access_policies": inventory.channel_access_policies,
     })
 }
 
@@ -146,7 +104,6 @@ fn legacy_acp_dispatch_payload_json(
             "channel_id": address.channel_id,
             "account_id": address.account_id,
             "conversation_id": address.conversation_id,
-            "participant_id": address.participant_id,
             "thread_id": address.thread_id,
         },
         "dispatch": acp_dispatch_decision_json(session_id, decision),
@@ -154,35 +111,20 @@ fn legacy_acp_dispatch_payload_json(
 }
 #[test]
 fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
-    let config = mvp::config::LoongConfig::default();
+    let config = mvp::config::LoongClawConfig::default();
     let inventory = mvp::channel::channel_inventory(&config);
     let payload =
-        gateway::read_models::build_channel_inventory_read_model("/tmp/loong.toml", &inventory);
+        gateway::read_models::build_channel_inventory_read_model("/tmp/loongclaw.toml", &inventory);
     let encoded = serde_json::to_value(&payload).expect("serialize channel inventory read model");
-    let legacy = legacy_channel_inventory_json("/tmp/loong.toml", &inventory);
+    let legacy = legacy_channel_inventory_json("/tmp/loongclaw.toml", &inventory);
 
-    assert_eq!(payload.config, "/tmp/loong.toml");
+    assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.schema.version, CHANNELS_CLI_JSON_SCHEMA_VERSION);
     assert_eq!(payload.schema.primary_channel_view, "channel_surfaces");
     assert_eq!(payload.schema.catalog_view, "channel_catalog");
     assert_eq!(
         payload.schema.legacy_channel_views,
         CHANNELS_CLI_JSON_LEGACY_VIEWS
-    );
-    assert_eq!(
-        payload.summary.total_surface_count,
-        inventory.channel_surfaces.len()
-    );
-    assert_eq!(
-        payload.summary.runtime_backed_surface_count,
-        inventory
-            .channel_surfaces
-            .iter()
-            .filter(|surface| {
-                surface.catalog.implementation_status
-                    == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
-            })
-            .count()
     );
     assert_eq!(encoded, legacy);
     assert_eq!(
@@ -213,7 +155,6 @@ fn gateway_read_model_acp_status_keeps_requested_and_resolved_session_fields() {
             channel_id: Some("telegram".to_owned()),
             account_id: Some("bot_123456".to_owned()),
             conversation_id: Some("42".to_owned()),
-            participant_id: None,
             thread_id: None,
         }),
         activation_origin: Some(mvp::acp::AcpRoutingOrigin::AutomaticDispatch),
@@ -226,7 +167,7 @@ fn gateway_read_model_acp_status_keeps_requested_and_resolved_session_fields() {
     };
 
     let payload = gateway::read_models::build_acp_status_read_model(
-        "/tmp/loong.toml",
+        "/tmp/loongclaw.toml",
         Some("agent:codex:telegram:42"),
         Some("telegram:42"),
         Some("telegram:bot_123456:42"),
@@ -235,7 +176,7 @@ fn gateway_read_model_acp_status_keeps_requested_and_resolved_session_fields() {
     );
     let encoded = serde_json::to_value(&payload).expect("serialize ACP status read model");
     let legacy = legacy_acp_status_payload_json(
-        "/tmp/loong.toml",
+        "/tmp/loongclaw.toml",
         Some("agent:codex:telegram:42"),
         Some("telegram:42"),
         Some("telegram:bot_123456:42"),
@@ -243,7 +184,7 @@ fn gateway_read_model_acp_status_keeps_requested_and_resolved_session_fields() {
         &status,
     );
 
-    assert_eq!(payload.config, "/tmp/loong.toml");
+    assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.resolved_session_key, "agent:codex:telegram:42");
     assert_eq!(payload.status.state, "busy");
     assert_eq!(payload.status.mode, Some("interactive"));
@@ -270,7 +211,6 @@ fn gateway_read_model_acp_session_list_keeps_metadata_and_counts() {
                 channel_id: Some("telegram".to_owned()),
                 account_id: Some("bot_123456".to_owned()),
                 conversation_id: Some("42".to_owned()),
-                participant_id: None,
                 thread_id: None,
             }),
             activation_origin: Some(mvp::acp::AcpRoutingOrigin::AutomaticDispatch),
@@ -301,12 +241,15 @@ fn gateway_read_model_acp_session_list_keeps_metadata_and_counts() {
         },
     ];
 
-    let payload =
-        gateway::read_models::build_acp_session_list_read_model("/tmp/loong.toml", 9, &sessions);
+    let payload = gateway::read_models::build_acp_session_list_read_model(
+        "/tmp/loongclaw.toml",
+        9,
+        &sessions,
+    );
     let encoded = serde_json::to_value(&payload).expect("serialize ACP session list read model");
-    let legacy = legacy_acp_session_list_payload_json("/tmp/loong.toml", 9, &sessions);
+    let legacy = legacy_acp_session_list_payload_json("/tmp/loongclaw.toml", 9, &sessions);
 
-    assert_eq!(payload.config, "/tmp/loong.toml");
+    assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.matched_count, 9);
     assert_eq!(payload.returned_count, sessions.len());
     assert_eq!(encoded, legacy);
@@ -358,11 +301,11 @@ fn gateway_read_model_acp_observability_keeps_rollups_and_provenance() {
     };
 
     let payload =
-        gateway::read_models::build_acp_observability_read_model("/tmp/loong.toml", &snapshot);
+        gateway::read_models::build_acp_observability_read_model("/tmp/loongclaw.toml", &snapshot);
     let encoded = serde_json::to_value(&payload).expect("serialize ACP observability read model");
-    let legacy = legacy_acp_observability_payload_json("/tmp/loong.toml", &snapshot);
+    let legacy = legacy_acp_observability_payload_json("/tmp/loongclaw.toml", &snapshot);
 
-    assert_eq!(payload.config, "/tmp/loong.toml");
+    assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.snapshot.runtime_cache.active_sessions, 2);
     assert_eq!(payload.snapshot.sessions.bound, 1);
     assert_eq!(payload.snapshot.turns.completed, 8);
@@ -381,7 +324,6 @@ fn gateway_read_model_acp_dispatch_keeps_structured_address_and_target() {
         Some("feishu"),
         Some("oc_123"),
         Some("lark-prod"),
-        Some("ou_sender_1"),
         Some("om_thread_1"),
     )
     .expect("build ACP dispatch address");
@@ -396,7 +338,6 @@ fn gateway_read_model_acp_dispatch_keeps_structured_address_and_target() {
             channel_id: Some("feishu".to_owned()),
             account_id: Some("lark-prod".to_owned()),
             conversation_id: Some("oc_123".to_owned()),
-            participant_id: None,
             thread_id: Some("om_thread_1".to_owned()),
             channel_path: vec![
                 "lark-prod".to_owned(),
@@ -407,16 +348,20 @@ fn gateway_read_model_acp_dispatch_keeps_structured_address_and_target() {
     };
 
     let payload = gateway::read_models::build_acp_dispatch_read_model(
-        "/tmp/loong.toml",
+        "/tmp/loongclaw.toml",
         &address,
         "opaque-session",
         &decision,
     );
     let encoded = serde_json::to_value(&payload).expect("serialize ACP dispatch read model");
-    let legacy =
-        legacy_acp_dispatch_payload_json("/tmp/loong.toml", &address, "opaque-session", &decision);
+    let legacy = legacy_acp_dispatch_payload_json(
+        "/tmp/loongclaw.toml",
+        &address,
+        "opaque-session",
+        &decision,
+    );
 
-    assert_eq!(payload.config, "/tmp/loong.toml");
+    assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.address.channel_id.as_deref(), Some("feishu"));
     assert_eq!(payload.dispatch.session, "opaque-session");
     assert_eq!(payload.dispatch.decision.reason, "allowed");
@@ -433,7 +378,7 @@ fn gateway_read_model_acp_dispatch_keeps_structured_address_and_target() {
 
 #[test]
 fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
-    let root = unique_temp_dir("loong-gateway-runtime-snapshot");
+    let root = unique_temp_dir("loongclaw-gateway-runtime-snapshot");
     let config_path = write_gateway_test_config(&root);
     let config_path_text = config_path
         .to_str()
@@ -458,18 +403,6 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
         payload.tools.visible_tool_names.len()
     );
     assert_eq!(
-        payload.channels.enabled_runtime_backed_channel_ids,
-        snapshot.enabled_runtime_backed_channel_ids
-    );
-    assert_eq!(
-        payload.channels.enabled_plugin_backed_channel_ids,
-        snapshot.enabled_plugin_backed_channel_ids
-    );
-    assert_eq!(
-        payload.channels.enabled_outbound_only_channel_ids,
-        snapshot.enabled_outbound_only_channel_ids
-    );
-    assert_eq!(
         encoded["channels"]["inventory"]["schema"]["catalog_view"],
         "channel_catalog"
     );
@@ -490,7 +423,7 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
 
 #[test]
 fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups() {
-    let root = unique_temp_dir("loong-gateway-operator-summary");
+    let root = unique_temp_dir("loongclaw-gateway-operator-summary");
     let config_path = write_gateway_test_config(&root);
     let config_path_text = config_path
         .to_str()
@@ -504,7 +437,7 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     );
     let runtime_snapshot = gateway::read_models::build_runtime_snapshot_read_model(&snapshot);
     let owner_status = gateway::state::GatewayOwnerStatus {
-        runtime_dir: "/tmp/loong-gateway-runtime".to_owned(),
+        runtime_dir: "/tmp/loongclaw-gateway-runtime".to_owned(),
         phase: "running".to_owned(),
         running: true,
         stale: false,
@@ -522,17 +455,33 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         running_surface_count: 0,
         bind_address: Some("127.0.0.1".to_owned()),
         port: Some(7777),
-        token_path: Some("/tmp/loong-gateway-runtime/control-token".to_owned()),
+        port_source: Some(gateway::state::GatewayPortSource::Default),
+        token_path: Some("/tmp/loongclaw-gateway-runtime/control-token".to_owned()),
     };
 
     let summary = gateway::read_models::build_operator_summary_read_model(
         &owner_status,
         &inventory,
         &runtime_snapshot,
+        gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 1,
+            approved_device_count: 2,
+            last_activity_ms: Some(300),
+        },
+        gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+            paired_device_count: 2,
+            managed_bridge_count: 1,
+            total_count: 3,
+        },
     );
     let encoded = serde_json::to_value(&summary).expect("serialize operator summary read model");
 
     assert_eq!(summary.owner.phase, "running");
+    assert_eq!(summary.pairing.pending_request_count, 1);
+    assert_eq!(summary.pairing.approved_device_count, 2);
+    assert_eq!(summary.nodes.paired_device_count, 2);
+    assert_eq!(summary.nodes.managed_bridge_count, 1);
+    assert_eq!(summary.nodes.total_count, 3);
     assert_eq!(
         summary.control_surface.base_url.as_deref(),
         Some("http://127.0.0.1:7777")
@@ -543,17 +492,6 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         inventory.channel_catalog.len()
     );
     assert_eq!(
-        summary.channels.plugin_backed_channel_count,
-        inventory
-            .channel_catalog
-            .iter()
-            .filter(|channel| {
-                channel.implementation_status
-                    == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
-            })
-            .count()
-    );
-    assert_eq!(
         summary.channels.configured_account_count,
         inventory.channels.len()
     );
@@ -562,45 +500,12 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         runtime_snapshot.channels.enabled_service_channel_ids.len()
     );
     assert_eq!(
-        summary.channels.enabled_runtime_backed_channel_count,
-        runtime_snapshot
-            .channels
-            .enabled_runtime_backed_channel_ids
-            .len()
-    );
-    assert_eq!(
-        summary.channels.enabled_plugin_backed_channel_count,
-        runtime_snapshot
-            .channels
-            .enabled_plugin_backed_channel_ids
-            .len()
-    );
-    assert_eq!(
-        summary.channels.enabled_outbound_only_channel_count,
-        runtime_snapshot
-            .channels
-            .enabled_outbound_only_channel_ids
-            .len()
-    );
-    assert_eq!(
         summary.channels.surfaces.len(),
         inventory.channel_surfaces.len()
     );
     assert_eq!(
         summary.runtime.visible_tool_count,
         runtime_snapshot.tools.visible_tool_count
-    );
-    assert_eq!(
-        summary.runtime.enabled_runtime_backed_channel_ids,
-        runtime_snapshot.channels.enabled_runtime_backed_channel_ids
-    );
-    assert_eq!(
-        summary.runtime.enabled_plugin_backed_channel_ids,
-        runtime_snapshot.channels.enabled_plugin_backed_channel_ids
-    );
-    assert_eq!(
-        summary.runtime.enabled_outbound_only_channel_ids,
-        runtime_snapshot.channels.enabled_outbound_only_channel_ids
     );
     assert_eq!(
         summary.runtime.active_provider_profile_id.as_deref(),
