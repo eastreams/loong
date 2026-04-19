@@ -2442,7 +2442,7 @@ fn concealed_provider_tool_denial() -> TurnFailure {
 }
 
 fn tool_search_recovery_hint() -> &'static str {
-    " If you need a non-core capability, call tool.search with a short natural-language description of the task."
+    " If you need a non-core capability, call tool.search with a short natural-language description of the task. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; use tool.invoke with the fresh lease and put the requested operation inside payload.arguments."
 }
 
 fn provider_tool_denial_reason(reason: &str, source: &str) -> String {
@@ -4039,6 +4039,65 @@ mod tests {
         assert!(
             failure.reason.contains("tool.search"),
             "concealed denial should advertise discovery recovery: {}",
+            failure.reason
+        );
+        assert!(failure.supports_discovery_recovery);
+        assert!(
+            failure.reason.contains("tool.invoke"),
+            "concealed denial should advertise tool.invoke recovery: {}",
+            failure.reason
+        );
+        assert!(
+            failure.reason.contains("lease"),
+            "concealed denial should mention the lease requirement: {}",
+            failure.reason
+        );
+    }
+
+    #[test]
+    fn validate_turn_in_context_conceals_direct_hidden_skills_surface_and_advertises_lease_flow() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "skills".to_owned(),
+                args_json: json!({
+                    "operation": "list"
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-provider-direct-skills".to_owned(),
+                turn_id: "turn-provider-direct-skills".to_owned(),
+                tool_call_id: "call-provider-direct-skills".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "session-provider-direct-skills",
+            crate::tools::ToolView::from_tool_names(std::iter::empty::<&str>()),
+        );
+
+        let failure = TurnEngine::new(4)
+            .validate_turn_in_context(&turn, &session_context)
+            .expect_err("provider direct hidden skills surface should be concealed");
+
+        assert_eq!(failure.code, "tool_not_found");
+        assert!(
+            failure
+                .reason
+                .contains("tool_not_found: requested tool is not available")
+        );
+        assert!(
+            failure.reason.contains("tool.search"),
+            "concealed denial should advertise discovery recovery: {}",
+            failure.reason
+        );
+        assert!(
+            failure.reason.contains("tool.invoke"),
+            "concealed denial should explain the grouped-surface invoke flow: {}",
+            failure.reason
+        );
+        assert!(
+            failure.reason.contains("skills"),
+            "concealed denial should mention grouped hidden surfaces: {}",
             failure.reason
         );
         assert!(failure.supports_discovery_recovery);

@@ -26,7 +26,7 @@ pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the 
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
-pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. Otherwise, provide the best possible answer with the currently available evidence.";
+pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
@@ -3043,6 +3043,14 @@ mod tests {
         assert!(user_prompt.contains(DISCOVERY_RECOVERY_FOLLOWUP_PROMPT));
         assert!(user_prompt.contains("Recovery reason:\nbounded-recovery"));
         assert!(!user_prompt.contains("tool_not_found"));
+        assert!(
+            user_prompt.contains("tool.invoke"),
+            "discovery recovery prompt should explain the invoke step: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("lease"),
+            "discovery recovery prompt should mention the lease requirement: {user_prompt}"
+        );
         assert!(user_prompt.contains("Loop warning:\nwarning"));
     }
 

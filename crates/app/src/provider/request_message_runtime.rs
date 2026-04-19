@@ -369,6 +369,7 @@ fn render_deferred_tool_text_workflow_section() -> String {
         "For `web`, distinguish search-provider mode from ordinary network mode: `web { query }` uses web-search providers, while `web { url }` or low-level request fields are still normal network access.".to_owned(),
         "Use `tool_search` only when the task needs a hidden surface such as `agent`, `skills`, or `channel`, and keep the query short and capability-focused.".to_owned(),
         "Use `tool_invoke` only with a fresh lease returned by `tool_search`; do not route normal direct-tool work through leases.".to_owned(),
+        "Grouped hidden surfaces such as `agent`, `skills`, and `channel` are not direct tool calls. If `tool_search` returns one of them, pass it back through `tool_invoke` with the returned lease instead of emitting that grouped name directly.".to_owned(),
         "When you need a tool, emit the raw JSON call instead of only describing the missing capability.".to_owned(),
         "Direct tool example:".to_owned(),
         direct_call_example,
