@@ -300,38 +300,9 @@ pub(crate) const fn runtime_durable_recall_intro() -> &'static str {
 mod tests {
     use super::*;
     use crate::config::LoongConfig;
+    use crate::test_support::ScopedCurrentDir;
     use serde_json::json;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
-
-    struct ScopedCurrentDir {
-        _guard: MutexGuard<'static, ()>,
-        original: std::path::PathBuf,
-    }
-
-    impl ScopedCurrentDir {
-        fn lock() -> &'static Mutex<()> {
-            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-            LOCK.get_or_init(|| Mutex::new(()))
-        }
-
-        fn enter(path: &std::path::Path) -> Self {
-            let guard = Self::lock().lock().expect("lock current dir test");
-            let original = std::env::current_dir().expect("read current dir");
-            std::env::set_current_dir(path).expect("set current dir");
-
-            Self {
-                _guard: guard,
-                original,
-            }
-        }
-    }
-
-    impl Drop for ScopedCurrentDir {
-        fn drop(&mut self) {
-            std::env::set_current_dir(&self.original).expect("restore current dir");
-        }
-    }
 
     #[test]
     fn runtime_self_continuity_from_event_payload_defaults_missing_tool_usage_policy_lane() {
@@ -460,7 +431,7 @@ mod tests {
         let workspace_root = temp_dir.path();
         let agents_path = workspace_root.join("AGENTS.md");
         let mut config = LoongConfig::default();
-        let _guard = ScopedCurrentDir::enter(workspace_root);
+        let _guard = ScopedCurrentDir::new(workspace_root);
 
         std::fs::write(&agents_path, "cwd runtime self should stay advisory-only")
             .expect("write AGENTS");

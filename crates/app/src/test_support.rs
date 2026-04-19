@@ -183,6 +183,40 @@ pub(crate) fn acquire_subprocess_test_guard() -> MutexGuard<'static, ()> {
 }
 
 #[cfg(test)]
+fn current_dir_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(test)]
+pub(crate) struct ScopedCurrentDir {
+    original: PathBuf,
+    _lock: MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl ScopedCurrentDir {
+    pub(crate) fn new(path: &Path) -> Self {
+        let lock = current_dir_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let original = std::env::current_dir().expect("read current dir");
+        std::env::set_current_dir(path).expect("set current dir");
+        Self {
+            original,
+            _lock: lock,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScopedCurrentDir {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.original).expect("restore current dir");
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn durable_memory_flush_test_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))

@@ -1,4 +1,21 @@
 use super::*;
+use crate::test_support::ScopedCurrentDir;
+
+fn execute_tool_core_for_subprocess_test(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let _guard = crate::test_support::acquire_subprocess_test_guard();
+    execute_tool_core_with_config(request, config)
+}
+
+fn execute_tool_core_with_trusted_subprocess_test_context(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let _guard = crate::test_support::acquire_subprocess_test_guard();
+    execute_tool_core_with_test_context(request, config)
+}
 
 #[cfg(feature = "tool-shell")]
 #[test]
@@ -79,7 +96,7 @@ fn tool_search_hides_bash_exec_when_governance_rules_failed_to_load() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn tool_search_routes_bash_capabilities_to_exec_when_runtime_is_available() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-visible");
+    let root = unique_tool_temp_dir("loong-bash-tool-search-visible");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -108,7 +125,7 @@ fn tool_search_routes_bash_capabilities_to_exec_when_runtime_is_available() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn tool_search_exact_bash_query_surfaces_exec() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-exact-query");
+    let root = unique_tool_temp_dir("loong-bash-tool-search-exact-query");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -247,7 +264,7 @@ fn bash_exec_reports_failed_status_for_non_zero_exit() {
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
     config.bash_exec = ready_bash_exec_runtime_policy();
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({"command": "printf 'hello'; exit 7"}),
@@ -301,7 +318,7 @@ fn bash_exec_runs_command_string_via_bash_runtime() {
         ..runtime_config::BashExecRuntimePolicy::default()
     };
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({"command": "printf 'hello-from-bash'"}),
@@ -348,7 +365,7 @@ fn bash_exec_falls_back_to_file_root_when_current_dir_is_unavailable() {
     let cwd_guard = ScopedCurrentDir::new(&deleted_cwd);
     fs::remove_dir_all(&deleted_cwd).expect("remove deleted cwd");
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({"command": "printf fallback-from-file-root"}),
@@ -388,7 +405,7 @@ fn bash_exec_defaults_cwd_to_configured_file_root() {
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
     config.bash_exec = ready_bash_exec_runtime_policy();
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({
@@ -430,7 +447,7 @@ fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
     let (bash_exec, _log_path) = configured_test_bash_runtime_with_rules(&root);
     config.bash_exec = bash_exec;
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({"command": "printf ok"}),
@@ -477,7 +494,7 @@ fn bash_exec_uses_loong_home_rules_dir_even_when_runtime_is_built_without_config
     runtime.bash_exec.available = true;
     runtime.bash_exec.command = Some(runtime_path);
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({"command": "printf ok"}),
@@ -627,7 +644,7 @@ fn bash_exec_allows_parse_unreliable_command_when_shell_default_mode_is_allow() 
     let (bash_exec, _log_path) = configured_test_bash_runtime_with_rules(&root);
     config.bash_exec = bash_exec;
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({"command": "if then"}),
@@ -645,7 +662,7 @@ fn bash_exec_allows_parse_unreliable_command_when_shell_default_mode_is_allow() 
 #[test]
 fn bash_exec_keeps_shell_exec_unchanged() {
     let config = test_tool_runtime_config(std::env::temp_dir());
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "shell.exec".to_owned(),
             payload: json!({"command": "echo", "args": ["hi"]}),
@@ -673,7 +690,7 @@ fn bash_exec_honors_cwd() {
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
     config.bash_exec = ready_bash_exec_runtime_policy();
 
-    let outcome = execute_tool_core_with_config(
+    let outcome = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({
@@ -739,7 +756,7 @@ fn bash_exec_times_out_when_timeout_ms_is_small() {
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
     config.bash_exec = ready_bash_exec_runtime_policy();
 
-    let error = execute_tool_core_with_config(
+    let error = execute_tool_core_for_subprocess_test(
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({
@@ -777,14 +794,14 @@ fn direct_exec_routes_script_mode_to_bash_exec() {
 fn direct_exec_can_run_bash_through_the_collapsed_exec_surface() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-direct-exec-bash");
+    let root = unique_tool_temp_dir("loong-direct-exec-bash");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let mut config = test_tool_runtime_config(root.clone());
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
     config.bash_exec = ready_bash_exec_runtime_policy();
 
-    let outcome = execute_tool_core_with_test_context(
+    let outcome = execute_tool_core_with_trusted_subprocess_test_context(
         ToolCoreRequest {
             tool_name: "exec".to_owned(),
             payload: json!({

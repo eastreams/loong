@@ -5613,23 +5613,8 @@ pub(super) fn format_summary_block(summary_body: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::config::MemoryProfile;
+    use crate::test_support::ScopedCurrentDir;
     use serde_json::json;
-
-    struct CurrentDirGuard {
-        original: PathBuf,
-    }
-
-    impl Drop for CurrentDirGuard {
-        fn drop(&mut self) {
-            std::env::set_current_dir(&self.original).expect("restore current dir");
-        }
-    }
-
-    fn set_current_dir_for_test(path: &Path) -> CurrentDirGuard {
-        let original = std::env::current_dir().expect("read current dir");
-        std::env::set_current_dir(path).expect("set current dir");
-        CurrentDirGuard { original }
-    }
 
     fn sqlite_test_config(db_path: impl Into<PathBuf>) -> MemoryRuntimeConfig {
         MemoryRuntimeConfig::for_sqlite_path(db_path)
@@ -6157,7 +6142,7 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create temp dir");
         let db_path = tmp.join("data").join("alias.sqlite3");
-        let _cwd_guard = set_current_dir_for_test(&tmp);
+        let _cwd_guard = ScopedCurrentDir::new(&tmp);
 
         let relative_config =
             sqlite_test_config_with_profile("data/alias.sqlite3", MemoryProfile::WindowOnly, 2);
@@ -6202,7 +6187,7 @@ mod tests {
         let cwd = tmp.join("workspace").join("nested");
         fs::create_dir_all(&cwd).expect("create nested cwd dir");
         let db_path = tmp.join("workspace").join("data").join("alias.sqlite3");
-        let _cwd_guard = set_current_dir_for_test(&cwd);
+        let _cwd_guard = ScopedCurrentDir::new(&cwd);
 
         let alias_a =
             sqlite_test_config_with_profile("../data/alias.sqlite3", MemoryProfile::WindowOnly, 2);
@@ -6522,7 +6507,7 @@ mod tests {
             .join("workspace")
             .join("data")
             .join("alias-cache.sqlite3");
-        let _cwd_guard = set_current_dir_for_test(&cwd);
+        let _cwd_guard = ScopedCurrentDir::new(&cwd);
 
         let config = sqlite_test_config_with_profile(
             PathBuf::from("../data/alias-cache.sqlite3"),

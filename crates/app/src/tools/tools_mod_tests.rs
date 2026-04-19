@@ -4,7 +4,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::{MutexGuard, OnceLock};
 
 struct ToolTestRuntimeConfig {
     config: runtime_config::ToolRuntimeConfig,
@@ -32,7 +31,7 @@ impl ToolTestRuntimeConfig {
 }
 
 fn test_tool_runtime_config(root: impl AsRef<Path>) -> ToolTestRuntimeConfig {
-    let runtime_home = ScopedLoongHome::new("loongclaw-tool-runtime-home");
+    let runtime_home = ScopedLoongHome::new("loong-tool-runtime-home");
     let config = runtime_config::ToolRuntimeConfig {
         shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
         file_root: Some(root.as_ref().to_path_buf()),
@@ -58,36 +57,6 @@ fn ready_bash_exec_runtime_policy() -> runtime_config::BashExecRuntimePolicy {
         available: true,
         command: Some(PathBuf::from("bash")),
         ..runtime_config::BashExecRuntimePolicy::default()
-    }
-}
-
-struct ScopedCurrentDir {
-    original: PathBuf,
-    _lock: MutexGuard<'static, ()>,
-}
-
-fn current_dir_test_lock() -> &'static std::sync::Mutex<()> {
-    static CURRENT_DIR_TEST_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-    CURRENT_DIR_TEST_LOCK.get_or_init(|| std::sync::Mutex::new(()))
-}
-
-impl ScopedCurrentDir {
-    fn new(path: &Path) -> Self {
-        let lock = current_dir_test_lock()
-            .lock()
-            .expect("lock current dir test");
-        let original = std::env::current_dir().expect("read current dir");
-        std::env::set_current_dir(path).expect("set current dir");
-        Self {
-            original,
-            _lock: lock,
-        }
-    }
-}
-
-impl Drop for ScopedCurrentDir {
-    fn drop(&mut self) {
-        std::env::set_current_dir(&self.original).expect("restore current dir");
     }
 }
 
@@ -2208,7 +2177,8 @@ fn browser_companion_protocol_surfaces_invalid_json_from_command() {
 #[cfg(feature = "tool-browser")]
 #[test]
 fn browser_companion_protocol_times_out_stalled_command() {
-    let root = unique_tool_temp_dir("loongclaw-browser-companion-timeout");
+    let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let root = unique_tool_temp_dir("loong-browser-companion-timeout");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let script_path = write_browser_companion_sleep_script(&root, "browser-companion-timeout", 2);
     let mut config = browser_companion_runtime_config(&root, script_path.display().to_string());
