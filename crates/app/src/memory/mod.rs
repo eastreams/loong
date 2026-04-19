@@ -6,7 +6,7 @@ use std::{
     thread::ThreadId,
 };
 
-use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
+use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::json;
 
 use crate::config::MemoryBackendKind;
@@ -58,7 +58,7 @@ pub use protocol::{
     decode_window_turns, encode_stage_envelope_payload, parse_exact_memory_core_operation,
 };
 #[cfg(feature = "memory-sqlite")]
-pub(crate) use sqlite::CanonicalMemorySearchHit;
+pub(crate) use sqlite::{CanonicalMemorySearchHit, WorkspaceMemoryIndexedSearchHit};
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
 pub use stage::{
@@ -336,6 +336,23 @@ pub(crate) fn search_canonical_memory(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<Vec<CanonicalMemorySearchHit>, String> {
     sqlite::search_canonical_records_for_recall(query, limit, exclude_session_id, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn search_workspace_memory_documents(
+    query: &str,
+    limit: usize,
+    workspace_root: &std::path::Path,
+    memory_system_id: &str,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<Vec<WorkspaceMemoryIndexedSearchHit>, String> {
+    sqlite::search_workspace_memory_documents(
+        query,
+        limit,
+        workspace_root,
+        memory_system_id,
+        config,
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]

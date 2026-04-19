@@ -31,8 +31,8 @@ impl LogFormat {
     }
 }
 
-fn resolved_log_directive(loongclaw_log: Option<&str>, rust_log: Option<&str>) -> String {
-    loongclaw_log
+fn resolved_log_directive(loong_log: Option<&str>, rust_log: Option<&str>) -> String {
+    loong_log
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or_else(|| rust_log.map(str::trim).filter(|value| !value.is_empty()))
@@ -65,9 +65,9 @@ pub fn debug_variant_name(value: &impl Debug) -> String {
 }
 
 pub fn init_tracing() {
-    let log_format = LogFormat::parse(std::env::var("LOONGCLAW_LOG_FORMAT").ok().as_deref());
+    let log_format = LogFormat::parse(std::env::var("LOONG_LOG_FORMAT").ok().as_deref());
     let directive = resolved_log_directive(
-        std::env::var("LOONGCLAW_LOG").ok().as_deref(),
+        std::env::var("LOONG_LOG").ok().as_deref(),
         std::env::var("RUST_LOG").ok().as_deref(),
     );
     let env_filter = build_env_filter(directive.as_str());
@@ -87,7 +87,7 @@ pub fn init_tracing() {
 
     if let Err(error) = init_result {
         let mut stderr = io::stderr();
-        let _ = writeln!(stderr, "loongclaw.daemon tracing init failed: {error}");
+        let _ = writeln!(stderr, "loong.daemon tracing init failed: {error}");
     }
 }
 
@@ -99,10 +99,10 @@ mod tests {
     use crate::Commands;
 
     #[test]
-    fn resolved_log_directive_prefers_loongclaw_log() {
+    fn resolved_log_directive_prefers_loong_log() {
         assert_eq!(
-            resolved_log_directive(Some("loongclaw_app=debug"), Some("warn")),
-            "loongclaw_app=debug"
+            resolved_log_directive(Some("loong_app=debug"), Some("warn")),
+            "loong_app=debug"
         );
     }
 

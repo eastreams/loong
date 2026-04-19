@@ -5,7 +5,7 @@ use std::time::Duration;
 #[cfg(feature = "tool-shell")]
 use std::time::Instant;
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
 use serde_json::{Value, json};
 
@@ -26,7 +26,7 @@ const BASH_EXEC_ALLOWED_FIELDS: &[&str] = &[
     "cwd",
     "timeout_ms",
     super::LOONG_INTERNAL_TOOL_CONTEXT_KEY,
-    super::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY,
+    super::LOONG_INTERNAL_TOOL_CONTEXT_KEY,
 ];
 
 pub(super) fn unavailable_bash_runtime_policy() -> BashExecRuntimePolicy {
@@ -254,7 +254,7 @@ mod tests {
     use crate::tools::runtime_events::{
         ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
     };
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::json;
     use std::fs;
     #[cfg(unix)]
@@ -411,7 +411,7 @@ mod tests {
             tool_name: "bash.exec".to_owned(),
             payload: json!({
                 "command": "echo hi",
-                "_loongclaw": {
+                "_loong": {
                     "tool_search": {
                         "visible_tool_ids": ["bash.exec"]
                     }

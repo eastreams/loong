@@ -14,13 +14,22 @@ use super::state;
 use super::state::ChannelOperationRuntimeTracker;
 use crate::CliResult;
 
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 #[derive(Debug, Clone, Copy)]
-/// Identifies the per-account singleton runtime slot for a `serve` operation.
-pub(in crate::channel) struct ChannelServeRuntimeSpec<'a> {
-    pub(in crate::channel) platform: ChannelPlatform,
-    pub(in crate::channel) operation_id: &'static str,
-    pub(in crate::channel) account_id: &'a str,
-    pub(in crate::channel) account_label: &'a str,
+pub struct ChannelServeRuntimeSpec<'a> {
+    pub platform: ChannelPlatform,
+    pub operation_id: &'static str,
+    pub account_id: &'a str,
+    pub account_label: &'a str,
 }
 
 #[derive(Debug, Clone)]
@@ -46,7 +55,17 @@ impl ChannelServeStopHandle {
         self.requested.load(Ordering::SeqCst)
     }
 
-    pub(in crate::channel) async fn wait(&self) {
+    #[cfg(any(
+        feature = "channel-plugin-bridge",
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-line",
+        feature = "channel-matrix",
+        feature = "channel-wecom",
+        feature = "channel-whatsapp",
+        feature = "channel-webhook"
+    ))]
+    pub async fn wait(&self) {
         if self.is_requested() {
             return;
         }
@@ -59,14 +78,34 @@ impl ChannelServeStopHandle {
     }
 }
 
-pub(in crate::channel) fn channel_runtime_now_ms() -> u64 {
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub fn channel_runtime_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_millis() as u64)
         .unwrap_or(0)
 }
 
-pub(in crate::channel) fn ensure_channel_operation_runtime_slot_available_in_dir(
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub fn ensure_channel_operation_runtime_slot_available_in_dir(
     runtime_dir: &std::path::Path,
     spec: ChannelServeRuntimeSpec<'_>,
 ) -> CliResult<()> {
@@ -110,7 +149,17 @@ pub(in crate::channel) fn ensure_channel_operation_runtime_slot_available_in_dir
 /// The helper prunes stale runtime state, rejects duplicate active serve loops
 /// for the same platform/operation/account triple, starts a tracker before
 /// invoking `run`, and always attempts shutdown bookkeeping afterward.
-pub(in crate::channel) async fn with_channel_serve_runtime<T, F, Fut>(
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub async fn with_channel_serve_runtime<T, F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     run: F,
 ) -> CliResult<T>
@@ -138,7 +187,17 @@ where
 
 /// Variant of `with_channel_serve_runtime` that forwards a cooperative stop
 /// handle into the serve loop.
-pub(in crate::channel) async fn with_channel_serve_runtime_with_stop<F, Fut>(
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub async fn with_channel_serve_runtime_with_stop<F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
     stop: ChannelServeStopHandle,
     run: F,
@@ -150,15 +209,14 @@ where
     with_channel_serve_runtime(spec, move |runtime| run(runtime, stop)).await
 }
 
-#[cfg(all(
-    test,
-    any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom",
-        feature = "channel-whatsapp"
-    )
+#[cfg(test)]
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(in crate::channel) async fn with_channel_serve_runtime_with_stop_in_dir<F, Fut>(
     runtime_dir: &std::path::Path,
@@ -177,15 +235,14 @@ where
     .await
 }
 
-#[cfg(all(
-    test,
-    any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom",
-        feature = "channel-whatsapp"
-    )
+#[cfg(test)]
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(in crate::channel) async fn with_channel_serve_runtime_in_dir<T, F, Fut>(
     runtime_dir: &std::path::Path,

@@ -7,11 +7,24 @@ use std::sync::{Arc, Mutex};
 
 use console::{Key, Term};
 
+use super::control_plane::{
+    CHAT_SESSION_KIND_DELEGATE_CHILD, ChatControlPlaneApprovalSummary,
+    ChatControlPlaneSessionSummary, ChatControlPlaneStore,
+};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::text::{Line, Text};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Widget, Wrap};
+
 use super::cli_input::ConcurrentCliInputReader;
 use super::*;
 
 const ALT_SCREEN_ENTER: &str = "\x1b[?1049h";
 const ALT_SCREEN_EXIT: &str = "\x1b[?1049l";
+const ANSI_RESET: &str = "\x1b[0m";
+const CURSOR_KEYS_NORMAL: &str = "\x1b[?1l";
+const KEYPAD_NORMAL: &str = "\x1b>";
+const BRACKETED_PASTE_DISABLE: &str = "\x1b[?2004l";
 const CLEAR_AND_HOME: &str = "\x1b[2J\x1b[H";
 const HEADER_GAP: usize = 1;
 const STATUS_BAR_HEIGHT: usize = 1;
@@ -96,7 +109,9 @@ struct SurfaceEntry {
 #[derive(Clone, Default)]
 struct SurfaceState {
     startup_summary: Option<operator_surfaces::CliChatStartupSummary>,
+    active_provider_label: String,
     session_title_override: Option<String>,
+    last_approval: Option<ApprovalSurfaceSummary>,
     transcript: Vec<SurfaceEntry>,
     composer: String,
     composer_cursor: usize,
@@ -121,6 +136,9 @@ enum SidebarTab {
     Session,
     Runtime,
     Tools,
+    Mission,
+    Workers,
+    Review,
     Help,
 }
 
@@ -130,6 +148,9 @@ impl SidebarTab {
             Self::Session => "session",
             Self::Runtime => "runtime",
             Self::Tools => "tools",
+            Self::Mission => "mission",
+            Self::Workers => "workers",
+            Self::Review => "review",
             Self::Help => "help",
         }
     }
@@ -138,7 +159,10 @@ impl SidebarTab {
         match self {
             Self::Session => Self::Runtime,
             Self::Runtime => Self::Tools,
-            Self::Tools => Self::Help,
+            Self::Tools => Self::Mission,
+            Self::Mission => Self::Workers,
+            Self::Workers => Self::Review,
+            Self::Review => Self::Help,
             Self::Help => Self::Session,
         }
     }
@@ -148,7 +172,10 @@ impl SidebarTab {
             Self::Session => Self::Help,
             Self::Runtime => Self::Session,
             Self::Tools => Self::Runtime,
-            Self::Help => Self::Tools,
+            Self::Mission => Self::Tools,
+            Self::Workers => Self::Mission,
+            Self::Review => Self::Workers,
+            Self::Help => Self::Review,
         }
     }
 }
@@ -170,10 +197,41 @@ enum SurfaceFocus {
 
 #[derive(Clone, Debug)]
 enum SurfaceOverlay {
+    Welcome {
+        screen: TuiScreenSpec,
+    },
+    SessionQueue {
+        selected: usize,
+        items: Vec<SessionQueueItemSummary>,
+    },
+    SessionDetails {
+        title: String,
+        lines: Vec<String>,
+    },
+    ReviewQueue {
+        selected: usize,
+        items: Vec<ApprovalQueueItemSummary>,
+    },
+    MissionControl {
+        lines: Vec<String>,
+    },
+    ReviewDetails {
+        title: String,
+        lines: Vec<String>,
+    },
+    WorkerQueue {
+        selected: usize,
+        items: Vec<WorkerQueueItemSummary>,
+    },
+    WorkerDetails {
+        title: String,
+        lines: Vec<String>,
+    },
     EntryDetails {
         entry_index: usize,
     },
     Timeline,
+    Help,
     ConfirmExit,
     InputPrompt {
         kind: OverlayInputKind,
@@ -226,8 +284,13 @@ enum CommandPaletteAction {
     Help,
     Status,
     History,
+    SessionQueue,
     Compact,
     Timeline,
+    ReviewApproval,
+    MissionControl,
+    ReviewQueue,
+    WorkerQueue,
     RenameSession,
     ExportTranscript,
     JumpLatest,
@@ -241,14 +304,51 @@ enum CommandPaletteAction {
 impl CommandPaletteAction {
     fn items() -> &'static [(&'static str, &'static str, Self)] {
         &[
-            ("Help", "Open slash command reference", Self::Help),
-            ("Status", "Show runtime/session status card", Self::Status),
-            ("History", "Show transcript window summary", Self::History),
-            ("Compact", "Run manual compaction summary", Self::Compact),
+            ("/help", "Open the operator help deck", Self::Help),
+            (
+                "/status",
+                "Show the runtime and session control deck",
+                Self::Status,
+            ),
+            (
+                "/history",
+                "Show the current transcript window summary",
+                Self::History,
+            ),
+            (
+                "Session queue",
+                "Open the visible session/lineage inspector for this session scope",
+                Self::SessionQueue,
+            ),
+            (
+                "/compact",
+                "Run manual compaction and checkpoint summary",
+                Self::Compact,
+            ),
             (
                 "Timeline",
                 "Open the transcript navigator overlay",
                 Self::Timeline,
+            ),
+            (
+                "Mission control",
+                "Open the orchestration overview for the current session scope",
+                Self::MissionControl,
+            ),
+            (
+                "Review approval",
+                "Reopen the latest approval request screen if one is pending",
+                Self::ReviewApproval,
+            ),
+            (
+                "Review queue",
+                "Open the approval queue inspector for the current session",
+                Self::ReviewQueue,
+            ),
+            (
+                "Worker queue",
+                "Open the visible delegate session/worker inspector",
+                Self::WorkerQueue,
             ),
             (
                 "Rename session",
@@ -272,12 +372,12 @@ impl CommandPaletteAction {
             ),
             (
                 "Toggle sidebar",
-                "Show or hide the right rail",
+                "Show or hide the control deck",
                 Self::ToggleSidebar,
             ),
             (
                 "Cycle rail tab",
-                "Move the right rail to the next tab",
+                "Move the control deck to the next tab",
                 Self::CycleSidebarTab,
             ),
             (
@@ -285,7 +385,7 @@ impl CommandPaletteAction {
                 "Clear the current draft",
                 Self::ClearComposer,
             ),
-            ("Exit", "Leave the session surface", Self::Exit),
+            ("/exit", "Leave the session surface", Self::Exit),
         ]
     }
 }
@@ -313,6 +413,263 @@ struct LiveSurfaceModel {
     last_phase_label: String,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ApprovalSurfaceSummary {
+    title: String,
+    subtitle: Option<String>,
+    request_items: Vec<String>,
+    rationale_lines: Vec<String>,
+    choice_lines: Vec<String>,
+    footer_lines: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ApprovalQueueItemSummary {
+    approval_request_id: String,
+    status: String,
+    tool_name: String,
+    turn_id: String,
+    requested_at: i64,
+    reason: Option<String>,
+    rule_id: Option<String>,
+    last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct WorkerQueueItemSummary {
+    session_id: String,
+    label: String,
+    state: String,
+    kind: String,
+    parent_session_id: Option<String>,
+    turn_count: usize,
+    updated_at: i64,
+    last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SessionQueueItemSummary {
+    session_id: String,
+    label: String,
+    state: String,
+    kind: String,
+    parent_session_id: Option<String>,
+    turn_count: usize,
+    updated_at: i64,
+    last_error: Option<String>,
+}
+
+impl ApprovalSurfaceSummary {
+    fn from_screen_spec(screen: &TuiScreenSpec) -> Self {
+        let mut request_items = Vec::new();
+        let mut rationale_lines = Vec::new();
+
+        for section in &screen.sections {
+            match section {
+                TuiSectionSpec::KeyValues { items, .. } => {
+                    request_items.extend(items.iter().map(|item| match item {
+                        TuiKeyValueSpec::Plain { key, value } => format!("{key}: {value}"),
+                        TuiKeyValueSpec::Csv { key, values } => {
+                            format!("{key}: {}", values.join(", "))
+                        }
+                    }));
+                }
+                TuiSectionSpec::Callout { lines, .. } | TuiSectionSpec::Narrative { lines, .. } => {
+                    rationale_lines.extend(lines.clone());
+                }
+                TuiSectionSpec::ActionGroup { .. }
+                | TuiSectionSpec::Checklist { .. }
+                | TuiSectionSpec::Preformatted { .. } => {}
+            }
+        }
+
+        let choice_lines = screen
+            .choices
+            .iter()
+            .map(|choice| {
+                if choice.recommended {
+                    format!("{}: {} (recommended)", choice.key, choice.label)
+                } else {
+                    format!("{}: {}", choice.key, choice.label)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Self {
+            title: screen
+                .title
+                .clone()
+                .unwrap_or_else(|| "approval".to_owned()),
+            subtitle: screen.subtitle.clone(),
+            request_items,
+            rationale_lines,
+            choice_lines,
+            footer_lines: screen.footer_lines.clone(),
+        }
+    }
+
+    fn screen_spec(&self) -> TuiScreenSpec {
+        let mut sections = Vec::new();
+        if !self.rationale_lines.is_empty() {
+            sections.push(TuiSectionSpec::Narrative {
+                title: Some("reason".to_owned()),
+                lines: self.rationale_lines.clone(),
+            });
+        }
+        if !self.request_items.is_empty() {
+            sections.push(TuiSectionSpec::Narrative {
+                title: Some("request".to_owned()),
+                lines: self.request_items.clone(),
+            });
+        }
+        let choices = self
+            .choice_lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| TuiChoiceSpec {
+                key: (index + 1).to_string(),
+                label: line.clone(),
+                detail_lines: Vec::new(),
+                recommended: line.contains("(recommended)"),
+            })
+            .collect::<Vec<_>>();
+
+        TuiScreenSpec {
+            header_style: TuiHeaderStyle::Compact,
+            subtitle: self.subtitle.clone(),
+            title: Some(self.title.clone()),
+            progress_line: None,
+            intro_lines: Vec::new(),
+            sections,
+            choices,
+            footer_lines: self.footer_lines.clone(),
+        }
+    }
+}
+
+impl ApprovalQueueItemSummary {
+    fn from_control_plane_summary(summary: &ChatControlPlaneApprovalSummary) -> Self {
+        Self {
+            approval_request_id: summary.approval_request_id.clone(),
+            status: summary.status.clone(),
+            tool_name: summary.tool_name.clone(),
+            turn_id: summary.turn_id.clone(),
+            requested_at: summary.requested_at,
+            reason: summary.reason.clone(),
+            rule_id: summary.rule_id.clone(),
+            last_error: summary.last_error.clone(),
+        }
+    }
+
+    fn list_line(&self) -> String {
+        let reason = self.reason.as_deref().unwrap_or("-");
+        format!(
+            "{} status={} tool={} reason={}",
+            self.approval_request_id, self.status, self.tool_name, reason
+        )
+    }
+
+    fn detail_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("approval_request_id={}", self.approval_request_id),
+            format!("status={}", self.status),
+            format!("tool_name={}", self.tool_name),
+            format!("turn_id={}", self.turn_id),
+            format!("requested_at={}", self.requested_at),
+        ];
+        if let Some(reason) = self.reason.as_deref() {
+            lines.push(format!("reason={reason}"));
+        }
+        if let Some(rule_id) = self.rule_id.as_deref() {
+            lines.push(format!("rule_id={rule_id}"));
+        }
+        if let Some(last_error) = self.last_error.as_deref() {
+            lines.push(format!("last_error={last_error}"));
+        }
+        lines
+    }
+}
+
+impl WorkerQueueItemSummary {
+    fn from_control_plane_summary(summary: &ChatControlPlaneSessionSummary) -> Self {
+        Self {
+            session_id: summary.session_id.clone(),
+            label: summary.label.clone(),
+            state: summary.state.clone(),
+            kind: summary.kind.clone(),
+            parent_session_id: summary.parent_session_id.clone(),
+            turn_count: summary.turn_count,
+            updated_at: summary.updated_at,
+            last_error: summary.last_error.clone(),
+        }
+    }
+
+    fn list_line(&self) -> String {
+        format!(
+            "{} state={} kind={} turns={}",
+            self.label, self.state, self.kind, self.turn_count
+        )
+    }
+
+    fn detail_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("session_id={}", self.session_id),
+            format!("label={}", self.label),
+            format!("state={}", self.state),
+            format!("kind={}", self.kind),
+            format!("turn_count={}", self.turn_count),
+            format!("updated_at={}", self.updated_at),
+        ];
+        if let Some(parent_session_id) = self.parent_session_id.as_deref() {
+            lines.push(format!("parent_session_id={parent_session_id}"));
+        }
+        if let Some(last_error) = self.last_error.as_deref() {
+            lines.push(format!("last_error={last_error}"));
+        }
+        lines
+    }
+}
+
+impl SessionQueueItemSummary {
+    fn from_control_plane_summary(summary: &ChatControlPlaneSessionSummary) -> Self {
+        Self {
+            session_id: summary.session_id.clone(),
+            label: summary.label.clone(),
+            state: summary.state.clone(),
+            kind: summary.kind.clone(),
+            parent_session_id: summary.parent_session_id.clone(),
+            turn_count: summary.turn_count,
+            updated_at: summary.updated_at,
+            last_error: summary.last_error.clone(),
+        }
+    }
+
+    fn list_line(&self) -> String {
+        format!(
+            "{} state={} kind={} turns={}",
+            self.label, self.state, self.kind, self.turn_count
+        )
+    }
+
+    fn detail_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("session_id={}", self.session_id),
+            format!("label={}", self.label),
+            format!("state={}", self.state),
+            format!("kind={}", self.kind),
+            format!("turn_count={}", self.turn_count),
+            format!("updated_at={}", self.updated_at),
+        ];
+        if let Some(parent_session_id) = self.parent_session_id.as_deref() {
+            lines.push(format!("parent_session_id={parent_session_id}"));
+        }
+        if let Some(last_error) = self.last_error.as_deref() {
+            lines.push(format!("last_error={last_error}"));
+        }
+        lines
+    }
+}
+
 fn sync_live_surface_snapshot(live: &mut LiveSurfaceModel) {
     let snapshot = build_cli_chat_live_surface_snapshot(&live.state);
     live.snapshot = snapshot;
@@ -326,6 +683,7 @@ fn fallback_live_surface_snapshot() -> CliChatLiveSurfaceSnapshot {
         tool_call_count: 0,
         message_count: None,
         estimated_tokens: None,
+        first_token_latency_ms: None,
         draft_preview: None,
         tools: Vec::new(),
     }
@@ -350,9 +708,22 @@ impl SurfaceGuard {
 impl Drop for SurfaceGuard {
     fn drop(&mut self) {
         let _ = self.term.show_cursor();
-        let _ = self.term.write_str(ALT_SCREEN_EXIT);
+        let _ = self
+            .term
+            .write_str(terminal_surface_restore_sequence().as_str());
         let _ = self.term.flush();
     }
+}
+
+fn terminal_surface_restore_sequence() -> String {
+    [
+        BRACKETED_PASTE_DISABLE,
+        CURSOR_KEYS_NORMAL,
+        KEYPAD_NORMAL,
+        ANSI_RESET,
+        ALT_SCREEN_EXIT,
+    ]
+    .join("")
 }
 
 impl ChatSessionSurface {
@@ -360,9 +731,29 @@ impl ChatSessionSurface {
         let term = Term::stdout();
         let startup_summary =
             operator_surfaces::build_cli_chat_startup_summary(&runtime, &options)?;
-        let mut state = SurfaceState {
+        let active_provider_label = runtime
+            .config
+            .active_provider_id()
+            .and_then(|profile_id| runtime.config.providers.get(profile_id))
+            .map(|profile| {
+                format!(
+                    "{} / {}",
+                    profile.provider.kind.display_name(),
+                    profile.provider.model
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "{} / {}",
+                    runtime.config.provider.kind.display_name(),
+                    runtime.config.provider.model
+                )
+            });
+        let state = SurfaceState {
             startup_summary: Some(startup_summary.clone()),
+            active_provider_label,
             session_title_override: None,
+            last_approval: None,
             transcript: Vec::new(),
             composer: String::new(),
             composer_cursor: 0,
@@ -375,20 +766,14 @@ impl ChatSessionSurface {
             sidebar_visible: true,
             sidebar_tab: SidebarTab::Session,
             command_palette: None,
-            overlay: None,
+            overlay: Some(SurfaceOverlay::Welcome {
+                screen: operator_surfaces::build_cli_chat_startup_screen_spec(&startup_summary),
+            }),
             live: LiveSurfaceModel::default(),
             footer_notice:
-                "Esc clear · ↑↓ history/scroll · PgUp/PgDn transcript · Tab focus · : commands"
-                    .to_owned(),
+                "?: help · : command menu · M mission · Esc clear · PgUp/PgDn transcript · Tab focus".to_owned(),
             pending_turn: false,
         };
-        let render_width = detect_cli_chat_render_width();
-        state.transcript.push(SurfaceEntry {
-            lines: operator_surfaces::render_cli_chat_startup_lines_with_width(
-                &startup_summary,
-                render_width,
-            ),
-        });
         Ok(Self {
             runtime,
             options,
@@ -474,6 +859,13 @@ impl ChatSessionSurface {
             Key::CtrlC => Ok(SurfaceLoopAction::Exit),
             Key::Escape => {
                 let mut state = self.lock_state();
+                if matches!(state.overlay, Some(SurfaceOverlay::Welcome { .. })) {
+                    state.overlay = None;
+                    state.focus = SurfaceFocus::Composer;
+                    drop(state);
+                    self.render()?;
+                    return Ok(SurfaceLoopAction::Continue);
+                }
                 if matches!(state.overlay, Some(SurfaceOverlay::ConfirmExit)) {
                     state.overlay = None;
                     state.focus = SurfaceFocus::Composer;
@@ -536,7 +928,18 @@ impl ChatSessionSurface {
             }
             Key::ArrowUp => {
                 let mut state = self.lock_state();
-                if let Some(palette) = state.command_palette.as_mut() {
+                if let Some(SurfaceOverlay::SessionQueue { selected, .. }) = state.overlay.as_mut()
+                {
+                    *selected = selected.saturating_sub(1);
+                } else if let Some(SurfaceOverlay::ReviewQueue { selected, .. }) =
+                    state.overlay.as_mut()
+                {
+                    *selected = selected.saturating_sub(1);
+                } else if let Some(SurfaceOverlay::WorkerQueue { selected, .. }) =
+                    state.overlay.as_mut()
+                {
+                    *selected = selected.saturating_sub(1);
+                } else if let Some(palette) = state.command_palette.as_mut() {
                     palette.selected = palette.selected.saturating_sub(1);
                 } else if state.focus == SurfaceFocus::Composer
                     && state.composer.contains('\n')
@@ -568,7 +971,22 @@ impl ChatSessionSurface {
             }
             Key::ArrowDown => {
                 let mut state = self.lock_state();
-                if let Some(palette) = state.command_palette.as_mut() {
+                if let Some(SurfaceOverlay::SessionQueue { selected, items }) =
+                    state.overlay.as_mut()
+                {
+                    let max_index = items.len().saturating_sub(1);
+                    *selected = min(selected.saturating_add(1), max_index);
+                } else if let Some(SurfaceOverlay::ReviewQueue { selected, items }) =
+                    state.overlay.as_mut()
+                {
+                    let max_index = items.len().saturating_sub(1);
+                    *selected = min(selected.saturating_add(1), max_index);
+                } else if let Some(SurfaceOverlay::WorkerQueue { selected, items }) =
+                    state.overlay.as_mut()
+                {
+                    let max_index = items.len().saturating_sub(1);
+                    *selected = min(selected.saturating_add(1), max_index);
+                } else if let Some(palette) = state.command_palette.as_mut() {
                     let max_index = filtered_command_palette_items(&palette.query)
                         .len()
                         .saturating_sub(1);
@@ -768,6 +1186,53 @@ impl ChatSessionSurface {
                 }
                 {
                     let mut state = self.lock_state();
+                    if let Some(SurfaceOverlay::SessionQueue { selected, items }) =
+                        state.overlay.as_ref()
+                        && let Some(item) = items.get(*selected)
+                    {
+                        let detail_lines = self.build_session_detail_lines(item);
+                        state.overlay = Some(SurfaceOverlay::SessionDetails {
+                            title: format!("session {}", item.session_id),
+                            lines: detail_lines,
+                        });
+                        drop(state);
+                        self.render()?;
+                        return Ok(SurfaceLoopAction::Continue);
+                    }
+                }
+                {
+                    let mut state = self.lock_state();
+                    if let Some(SurfaceOverlay::ReviewQueue { selected, items }) =
+                        state.overlay.as_ref()
+                        && let Some(item) = items.get(*selected)
+                    {
+                        state.overlay = Some(SurfaceOverlay::ReviewDetails {
+                            title: format!("approval {}", item.approval_request_id),
+                            lines: item.detail_lines(),
+                        });
+                        drop(state);
+                        self.render()?;
+                        return Ok(SurfaceLoopAction::Continue);
+                    }
+                }
+                {
+                    let mut state = self.lock_state();
+                    if let Some(SurfaceOverlay::WorkerQueue { selected, items }) =
+                        state.overlay.as_ref()
+                        && let Some(item) = items.get(*selected)
+                    {
+                        let detail_lines = self.build_worker_detail_lines(item);
+                        state.overlay = Some(SurfaceOverlay::WorkerDetails {
+                            title: format!("worker {}", item.session_id),
+                            lines: detail_lines,
+                        });
+                        drop(state);
+                        self.render()?;
+                        return Ok(SurfaceLoopAction::Continue);
+                    }
+                }
+                {
+                    let mut state = self.lock_state();
                     if matches!(state.overlay, Some(SurfaceOverlay::Timeline)) {
                         let entry_index = state
                             .selected_entry
@@ -801,9 +1266,22 @@ impl ChatSessionSurface {
             }
             Key::Char(character) => {
                 let mut state = self.lock_state();
-                if character == ':' && state.composer.is_empty() {
+                if matches!(state.overlay, Some(SurfaceOverlay::Welcome { .. })) {
+                    state.overlay = None;
+                    state.focus = SurfaceFocus::Composer;
+                }
+                if (character == ':' || character == '/')
+                    && state.composer.is_empty()
+                    && state.command_palette.is_none()
+                {
                     state.command_palette = Some(CommandPaletteState::default());
                     state.focus = SurfaceFocus::CommandPalette;
+                } else if character == '?'
+                    && state.composer.is_empty()
+                    && state.command_palette.is_none()
+                {
+                    state.overlay = Some(SurfaceOverlay::Help);
+                    state.focus = SurfaceFocus::Transcript;
                 } else if let Some(SurfaceOverlay::InputPrompt { value, cursor, .. }) =
                     state.overlay.as_mut()
                 {
@@ -830,6 +1308,136 @@ impl ChatSessionSurface {
                 {
                     state.overlay = Some(SurfaceOverlay::Timeline);
                     state.focus = SurfaceFocus::Transcript;
+                } else if character == 'M'
+                    && state.composer.is_empty()
+                    && state.command_palette.is_none()
+                {
+                    match self.try_build_mission_control_lines(&state, 10, 6, 6) {
+                        Ok(lines) => {
+                            state.overlay = Some(SurfaceOverlay::MissionControl { lines });
+                            state.focus = SurfaceFocus::Transcript;
+                        }
+                        Err(error) => {
+                            let lines = render_control_plane_unavailable_lines_with_width(
+                                "mission",
+                                "control plane",
+                                error.as_str(),
+                                vec![
+                                    "Mission control needs a readable control-plane store before it can summarize related sessions."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            );
+                            push_transcript_message(&mut state, lines);
+                        }
+                    }
+                } else if character == 'S'
+                    && state.composer.is_empty()
+                    && state.command_palette.is_none()
+                {
+                    match self.load_visible_sessions(24) {
+                        Ok(items) if !items.is_empty() => {
+                            state.overlay =
+                                Some(SurfaceOverlay::SessionQueue { selected: 0, items });
+                            state.focus = SurfaceFocus::Transcript;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            let lines = render_control_plane_unavailable_lines_with_width(
+                                "sessions",
+                                "queue",
+                                error.as_str(),
+                                vec![
+                                    "Related sessions and worker lanes will appear here when the control-plane store is available."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            );
+                            push_transcript_message(&mut state, lines);
+                        }
+                    }
+                } else if character == 'r'
+                    && state.composer.is_empty()
+                    && state.command_palette.is_none()
+                {
+                    if let Some(approval) = state.last_approval.as_ref() {
+                        state.overlay = Some(SurfaceOverlay::ApprovalPrompt {
+                            screen: approval.screen_spec(),
+                        });
+                        state.focus = SurfaceFocus::Transcript;
+                    } else {
+                        match self.load_review_queue_items(24) {
+                            Ok(items) if !items.is_empty() => {
+                                state.overlay =
+                                    Some(SurfaceOverlay::ReviewQueue { selected: 0, items });
+                                state.focus = SurfaceFocus::Transcript;
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                let lines = render_control_plane_unavailable_lines_with_width(
+                                    "review",
+                                    "queue",
+                                    error.as_str(),
+                                    vec![
+                                        "Governed actions will appear here after a turn pauses for approval and the control-plane store is readable."
+                                            .to_owned(),
+                                    ],
+                                    self.content_width(),
+                                );
+                                push_transcript_message(&mut state, lines);
+                            }
+                        }
+                    }
+                } else if character == 'R'
+                    && state.composer.is_empty()
+                    && state.command_palette.is_none()
+                {
+                    match self.load_review_queue_items(24) {
+                        Ok(items) if !items.is_empty() => {
+                            state.overlay =
+                                Some(SurfaceOverlay::ReviewQueue { selected: 0, items });
+                            state.focus = SurfaceFocus::Transcript;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            let lines = render_control_plane_unavailable_lines_with_width(
+                                "review",
+                                "queue",
+                                error.as_str(),
+                                vec![
+                                    "Governed actions will appear here after a turn pauses for approval and the control-plane store is readable."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            );
+                            push_transcript_message(&mut state, lines);
+                        }
+                    }
+                } else if character == 'W'
+                    && state.composer.is_empty()
+                    && state.command_palette.is_none()
+                {
+                    match self.load_visible_worker_sessions(24) {
+                        Ok(items) if !items.is_empty() => {
+                            state.overlay =
+                                Some(SurfaceOverlay::WorkerQueue { selected: 0, items });
+                            state.focus = SurfaceFocus::Transcript;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            let lines = render_control_plane_unavailable_lines_with_width(
+                                "workers",
+                                "queue",
+                                error.as_str(),
+                                vec![
+                                    "Async delegate or worker sessions will appear here when the control-plane store is readable."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            );
+                            push_transcript_message(&mut state, lines);
+                        }
+                    }
                 } else if matches!(state.overlay, Some(SurfaceOverlay::ApprovalPrompt { .. })) {
                     let quick_response = character.to_string();
                     let quick_response_action =
@@ -948,6 +1556,51 @@ impl ChatSessionSurface {
                     CLI_CHAT_HISTORY_COMMAND.to_owned(),
                 ));
             }
+            CommandPaletteAction::SessionQueue => match self.load_visible_sessions(24) {
+                Ok(items) if items.is_empty() => {
+                    push_transcript_message(
+                            &mut state,
+                            render_cli_chat_message_spec_with_width(
+                                &TuiMessageSpec {
+                                    role: "sessions".to_owned(),
+                                    caption: Some("queue".to_owned()),
+                                    sections: vec![TuiSectionSpec::Callout {
+                                        tone: TuiCalloutTone::Info,
+                                        title: Some("no visible sessions".to_owned()),
+                                        lines: vec![
+                                            "No visible sessions are currently rooted at this session scope."
+                                                .to_owned(),
+                                        ],
+                                    }],
+                                    footer_lines: vec![
+                                        "Related sessions and worker lanes will appear here when they exist."
+                                            .to_owned(),
+                                    ],
+                                },
+                                self.content_width(),
+                            ),
+                        );
+                }
+                Ok(items) => {
+                    state.overlay = Some(SurfaceOverlay::SessionQueue { selected: 0, items });
+                    state.focus = SurfaceFocus::Transcript;
+                }
+                Err(error) => {
+                    push_transcript_message(
+                            &mut state,
+                            render_control_plane_unavailable_lines_with_width(
+                                "sessions",
+                                "queue",
+                                error.as_str(),
+                                vec![
+                                    "Related sessions and worker lanes will appear here when the control-plane store is available."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            ),
+                        );
+                }
+            },
             CommandPaletteAction::Compact => {
                 return Ok(SurfaceLoopAction::RunCommand(
                     CLI_CHAT_COMPACT_COMMAND.to_owned(),
@@ -957,6 +1610,150 @@ impl ChatSessionSurface {
                 state.overlay = Some(SurfaceOverlay::Timeline);
                 state.focus = SurfaceFocus::Transcript;
             }
+            CommandPaletteAction::MissionControl => {
+                match self.try_build_mission_control_lines(&state, 10, 6, 6) {
+                    Ok(lines) => {
+                        state.overlay = Some(SurfaceOverlay::MissionControl { lines });
+                        state.focus = SurfaceFocus::Transcript;
+                    }
+                    Err(error) => {
+                        push_transcript_message(
+                            &mut state,
+                            render_control_plane_unavailable_lines_with_width(
+                                "mission",
+                                "control plane",
+                                error.as_str(),
+                                vec![
+                                    "Mission control needs a readable control-plane store before it can summarize related sessions."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            ),
+                        );
+                    }
+                }
+            }
+            CommandPaletteAction::ReviewApproval => {
+                if let Some(approval) = state.last_approval.as_ref() {
+                    state.overlay = Some(SurfaceOverlay::ApprovalPrompt {
+                        screen: approval.screen_spec(),
+                    });
+                    state.focus = SurfaceFocus::Transcript;
+                } else {
+                    push_transcript_message(
+                        &mut state,
+                        render_cli_chat_message_spec_with_width(
+                            &TuiMessageSpec {
+                                role: "system".to_owned(),
+                                caption: Some("review".to_owned()),
+                                sections: vec![TuiSectionSpec::Callout {
+                                    tone: TuiCalloutTone::Info,
+                                    title: Some("no pending approval".to_owned()),
+                                    lines: vec![
+                                        "The latest turn does not have an approval screen to reopen."
+                                            .to_owned(),
+                                    ],
+                                }],
+                                footer_lines: vec![
+                                    "Approvals appear automatically when governed actions pause the turn."
+                                        .to_owned(),
+                                ],
+                            },
+                            self.content_width(),
+                        ),
+                    );
+                }
+            }
+            CommandPaletteAction::ReviewQueue => match self.load_review_queue_items(24) {
+                Ok(items) if items.is_empty() => {
+                    push_transcript_message(
+                            &mut state,
+                            render_cli_chat_message_spec_with_width(
+                                &TuiMessageSpec {
+                                    role: "review".to_owned(),
+                                    caption: Some("queue".to_owned()),
+                                    sections: vec![TuiSectionSpec::Callout {
+                                        tone: TuiCalloutTone::Info,
+                                        title: Some("approval queue empty".to_owned()),
+                                        lines: vec![
+                                            "No approval requests are currently recorded for this session."
+                                                .to_owned(),
+                                        ],
+                                    }],
+                                    footer_lines: vec![
+                                        "Governed actions will appear here after a turn pauses for approval."
+                                            .to_owned(),
+                                    ],
+                                },
+                                self.content_width(),
+                            ),
+                        );
+                }
+                Ok(items) => {
+                    state.overlay = Some(SurfaceOverlay::ReviewQueue { selected: 0, items });
+                    state.focus = SurfaceFocus::Transcript;
+                }
+                Err(error) => {
+                    push_transcript_message(
+                            &mut state,
+                            render_control_plane_unavailable_lines_with_width(
+                                "review",
+                                "queue",
+                                error.as_str(),
+                                vec![
+                                    "Governed actions will appear here after a turn pauses for approval and the control-plane store is readable."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            ),
+                        );
+                }
+            },
+            CommandPaletteAction::WorkerQueue => match self.load_visible_worker_sessions(24) {
+                Ok(items) if items.is_empty() => {
+                    push_transcript_message(
+                            &mut state,
+                            render_cli_chat_message_spec_with_width(
+                                &TuiMessageSpec {
+                                    role: "workers".to_owned(),
+                                    caption: Some("queue".to_owned()),
+                                    sections: vec![TuiSectionSpec::Callout {
+                                        tone: TuiCalloutTone::Info,
+                                        title: Some("no visible worker sessions".to_owned()),
+                                        lines: vec![
+                                            "No delegate child sessions are currently visible from this session scope."
+                                                .to_owned(),
+                                        ],
+                                    }],
+                                    footer_lines: vec![
+                                        "Async delegate or worker sessions will appear here after they are spawned."
+                                            .to_owned(),
+                                    ],
+                                },
+                                self.content_width(),
+                            ),
+                        );
+                }
+                Ok(items) => {
+                    state.overlay = Some(SurfaceOverlay::WorkerQueue { selected: 0, items });
+                    state.focus = SurfaceFocus::Transcript;
+                }
+                Err(error) => {
+                    push_transcript_message(
+                            &mut state,
+                            render_control_plane_unavailable_lines_with_width(
+                                "workers",
+                                "queue",
+                                error.as_str(),
+                                vec![
+                                    "Async delegate or worker sessions will appear here when the control-plane store is readable."
+                                        .to_owned(),
+                                ],
+                                self.content_width(),
+                            ),
+                        );
+                }
+            },
             CommandPaletteAction::RenameSession => {
                 let initial = state
                     .session_title_override
@@ -1011,9 +1808,769 @@ impl ChatSessionSurface {
             }
             CommandPaletteAction::Exit => return Ok(SurfaceLoopAction::Exit),
         }
-        drop(state);
-        self.render()?;
+        state.command_palette = None;
         Ok(SurfaceLoopAction::Continue)
+    }
+
+    async fn handle_command(&self, input: &str) -> CliResult<()> {
+        let width = self.content_width();
+        let help_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_HELP_COMMAND],
+            "usage: /help",
+        ))?;
+
+        let status_match = classify_chat_command_match_result(
+            operator_surfaces::is_cli_chat_status_command(input),
+        )?;
+
+        let compact_match = classify_chat_command_match_result(
+            operator_surfaces::is_manual_compaction_command(input),
+        )?;
+
+        let history_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_HISTORY_COMMAND],
+            "usage: /history",
+        ))?;
+
+        let sessions_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_SESSIONS_COMMAND],
+            "usage: /sessions",
+        ))?;
+
+        let mission_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_MISSION_COMMAND],
+            "usage: /mission",
+        ))?;
+
+        let review_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_REVIEW_COMMAND],
+            "usage: /review",
+        ))?;
+
+        let workers_match = classify_chat_command_match_result(parse_exact_chat_command(
+            input,
+            &[CLI_CHAT_WORKERS_COMMAND],
+            "usage: /workers",
+        ))?;
+
+        let turn_checkpoint_repair_match = classify_chat_command_match_result(
+            operator_surfaces::is_turn_checkpoint_repair_command(input),
+        )?;
+
+        if !matches!(sessions_match, ChatCommandMatchResult::NotMatched) {
+            let lines = match sessions_match {
+                ChatCommandMatchResult::Matched => match self.load_visible_sessions(24) {
+                    Ok(items) => {
+                        let session_queue_lines = items
+                            .iter()
+                            .take(12)
+                            .map(SessionQueueItemSummary::list_line)
+                            .collect::<Vec<_>>();
+                        if !items.is_empty() {
+                            let mut state = self.lock_state();
+                            state.overlay =
+                                Some(SurfaceOverlay::SessionQueue { selected: 0, items });
+                        }
+                        render_cli_chat_message_spec_with_width(
+                            &TuiMessageSpec {
+                                role: "sessions".to_owned(),
+                                caption: Some("visible lineage".to_owned()),
+                                sections: vec![TuiSectionSpec::Narrative {
+                                    title: Some("queue".to_owned()),
+                                    lines: if session_queue_lines.is_empty() {
+                                        vec![
+                                            "No visible sessions are currently rooted at this session scope."
+                                                .to_owned(),
+                                        ]
+                                    } else {
+                                        session_queue_lines
+                                    },
+                                }],
+                                footer_lines: vec![
+                                    "Use S to open the session queue overlay or Enter on the queue to inspect one session."
+                                        .to_owned(),
+                                ],
+                            },
+                            width,
+                        )
+                    }
+                    Err(error) => render_control_plane_unavailable_lines_with_width(
+                        "sessions",
+                        "visible lineage",
+                        error.as_str(),
+                        vec![
+                            "Use /status or restore the control-plane store before inspecting related sessions."
+                                .to_owned(),
+                        ],
+                        width,
+                    ),
+                },
+                ChatCommandMatchResult::UsageError(usage) => {
+                    render_cli_chat_command_usage_lines_with_width(&usage, width)
+                }
+                ChatCommandMatchResult::NotMatched => {
+                    render_cli_chat_command_usage_lines_with_width("usage: /sessions", width)
+                }
+            };
+
+            let mut state = self.lock_state();
+            push_transcript_message(&mut state, lines);
+            return Ok(());
+        }
+
+        if !matches!(mission_match, ChatCommandMatchResult::NotMatched) {
+            let lines = match mission_match {
+                ChatCommandMatchResult::Matched => {
+                    let mission_result = {
+                        let state = self.lock_state();
+                        self.try_build_mission_control_lines(&state, 10, 6, 6)
+                    };
+                    match mission_result {
+                        Ok(mission_lines) => {
+                            let mut state = self.lock_state();
+                            state.overlay = Some(SurfaceOverlay::MissionControl {
+                                lines: mission_lines.clone(),
+                            });
+                            state.focus = SurfaceFocus::Transcript;
+                            render_cli_chat_message_spec_with_width(
+                                &TuiMessageSpec {
+                                    role: "mission".to_owned(),
+                                    caption: Some("control plane".to_owned()),
+                                    sections: vec![TuiSectionSpec::Narrative {
+                                        title: Some("overview".to_owned()),
+                                        lines: mission_lines,
+                                    }],
+                                    footer_lines: vec![
+                                        "Use M to reopen mission control, S for sessions, W for workers, and R for approvals."
+                                            .to_owned(),
+                                    ],
+                                },
+                                width,
+                            )
+                        }
+                        Err(error) => render_control_plane_unavailable_lines_with_width(
+                            "mission",
+                            "control plane",
+                            error.as_str(),
+                            vec![
+                                "Mission control needs a readable control-plane store before it can summarize related sessions."
+                                    .to_owned(),
+                            ],
+                            width,
+                        ),
+                    }
+                }
+                ChatCommandMatchResult::UsageError(usage) => {
+                    render_cli_chat_command_usage_lines_with_width(&usage, width)
+                }
+                ChatCommandMatchResult::NotMatched => {
+                    render_cli_chat_command_usage_lines_with_width("usage: /mission", width)
+                }
+            };
+
+            let mut state = self.lock_state();
+            push_transcript_message(&mut state, lines);
+            return Ok(());
+        }
+
+        let lines = match help_match {
+            ChatCommandMatchResult::Matched => {
+                operator_surfaces::render_cli_chat_help_lines_with_width(width)
+            }
+            ChatCommandMatchResult::UsageError(usage) => {
+                render_cli_chat_command_usage_lines_with_width(&usage, width)
+            }
+            ChatCommandMatchResult::NotMatched => match status_match {
+                ChatCommandMatchResult::Matched => {
+                    let summary = operator_surfaces::build_cli_chat_startup_summary(
+                        &self.runtime,
+                        &self.options,
+                    )?;
+                    operator_surfaces::render_cli_chat_status_lines_with_width(&summary, width)
+                }
+                ChatCommandMatchResult::UsageError(usage) => {
+                    render_cli_chat_command_usage_lines_with_width(&usage, width)
+                }
+                ChatCommandMatchResult::NotMatched => match compact_match {
+                    ChatCommandMatchResult::Matched => {
+                        #[cfg(feature = "memory-sqlite")]
+                        {
+                            let binding =
+                                ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx);
+                            let result = operator_surfaces::load_manual_compaction_result(
+                                &self.runtime.config,
+                                &self.runtime.session_id,
+                                &self.runtime.turn_coordinator,
+                                binding,
+                            )
+                            .await?;
+                            operator_surfaces::render_manual_compaction_lines_with_width(
+                                &self.runtime.session_id,
+                                &result,
+                                width,
+                            )
+                        }
+                        #[cfg(not(feature = "memory-sqlite"))]
+                        {
+                            render_cli_chat_feature_unavailable_lines_with_width(
+                                "compact",
+                                "manual compaction unavailable: memory-sqlite feature disabled",
+                                width,
+                            )
+                        }
+                    }
+                    ChatCommandMatchResult::UsageError(usage) => {
+                        render_cli_chat_command_usage_lines_with_width(&usage, width)
+                    }
+                    ChatCommandMatchResult::NotMatched => match history_match {
+                        ChatCommandMatchResult::Matched => {
+                            #[cfg(feature = "memory-sqlite")]
+                            {
+                                let history_lines = operator_surfaces::load_history_lines(
+                                    &self.runtime.session_id,
+                                    self.runtime.config.memory.sliding_window,
+                                    ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx),
+                                    &self.runtime.memory_config,
+                                )
+                                .await?;
+                                operator_surfaces::render_cli_chat_history_lines_with_width(
+                                    &self.runtime.session_id,
+                                    self.runtime.config.memory.sliding_window,
+                                    &history_lines,
+                                    width,
+                                )
+                            }
+                            #[cfg(not(feature = "memory-sqlite"))]
+                            {
+                                render_cli_chat_feature_unavailable_lines_with_width(
+                                    "history",
+                                    "history unavailable: memory-sqlite feature disabled",
+                                    width,
+                                )
+                            }
+                        }
+                        ChatCommandMatchResult::UsageError(usage) => {
+                            render_cli_chat_command_usage_lines_with_width(&usage, width)
+                        }
+                        ChatCommandMatchResult::NotMatched => match review_match {
+                            ChatCommandMatchResult::Matched => {
+                                let maybe_lines = {
+                                    let state = self.lock_state();
+                                    state.last_approval.as_ref().map(|approval| {
+                                        let review_queue_lines = match self.load_review_queue_items(6) {
+                                            Ok(items) if items.is_empty() => vec!["approval queue: empty".to_owned()],
+                                            Ok(items) => build_review_queue_lines_from_items(&items),
+                                            Err(error) => vec![format!(
+                                                "approval queue unavailable: {error}"
+                                            )],
+                                        };
+                                        render_cli_chat_message_spec_with_width(
+                                            &TuiMessageSpec {
+                                                role: "review".to_owned(),
+                                                caption: Some("latest approval".to_owned()),
+                                                sections: vec![
+                                                    TuiSectionSpec::Narrative {
+                                                        title: Some("queue".to_owned()),
+                                                        lines: review_queue_lines,
+                                                    },
+                                                    TuiSectionSpec::Narrative {
+                                                        title: Some("title".to_owned()),
+                                                        lines: vec![approval.title.clone()],
+                                                    },
+                                                    TuiSectionSpec::Narrative {
+                                                        title: Some("request".to_owned()),
+                                                        lines: approval.request_items.clone(),
+                                                    },
+                                                    TuiSectionSpec::Narrative {
+                                                        title: Some("reason".to_owned()),
+                                                        lines: approval.rationale_lines.clone(),
+                                                    },
+                                                    TuiSectionSpec::Narrative {
+                                                        title: Some("choices".to_owned()),
+                                                        lines: approval.choice_lines.clone(),
+                                                    },
+                                                ],
+                                                footer_lines: approval.footer_lines.clone(),
+                                            },
+                                            width,
+                                        )
+                                    })
+                                };
+
+                                if let Some(lines) = maybe_lines {
+                                    let mut state = self.lock_state();
+                                    if let Some(approval) = state.last_approval.as_ref() {
+                                        state.overlay = Some(SurfaceOverlay::ApprovalPrompt {
+                                            screen: approval.screen_spec(),
+                                        });
+                                    }
+                                    lines
+                                } else {
+                                    match self.load_review_queue_items(6) {
+                                        Ok(items) => {
+                                            let review_queue_lines = if items.is_empty() {
+                                                vec!["approval queue: empty".to_owned()]
+                                            } else {
+                                                build_review_queue_lines_from_items(&items)
+                                            };
+                                            render_cli_chat_message_spec_with_width(
+                                                &TuiMessageSpec {
+                                                    role: "review".to_owned(),
+                                                    caption: Some("latest approval".to_owned()),
+                                                    sections: vec![
+                                                        TuiSectionSpec::Narrative {
+                                                            title: Some("queue".to_owned()),
+                                                            lines: review_queue_lines,
+                                                        },
+                                                        TuiSectionSpec::Callout {
+                                                            tone: TuiCalloutTone::Info,
+                                                            title: Some("no retained approval screen".to_owned()),
+                                                            lines: vec![
+                                                                "No approval/review item is currently retained in this session surface."
+                                                                    .to_owned(),
+                                                            ],
+                                                        },
+                                                    ],
+                                                    footer_lines: vec![
+                                                        "Governed actions automatically surface review screens when needed."
+                                                            .to_owned(),
+                                                    ],
+                                                },
+                                                width,
+                                            )
+                                        }
+                                        Err(error) => render_control_plane_unavailable_lines_with_width(
+                                            "review",
+                                            "latest approval",
+                                            error.as_str(),
+                                            vec![
+                                                "Governed actions automatically surface review screens when the control-plane store is readable."
+                                                    .to_owned(),
+                                            ],
+                                            width,
+                                        ),
+                                    }
+                                }
+                            }
+                            ChatCommandMatchResult::UsageError(usage) => {
+                                render_cli_chat_command_usage_lines_with_width(&usage, width)
+                            }
+                            ChatCommandMatchResult::NotMatched => match workers_match {
+                                ChatCommandMatchResult::Matched => match self.load_visible_worker_sessions(24) {
+                                    Ok(items) => {
+                                        let worker_queue_lines = items
+                                            .iter()
+                                            .take(12)
+                                            .map(WorkerQueueItemSummary::list_line)
+                                            .collect::<Vec<_>>();
+                                        if !items.is_empty() {
+                                            let mut state = self.lock_state();
+                                            state.overlay = Some(SurfaceOverlay::WorkerQueue {
+                                                selected: 0,
+                                                items,
+                                            });
+                                        }
+                                        render_cli_chat_message_spec_with_width(
+                                            &TuiMessageSpec {
+                                                role: "workers".to_owned(),
+                                                caption: Some("visible delegates".to_owned()),
+                                                sections: vec![TuiSectionSpec::Narrative {
+                                                    title: Some("queue".to_owned()),
+                                                    lines: if worker_queue_lines.is_empty() {
+                                                        vec![
+                                                            "No visible delegate child sessions are currently active in this session scope."
+                                                                .to_owned(),
+                                                        ]
+                                                    } else {
+                                                        worker_queue_lines
+                                                    },
+                                                }],
+                                                footer_lines: vec![
+                                                    "Use W to open the worker queue overlay or Enter on the queue to inspect one worker."
+                                                        .to_owned(),
+                                                ],
+                                            },
+                                            width,
+                                        )
+                                    }
+                                    Err(error) => render_control_plane_unavailable_lines_with_width(
+                                        "workers",
+                                        "visible delegates",
+                                        error.as_str(),
+                                        vec![
+                                            "Use /status or restore the control-plane store before inspecting worker sessions."
+                                                .to_owned(),
+                                        ],
+                                        width,
+                                    ),
+                                },
+                                ChatCommandMatchResult::UsageError(usage) => {
+                                    render_cli_chat_command_usage_lines_with_width(&usage, width)
+                                }
+                                ChatCommandMatchResult::NotMatched => {
+                                    match turn_checkpoint_repair_match {
+                                        ChatCommandMatchResult::Matched => {
+                                            let outcome = self
+                                                .runtime
+                                                .turn_coordinator
+                                                .repair_turn_checkpoint_tail(
+                                                    &self.runtime.config,
+                                                    &self.runtime.session_id,
+                                                    ConversationRuntimeBinding::kernel(
+                                                        &self.runtime.kernel_ctx,
+                                                    ),
+                                                )
+                                                .await?;
+                                            render_turn_checkpoint_repair_lines_with_width(
+                                                &self.runtime.session_id,
+                                                &outcome,
+                                                width,
+                                            )
+                                        }
+                                        ChatCommandMatchResult::UsageError(usage) => {
+                                            render_cli_chat_command_usage_lines_with_width(
+                                                &usage, width,
+                                            )
+                                        }
+                                        ChatCommandMatchResult::NotMatched => {
+                                            render_cli_chat_command_usage_lines_with_width(
+                                                "usage: /help | /status | /history | /sessions | /mission | /review | /workers | /compact | /turn_checkpoint_repair | /exit",
+                                                width,
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        let mut state = self.lock_state();
+        push_transcript_message(&mut state, lines);
+        Ok(())
+    }
+
+    fn control_plane_store(&self) -> CliResult<ChatControlPlaneStore> {
+        ChatControlPlaneStore::new(&self.runtime.memory_config)
+    }
+
+    fn try_build_mission_control_lines(
+        &self,
+        state: &SurfaceState,
+        session_limit: usize,
+        worker_limit: usize,
+        review_limit: usize,
+    ) -> CliResult<Vec<String>> {
+        let visible_sessions =
+            self.load_visible_sessions(session_limit.saturating_mul(2).max(8))?;
+        let worker_items = visible_sessions
+            .iter()
+            .filter(|item| item.kind == CHAT_SESSION_KIND_DELEGATE_CHILD)
+            .take(worker_limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        let approval_items = self.load_review_queue_items(review_limit)?;
+        let maybe_snapshot = state.live.snapshot.as_ref();
+        let phase = maybe_snapshot
+            .map(|snapshot| snapshot.phase.as_str())
+            .unwrap_or("idle");
+        let provider_round = maybe_snapshot
+            .and_then(|snapshot| snapshot.provider_round)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        let tool_calls = maybe_snapshot
+            .map(|snapshot| snapshot.tool_call_count)
+            .unwrap_or(0);
+
+        let visible_session_count = visible_sessions.len();
+        let delegate_count = visible_sessions
+            .iter()
+            .filter(|item| item.kind == CHAT_SESSION_KIND_DELEGATE_CHILD)
+            .count();
+        let root_count = visible_session_count.saturating_sub(delegate_count);
+        let failing_sessions = visible_sessions
+            .iter()
+            .filter(|item| item.state == "failed" || item.state == "timed_out")
+            .count();
+
+        let mut lines = vec![
+            format!("scope: {}", self.runtime.session_id),
+            format!("provider: {}", state.active_provider_label),
+            format!("phase: {phase} · round={provider_round} · tools={tool_calls}"),
+            format!(
+                "lanes: sessions={} · roots={} · delegates={} · approvals={}",
+                visible_session_count,
+                root_count,
+                delegate_count,
+                approval_items.len()
+            ),
+        ];
+
+        let session_state_mix =
+            summarize_state_mix(visible_sessions.iter().map(|item| item.state.as_str()));
+        if let Some(state_mix) = session_state_mix {
+            lines.push(format!("session mix: {state_mix}"));
+        }
+
+        let worker_state_mix =
+            summarize_state_mix(worker_items.iter().map(|item| item.state.as_str()));
+        if let Some(worker_mix) = worker_state_mix {
+            lines.push(format!("worker mix: {worker_mix}"));
+        }
+
+        if failing_sessions > 0 {
+            lines.push(format!("attention: failing lanes={failing_sessions}"));
+        }
+
+        let recent_sessions = visible_sessions.iter().take(session_limit);
+        let recent_session_lines = recent_sessions
+            .map(SessionQueueItemSummary::list_line)
+            .collect::<Vec<_>>();
+        if !recent_session_lines.is_empty() {
+            lines.push(String::new());
+            lines.push("recent sessions".to_owned());
+            lines.extend(recent_session_lines);
+        }
+
+        if !worker_items.is_empty() {
+            lines.push(String::new());
+            lines.push("recent workers".to_owned());
+            lines.extend(worker_items.iter().map(SessionQueueItemSummary::list_line));
+        }
+
+        if !approval_items.is_empty() {
+            lines.push(String::new());
+            lines.push("review queue".to_owned());
+            lines.extend(
+                approval_items
+                    .iter()
+                    .take(review_limit)
+                    .map(ApprovalQueueItemSummary::list_line),
+            );
+        }
+
+        let maybe_approval = state.last_approval.as_ref();
+        if let Some(approval) = maybe_approval {
+            lines.push(String::new());
+            lines.push(format!("latest approval: {}", approval.title));
+            let maybe_subtitle = approval.subtitle.as_deref();
+            if let Some(subtitle) = maybe_subtitle {
+                lines.push(format!("mode: {subtitle}"));
+            }
+        }
+
+        lines.push(String::new());
+        lines.push("controls".to_owned());
+        lines.push("S sessions · W workers · R approval queue".to_owned());
+        lines.push("r latest approval · M mission control".to_owned());
+        Ok(lines)
+    }
+
+    fn build_mission_control_lines(
+        &self,
+        state: &SurfaceState,
+        session_limit: usize,
+        worker_limit: usize,
+        review_limit: usize,
+    ) -> Vec<String> {
+        match self.try_build_mission_control_lines(state, session_limit, worker_limit, review_limit)
+        {
+            Ok(lines) => lines,
+            Err(error) => vec![format!("control_plane_unavailable={error}")],
+        }
+    }
+
+    fn build_review_queue_lines(&self, limit: usize) -> Vec<String> {
+        match self.load_review_queue_items(usize::MAX) {
+            Ok(approval_items) => {
+                if approval_items.is_empty() {
+                    return vec!["approval queue: empty".to_owned()];
+                }
+
+                let total_count = approval_items.len();
+                let mut lines = vec![format!("approval queue: {total_count}")];
+                for item in approval_items.iter().take(limit) {
+                    let list_line = item.list_line();
+                    lines.push(list_line);
+
+                    if let Some(reason) = item.reason.as_deref() {
+                        lines.push(format!("  reason={reason}"));
+                    }
+                    if let Some(rule_id) = item.rule_id.as_deref() {
+                        lines.push(format!("  rule_id={rule_id}"));
+                    }
+                    if let Some(last_error) = item.last_error.as_deref() {
+                        lines.push(format!("  last_error={last_error}"));
+                    }
+                }
+                lines
+            }
+            Err(error) => vec![format!("approval queue unavailable: {error}")],
+        }
+    }
+
+    fn build_worker_queue_lines(&self, limit: usize) -> Vec<String> {
+        match self.load_visible_worker_sessions(usize::MAX) {
+            Ok(items) => {
+                if items.is_empty() {
+                    vec!["worker sessions: empty".to_owned()]
+                } else {
+                    let total_count = items.len();
+                    let limited_items = items.into_iter().take(limit);
+                    let mut lines = vec![format!("worker sessions: {total_count}")];
+                    for item in limited_items {
+                        let list_line = item.list_line();
+                        lines.push(list_line);
+                    }
+                    lines
+                }
+            }
+            Err(error) => {
+                let error_line = format!("worker sessions unavailable: {error}");
+                vec![error_line]
+            }
+        }
+    }
+
+    fn build_session_detail_lines(&self, item: &SessionQueueItemSummary) -> Vec<String> {
+        let base_lines = item.detail_lines();
+        let session_id = item.session_id.as_str();
+        let include_delegate_lifecycle = false;
+
+        self.build_session_detail_lines_with_runtime(
+            session_id,
+            base_lines,
+            include_delegate_lifecycle,
+        )
+    }
+
+    fn build_worker_detail_lines(&self, item: &WorkerQueueItemSummary) -> Vec<String> {
+        let base_lines = item.detail_lines();
+        let session_id = item.session_id.as_str();
+        let include_delegate_lifecycle = true;
+
+        self.build_session_detail_lines_with_runtime(
+            session_id,
+            base_lines,
+            include_delegate_lifecycle,
+        )
+    }
+
+    fn build_session_detail_lines_with_runtime(
+        &self,
+        session_id: &str,
+        mut lines: Vec<String>,
+        include_delegate_lifecycle: bool,
+    ) -> Vec<String> {
+        let store_result = self.control_plane_store();
+        let store = match store_result {
+            Ok(store) => store,
+            Err(error) => {
+                let detail_line = format!("detail_runtime_unavailable={error}");
+                lines.push(detail_line);
+                return lines;
+            }
+        };
+
+        let details_result = store.session_details(session_id, include_delegate_lifecycle);
+        let maybe_details = match details_result {
+            Ok(details) => details,
+            Err(error) => {
+                let detail_line = format!("trajectory_unavailable={error}");
+                lines.push(detail_line);
+                return lines;
+            }
+        };
+
+        let details = match maybe_details {
+            Some(details) => details,
+            None => {
+                lines.push("trajectory_unavailable=session_not_found".to_owned());
+                return lines;
+            }
+        };
+
+        let maybe_lineage_root = details.lineage_root_session_id.as_deref();
+        let lineage_root = maybe_lineage_root.unwrap_or("-");
+        let turn_count = details.trajectory_turn_count;
+        let event_count = details.event_count;
+        let approval_count = details.approval_count;
+
+        lines.push(String::new());
+        lines.push(format!("lineage_root_session_id={lineage_root}"));
+        lines.push(format!("lineage_depth={}", details.lineage_depth));
+        lines.push(format!("trajectory_turn_count={turn_count}"));
+        lines.push(format!("trajectory_event_count={event_count}"));
+        lines.push(format!("approval_request_count={approval_count}"));
+
+        let maybe_terminal_status = details.terminal_status.as_deref();
+        let maybe_terminal_recorded_at = details.terminal_recorded_at;
+        if let Some(terminal_status) = maybe_terminal_status {
+            lines.push(format!("terminal_status={terminal_status}"));
+        }
+        if let Some(terminal_recorded_at) = maybe_terminal_recorded_at {
+            lines.push(format!("terminal_recorded_at={terminal_recorded_at}"));
+        }
+
+        let maybe_last_turn_role = details.last_turn_role.as_deref();
+        let maybe_last_turn_ts = details.last_turn_ts;
+        let maybe_last_turn_excerpt = details.last_turn_excerpt.as_deref();
+        if let Some(last_turn_role) = maybe_last_turn_role {
+            lines.push(format!("last_turn_role={last_turn_role}"));
+        }
+        if let Some(last_turn_ts) = maybe_last_turn_ts {
+            lines.push(format!("last_turn_ts={last_turn_ts}"));
+        }
+        if let Some(last_turn_excerpt) = maybe_last_turn_excerpt {
+            lines.push(format!("last_turn_excerpt={last_turn_excerpt}"));
+        }
+
+        if !details.recent_events.is_empty() {
+            lines.push(String::new());
+            lines.push("recent_events".to_owned());
+            lines.extend(details.recent_events);
+        }
+
+        let approval_items_result = store.approval_queue(session_id, 1);
+        let approval_items = approval_items_result.unwrap_or_default();
+        let maybe_latest_approval = approval_items.first();
+        if let Some(latest_approval) = maybe_latest_approval {
+            let approval_id = latest_approval.approval_request_id.as_str();
+            let approval_status = latest_approval.status.as_str();
+            let approval_tool = latest_approval.tool_name.as_str();
+            lines.push(String::new());
+            lines.push(format!("latest_approval_id={approval_id}"));
+            lines.push(format!("latest_approval_status={approval_status}"));
+            lines.push(format!("latest_approval_tool={approval_tool}"));
+        }
+
+        if !details.delegate_events.is_empty() {
+            lines.push(String::new());
+            lines.push("delegate_lifecycle".to_owned());
+            lines.extend(details.delegate_events);
+        }
+
+        lines
+    }
+
+    fn load_review_queue_items(&self, limit: usize) -> CliResult<Vec<ApprovalQueueItemSummary>> {
+        let store = self.control_plane_store()?;
+
+        let approvals = store.approval_queue(&self.runtime.session_id, limit)?;
+
+        let mut items = Vec::new();
+        for approval in approvals {
+            let item = ApprovalQueueItemSummary::from_control_plane_summary(&approval);
+            items.push(item);
+        }
+        Ok(items)
     }
 
     async fn submit_text(&self, text: &str) -> CliResult<SurfaceLoopAction> {
@@ -1105,7 +2662,10 @@ impl ChatSessionSurface {
                 ),
             });
             if let Some(screen) = build_cli_chat_approval_screen_spec(&assistant_text) {
+                state.last_approval = Some(ApprovalSurfaceSummary::from_screen_spec(&screen));
                 state.overlay = Some(SurfaceOverlay::ApprovalPrompt { screen });
+            } else {
+                state.last_approval = None;
             }
             state.pending_turn = false;
             state.live.last_assistant_preview = Some(assistant_text);
@@ -1116,153 +2676,6 @@ impl ChatSessionSurface {
         }
         self.render()?;
         Ok(SurfaceLoopAction::Continue)
-    }
-
-    async fn handle_command(&self, input: &str) -> CliResult<()> {
-        let width = self.content_width();
-        let help_match = classify_chat_command_match_result(parse_exact_chat_command(
-            input,
-            &[CLI_CHAT_HELP_COMMAND],
-            "usage: /help",
-        ))?;
-
-        let status_match = classify_chat_command_match_result(
-            operator_surfaces::is_cli_chat_status_command(input),
-        )?;
-
-        let compact_match = classify_chat_command_match_result(
-            operator_surfaces::is_manual_compaction_command(input),
-        )?;
-
-        let history_match = classify_chat_command_match_result(parse_exact_chat_command(
-            input,
-            &[CLI_CHAT_HISTORY_COMMAND],
-            "usage: /history",
-        ))?;
-
-        let turn_checkpoint_repair_match = classify_chat_command_match_result(
-            operator_surfaces::is_turn_checkpoint_repair_command(input),
-        )?;
-
-        let lines = match help_match {
-            ChatCommandMatchResult::Matched => {
-                operator_surfaces::render_cli_chat_help_lines_with_width(width)
-            }
-            ChatCommandMatchResult::UsageError(usage) => {
-                render_cli_chat_command_usage_lines_with_width(&usage, width)
-            }
-            ChatCommandMatchResult::NotMatched => match status_match {
-                ChatCommandMatchResult::Matched => {
-                    let summary = operator_surfaces::build_cli_chat_startup_summary(
-                        &self.runtime,
-                        &self.options,
-                    )?;
-                    operator_surfaces::render_cli_chat_status_lines_with_width(&summary, width)
-                }
-                ChatCommandMatchResult::UsageError(usage) => {
-                    render_cli_chat_command_usage_lines_with_width(&usage, width)
-                }
-                ChatCommandMatchResult::NotMatched => match compact_match {
-                    ChatCommandMatchResult::Matched => {
-                        #[cfg(feature = "memory-sqlite")]
-                        {
-                            let binding =
-                                ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx);
-                            let result = operator_surfaces::load_manual_compaction_result(
-                                &self.runtime.config,
-                                &self.runtime.session_id,
-                                &self.runtime.turn_coordinator,
-                                binding,
-                            )
-                            .await?;
-                            operator_surfaces::render_manual_compaction_lines_with_width(
-                                &self.runtime.session_id,
-                                &result,
-                                width,
-                            )
-                        }
-                        #[cfg(not(feature = "memory-sqlite"))]
-                        {
-                            render_cli_chat_feature_unavailable_lines_with_width(
-                                "compact",
-                                "manual compaction unavailable: memory-sqlite feature disabled",
-                                width,
-                            )
-                        }
-                    }
-                    ChatCommandMatchResult::UsageError(usage) => {
-                        render_cli_chat_command_usage_lines_with_width(&usage, width)
-                    }
-                    ChatCommandMatchResult::NotMatched => match history_match {
-                        ChatCommandMatchResult::Matched => {
-                            #[cfg(feature = "memory-sqlite")]
-                            {
-                                let history_lines = operator_surfaces::load_history_lines(
-                                    &self.runtime.session_id,
-                                    self.runtime.config.memory.sliding_window,
-                                    ConversationRuntimeBinding::kernel(&self.runtime.kernel_ctx),
-                                    &self.runtime.memory_config,
-                                )
-                                .await?;
-                                operator_surfaces::render_cli_chat_history_lines_with_width(
-                                    &self.runtime.session_id,
-                                    self.runtime.config.memory.sliding_window,
-                                    &history_lines,
-                                    width,
-                                )
-                            }
-                            #[cfg(not(feature = "memory-sqlite"))]
-                            {
-                                render_cli_chat_feature_unavailable_lines_with_width(
-                                    "history",
-                                    "history unavailable: memory-sqlite feature disabled",
-                                    width,
-                                )
-                            }
-                        }
-                        ChatCommandMatchResult::UsageError(usage) => {
-                            render_cli_chat_command_usage_lines_with_width(&usage, width)
-                        }
-                        ChatCommandMatchResult::NotMatched => match turn_checkpoint_repair_match {
-                            ChatCommandMatchResult::Matched => {
-                                let outcome = self
-                                    .runtime
-                                    .turn_coordinator
-                                    .repair_turn_checkpoint_tail(
-                                        &self.runtime.config,
-                                        &self.runtime.session_id,
-                                        ConversationRuntimeBinding::kernel(
-                                            &self.runtime.kernel_ctx,
-                                        ),
-                                    )
-                                    .await?;
-                                render_turn_checkpoint_repair_lines_with_width(
-                                    &self.runtime.session_id,
-                                    &outcome,
-                                    width,
-                                )
-                            }
-                            ChatCommandMatchResult::UsageError(usage) => {
-                                render_cli_chat_command_usage_lines_with_width(&usage, width)
-                            }
-                            ChatCommandMatchResult::NotMatched => {
-                                render_cli_chat_command_usage_lines_with_width(
-                                    "usage: /help | /status | /history | /compact | /turn_checkpoint_repair | /exit",
-                                    width,
-                                )
-                            }
-                        },
-                    },
-                },
-            },
-        };
-
-        let mut state = self.lock_state();
-        state.transcript.push(SurfaceEntry { lines });
-        state.selected_entry = Some(state.transcript.len().saturating_sub(1));
-        state.sticky_bottom = true;
-        state.focus = SurfaceFocus::Transcript;
-        Ok(())
     }
 
     fn submit_input_overlay(&self, kind: OverlayInputKind, value: String) -> CliResult<()> {
@@ -1340,7 +2753,6 @@ impl ChatSessionSurface {
         let total_height = usize::from(height_u16);
         let total_width = usize::from(width_u16);
         let state = self.lock_state().clone();
-
         let header_lines = crate::presentation::render_compact_brand_header(
             total_width.saturating_sub(2),
             &crate::presentation::BuildVersionInfo::current(),
@@ -1349,67 +2761,35 @@ impl ChatSessionSurface {
         .into_iter()
         .map(|line| line.text)
         .collect::<Vec<_>>();
-
         let sidebar_visible = state.sidebar_visible && total_width >= MIN_SIDEBAR_TOTAL_WIDTH;
         let sidebar_width = if sidebar_visible { SIDEBAR_WIDTH } else { 0 };
         let content_width = total_width
             .saturating_sub(sidebar_width)
             .saturating_sub(if sidebar_visible { 3 } else { 2 })
             .max(24);
-
         let reserved_height =
             header_lines.len() + HEADER_GAP + COMPOSER_HEIGHT + STATUS_BAR_HEIGHT + 1;
         let transcript_height = total_height.saturating_sub(reserved_height).max(5);
-        let transcript_lines =
-            self.build_transcript_lines(&state, content_width, transcript_height);
-        let sidebar_lines = self.build_sidebar_lines(&state, sidebar_width, transcript_height);
-        let composer_lines = self.build_composer_lines(&state, total_width.saturating_sub(2));
-        let status_line = self.build_status_line(&state, total_width.saturating_sub(2));
-        let overlay_lines =
-            self.build_command_palette_lines(&state, total_width, total_height, transcript_height);
-        let detail_overlay =
-            self.build_entry_detail_overlay_lines(&state, total_width, total_height);
-        let timeline_overlay = self.build_timeline_overlay_lines(&state, total_width, total_height);
-        let prompt_overlay = self.build_prompt_overlay_lines(&state, total_width, total_height);
-
-        let mut output = String::from(CLEAR_AND_HOME);
-        for line in &header_lines {
-            output.push_str(line);
-            output.push('\n');
-        }
-        output.push('\n');
-
-        for row in 0..transcript_height {
-            let main_line = transcript_lines.get(row).map(String::as_str).unwrap_or("");
-            output.push_str(&pad_and_clip(main_line, content_width));
-            if sidebar_visible {
-                output.push_str(" │ ");
-                let side_line = sidebar_lines.get(row).map(String::as_str).unwrap_or("");
-                output.push_str(&pad_and_clip(side_line, sidebar_width));
-            }
-            output.push('\n');
-        }
-
-        for line in &composer_lines {
-            output.push_str(line);
-            output.push('\n');
-        }
-        output.push_str(&status_line);
-        if let Some(overlay) = overlay_lines {
-            output.push_str(overlay.as_str());
-        }
-        if let Some(overlay) = detail_overlay {
-            output.push_str(overlay.as_str());
-        }
-        if let Some(overlay) = timeline_overlay {
-            output.push_str(overlay.as_str());
-        }
-        if let Some(overlay) = prompt_overlay {
-            output.push_str(overlay.as_str());
-        }
+        let render_data = SurfaceRenderData {
+            header_lines,
+            header_status_line: self
+                .build_header_status_line(&state, total_width.saturating_sub(4)),
+            transcript_lines: self.build_transcript_lines(&state, content_width, transcript_height),
+            sidebar_visible,
+            sidebar_tab: state.sidebar_tab,
+            sidebar_lines: self.build_sidebar_lines(
+                &state,
+                SIDEBAR_WIDTH.saturating_sub(2),
+                transcript_height,
+            ),
+            composer_lines: self.build_composer_lines(&state, total_width.saturating_sub(6)),
+            status_line: self.build_status_line(&state, total_width.saturating_sub(4)),
+        };
+        let output =
+            render_surface_to_string(&state, &render_data, Rect::new(0, 0, width_u16, height_u16));
 
         self.term
-            .write_str(output.as_str())
+            .write_str(format!("{CLEAR_AND_HOME}{output}").as_str())
             .map_err(|error| format!("failed to render chat surface: {error}"))?;
         self.term
             .flush()
@@ -1492,12 +2872,12 @@ impl ChatSessionSurface {
             .clone()
             .unwrap_or_else(|| fallback_startup_summary(self.runtime.session_id.as_str()));
         let mut lines = vec![
-            format!("right rail · {}", state.sidebar_tab.title()),
+            format!("control deck · {}", state.sidebar_tab.title()),
             format!("session {}", startup_summary.session_id),
         ];
         lines.push(format!("focus: {}", state.focus.label()));
         let tab_label = format!(
-            "tabs: {} | {} | {} | {}",
+            "tabs: {} | {} | {} | {} | {} | {} | {}",
             if state.sidebar_tab == SidebarTab::Session {
                 "[session]"
             } else {
@@ -1512,6 +2892,21 @@ impl ChatSessionSurface {
                 "[tools]"
             } else {
                 "tools"
+            },
+            if state.sidebar_tab == SidebarTab::Mission {
+                "[mission]"
+            } else {
+                "mission"
+            },
+            if state.sidebar_tab == SidebarTab::Workers {
+                "[workers]"
+            } else {
+                "workers"
+            },
+            if state.sidebar_tab == SidebarTab::Review {
+                "[review]"
+            } else {
+                "review"
             },
             if state.sidebar_tab == SidebarTab::Help {
                 "[help]"
@@ -1622,6 +3017,38 @@ impl ChatSessionSurface {
                     lines.extend(tool_lines.into_iter().take(10));
                 }
             }
+            SidebarTab::Mission => {
+                lines.extend(self.build_mission_control_lines(state, 4, 3, 3));
+            }
+            SidebarTab::Workers => {
+                lines.extend(self.build_worker_queue_lines(6));
+            }
+            SidebarTab::Review => {
+                let queue_lines = self.build_review_queue_lines(4);
+                lines.extend(queue_lines);
+                if let Some(approval) = state.last_approval.as_ref() {
+                    lines.push(String::new());
+                    lines.push(format!("approval: {}", approval.title));
+                    if let Some(subtitle) = approval.subtitle.as_deref() {
+                        lines.push(format!("mode: {subtitle}"));
+                    }
+                    if !approval.request_items.is_empty() {
+                        lines.push("request".to_owned());
+                        lines.extend(approval.request_items.iter().take(4).cloned());
+                    }
+                    if !approval.rationale_lines.is_empty() {
+                        lines.push("reason".to_owned());
+                        lines.extend(approval.rationale_lines.iter().take(4).cloned());
+                    }
+                    if !approval.choice_lines.is_empty() {
+                        lines.push("choices".to_owned());
+                        lines.extend(approval.choice_lines.iter().take(4).cloned());
+                    }
+                } else if lines.is_empty() {
+                    lines.push("no pending approval".to_owned());
+                    lines.push("Governed actions surface here.".to_owned());
+                }
+            }
             SidebarTab::Help => {
                 lines.push("shortcuts".to_owned());
                 lines.push("Enter send".to_owned());
@@ -1633,10 +3060,19 @@ impl ChatSessionSurface {
                 lines.push("Enter on transcript → detail".to_owned());
                 lines.push("g / G transcript jump".to_owned());
                 lines.push("t timeline overlay".to_owned());
+                lines.push("M open mission control".to_owned());
+                lines.push("r reopen latest approval".to_owned());
+                lines.push("S open session queue".to_owned());
+                lines.push("W open worker queue".to_owned());
+                lines.push("R open approval queue".to_owned());
                 lines.push("← / → / Home / End composer cursor".to_owned());
                 lines.push("↑ / ↓ composer multiline move".to_owned());
-                lines.push(": command palette".to_owned());
-                lines.push("/help /status /history /compact".to_owned());
+                lines.push("?: help overlay".to_owned());
+                lines.push(": or / command menu".to_owned());
+                lines.push(
+                    "/help /status /history /sessions /mission /review /workers /compact"
+                        .to_owned(),
+                );
             }
         }
 
@@ -1692,20 +3128,20 @@ impl ChatSessionSurface {
             "│".to_owned()
         };
         let hint = if state.command_palette.is_some() {
-            "╰─ command palette active · type filter · ↑↓ choose · Enter run · Esc close"
+            "╰─ command menu active · type filter · ↑↓ choose · Enter run · Esc close"
         } else if state.composer.starts_with('/') {
-            "╰─ slash mode · Enter send command · : open command palette"
+            "╰─ slash mode · Enter send command · : or / opens the command menu"
         } else if should_continue_multiline(&state.composer) {
             "╰─ multiline compose · trailing \\ inserts newline on Enter"
         } else {
-            "╰─ Enter send · : command palette · /help for commands"
+            "╰─ Enter send · ? help · : or / command menu"
         };
         vec![prompt_line, body_line, second_line, hint.to_owned()]
     }
 
     fn build_status_line(&self, state: &SurfaceState, width: usize) -> String {
         let mut status = format!(
-            "{} · focus={} · rail={} · entries={} · scroll={} · sticky={} · overlay={}",
+            "{} · mode=chat · focus={} · deck={} · entries={} · scroll={} · sticky={} · overlay={}",
             state.footer_notice,
             state.focus.label(),
             state.sidebar_tab.title(),
@@ -1720,6 +3156,31 @@ impl ChatSessionSurface {
         clipped_display_line(&status, width)
     }
 
+    fn build_header_status_line(&self, state: &SurfaceState, width: usize) -> String {
+        let session_id = state
+            .startup_summary
+            .as_ref()
+            .map(|summary| summary.session_id.as_str())
+            .unwrap_or(self.runtime.session_id.as_str());
+        let acp = if self.runtime.config.acp.enabled {
+            "acp:on"
+        } else {
+            "acp:off"
+        };
+        clipped_display_line(
+            format!(
+                "session={session_id} · provider={} · {} · focus={} · overlay={}",
+                state.active_provider_label,
+                acp,
+                state.focus.label(),
+                current_overlay_label(state)
+            )
+            .as_str(),
+            width,
+        )
+    }
+
+    #[allow(dead_code)]
     fn build_command_palette_lines(
         &self,
         state: &SurfaceState,
@@ -1735,9 +3196,9 @@ impl ChatSessionSurface {
         let x = total_width.saturating_sub(overlay_width + 2);
         let y = transcript_height.saturating_sub(8).max(2);
         let header = if palette.query.is_empty() {
-            "╭─ commands".to_owned()
+            "╭─ command menu".to_owned()
         } else {
-            format!("╭─ commands · query={}", palette.query)
+            format!("╭─ command menu · query={}", palette.query)
         };
         let mut lines = vec![format!("\x1b[{};{}H{}", y + 1, x + 1, header)];
         for (index, (label, detail, _)) in filtered_items.iter().enumerate() {
@@ -1778,6 +3239,7 @@ impl ChatSessionSurface {
         Some(lines.join(""))
     }
 
+    #[allow(dead_code)]
     fn build_entry_detail_overlay_lines(
         &self,
         state: &SurfaceState,
@@ -1828,6 +3290,7 @@ impl ChatSessionSurface {
         Some(lines.join(""))
     }
 
+    #[allow(dead_code)]
     fn build_timeline_overlay_lines(
         &self,
         state: &SurfaceState,
@@ -1876,6 +3339,7 @@ impl ChatSessionSurface {
         Some(lines.join(""))
     }
 
+    #[allow(dead_code)]
     fn build_prompt_overlay_lines(
         &self,
         state: &SurfaceState,
@@ -1883,6 +3347,70 @@ impl ChatSessionSurface {
         total_height: usize,
     ) -> Option<String> {
         match state.overlay.as_ref()? {
+            SurfaceOverlay::Welcome { screen } => {
+                let overlay_width = min(total_width.saturating_sub(8), 92).max(40);
+                let x = (total_width.saturating_sub(overlay_width)) / 2;
+                let y = (total_height.saturating_sub(20)) / 2;
+                let lines = render_tui_screen_spec(screen, overlay_width.saturating_sub(4), false);
+                let mut rendered = vec![format!("\x1b[{};{}H╭─ welcome", y + 1, x + 1)];
+                for (offset, line) in lines.into_iter().take(16).enumerate() {
+                    rendered.push(format!(
+                        "\x1b[{};{}H│ {}",
+                        y + 2 + offset,
+                        x + 1,
+                        pad_and_clip(line.as_str(), overlay_width.saturating_sub(4))
+                    ));
+                }
+                rendered.push(format!(
+                    "\x1b[{};{}H╰─ Type to begin · ? help · : command menu · Esc close",
+                    y + 18,
+                    x + 1
+                ));
+                Some(rendered.join(""))
+            }
+            SurfaceOverlay::MissionControl { lines } => {
+                let overlay_width = min(total_width.saturating_sub(8), 92).max(40);
+                let x = (total_width.saturating_sub(overlay_width)) / 2;
+                let y = (total_height.saturating_sub(20)) / 2;
+                let mut rendered = vec![format!("\x1b[{};{}H╭─ mission control", y + 1, x + 1)];
+                for (offset, line) in lines.iter().take(16).enumerate() {
+                    rendered.push(format!(
+                        "\x1b[{};{}H│ {}",
+                        y + 2 + offset,
+                        x + 1,
+                        pad_and_clip(line.as_str(), overlay_width.saturating_sub(4))
+                    ));
+                }
+                rendered.push(format!(
+                    "\x1b[{};{}H╰─ Esc close · S sessions · W workers · R approvals",
+                    y + 18,
+                    x + 1
+                ));
+                Some(rendered.join(""))
+            }
+            SurfaceOverlay::Help => {
+                let overlay_width = min(total_width.saturating_sub(10), 88).max(36);
+                let x = (total_width.saturating_sub(overlay_width)) / 2;
+                let y = (total_height.saturating_sub(16)) / 2;
+                let lines = operator_surfaces::render_cli_chat_help_lines_with_width(
+                    overlay_width.saturating_sub(4),
+                );
+                let mut rendered = vec![format!("\x1b[{};{}H╭─ help", y + 1, x + 1)];
+                for (offset, line) in lines.into_iter().take(12).enumerate() {
+                    rendered.push(format!(
+                        "\x1b[{};{}H│ {}",
+                        y + 2 + offset,
+                        x + 1,
+                        pad_and_clip(line.as_str(), overlay_width.saturating_sub(4))
+                    ));
+                }
+                rendered.push(format!(
+                    "\x1b[{};{}H╰─ Esc close · : command menu · /help send command",
+                    y + 14,
+                    x + 1
+                ));
+                Some(rendered.join(""))
+            }
             SurfaceOverlay::ConfirmExit => {
                 let overlay_width = min(total_width.saturating_sub(12), 56).max(28);
                 let x = (total_width.saturating_sub(overlay_width)) / 2;
@@ -1966,7 +3494,14 @@ impl ChatSessionSurface {
                 ));
                 Some(rendered.join(""))
             }
-            SurfaceOverlay::EntryDetails { .. } | SurfaceOverlay::Timeline => None,
+            SurfaceOverlay::ReviewQueue { .. }
+            | SurfaceOverlay::ReviewDetails { .. }
+            | SurfaceOverlay::SessionQueue { .. }
+            | SurfaceOverlay::SessionDetails { .. }
+            | SurfaceOverlay::WorkerQueue { .. }
+            | SurfaceOverlay::WorkerDetails { .. }
+            | SurfaceOverlay::EntryDetails { .. }
+            | SurfaceOverlay::Timeline => None,
         }
     }
 
@@ -1975,6 +3510,32 @@ impl ChatSessionSurface {
             Ok(state) => state,
             Err(poisoned_state) => poisoned_state.into_inner(),
         }
+    }
+
+    fn load_visible_worker_sessions(&self, limit: usize) -> CliResult<Vec<WorkerQueueItemSummary>> {
+        let store = self.control_plane_store()?;
+        let sessions = store.visible_worker_sessions(&self.runtime.session_id, limit)?;
+        let mut items = Vec::new();
+
+        for session in sessions {
+            let item = WorkerQueueItemSummary::from_control_plane_summary(&session);
+            items.push(item);
+        }
+
+        Ok(items)
+    }
+
+    fn load_visible_sessions(&self, limit: usize) -> CliResult<Vec<SessionQueueItemSummary>> {
+        let store = self.control_plane_store()?;
+        let sessions = store.visible_sessions(&self.runtime.session_id, limit)?;
+        let mut items = Vec::new();
+
+        for session in sessions {
+            let item = SessionQueueItemSummary::from_control_plane_summary(&session);
+            items.push(item);
+        }
+
+        Ok(items)
     }
 
     fn content_width(&self) -> usize {
@@ -2004,6 +3565,75 @@ impl ChatSessionSurface {
 
         total_height.saturating_sub(reserved_height).max(5)
     }
+}
+
+fn push_transcript_message(state: &mut SurfaceState, lines: Vec<String>) {
+    state.transcript.push(SurfaceEntry { lines });
+    state.selected_entry = Some(state.transcript.len().saturating_sub(1));
+    state.sticky_bottom = true;
+    state.focus = SurfaceFocus::Transcript;
+}
+
+fn control_plane_unavailable_title(error: &str) -> &'static str {
+    if error.contains("memory-sqlite support") {
+        "feature unavailable"
+    } else {
+        "control plane unavailable"
+    }
+}
+
+fn render_control_plane_unavailable_lines_with_width(
+    role: &str,
+    caption: &str,
+    error: &str,
+    footer_lines: Vec<String>,
+    width: usize,
+) -> Vec<String> {
+    let detail = format!("{role} unavailable: {error}");
+    render_cli_chat_message_spec_with_width(
+        &TuiMessageSpec {
+            role: role.to_owned(),
+            caption: Some(caption.to_owned()),
+            sections: vec![TuiSectionSpec::Callout {
+                tone: TuiCalloutTone::Warning,
+                title: Some(control_plane_unavailable_title(error).to_owned()),
+                lines: vec![detail],
+            }],
+            footer_lines,
+        },
+        width,
+    )
+}
+
+fn build_review_queue_lines_from_items(approval_items: &[ApprovalQueueItemSummary]) -> Vec<String> {
+    if approval_items.is_empty() {
+        return vec!["approval queue: empty".to_owned()];
+    }
+
+    let total_count = approval_items.len();
+    let mut lines = vec![format!("approval queue: {total_count}")];
+
+    for item in approval_items {
+        let list_line = item.list_line();
+        lines.push(list_line);
+
+        let maybe_reason = item.reason.as_deref();
+        if let Some(reason) = maybe_reason {
+            lines.push(format!("  reason={reason}"));
+        }
+
+        let maybe_rule_id = item.rule_id.as_deref();
+        if let Some(rule_id) = maybe_rule_id {
+            lines.push(format!("  rule_id={rule_id}"));
+        }
+
+        let maybe_last_error = item.last_error.as_deref();
+        if let Some(last_error) = maybe_last_error {
+            lines.push(format!("  last_error={last_error}"));
+        }
+    }
+
+    lines
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2096,6 +3726,9 @@ impl ConversationTurnObserver for SurfaceLiveObserver {
             && let Some(current_phase) = current_phase
             && phase_supports_cli_chat_live_preview(current_phase)
         {
+            if state.live.state.first_token_latency_ms.is_none() {
+                state.live.state.first_token_latency_ms = event.elapsed_ms;
+            }
             let preview_char_limit = cli_chat_live_preview_char_limit(render_width);
             state.live.state.total_text_chars_seen = state
                 .live
@@ -2134,6 +3767,461 @@ fn build_surface_live_observer(
     term: Term,
 ) -> ConversationTurnObserverHandle {
     Arc::new(SurfaceLiveObserver { state, term })
+}
+
+struct SurfaceRenderData {
+    header_lines: Vec<String>,
+    header_status_line: String,
+    transcript_lines: Vec<String>,
+    sidebar_visible: bool,
+    sidebar_tab: SidebarTab,
+    sidebar_lines: Vec<String>,
+    composer_lines: Vec<String>,
+    status_line: String,
+}
+
+fn render_surface_to_string(
+    state: &SurfaceState,
+    render_data: &SurfaceRenderData,
+    area: Rect,
+) -> String {
+    if area.width == 0 || area.height == 0 {
+        return String::new();
+    }
+
+    let mut buffer = Buffer::empty(area);
+    let composer_height = u16::try_from(render_data.composer_lines.len().max(2))
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let header_height = u16::try_from(render_data.header_lines.len().max(1))
+        .unwrap_or(u16::MAX)
+        .saturating_add(3);
+    let footer_height = 3;
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height.min(area.height.saturating_sub(footer_height + 4))),
+            Constraint::Min(6),
+            Constraint::Length(composer_height.min(area.height.saturating_sub(footer_height + 2))),
+            Constraint::Length(footer_height),
+        ])
+        .split(area);
+    let header_area = rect_or(layout.as_ref(), 0, area);
+    let body_area = rect_or(layout.as_ref(), 1, area);
+    let composer_area = rect_or(layout.as_ref(), 2, area);
+    let footer_area = rect_or(layout.as_ref(), 3, area);
+
+    render_surface_header(render_data, header_area, &mut buffer);
+    render_surface_body(state, render_data, body_area, &mut buffer);
+    render_surface_composer(render_data, composer_area, &mut buffer);
+    render_surface_footer(render_data, footer_area, &mut buffer);
+    render_surface_overlays(state, body_area, &mut buffer);
+
+    render_buffer_to_string(&buffer)
+}
+
+fn render_surface_header(render_data: &SurfaceRenderData, area: Rect, buffer: &mut Buffer) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" loong / chat ");
+    let inner = block.inner(area);
+    block.render(area, buffer);
+    if inner.height == 0 {
+        return;
+    }
+
+    let status_height = 1;
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(status_height)])
+        .split(inner);
+    let brand_area = rect_or(layout.as_ref(), 0, inner);
+    let status_area = rect_or(layout.as_ref(), 1, inner);
+
+    Paragraph::new(text_from_lines(&render_data.header_lines))
+        .wrap(Wrap { trim: false })
+        .render(brand_area, buffer);
+    Paragraph::new(render_data.header_status_line.clone()).render(status_area, buffer);
+}
+
+fn render_surface_body(
+    state: &SurfaceState,
+    render_data: &SurfaceRenderData,
+    area: Rect,
+    buffer: &mut Buffer,
+) {
+    if render_data.sidebar_visible {
+        let layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(40),
+                Constraint::Length(SIDEBAR_WIDTH as u16),
+            ])
+            .split(area);
+        let transcript_area = rect_or(layout.as_ref(), 0, area);
+        let sidebar_area = rect_or(layout.as_ref(), 1, area);
+        render_transcript_panel(state, render_data, transcript_area, buffer);
+        render_sidebar_panel(render_data, sidebar_area, buffer);
+    } else {
+        render_transcript_panel(state, render_data, area, buffer);
+    }
+}
+
+fn render_transcript_panel(
+    state: &SurfaceState,
+    render_data: &SurfaceRenderData,
+    area: Rect,
+    buffer: &mut Buffer,
+) {
+    let title = if state.pending_turn {
+        " transcript · live turn "
+    } else {
+        " transcript "
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    block.render(area, buffer);
+    Paragraph::new(text_from_lines(&render_data.transcript_lines))
+        .wrap(Wrap { trim: false })
+        .render(inner, buffer);
+}
+
+fn render_sidebar_panel(render_data: &SurfaceRenderData, area: Rect, buffer: &mut Buffer) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" control deck ");
+    let inner = block.inner(area);
+    block.render(area, buffer);
+    if inner.height == 0 {
+        return;
+    }
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(inner);
+    let tabs_area = rect_or(layout.as_ref(), 0, inner);
+    let body_area = rect_or(layout.as_ref(), 1, inner);
+
+    let tab_titles = [
+        SidebarTab::Session,
+        SidebarTab::Runtime,
+        SidebarTab::Tools,
+        SidebarTab::Mission,
+        SidebarTab::Workers,
+        SidebarTab::Review,
+        SidebarTab::Help,
+    ]
+    .into_iter()
+    .map(|tab| {
+        let label = tab.title();
+        if tab == render_data.sidebar_tab {
+            Line::from(format!("[{label}]"))
+        } else {
+            Line::from(label)
+        }
+    })
+    .collect::<Vec<_>>();
+    Tabs::new(tab_titles).render(tabs_area, buffer);
+    Paragraph::new(text_from_lines(&render_data.sidebar_lines))
+        .wrap(Wrap { trim: false })
+        .render(body_area, buffer);
+}
+
+fn render_surface_composer(render_data: &SurfaceRenderData, area: Rect, buffer: &mut Buffer) {
+    let block = Block::default().borders(Borders::ALL).title(" compose ");
+    let inner = block.inner(area);
+    block.render(area, buffer);
+    Paragraph::new(text_from_lines(&render_data.composer_lines))
+        .wrap(Wrap { trim: false })
+        .render(inner, buffer);
+}
+
+fn render_surface_footer(render_data: &SurfaceRenderData, area: Rect, buffer: &mut Buffer) {
+    let block = Block::default().borders(Borders::TOP).title(" controls ");
+    let inner = block.inner(area);
+    block.render(area, buffer);
+    Paragraph::new(render_data.status_line.clone()).render(inner, buffer);
+}
+
+fn render_surface_overlays(state: &SurfaceState, overlay_area: Rect, buffer: &mut Buffer) {
+    if let Some(palette) = state.command_palette.as_ref() {
+        let items = filtered_command_palette_items(&palette.query)
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, detail, _))| {
+                let marker = if index == palette.selected { ">" } else { " " };
+                ListItem::new(format!("{marker} {label} — {detail}"))
+            })
+            .collect::<Vec<_>>();
+        let title = if palette.query.is_empty() {
+            " command menu ".to_owned()
+        } else {
+            format!(" command menu · {} ", palette.query)
+        };
+        render_overlay_list(
+            overlay_area,
+            68,
+            14,
+            title.as_str(),
+            if items.is_empty() {
+                vec![ListItem::new("no commands match the current query")]
+            } else {
+                items
+            },
+            buffer,
+        );
+    }
+
+    match state.overlay.as_ref() {
+        Some(SurfaceOverlay::Welcome { screen }) => {
+            render_overlay_paragraph(
+                overlay_area,
+                92,
+                20,
+                " welcome ",
+                &render_tui_screen_spec(screen, 84, false),
+                buffer,
+            );
+        }
+        Some(SurfaceOverlay::MissionControl { lines }) => {
+            render_overlay_paragraph(overlay_area, 92, 20, " mission control ", lines, buffer);
+        }
+        Some(SurfaceOverlay::SessionQueue { selected, items }) => {
+            let rendered_items = items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let marker = if index == *selected { ">" } else { " " };
+                    ListItem::new(format!("{marker} {}", item.list_line()))
+                })
+                .collect::<Vec<_>>();
+            render_overlay_list(
+                overlay_area,
+                92,
+                18,
+                " session queue ",
+                rendered_items,
+                buffer,
+            );
+        }
+        Some(SurfaceOverlay::SessionDetails { title, lines }) => {
+            render_overlay_paragraph(overlay_area, 88, 16, title, lines, buffer);
+        }
+        Some(SurfaceOverlay::ReviewQueue { selected, items }) => {
+            let rendered_items = items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let marker = if index == *selected { ">" } else { " " };
+                    ListItem::new(format!("{marker} {}", item.list_line()))
+                })
+                .collect::<Vec<_>>();
+            render_overlay_list(
+                overlay_area,
+                92,
+                18,
+                " review queue ",
+                rendered_items,
+                buffer,
+            );
+        }
+        Some(SurfaceOverlay::ReviewDetails { title, lines }) => {
+            render_overlay_paragraph(overlay_area, 88, 16, title, lines, buffer);
+        }
+        Some(SurfaceOverlay::WorkerQueue { selected, items }) => {
+            let rendered_items = items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let marker = if index == *selected { ">" } else { " " };
+                    ListItem::new(format!("{marker} {}", item.list_line()))
+                })
+                .collect::<Vec<_>>();
+            render_overlay_list(
+                overlay_area,
+                92,
+                18,
+                " worker queue ",
+                rendered_items,
+                buffer,
+            );
+        }
+        Some(SurfaceOverlay::WorkerDetails { title, lines }) => {
+            render_overlay_paragraph(overlay_area, 88, 16, title, lines, buffer);
+        }
+        Some(SurfaceOverlay::EntryDetails { entry_index }) => {
+            if let Some(entry) = state.transcript.get(*entry_index) {
+                render_overlay_paragraph(
+                    overlay_area,
+                    88,
+                    18,
+                    format!(" entry details · #{} ", entry_index + 1).as_str(),
+                    &entry.lines,
+                    buffer,
+                );
+            }
+        }
+        Some(SurfaceOverlay::Timeline) => {
+            let selected = state
+                .selected_entry
+                .unwrap_or_else(|| state.transcript.len().saturating_sub(1));
+            let items = state
+                .transcript
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    let prefix = if index == selected { ">" } else { " " };
+                    let title = entry
+                        .lines
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "(empty entry)".to_owned());
+                    ListItem::new(format!("{prefix} {:>3}. {}", index + 1, title))
+                })
+                .collect::<Vec<_>>();
+            render_overlay_list(overlay_area, 72, 18, " timeline ", items, buffer);
+        }
+        Some(SurfaceOverlay::Help) => {
+            render_overlay_paragraph(
+                overlay_area,
+                88,
+                16,
+                " help ",
+                &operator_surfaces::render_cli_chat_help_lines_with_width(82),
+                buffer,
+            );
+        }
+        Some(SurfaceOverlay::ConfirmExit) => {
+            render_overlay_paragraph(
+                overlay_area,
+                60,
+                7,
+                " confirm exit ",
+                &[
+                    "Press Enter to leave the session surface, or Esc to continue.".to_owned(),
+                    String::new(),
+                    "Enter confirm · Esc cancel".to_owned(),
+                ],
+                buffer,
+            );
+        }
+        Some(SurfaceOverlay::InputPrompt {
+            kind,
+            value,
+            cursor,
+        }) => {
+            let title = match kind {
+                OverlayInputKind::RenameSession => " rename session ",
+                OverlayInputKind::ExportTranscript => " export transcript ",
+            };
+            let hint = match kind {
+                OverlayInputKind::RenameSession => {
+                    "Set a local session title for this fullscreen surface."
+                }
+                OverlayInputKind::ExportTranscript => {
+                    "Choose a file path to write the current transcript."
+                }
+            };
+            let lines = vec![
+                hint.to_owned(),
+                String::new(),
+                composer_text_with_cursor(value, *cursor),
+                String::new(),
+                "Enter save · Esc cancel".to_owned(),
+            ];
+            render_overlay_paragraph(overlay_area, 72, 9, title, &lines, buffer);
+        }
+        Some(SurfaceOverlay::ApprovalPrompt { screen }) => {
+            render_overlay_paragraph(
+                overlay_area,
+                88,
+                16,
+                " approval required ",
+                &render_tui_screen_spec(screen, 82, false),
+                buffer,
+            );
+        }
+        None => {}
+    }
+}
+
+fn render_overlay_paragraph(
+    area: Rect,
+    desired_width: u16,
+    desired_height: u16,
+    title: &str,
+    lines: &[String],
+    buffer: &mut Buffer,
+) {
+    let overlay_area = centered_rect(area, desired_width, desired_height);
+    Clear.render(overlay_area, buffer);
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(overlay_area);
+    block.render(overlay_area, buffer);
+    Paragraph::new(text_from_lines(lines))
+        .wrap(Wrap { trim: false })
+        .render(inner, buffer);
+}
+
+fn render_overlay_list(
+    area: Rect,
+    desired_width: u16,
+    desired_height: u16,
+    title: &str,
+    items: Vec<ListItem<'static>>,
+    buffer: &mut Buffer,
+) {
+    let overlay_area = centered_rect(area, desired_width, desired_height);
+    Clear.render(overlay_area, buffer);
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(overlay_area);
+    block.render(overlay_area, buffer);
+    List::new(items).render(inner, buffer);
+}
+
+fn centered_rect(area: Rect, desired_width: u16, desired_height: u16) -> Rect {
+    let width = desired_width.min(area.width.saturating_sub(2)).max(10);
+    let height = desired_height.min(area.height.saturating_sub(2)).max(5);
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(area.height.saturating_sub(height) / 2),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(area);
+    let vertical_area = rect_or(vertical.as_ref(), 1, area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(area.width.saturating_sub(width) / 2),
+            Constraint::Length(width),
+            Constraint::Min(0),
+        ])
+        .split(vertical_area);
+    rect_or(horizontal.as_ref(), 1, vertical_area)
+}
+
+fn text_from_lines(lines: &[String]) -> Text<'static> {
+    Text::from(lines.iter().cloned().map(Line::from).collect::<Vec<_>>())
+}
+
+fn rect_or(layout: &[Rect], index: usize, fallback: Rect) -> Rect {
+    layout.get(index).copied().unwrap_or(fallback)
+}
+
+fn render_buffer_to_string(buffer: &Buffer) -> String {
+    let area = buffer.area;
+    let mut rendered_lines = Vec::new();
+    for y in area.top()..area.bottom() {
+        let mut line = String::new();
+        for x in area.left()..area.right() {
+            line.push_str(buffer[(x, y)].symbol());
+        }
+        rendered_lines.push(line.trim_end_matches(' ').to_owned());
+    }
+    rendered_lines.join("\n")
 }
 
 fn render_live_update(term: Term, state: Arc<Mutex<SurfaceState>>) -> CliResult<()> {
@@ -2199,46 +4287,47 @@ fn render_live_update(term: Term, state: Arc<Mutex<SurfaceState>>) -> CliResult<
             lines
         }
     };
-
     let startup_summary = snapshot_state
         .startup_summary
         .clone()
         .unwrap_or_else(|| fallback_startup_summary("default"));
     let mut sidebar_lines = vec![
-        format!("right rail · {}", snapshot_state.sidebar_tab.title()),
-        format!("session {}", startup_summary.session_id),
+        format!("session: {}", startup_summary.session_id),
         format!("focus: {}", snapshot_state.focus.label()),
         format!("sticky: {}", snapshot_state.sticky_bottom),
+        format!("phase: {}", snapshot_state.live.last_phase_label),
     ];
     if let Some(preview) = snapshot_state.live.last_assistant_preview.as_deref() {
         sidebar_lines.push(String::new());
         sidebar_lines.push("last reply".to_owned());
         sidebar_lines.extend(
-            crate::presentation::render_wrapped_display_line(preview, sidebar_width)
-                .into_iter()
-                .take(8),
+            crate::presentation::render_wrapped_display_line(
+                preview,
+                SIDEBAR_WIDTH.saturating_sub(4),
+            )
+            .into_iter()
+            .take(8),
         );
     }
-
     let draft_lines = composer_display_lines(
         &composer_text_with_cursor(&snapshot_state.composer, snapshot_state.composer_cursor),
-        total_width.saturating_sub(4),
+        total_width.saturating_sub(6),
         2,
     );
     let composer_lines = vec![
-        format!("╭─ compose · focus={}", snapshot_state.focus.label()),
-        format!("│ {}", draft_lines.first().cloned().unwrap_or_default()),
+        format!("draft · focus={}", snapshot_state.focus.label()),
+        draft_lines.first().cloned().unwrap_or_default(),
         if draft_lines.len() > 1 {
-            format!("│ {}", draft_lines.get(1).cloned().unwrap_or_default())
+            draft_lines.get(1).cloned().unwrap_or_default()
         } else if let Some(hint) = slash_command_hint(&snapshot_state.composer) {
-            format!("│ {hint}")
+            hint
         } else {
-            "│ turn running…".to_owned()
+            "turn running…".to_owned()
         },
-        "╰─ Enter send · : command palette · /help for commands".to_owned(),
+        "Enter send · ? help · : or / command menu".to_owned(),
     ];
     let mut status_text = format!(
-        "Esc clear · ↑↓ history/scroll · PgUp/PgDn transcript · Tab focus · : commands · focus={} · rail={} · sticky={}",
+        "?: help · : command menu · M mission · Esc clear · PgUp/PgDn transcript · Tab focus · focus={} · deck={} · sticky={}",
         snapshot_state.focus.label(),
         snapshot_state.sidebar_tab.title(),
         snapshot_state.sticky_bottom
@@ -2246,29 +4335,33 @@ fn render_live_update(term: Term, state: Arc<Mutex<SurfaceState>>) -> CliResult<
     if snapshot_state.pending_turn {
         status_text.push_str(" · turn running");
     }
-    let status_line = clipped_display_line(&status_text, total_width.saturating_sub(2));
-    let mut output = String::from(CLEAR_AND_HOME);
-    for line in header_lines {
-        output.push_str(&line);
-        output.push('\n');
-    }
-    output.push('\n');
-    for row in 0..transcript_height {
-        let line = transcript_lines.get(row).map(String::as_str).unwrap_or("");
-        output.push_str(&pad_and_clip(line, content_width));
-        if sidebar_visible {
-            output.push_str(" │ ");
-            let side_line = sidebar_lines.get(row).map(String::as_str).unwrap_or("");
-            output.push_str(&pad_and_clip(side_line, sidebar_width));
-        }
-        output.push('\n');
-    }
-    for line in composer_lines {
-        output.push_str(&line);
-        output.push('\n');
-    }
-    output.push_str(&status_line);
-    term.write_str(output.as_str())
+    let render_data = SurfaceRenderData {
+        header_lines,
+        header_status_line: clipped_display_line(
+            format!(
+                "session={} · provider={} · phase={} · focus={} · overlay={}",
+                startup_summary.session_id,
+                snapshot_state.active_provider_label,
+                snapshot_state.live.last_phase_label,
+                snapshot_state.focus.label(),
+                current_overlay_label(&snapshot_state)
+            )
+            .as_str(),
+            total_width.saturating_sub(4),
+        ),
+        transcript_lines,
+        sidebar_visible,
+        sidebar_tab: snapshot_state.sidebar_tab,
+        sidebar_lines,
+        composer_lines,
+        status_line: clipped_display_line(status_text.as_str(), total_width.saturating_sub(4)),
+    };
+    let output = render_surface_to_string(
+        &snapshot_state,
+        &render_data,
+        Rect::new(0, 0, width_u16, height_u16),
+    );
+    term.write_str(format!("{CLEAR_AND_HOME}{output}").as_str())
         .map_err(|error| format!("failed to refresh live surface: {error}"))?;
     term.flush()
         .map_err(|error| format!("failed to flush live surface: {error}"))?;
@@ -2300,6 +4393,54 @@ fn clipped_display_line(line: &str, width: usize) -> String {
     result
 }
 
+fn summarize_state_mix<'a>(states: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut ready = 0usize;
+    let mut running = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    let mut timed_out = 0usize;
+    let mut other = 0usize;
+    let mut seen_any = false;
+
+    for state in states {
+        seen_any = true;
+        match state {
+            "ready" => ready += 1,
+            "running" => running += 1,
+            "completed" => completed += 1,
+            "failed" => failed += 1,
+            "timed_out" => timed_out += 1,
+            _ => other += 1,
+        }
+    }
+
+    if !seen_any {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    if ready > 0 {
+        parts.push(format!("ready={ready}"));
+    }
+    if running > 0 {
+        parts.push(format!("running={running}"));
+    }
+    if completed > 0 {
+        parts.push(format!("completed={completed}"));
+    }
+    if failed > 0 {
+        parts.push(format!("failed={failed}"));
+    }
+    if timed_out > 0 {
+        parts.push(format!("timed_out={timed_out}"));
+    }
+    if other > 0 {
+        parts.push(format!("other={other}"));
+    }
+
+    Some(parts.join(" · "))
+}
+
 fn fallback_startup_summary(session_id: &str) -> operator_surfaces::CliChatStartupSummary {
     operator_surfaces::CliChatStartupSummary {
         config_path: "-".to_owned(),
@@ -2329,7 +4470,7 @@ fn session_surface_subtitle(state: &SurfaceState) -> &str {
     state
         .session_title_override
         .as_deref()
-        .unwrap_or("interactive session surface")
+        .unwrap_or("operator cockpit")
 }
 
 fn default_export_path(session_id: &str) -> String {
@@ -2386,8 +4527,17 @@ fn format_transcript_export(entries: &[SurfaceEntry]) -> String {
 
 fn current_overlay_label(state: &SurfaceState) -> &'static str {
     match state.overlay.as_ref() {
+        Some(SurfaceOverlay::Welcome { .. }) => "welcome",
+        Some(SurfaceOverlay::MissionControl { .. }) => "mission",
+        Some(SurfaceOverlay::SessionQueue { .. }) => "session-queue",
+        Some(SurfaceOverlay::SessionDetails { .. }) => "session-detail",
+        Some(SurfaceOverlay::ReviewQueue { .. }) => "review-queue",
+        Some(SurfaceOverlay::ReviewDetails { .. }) => "review-detail",
+        Some(SurfaceOverlay::WorkerQueue { .. }) => "worker-queue",
+        Some(SurfaceOverlay::WorkerDetails { .. }) => "worker-detail",
         Some(SurfaceOverlay::EntryDetails { .. }) => "entry",
         Some(SurfaceOverlay::Timeline) => "timeline",
+        Some(SurfaceOverlay::Help) => "help",
         Some(SurfaceOverlay::ConfirmExit) => "confirm-exit",
         Some(SurfaceOverlay::InputPrompt { kind, .. }) => match kind {
             OverlayInputKind::RenameSession => "rename",
@@ -2521,6 +4671,10 @@ fn slash_command_hint(value: &str) -> Option<String> {
         CLI_CHAT_HELP_COMMAND,
         CLI_CHAT_STATUS_COMMAND,
         CLI_CHAT_HISTORY_COMMAND,
+        CLI_CHAT_SESSIONS_COMMAND,
+        CLI_CHAT_MISSION_COMMAND,
+        CLI_CHAT_REVIEW_COMMAND,
+        CLI_CHAT_WORKERS_COMMAND,
         CLI_CHAT_COMPACT_COMMAND,
         CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND,
     ];
@@ -2639,13 +4793,82 @@ fn align_scroll_offset_to_selected_entry(
 mod tests {
     use super::*;
 
+    fn sample_surface_state() -> SurfaceState {
+        SurfaceState {
+            startup_summary: Some(fallback_startup_summary("default")),
+            active_provider_label: "OpenAI / gpt-5.4".to_owned(),
+            session_title_override: None,
+            last_approval: None,
+            transcript: vec![SurfaceEntry {
+                lines: vec![
+                    "you · prompt".to_owned(),
+                    "Summarize the repository.".to_owned(),
+                ],
+            }],
+            composer: "hi".to_owned(),
+            composer_cursor: 2,
+            history: Vec::new(),
+            history_index: None,
+            scroll_offset: 0,
+            sticky_bottom: true,
+            selected_entry: Some(0),
+            focus: SurfaceFocus::Composer,
+            sidebar_visible: true,
+            sidebar_tab: SidebarTab::Runtime,
+            command_palette: None,
+            overlay: None,
+            live: LiveSurfaceModel::default(),
+            footer_notice: "?: help · : command menu".to_owned(),
+            pending_turn: false,
+        }
+    }
+
+    fn sample_render_data() -> SurfaceRenderData {
+        SurfaceRenderData {
+            header_lines: vec![
+                "LOONG  v0.1.0-alpha.3".to_owned(),
+                "interactive chat".to_owned(),
+            ],
+            header_status_line:
+                "session=default · provider=OpenAI / gpt-5.4 · acp:off · focus=composer".to_owned(),
+            transcript_lines: vec![
+                "▶ you · prompt".to_owned(),
+                "Summarize the repository.".to_owned(),
+                String::new(),
+                "assistant · reply".to_owned(),
+                "Repository mapped.".to_owned(),
+            ],
+            sidebar_visible: true,
+            sidebar_tab: SidebarTab::Runtime,
+            sidebar_lines: vec![
+                "session: default".to_owned(),
+                "config: ~/.loong/config.toml".to_owned(),
+                "memory: ~/.loong/memory.sqlite3".to_owned(),
+            ],
+            composer_lines: vec![
+                "draft · focus=composer".to_owned(),
+                "hi▏".to_owned(),
+                String::new(),
+                "Enter send · ? help · : or / command menu".to_owned(),
+            ],
+            status_line: "?: help · : command menu · Esc clear · PgUp/PgDn transcript · Tab focus"
+                .to_owned(),
+        }
+    }
+
     #[test]
     fn sidebar_tab_cycles_forward_and_backward() {
         assert_eq!(SidebarTab::Session.next(), SidebarTab::Runtime);
         assert_eq!(SidebarTab::Runtime.next(), SidebarTab::Tools);
-        assert_eq!(SidebarTab::Tools.next(), SidebarTab::Help);
+        assert_eq!(SidebarTab::Tools.next(), SidebarTab::Mission);
+        assert_eq!(SidebarTab::Mission.next(), SidebarTab::Workers);
+        assert_eq!(SidebarTab::Workers.next(), SidebarTab::Review);
+        assert_eq!(SidebarTab::Review.next(), SidebarTab::Help);
         assert_eq!(SidebarTab::Help.next(), SidebarTab::Session);
         assert_eq!(SidebarTab::Session.previous(), SidebarTab::Help);
+        assert_eq!(SidebarTab::Workers.previous(), SidebarTab::Mission);
+        assert_eq!(SidebarTab::Review.previous(), SidebarTab::Workers);
+        assert_eq!(SidebarTab::Help.previous(), SidebarTab::Review);
     }
 
     #[test]
@@ -2667,7 +4890,7 @@ mod tests {
         let items = CommandPaletteAction::items();
         assert_eq!(palette.selected, 0);
         assert_eq!(palette.query, "");
-        assert_eq!(items[0].0, "Help");
+        assert_eq!(items[0].0, "/help");
         assert!(items.iter().any(|item| item.0 == "Jump to latest"));
     }
 
@@ -2690,7 +4913,12 @@ mod tests {
     #[test]
     fn slash_command_hint_surfaces_matches() {
         let hint = slash_command_hint("/hi").expect("hint");
+        let mission_hint = slash_command_hint("/mi").expect("mission hint");
+        let sessions_hint = slash_command_hint("/se").expect("sessions hint");
+
         assert!(hint.contains("/history"));
+        assert!(mission_hint.contains("/mission"));
+        assert!(sessions_hint.contains("/sessions"));
         assert!(slash_command_hint("hello").is_none());
     }
 
@@ -2747,6 +4975,8 @@ mod tests {
             .iter()
             .map(|item| item.0)
             .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"Mission control"));
         assert!(labels.contains(&"Jump to latest"));
         assert!(labels.contains(&"Toggle sticky scroll"));
         assert!(labels.contains(&"Timeline"));
@@ -2756,14 +4986,16 @@ mod tests {
     fn filtered_command_palette_items_respects_query() {
         let filtered = filtered_command_palette_items("time");
         assert!(filtered.iter().any(|item| item.0 == "Timeline"));
-        assert!(!filtered.iter().any(|item| item.0 == "Compact"));
+        assert!(!filtered.iter().any(|item| item.0 == "/compact"));
     }
 
     #[test]
     fn current_overlay_label_reports_overlay_kind() {
         let mut state = SurfaceState {
             startup_summary: None,
+            active_provider_label: "provider / model".to_owned(),
             session_title_override: None,
+            last_approval: None,
             transcript: Vec::new(),
             composer: String::new(),
             composer_cursor: 0,
@@ -2782,8 +5014,27 @@ mod tests {
             pending_turn: false,
         };
         assert_eq!(current_overlay_label(&state), "none");
+        state.overlay = Some(SurfaceOverlay::Welcome {
+            screen: TuiScreenSpec {
+                header_style: TuiHeaderStyle::Compact,
+                subtitle: Some("interactive chat".to_owned()),
+                title: Some("operator cockpit ready".to_owned()),
+                progress_line: None,
+                intro_lines: Vec::new(),
+                sections: Vec::new(),
+                choices: Vec::new(),
+                footer_lines: Vec::new(),
+            },
+        });
+        assert_eq!(current_overlay_label(&state), "welcome");
+        state.overlay = Some(SurfaceOverlay::MissionControl {
+            lines: vec!["scope: default".to_owned()],
+        });
+        assert_eq!(current_overlay_label(&state), "mission");
         state.overlay = Some(SurfaceOverlay::Timeline);
         assert_eq!(current_overlay_label(&state), "timeline");
+        state.overlay = Some(SurfaceOverlay::Help);
+        assert_eq!(current_overlay_label(&state), "help");
     }
 
     #[test]
@@ -2829,10 +5080,204 @@ mod tests {
     }
 
     #[test]
+    fn terminal_surface_restore_sequence_resets_terminal_modes_before_exit() {
+        let sequence = terminal_surface_restore_sequence();
+
+        assert!(
+            sequence.contains(BRACKETED_PASTE_DISABLE),
+            "restore sequence should disable bracketed paste: {sequence:?}"
+        );
+        assert!(
+            sequence.contains(CURSOR_KEYS_NORMAL),
+            "restore sequence should restore normal cursor key mode: {sequence:?}"
+        );
+        assert!(
+            sequence.contains(KEYPAD_NORMAL),
+            "restore sequence should restore normal keypad mode: {sequence:?}"
+        );
+        assert!(
+            sequence.contains(ANSI_RESET),
+            "restore sequence should reset terminal styling: {sequence:?}"
+        );
+        assert!(
+            sequence.ends_with(ALT_SCREEN_EXIT),
+            "restore sequence should leave the alternate screen last: {sequence:?}"
+        );
+    }
+
+    #[test]
     fn ensure_parent_directory_exists_ignores_relative_files_without_parent() {
         let path = Path::new("transcript.txt");
         let result = ensure_parent_directory_exists(path);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn render_surface_to_string_draws_ratatui_panels() {
+        let rendered = render_surface_to_string(
+            &sample_surface_state(),
+            &sample_render_data(),
+            Rect::new(0, 0, 120, 32),
+        );
+
+        assert!(rendered.contains("loong / chat"), "{rendered}");
+        assert!(rendered.contains("transcript"), "{rendered}");
+        assert!(rendered.contains("control deck"), "{rendered}");
+        assert!(rendered.contains("compose"), "{rendered}");
+        assert!(rendered.contains("controls"), "{rendered}");
+        assert!(rendered.contains("OpenAI / gpt-5.4"), "{rendered}");
+    }
+
+    #[test]
+    fn render_surface_to_string_renders_command_menu_overlay() {
+        let mut state = sample_surface_state();
+        state.command_palette = Some(CommandPaletteState {
+            selected: 0,
+            query: "help".to_owned(),
+        });
+
+        let rendered =
+            render_surface_to_string(&state, &sample_render_data(), Rect::new(0, 0, 120, 32));
+
+        assert!(rendered.contains("command menu"), "{rendered}");
+        assert!(rendered.contains("/help"), "{rendered}");
+    }
+
+    #[test]
+    fn render_surface_to_string_renders_welcome_overlay() {
+        let mut state = sample_surface_state();
+        state.overlay = Some(SurfaceOverlay::Welcome {
+            screen: TuiScreenSpec {
+                header_style: TuiHeaderStyle::Compact,
+                subtitle: Some("interactive chat".to_owned()),
+                title: Some("operator cockpit ready".to_owned()),
+                progress_line: None,
+                intro_lines: vec!["Start with a first answer.".to_owned()],
+                sections: Vec::new(),
+                choices: Vec::new(),
+                footer_lines: vec!["Type to begin.".to_owned()],
+            },
+        });
+
+        let rendered =
+            render_surface_to_string(&state, &sample_render_data(), Rect::new(0, 0, 120, 32));
+
+        assert!(rendered.contains("welcome"), "{rendered}");
+        assert!(rendered.contains("operator cockpit ready"), "{rendered}");
+        assert!(
+            rendered.contains("Start with a first answer."),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn render_surface_to_string_surfaces_review_tab_context() {
+        let mut state = sample_surface_state();
+        state.sidebar_tab = SidebarTab::Review;
+        state.last_approval = Some(ApprovalSurfaceSummary {
+            title: "tool approval".to_owned(),
+            subtitle: Some("approval pending".to_owned()),
+            request_items: vec!["tool: shell.exec".to_owned()],
+            rationale_lines: vec!["Needs confirmation before continuing.".to_owned()],
+            choice_lines: vec!["1: approve".to_owned(), "2: reject".to_owned()],
+            footer_lines: vec!["Reply with 1 or 2".to_owned()],
+        });
+        let mut render_data = sample_render_data();
+        render_data.sidebar_tab = SidebarTab::Review;
+        render_data.sidebar_lines = vec![
+            "approval: tool approval".to_owned(),
+            "mode: approval pending".to_owned(),
+            "request".to_owned(),
+            "tool: shell.exec".to_owned(),
+            "reason".to_owned(),
+            "Needs confirmation before continuing.".to_owned(),
+        ];
+
+        let rendered = render_surface_to_string(&state, &render_data, Rect::new(0, 0, 120, 32));
+
+        assert!(rendered.contains("approval: tool approval"), "{rendered}");
+        assert!(rendered.contains("tool approval"), "{rendered}");
+        assert!(rendered.contains("Needs confirmation"), "{rendered}");
+    }
+
+    #[test]
+    fn approval_queue_item_summary_formats_list_and_detail_lines() {
+        let item = ApprovalQueueItemSummary {
+            approval_request_id: "apr_123".to_owned(),
+            status: "pending".to_owned(),
+            tool_name: "shell.exec".to_owned(),
+            turn_id: "turn_9".to_owned(),
+            requested_at: 42,
+            reason: Some("governed tool requires approval".to_owned()),
+            rule_id: Some("approval-visible".to_owned()),
+            last_error: Some("still waiting".to_owned()),
+        };
+
+        assert!(item.list_line().contains("apr_123"));
+        let detail = item.detail_lines().join("\n");
+        assert!(detail.contains("approval_request_id=apr_123"));
+        assert!(detail.contains("tool_name=shell.exec"));
+        assert!(detail.contains("rule_id=approval-visible"));
+        assert!(detail.contains("last_error=still waiting"));
+    }
+
+    #[test]
+    fn worker_queue_item_summary_formats_list_and_detail_lines() {
+        let item = WorkerQueueItemSummary {
+            session_id: "child-1".to_owned(),
+            label: "worker: lint".to_owned(),
+            state: "running".to_owned(),
+            kind: "delegate_child".to_owned(),
+            parent_session_id: Some("root-session".to_owned()),
+            turn_count: 3,
+            updated_at: 77,
+            last_error: Some("still working".to_owned()),
+        };
+
+        assert!(item.list_line().contains("worker: lint"));
+        let detail = item.detail_lines().join("\n");
+        assert!(detail.contains("session_id=child-1"));
+        assert!(detail.contains("parent_session_id=root-session"));
+        assert!(detail.contains("turn_count=3"));
+        assert!(detail.contains("last_error=still working"));
+    }
+
+    #[test]
+    fn render_surface_to_string_surfaces_worker_tab_context() {
+        let mut state = sample_surface_state();
+        state.sidebar_tab = SidebarTab::Workers;
+        let mut render_data = sample_render_data();
+        render_data.sidebar_tab = SidebarTab::Workers;
+        render_data.sidebar_lines = vec![
+            "worker sessions: 1".to_owned(),
+            "worker: lint state=running kind=delegate_child turns=3".to_owned(),
+        ];
+
+        let rendered = render_surface_to_string(&state, &render_data, Rect::new(0, 0, 120, 32));
+
+        assert!(rendered.contains("worker sessions: 1"), "{rendered}");
+        assert!(rendered.contains("worker: lint"), "{rendered}");
+        assert!(rendered.contains("delegate_child"), "{rendered}");
+    }
+
+    #[test]
+    fn render_surface_to_string_surfaces_mission_overlay() {
+        let mut state = sample_surface_state();
+        state.overlay = Some(SurfaceOverlay::MissionControl {
+            lines: vec![
+                "scope: default".to_owned(),
+                "lanes: sessions=2 · roots=1 · delegates=1 · approvals=1".to_owned(),
+                "controls".to_owned(),
+                "S sessions · W workers · R approval queue".to_owned(),
+            ],
+        });
+
+        let rendered =
+            render_surface_to_string(&state, &sample_render_data(), Rect::new(0, 0, 120, 32));
+
+        assert!(rendered.contains("mission control"), "{rendered}");
+        assert!(rendered.contains("lanes: sessions=2"), "{rendered}");
+        assert!(rendered.contains("S sessions"), "{rendered}");
     }
 }

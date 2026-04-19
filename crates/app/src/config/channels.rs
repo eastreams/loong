@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
@@ -54,6 +54,7 @@ use signal_impl::{
 
 pub(crate) const TELEGRAM_BOT_TOKEN_ENV: &str = "TELEGRAM_BOT_TOKEN";
 pub(crate) const DISCORD_BOT_TOKEN_ENV: &str = "DISCORD_BOT_TOKEN";
+pub(crate) const DISCORD_APPLICATION_ID_ENV: &str = "DISCORD_APPLICATION_ID";
 pub(crate) const DINGTALK_WEBHOOK_URL_ENV: &str = "DINGTALK_WEBHOOK_URL";
 pub(crate) const DINGTALK_SECRET_ENV: &str = "DINGTALK_SECRET";
 pub(crate) const EMAIL_SMTP_USERNAME_ENV: &str = "EMAIL_SMTP_USERNAME";
@@ -972,6 +973,12 @@ pub struct DiscordAccountConfig {
     #[serde(default)]
     pub bot_token_env: Option<String>,
     #[serde(default)]
+    pub application_id: Option<String>,
+    #[serde(default)]
+    pub application_id_env: Option<String>,
+    #[serde(default)]
+    pub allowed_guild_ids: Option<Vec<String>>,
+    #[serde(default)]
     pub api_base_url: Option<String>,
 }
 
@@ -983,6 +990,9 @@ pub struct ResolvedDiscordChannelConfig {
     pub enabled: bool,
     pub bot_token: Option<SecretRef>,
     pub bot_token_env: Option<String>,
+    pub application_id: Option<String>,
+    pub application_id_env: Option<String>,
+    pub allowed_guild_ids: Vec<String>,
     pub api_base_url: Option<String>,
 }
 
@@ -998,6 +1008,13 @@ impl ResolvedDiscordChannelConfig {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(default_discord_api_base_url)
+    }
+
+    pub fn application_id(&self) -> Option<String> {
+        resolve_string_with_legacy_env(
+            self.application_id.as_deref(),
+            self.application_id_env.as_deref(),
+        )
     }
 }
 
@@ -1537,6 +1554,12 @@ pub struct DiscordChannelConfig {
     pub bot_token: Option<SecretRef>,
     #[serde(default = "default_discord_bot_token_env")]
     pub bot_token_env: Option<String>,
+    #[serde(default)]
+    pub application_id: Option<String>,
+    #[serde(default)]
+    pub application_id_env: Option<String>,
+    #[serde(default)]
+    pub allowed_guild_ids: Vec<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -2331,6 +2354,9 @@ impl Default for DiscordChannelConfig {
             default_account: None,
             bot_token: None,
             bot_token_env: Some(DISCORD_BOT_TOKEN_ENV.to_owned()),
+            application_id: None,
+            application_id_env: None,
+            allowed_guild_ids: Vec::new(),
             api_base_url: None,
             accounts: BTreeMap::new(),
         }
@@ -4041,7 +4067,7 @@ impl EmailChannelConfig {
                 let issue = build_email_invalid_value_issue(
                     "email.from_address",
                     "mailbox parse failed",
-                    "Use a valid RFC 5322 mailbox like `ops@example.com` or `LoongClaw <ops@example.com>`.",
+                    "Use a valid RFC 5322 mailbox like `ops@example.com` or `Loong <ops@example.com>`.",
                 );
                 issues.push(issue);
             }
@@ -4138,7 +4164,7 @@ impl EmailChannelConfig {
                     let issue = build_email_invalid_value_issue(
                         field_path.as_str(),
                         "mailbox parse failed",
-                        "Use a valid RFC 5322 mailbox like `ops@example.com` or `LoongClaw <ops@example.com>`.",
+                        "Use a valid RFC 5322 mailbox like `ops@example.com` or `Loong <ops@example.com>`.",
                     );
                     issues.push(issue);
                 }
@@ -4362,6 +4388,12 @@ impl DiscordChannelConfig {
             self.bot_token_env.as_deref(),
             "discord.bot_token",
         );
+        validate_discord_env_pointer(
+            &mut issues,
+            "discord.application_id_env",
+            self.application_id_env.as_deref(),
+            "discord.application_id",
+        );
         validate_discord_secret_ref_env_pointer(
             &mut issues,
             "discord.bot_token",
@@ -4376,6 +4408,14 @@ impl DiscordChannelConfig {
                 bot_token_env_field_path.as_str(),
                 account.bot_token_env.as_deref(),
                 bot_token_field_path.as_str(),
+            );
+            let application_id_field_path = format!("discord.accounts.{account_id}.application_id");
+            let application_id_env_field_path = format!("{application_id_field_path}_env");
+            validate_discord_env_pointer(
+                &mut issues,
+                application_id_env_field_path.as_str(),
+                account.application_id_env.as_deref(),
+                application_id_field_path.as_str(),
             );
             validate_discord_secret_ref_env_pointer(
                 &mut issues,
@@ -4449,6 +4489,15 @@ impl DiscordChannelConfig {
             bot_token_env: account_override
                 .and_then(|account| account.bot_token_env.clone())
                 .or_else(|| self.bot_token_env.clone()),
+            application_id: account_override
+                .and_then(|account| account.application_id.clone())
+                .or_else(|| self.application_id.clone()),
+            application_id_env: account_override
+                .and_then(|account| account.application_id_env.clone())
+                .or_else(|| self.application_id_env.clone()),
+            allowed_guild_ids: account_override
+                .and_then(|account| account.allowed_guild_ids.clone())
+                .unwrap_or_else(|| self.allowed_guild_ids.clone()),
             api_base_url: account_override
                 .and_then(|account| account.api_base_url.clone())
                 .or_else(|| self.api_base_url.clone()),
@@ -4463,6 +4512,9 @@ impl DiscordChannelConfig {
             enabled: merged.enabled,
             bot_token: merged.bot_token,
             bot_token_env: merged.bot_token_env,
+            application_id: merged.application_id,
+            application_id_env: merged.application_id_env,
+            allowed_guild_ids: merged.allowed_guild_ids,
             api_base_url: merged.api_base_url,
         })
     }
@@ -6987,7 +7039,7 @@ mod tests {
     #[test]
     fn telegram_account_identity_derives_from_bot_token_prefix() {
         let config = TelegramChannelConfig {
-            bot_token: Some(loongclaw_contracts::SecretRef::Inline(
+            bot_token: Some(loong_contracts::SecretRef::Inline(
                 "987654:token-value".to_owned(),
             )),
             bot_token_env: None,
@@ -7016,9 +7068,7 @@ mod tests {
     #[test]
     fn feishu_account_identity_derives_from_domain_and_app_id() {
         let config = FeishuChannelConfig {
-            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                "cli_a1b2c3".to_owned(),
-            )),
+            app_id: Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned())),
             app_id_env: None,
             domain: FeishuDomain::Lark,
             ..FeishuChannelConfig::default()
@@ -7294,6 +7344,54 @@ mod tests {
     }
 
     #[test]
+    fn discord_multi_account_resolution_merges_reserved_runtime_fields() {
+        let config: DiscordChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "account_id": "discord-shared",
+            "application_id": "base-application-id",
+            "allowed_guild_ids": ["guild-base"],
+            "default_account": "Ops",
+            "accounts": {
+                "Ops": {
+                    "account_id": "discord-ops",
+                    "bot_token_env": "DISCORD_OPS_TOKEN",
+                    "application_id_env": "DISCORD_OPS_APPLICATION_ID",
+                    "allowed_guild_ids": ["guild-ops", "guild-backup"]
+                },
+                "Backup": {
+                    "enabled": false,
+                    "bot_token_env": "DISCORD_BACKUP_TOKEN"
+                }
+            }
+        }))
+        .expect("deserialize discord config");
+
+        let ops = config
+            .resolve_account(None)
+            .expect("resolve default discord account");
+        assert_eq!(ops.configured_account_id, "ops");
+        assert_eq!(ops.account.id, "discord-ops");
+        assert_eq!(ops.account.label, "discord-ops");
+        assert_eq!(
+            ops.application_id_env.as_deref(),
+            Some("DISCORD_OPS_APPLICATION_ID")
+        );
+        assert_eq!(ops.allowed_guild_ids, vec!["guild-ops", "guild-backup"]);
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve backup discord account");
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup.account.id, "discord-shared");
+        assert_eq!(
+            backup.application_id.as_deref(),
+            Some("base-application-id")
+        );
+        assert_eq!(backup.allowed_guild_ids, vec!["guild-base"]);
+    }
+
+    #[test]
     fn feishu_multi_account_resolution_allows_websocket_mode_override() {
         let config: FeishuChannelConfig = serde_json::from_value(json!({
             "enabled": true,
@@ -7450,7 +7548,7 @@ mod tests {
     #[test]
     fn wecom_account_identity_derives_from_bot_id() {
         let config = WecomChannelConfig {
-            bot_id: Some(loongclaw_contracts::SecretRef::Inline("bot_123".to_owned())),
+            bot_id: Some(loong_contracts::SecretRef::Inline("bot_123".to_owned())),
             bot_id_env: None,
             ..WecomChannelConfig::default()
         };
@@ -7814,7 +7912,7 @@ mod tests {
             "account_id": "Webhook-Shared",
             "endpoint_url": "https://hooks.example.test/base",
             "auth_token": "base-token",
-            "auth_header_name": "X-LoongClaw-Token",
+            "auth_header_name": "X-Loong-Token",
             "auth_token_prefix": "Token ",
             "payload_format": "json_text",
             "payload_text_field": "message",
@@ -7857,7 +7955,7 @@ mod tests {
         );
         assert_eq!(ops_auth_token.as_deref(), Some("base-token"));
         assert_eq!(ops_signing_secret.as_deref(), Some("base-signing-secret"));
-        assert_eq!(ops.auth_header_name, "X-LoongClaw-Token");
+        assert_eq!(ops.auth_header_name, "X-Loong-Token");
         assert_eq!(ops.auth_token_prefix, "Token ");
         assert_eq!(ops.payload_format, WebhookPayloadFormat::PlainText);
         assert_eq!(ops.payload_text_field, "message");

@@ -181,6 +181,7 @@ impl ChannelInboundAccessPolicy<String> {
             && self.allowed_senders_allow_str(sender_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn allows_conversation_str(&self, conversation_id: &str) -> bool {
         let conversation_id = conversation_id.trim();
         if conversation_id.is_empty() {

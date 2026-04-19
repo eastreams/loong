@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 #[cfg(test)]
 use tool_search::searchable_entry_from_provider_definition;
@@ -57,7 +57,7 @@ mod provider_switch;
 mod required_capabilities_tests;
 pub mod runtime_config;
 pub(crate) mod runtime_events;
-mod session;
+pub(crate) mod session;
 #[cfg(feature = "memory-sqlite")]
 mod session_search;
 mod shell;
@@ -117,7 +117,7 @@ pub(crate) use tool_lease::{
 pub use web_http::build_ssrf_safe_client;
 
 pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loong_browser_scope";
-pub(crate) const LEGACY_BROWSER_SESSION_SCOPE_FIELD: &str = "__loongclaw_browser_scope";
+pub(crate) const LEGACY_BROWSER_SESSION_SCOPE_FIELD: &str = "__loong_browser_scope";
 pub const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str =
     bundled_skills::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_COMMAND;
@@ -137,21 +137,10 @@ const WEB_FETCH_TOOL_NAME: &str = "web.fetch";
 const WEB_SEARCH_TOOL_NAME: &str = "web.search";
 
 pub(crate) const LOONG_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loong";
-pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
-pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
-pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
-pub(crate) const LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
-pub(crate) const LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY: &str = "workspace_root";
-#[allow(dead_code)]
-pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_KEY: &str = LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY;
-#[allow(dead_code)]
-pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str =
-    LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY;
-#[allow(dead_code)]
-pub(crate) const LOONG_INTERNAL_RUNTIME_NARROWING_KEY: &str =
-    LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY;
-#[allow(dead_code)]
-pub(crate) const LOONG_INTERNAL_WORKSPACE_ROOT_KEY: &str = LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY;
+pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
+pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
+pub(crate) const LOONG_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
+pub(crate) const LOONG_INTERNAL_WORKSPACE_ROOT_KEY: &str = "workspace_root";
 
 pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
     external_skills::normalize_domain_rule(raw)
@@ -254,8 +243,6 @@ fn reserved_internal_tool_context_key_in_map(
 ) -> Option<&'static str> {
     if body.contains_key(LOONG_INTERNAL_TOOL_CONTEXT_KEY) {
         Some(LOONG_INTERNAL_TOOL_CONTEXT_KEY)
-    } else if body.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
-        Some(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
     } else {
         None
     }
@@ -274,7 +261,7 @@ pub(crate) fn take_trusted_internal_tool_context(
 ) -> serde_json::Map<String, Value> {
     for key in [
         LOONG_INTERNAL_TOOL_CONTEXT_KEY,
-        LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY,
+        LOONG_INTERNAL_TOOL_CONTEXT_KEY,
     ] {
         let Some(value) = body.remove(key) else {
             continue;
@@ -330,7 +317,7 @@ pub(crate) async fn execute_kernel_tool_request(
     ctx: &KernelContext,
     request: ToolCoreRequest,
     trusted_internal_payload: bool,
-) -> Result<ToolCoreOutcome, loongclaw_kernel::KernelError> {
+) -> Result<ToolCoreOutcome, loong_kernel::KernelError> {
     let caps = required_capabilities_for_request(&request);
     if trusted_internal_payload {
         return with_trusted_internal_tool_payload_async(async move {
@@ -480,7 +467,7 @@ pub(crate) async fn continue_session_with_runtime<
     current_session_id: &str,
     memory_config: &MemoryRuntimeConfig,
     tool_config: &ToolConfig,
-    app_config: &crate::config::LoongClawConfig,
+    app_config: &crate::config::LoongConfig,
     runtime: &R,
     binding: crate::conversation::ConversationRuntimeBinding<'_>,
 ) -> Result<ToolCoreOutcome, String> {
@@ -690,12 +677,6 @@ pub fn runtime_tool_view_from_loong_config(config: &crate::config::LoongConfig) 
     runtime_tool_view_with_runtime_config(&config.tools, &runtime_config)
 }
 
-pub fn runtime_tool_view_from_loongclaw_config(
-    config: &crate::config::LoongClawConfig,
-) -> ToolView {
-    runtime_tool_view_from_loong_config(config)
-}
-
 pub(crate) fn runtime_tool_view_with_runtime_config(
     _tool_config: &crate::config::ToolConfig,
     runtime_config: &runtime_config::ToolRuntimeConfig,
@@ -765,8 +746,8 @@ pub fn execute_tool_core_with_config(
         effective_config = effective_config.narrowed(&runtime_narrowing);
     }
     let config = &effective_config;
-    let debug_log_enabled = tracing::enabled!(target: "loongclaw.tools", tracing::Level::DEBUG);
-    let warn_log_enabled = tracing::enabled!(target: "loongclaw.tools", tracing::Level::WARN);
+    let debug_log_enabled = tracing::enabled!(target: "loong.tools", tracing::Level::DEBUG);
+    let warn_log_enabled = tracing::enabled!(target: "loong.tools", tracing::Level::WARN);
     let should_log_payload_metadata = debug_log_enabled || warn_log_enabled;
     let mut payload_kind = "-";
     let mut payload_keys = Vec::new();
@@ -803,7 +784,7 @@ pub fn execute_tool_core_with_config(
         Ok(outcome) => {
             if debug_log_enabled {
                 tracing::debug!(
-                    target: "loongclaw.tools",
+                    target: "loong.tools",
                     requested_tool_name = %requested_tool_name,
                     canonical_tool_name = %canonical_name,
                     inner_tool_name = %inner_tool_name,
@@ -819,7 +800,7 @@ pub fn execute_tool_core_with_config(
             if is_expected_tool_request_error(error) {
                 if debug_log_enabled {
                     tracing::debug!(
-                        target: "loongclaw.tools",
+                        target: "loong.tools",
                         requested_tool_name = %requested_tool_name,
                         canonical_tool_name = %canonical_name,
                         inner_tool_name = %inner_tool_name,
@@ -830,20 +811,18 @@ pub fn execute_tool_core_with_config(
                         "tool execution rejected"
                     );
                 }
-            } else {
-                if warn_log_enabled {
-                    tracing::warn!(
-                        target: "loongclaw.tools",
-                        requested_tool_name = %requested_tool_name,
-                        canonical_tool_name = %canonical_name,
-                        inner_tool_name = %inner_tool_name,
-                        payload_kind,
-                        payload_keys = ?payload_keys,
-                        duration_ms,
-                        error = %crate::observability::summarize_error(error),
-                        "tool execution failed"
-                    );
-                }
+            } else if warn_log_enabled {
+                tracing::warn!(
+                    target: "loong.tools",
+                    requested_tool_name = %requested_tool_name,
+                    canonical_tool_name = %canonical_name,
+                    inner_tool_name = %inner_tool_name,
+                    payload_kind,
+                    payload_keys = ?payload_keys,
+                    duration_ms,
+                    error = %crate::observability::summarize_error(error),
+                    "tool execution failed"
+                );
             }
         }
     }
@@ -875,7 +854,7 @@ fn trusted_runtime_narrowing_from_payload(
     }
 
     let Some(value) = trusted_internal_tool_context_from_payload(payload)
-        .and_then(|body| body.get(LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY))
+        .and_then(|body| body.get(LOONG_INTERNAL_RUNTIME_NARROWING_KEY))
         .cloned()
     else {
         return Ok(None);
@@ -892,7 +871,7 @@ fn trusted_workspace_root_from_payload(payload: &Value) -> Result<Option<PathBuf
     }
 
     let Some(value) = trusted_internal_tool_context_from_payload(payload)
-        .and_then(|body| body.get(LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY))
+        .and_then(|body| body.get(LOONG_INTERNAL_WORKSPACE_ROOT_KEY))
         .cloned()
     else {
         return Ok(None);
@@ -1319,7 +1298,7 @@ fn runtime_discoverable_tool_entries(
     let visible_tool_view = match visible_tool_view {
         Some(injected) => {
             // Intersect the injected view with the runtime-visible surface so that
-            // trusted _loongclaw.tool_search.visible_tool_ids cannot re-expose
+            // trusted _loong.tool_search.visible_tool_ids cannot re-expose
             // tools disabled by runtime config (browser.*, session_*, etc.).
             intersected_view = injected.intersect(&runtime_view);
             &intersected_view
@@ -1363,7 +1342,7 @@ fn tool_function_name(tool: &Value) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongClawHome, unique_temp_dir};
+    use crate::test_support::{ScopedEnv, ScopedLoongHome, unique_temp_dir};
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use std::ops::{Deref, DerefMut};
@@ -1372,7 +1351,7 @@ mod tests {
 
     struct ToolTestRuntimeConfig {
         config: runtime_config::ToolRuntimeConfig,
-        _runtime_home: ScopedLoongClawHome,
+        _runtime_home: ScopedLoongHome,
     }
 
     impl Deref for ToolTestRuntimeConfig {
@@ -1396,7 +1375,7 @@ mod tests {
     }
 
     fn test_tool_runtime_config(root: impl AsRef<Path>) -> ToolTestRuntimeConfig {
-        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-home");
+        let runtime_home = ScopedLoongHome::new("loong-tool-runtime-home");
         let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
             file_root: Some(root.as_ref().to_path_buf()),
@@ -1513,7 +1492,7 @@ mod tests {
             "invalid_tool_lease: malformed lease"
         ));
         assert!(super::is_expected_tool_request_error(
-            "tool `tool.invoke` payload._loongclaw is reserved for trusted internal tool context; retry without that field"
+            "tool `tool.invoke` payload._loong is reserved for trusted internal tool context; retry without that field"
         ));
     }
 
@@ -1652,7 +1631,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-capability-snapshot-skills");
+        let root = unique_temp_dir("loong-tool-capability-snapshot-skills");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(
             &root,
@@ -2326,7 +2305,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn runtime_tool_view_hides_memory_tools_when_memory_corpus_is_empty() {
-        let root = unique_tool_temp_dir("loongclaw-memory-tool-view-empty");
+        let root = unique_tool_temp_dir("loong-memory-tool-view-empty");
 
         std::fs::create_dir_all(&root).expect("create root dir");
 
@@ -2340,7 +2319,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn runtime_tool_view_includes_memory_tools_when_memory_corpus_exists() {
-        let root = unique_tool_temp_dir("loongclaw-memory-tool-view-visible");
+        let root = unique_tool_temp_dir("loong-memory-tool-view-visible");
         let memory_path = root.join("MEMORY.md");
 
         std::fs::create_dir_all(&root).expect("create root dir");
@@ -2367,7 +2346,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be after epoch")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("loongclaw-tool-search-{nanos}"));
+        let root = std::env::temp_dir().join(format!("loong-tool-search-{nanos}"));
         fs::create_dir_all(&root).expect("create fixture root");
         fs::write(root.join("README.md"), "hello tool search").expect("write fixture");
 
@@ -2404,7 +2383,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_surfaces_memory_tools_when_memory_corpus_is_available() {
-        let root = unique_tool_temp_dir("loongclaw-memory-tool-search");
+        let root = unique_tool_temp_dir("loong-memory-tool-search");
         let memory_dir = root.join("memory");
 
         std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -2442,7 +2421,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_hides_memory_tools_when_memory_corpus_is_empty() {
-        let root = unique_tool_temp_dir("loongclaw-memory-tool-search-empty");
+        let root = unique_tool_temp_dir("loong-memory-tool-search-empty");
 
         std::fs::create_dir_all(&root).expect("create root dir");
 
@@ -2472,7 +2451,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_search_tool_returns_structured_hits_from_workspace_memory_files() {
-        let root = unique_tool_temp_dir("loongclaw-memory-search");
+        let root = unique_tool_temp_dir("loong-memory-search");
         let memory_dir = root.join("memory");
 
         std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -2549,7 +2528,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_get_tool_returns_bounded_line_window_from_memory_file() {
-        let root = unique_tool_temp_dir("loongclaw-memory-get");
+        let root = unique_tool_temp_dir("loong-memory-get");
         let memory_path = root.join("MEMORY.md");
 
         std::fs::create_dir_all(&root).expect("create root dir");
@@ -2594,7 +2573,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_get_tool_uses_selected_memory_system_id_in_provenance() {
-        let root = unique_tool_temp_dir("loongclaw-memory-get-selected-system");
+        let root = unique_tool_temp_dir("loong-memory-get-selected-system");
         let memory_path = root.join("MEMORY.md");
 
         std::fs::create_dir_all(&root).expect("create root dir");
@@ -2625,7 +2604,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_get_tool_reads_requested_window_without_loading_invalid_tail() {
-        let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-tail");
+        let root = unique_tool_temp_dir("loong-memory-get-invalid-tail");
         let memory_path = root.join("MEMORY.md");
         let mut bytes = b"line one\nline two\n".to_vec();
 
@@ -2658,7 +2637,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_search_tool_rejects_invalid_max_results_values() {
-        let root = unique_tool_temp_dir("loongclaw-memory-search-invalid-max-results");
+        let root = unique_tool_temp_dir("loong-memory-search-invalid-max-results");
 
         std::fs::create_dir_all(&root).expect("create root dir");
         std::fs::write(root.join("MEMORY.md"), "deploy freeze window\n").expect("write memory");
@@ -2694,7 +2673,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_get_tool_rejects_invalid_window_arguments() {
-        let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-window");
+        let root = unique_tool_temp_dir("loong-memory-get-invalid-window");
 
         std::fs::create_dir_all(&root).expect("create root dir");
         std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
@@ -2730,7 +2709,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_get_tool_hides_non_corpus_file_existence() {
-        let root = unique_tool_temp_dir("loongclaw-memory-get-corpus-boundary");
+        let root = unique_tool_temp_dir("loong-memory-get-corpus-boundary");
 
         std::fs::create_dir_all(&root).expect("create root dir");
         std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
@@ -2774,7 +2753,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_result_includes_search_hint_and_schema_preview() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-card-metadata");
+        let root = unique_tool_temp_dir("loong-tool-search-card-metadata");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -2805,7 +2784,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_accepts_keywords_array_payloads() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-array");
+        let root = unique_tool_temp_dir("loong-tool-search-keywords-array");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -2833,7 +2812,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-webfetch"))]
     #[test]
     fn tool_search_uses_schema_derived_terms_for_web_fetch_modes() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-schema-derived");
+        let root = unique_tool_temp_dir("loong-tool-search-schema-derived");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -2861,7 +2840,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
     #[test]
     fn tool_search_matches_multilingual_queries_across_languages() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-multilingual");
+        let root = unique_tool_temp_dir("loong-tool-search-multilingual");
         let memory_dir = root.join("memory");
 
         std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -2918,7 +2897,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-missing-query");
+        let root = unique_tool_temp_dir("loong-tool-search-missing-query");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -2956,7 +2935,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_prefers_file_write_for_write_queries() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-write-query");
+        let root = unique_tool_temp_dir("loong-tool-search-write-query");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -2985,7 +2964,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_accepts_keywords_array_queries() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-query");
+        let root = unique_tool_temp_dir("loong-tool-search-keywords-query");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -3035,7 +3014,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_search_returns_coarse_fallback_for_zero_match_queries() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-coarse-fallback");
+        let root = unique_tool_temp_dir("loong-tool-search-coarse-fallback");
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -3072,7 +3051,7 @@ mod tests {
     #[test]
     fn browser_companion_tool_search_returns_runtime_ready_companion_entries() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-browser-companion-{}",
+            "loong-tool-search-browser-companion-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3135,7 +3114,7 @@ mod tests {
     #[test]
     fn browser_companion_protocol_start_issues_managed_session_id_and_records_request() {
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
-        let root = unique_tool_temp_dir("loongclaw-browser-companion-start");
+        let root = unique_tool_temp_dir("loong-browser-companion-start");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -3168,7 +3147,7 @@ mod tests {
             .expect("session id should be text");
         assert!(
             session_id.starts_with("browser-companion-"),
-            "session id should be issued by LoongClaw: {session_id}"
+            "session id should be issued by Loong: {session_id}"
         );
         assert_eq!(outcome.payload["result"]["page_url"], "https://example.com");
 
@@ -3188,7 +3167,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_protocol_rejects_unknown_session_for_read_tools() {
-        let root = unique_tool_temp_dir("loongclaw-browser-companion-unknown-session");
+        let root = unique_tool_temp_dir("loong-browser-companion-unknown-session");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -3223,7 +3202,7 @@ mod tests {
     #[test]
     fn browser_companion_protocol_surfaces_invalid_json_from_command() {
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
-        let root = unique_tool_temp_dir("loongclaw-browser-companion-invalid-json");
+        let root = unique_tool_temp_dir("loong-browser-companion-invalid-json");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -3256,7 +3235,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_protocol_times_out_stalled_command() {
-        let root = unique_tool_temp_dir("loongclaw-browser-companion-timeout");
+        let root = unique_tool_temp_dir("loong-browser-companion-timeout");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let script_path =
             write_browser_companion_sleep_script(&root, "browser-companion-timeout", 2);
@@ -3283,7 +3262,7 @@ mod tests {
     #[test]
     fn browser_companion_app_tool_click_uses_current_session_scope() {
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
-        let root = unique_tool_temp_dir("loongclaw-browser-companion-app-click");
+        let root = unique_tool_temp_dir("loong-browser-companion-app-click");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -3311,7 +3290,7 @@ mod tests {
             .to_owned();
 
         let mut env = ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
 
         let mut tool_config = crate::config::ToolConfig::default();
         tool_config.browser_companion.enabled = true;
@@ -3370,7 +3349,7 @@ mod tests {
     #[test]
     fn tool_search_respects_visible_tool_ids_from_runtime_context() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-visible-filter-{}",
+            "loong-tool-search-visible-filter-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3381,7 +3360,7 @@ mod tests {
                 tool_name: "tool.search".to_owned(),
                 payload: json!({
                     "query": "session history status",
-                    "_loongclaw": {
+                    "_loong": {
                         "tool_search": {
                             "visible_tool_ids": ["tool.search", "tool.invoke", "file.read"],
                         }
@@ -3429,7 +3408,7 @@ mod tests {
     #[test]
     fn tool_search_rejects_forged_visible_tool_ids_from_untrusted_payload() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-visible-forged-{}",
+            "loong-tool-search-visible-forged-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3440,7 +3419,7 @@ mod tests {
                 tool_name: "tool.search".to_owned(),
                 payload: json!({
                     "query": "session history status",
-                    "_loongclaw": {
+                    "_loong": {
                         "tool_search": {
                             "visible_tool_ids": ["tool.search", "tool.invoke", "file.read"],
                         }
@@ -3452,7 +3431,7 @@ mod tests {
         .expect_err("untrusted tool search should reject reserved internal visibility context");
 
         assert!(
-            error.contains("payload._loongclaw is reserved for trusted internal tool context"),
+            error.contains("payload._loong is reserved for trusted internal tool context"),
             "error={error}"
         );
 
@@ -3463,7 +3442,7 @@ mod tests {
     #[test]
     fn web_fetch_respects_runtime_narrowing_from_trusted_internal_payload() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-web-fetch-runtime-narrowing-{}",
+            "loong-web-fetch-runtime-narrowing-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3475,7 +3454,7 @@ mod tests {
                 tool_name: "web.fetch".to_owned(),
                 payload: json!({
                     "url": "https://example.com/docs",
-                    "_loongclaw": {
+                    "_loong": {
                         "runtime_narrowing": {
                             "web_fetch": {
                                 "allowed_domains": ["docs.example.com"],
@@ -3499,7 +3478,7 @@ mod tests {
     #[test]
     fn web_fetch_denies_disjoint_allowlists_when_runtime_narrowing_intersection_is_empty() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-web-fetch-runtime-narrowing-disjoint-{}",
+            "loong-web-fetch-runtime-narrowing-disjoint-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3514,7 +3493,7 @@ mod tests {
                 tool_name: "web.fetch".to_owned(),
                 payload: json!({
                     "url": "https://api.example.com/docs",
-                    "_loongclaw": {
+                    "_loong": {
                         "runtime_narrowing": {
                             "web_fetch": {
                                 "allowed_domains": ["docs.example.com"]
@@ -3539,7 +3518,7 @@ mod tests {
     #[test]
     fn web_fetch_fail_closes_malformed_trusted_runtime_narrowing() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-web-fetch-runtime-narrowing-malformed-{}",
+            "loong-web-fetch-runtime-narrowing-malformed-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3550,7 +3529,7 @@ mod tests {
                 tool_name: "web.fetch".to_owned(),
                 payload: json!({
                     "url": "https://outside.invalid/docs",
-                    "_loongclaw": {
+                    "_loong": {
                         "runtime_narrowing": "not-an-object"
                     }
                 }),
@@ -3571,7 +3550,7 @@ mod tests {
     #[test]
     fn web_fetch_rejects_forged_runtime_narrowing_from_untrusted_payload() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-web-fetch-runtime-narrowing-forged-{}",
+            "loong-web-fetch-runtime-narrowing-forged-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3582,7 +3561,7 @@ mod tests {
                 tool_name: "web.fetch".to_owned(),
                 payload: json!({
                     "url": "https://example.com/docs",
-                    "_loongclaw": {
+                    "_loong": {
                         "runtime_narrowing": {
                             "web_fetch": {
                                 "allowed_domains": ["docs.example.com"]
@@ -3596,7 +3575,7 @@ mod tests {
         .expect_err("untrusted runtime narrowing should be rejected");
 
         assert!(
-            error.contains("payload._loongclaw is reserved for trusted internal tool context"),
+            error.contains("payload._loong is reserved for trusted internal tool context"),
             "error={error}"
         );
 
@@ -3610,12 +3589,8 @@ mod tests {
         config.feishu = Some(runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
                 enabled: true,
-                app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                    "cli_a1b2c3".to_owned(),
-                )),
-                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
-                    "app-secret".to_owned(),
-                )),
+                app_id: Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned())),
+                app_secret: Some(loong_contracts::SecretRef::Inline("app-secret".to_owned())),
                 ..crate::config::FeishuChannelConfig::default()
             },
             integration: crate::config::FeishuIntegrationConfig::default(),
@@ -3728,7 +3703,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be after epoch")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("loongclaw-tool-invoke-{nanos}"));
+        let root = std::env::temp_dir().join(format!("loong-tool-invoke-{nanos}"));
         fs::create_dir_all(&root).expect("create fixture root");
         fs::write(root.join("README.md"), "tool invoke fixture").expect("write fixture");
 
@@ -3779,7 +3754,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn discovered_tool_lease_uses_current_catalog_digest() {
-        let root = unique_tool_temp_dir("loongclaw-tool-lease-digest");
+        let root = unique_tool_temp_dir("loong-tool-lease-digest");
         let config = test_tool_runtime_config(root.clone());
         let search = execute_tool_core_with_config(
             ToolCoreRequest {
@@ -3815,10 +3790,8 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_invoke_rejects_tampered_or_missing_leases() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-invoke-invalid-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("loong-tool-invoke-invalid-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -3844,10 +3817,8 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn tool_invoke_rejects_leases_replayed_in_another_turn() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-invoke-replay-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("loong-tool-invoke-replay-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -3896,7 +3867,7 @@ mod tests {
     #[test]
     fn tool_invoke_preserves_trusted_runtime_narrowing_for_inner_execution() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-invoke-runtime-narrowing-{}",
+            "loong-tool-invoke-runtime-narrowing-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
@@ -3917,9 +3888,9 @@ mod tests {
         );
         let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
         payload_object.insert(
-            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            LOONG_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
             json!({
-                LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: {
+                LOONG_INTERNAL_RUNTIME_NARROWING_KEY: {
                     "web_fetch": {
                         "allowed_domains": ["docs.example.com"]
                     }
@@ -3942,7 +3913,7 @@ mod tests {
     #[test]
     fn tool_invoke_rejects_forged_reserved_internal_context_inside_arguments() {
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-invoke-inner-context-forged-{}",
+            "loong-tool-invoke-inner-context-forged-{}",
             std::process::id()
         ));
         let fixture_path = root.join("README.md");
@@ -3965,10 +3936,10 @@ mod tests {
             .and_then(Value::as_object_mut)
             .expect("tool.invoke arguments object");
         arguments.insert(
-            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            LOONG_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
             json!({
-                LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: {
-                    LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: ["file.read"]
+                LOONG_INTERNAL_TOOL_SEARCH_KEY: {
+                    LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: ["file.read"]
                 }
             }),
         );
@@ -3977,9 +3948,8 @@ mod tests {
             .expect_err("untrusted tool.invoke should reject forged inner reserved context");
 
         assert!(
-            error.contains(
-                "payload.arguments._loongclaw is reserved for trusted internal tool context"
-            ),
+            error
+                .contains("payload.arguments._loong is reserved for trusted internal tool context"),
             "error={error}"
         );
 
@@ -3993,7 +3963,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock should be after epoch");
         let nanos = duration.as_nanos();
-        let root = std::env::temp_dir().join(format!("loongclaw-tool-search-cap-filter-{nanos}"));
+        let root = std::env::temp_dir().join(format!("loong-tool-search-cap-filter-{nanos}"));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -4032,8 +4002,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock should be after epoch");
         let nanos = duration.as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("loongclaw-tool-search-bash-cap-filter-{nanos}"));
+        let root = std::env::temp_dir().join(format!("loong-tool-search-bash-cap-filter-{nanos}"));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let mut config = test_tool_runtime_config(root.clone());
@@ -4137,12 +4106,8 @@ mod tests {
         config.feishu = Some(runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
                 enabled: true,
-                app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                    "cli_a1b2c3".to_owned(),
-                )),
-                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
-                    "app-secret".to_owned(),
-                )),
+                app_id: Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned())),
+                app_secret: Some(loong_contracts::SecretRef::Inline("app-secret".to_owned())),
                 ..crate::config::FeishuChannelConfig::default()
             },
             integration: crate::config::FeishuIntegrationConfig::default(),
@@ -4174,12 +4139,8 @@ mod tests {
         config.feishu = Some(runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
                 enabled: true,
-                app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                    "cli_a1b2c3".to_owned(),
-                )),
-                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
-                    "app-secret".to_owned(),
-                )),
+                app_id: Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned())),
+                app_secret: Some(loong_contracts::SecretRef::Inline("app-secret".to_owned())),
                 ..crate::config::FeishuChannelConfig::default()
             },
             integration: crate::config::FeishuIntegrationConfig::default(),
@@ -4229,7 +4190,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
     #[test]
     fn tool_search_creates_tool_lease_secret_under_scoped_runtime_home() {
-        let root = unique_tool_temp_dir("loongclaw-tool-search-home-override");
+        let root = unique_tool_temp_dir("loong-tool-search-home-override");
         let memory_dir = root.join("memory");
 
         std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -4915,7 +4876,7 @@ mod tests {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         std::env::temp_dir().join(format!(
-            "loongclaw-tool-feishu-{label}-{}",
+            "loong-tool-feishu-{label}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -4987,12 +4948,8 @@ mod tests {
                 channel: crate::config::FeishuChannelConfig {
                     enabled: true,
                     account_id: Some("feishu_main".to_owned()),
-                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                        "cli_a1b2c3".to_owned(),
-                    )),
-                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
-                        "app-secret".to_owned(),
-                    )),
+                    app_id: Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned())),
+                    app_secret: Some(loong_contracts::SecretRef::Inline("app-secret".to_owned())),
                     base_url: Some(base_url),
                     ..crate::config::FeishuChannelConfig::default()
                 },
@@ -5061,7 +5018,7 @@ mod tests {
 
         fn unique_temp_dir(label: &str) -> std::path::PathBuf {
             std::env::temp_dir().join(format!(
-                "loongclaw-tool-feishu-{label}-{}",
+                "loong-tool-feishu-{label}-{}",
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("clock")
@@ -5130,12 +5087,8 @@ mod tests {
                 channel: crate::config::FeishuChannelConfig {
                     enabled: true,
                     account_id: Some("feishu_main".to_owned()),
-                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                        "cli_a1b2c3".to_owned(),
-                    )),
-                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
-                        "app-secret".to_owned(),
-                    )),
+                    app_id: Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned())),
+                    app_secret: Some(loong_contracts::SecretRef::Inline("app-secret".to_owned())),
                     base_url: Some(base_url),
                     ..crate::config::FeishuChannelConfig::default()
                 },
@@ -5148,7 +5101,7 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.read".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnDemo"
@@ -5279,7 +5232,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.create".to_owned(),
                 payload: serde_json::json!({
                     "title": "Release Plan",
@@ -5478,7 +5431,7 @@ mod tests {
         config.file_root = Some(file_root.clone());
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.create".to_owned(),
                 payload: serde_json::json!({
                     "title": "Release Plan",
@@ -5533,7 +5486,7 @@ mod tests {
         config.file_root = Some(file_root);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.create".to_owned(),
                 payload: serde_json::json!({
                     "title": "Release Plan",
@@ -5568,7 +5521,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.create".to_owned(),
                 payload: serde_json::json!({
                     "title": "Release Plan"
@@ -5663,7 +5616,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -5827,7 +5780,7 @@ mod tests {
         config.file_root = Some(file_root.clone());
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -5939,7 +5892,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -6100,7 +6053,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -6321,7 +6274,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -6559,7 +6512,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -6729,7 +6682,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -6897,7 +6850,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -6952,7 +6905,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.doc.append".to_owned(),
                 payload: serde_json::json!({
                     "url": "https://open.feishu.cn/docx/doxcnExisting",
@@ -7038,7 +6991,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.history".to_owned(),
                 payload: serde_json::json!({
                     "container_id_type": "chat",
@@ -7155,10 +7108,10 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_work".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-work".to_owned(),
                                 )),
                                 base_url: Some(base_url),
@@ -7169,10 +7122,10 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_alerts".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-alerts".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -7191,11 +7144,11 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.history".to_owned(),
                 payload: serde_json::json!({
                     "page_size": 20,
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -7305,7 +7258,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.get".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_789"
@@ -7409,10 +7362,10 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_work".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-work".to_owned(),
                                 )),
                                 base_url: Some(base_url),
@@ -7423,10 +7376,10 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_alerts".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-alerts".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -7445,10 +7398,10 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.get".to_owned(),
                 payload: serde_json::json!({
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -7560,7 +7513,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.get".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_legacy"
@@ -7664,7 +7617,7 @@ mod tests {
         config.file_root = Some(file_root.clone());
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_resource_123",
@@ -7798,10 +7751,10 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_work".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-work".to_owned(),
                                 )),
                                 base_url: Some(base_url),
@@ -7812,10 +7765,10 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_alerts".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-alerts".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -7834,11 +7787,11 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "save_as": "artifacts/images/incoming.png",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -7989,10 +7942,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some(base_url),
@@ -8011,12 +7962,12 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "type": "audio",
                     "save_as": "artifacts/audio/voice.ogg",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8166,10 +8117,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some(base_url),
@@ -8187,12 +8136,12 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "type": "image",
                     "save_as": "artifacts/media/preview.png",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8340,10 +8289,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some(base_url),
@@ -8361,12 +8308,12 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "file_key": "img_post_456",
                     "save_as": "artifacts/post/image.jpg",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8457,10 +8404,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -8478,12 +8423,12 @@ mod tests {
         };
 
         let error = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "type": "image",
                     "save_as": "artifacts/post/ambiguous.jpg",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8557,10 +8502,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -8578,13 +8521,13 @@ mod tests {
         };
 
         let error = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_other_message",
                     "type": "image",
                     "save_as": "artifacts/post/override.jpg",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8654,10 +8597,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -8675,13 +8616,13 @@ mod tests {
         };
 
         let error = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "file_key": "img_post_111",
                     "type": "file",
                     "save_as": "artifacts/post/conflict.bin",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8747,10 +8688,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -8768,11 +8707,11 @@ mod tests {
         };
 
         let error = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "save_as": "artifacts/images/ambiguous.png",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8844,10 +8783,8 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                                "cli_work".to_owned(),
-                            )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-work".to_owned(),
                             )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -8865,13 +8802,13 @@ mod tests {
         };
 
         let error = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_ingress_resource",
                     "file_key": "img_other_999",
                     "save_as": "artifacts/images/conflict.png",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -8925,7 +8862,7 @@ mod tests {
         config.file_root = Some(file_root);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.resource.get".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_resource_escape",
@@ -9038,7 +8975,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.whoami".to_owned(),
                 payload: serde_json::json!({}),
             },
@@ -9132,10 +9069,10 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_secondary".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline(
                                 "cli_secondary".to_owned(),
                             )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-secondary".to_owned(),
                             )),
                             base_url: Some(base_url),
@@ -9219,10 +9156,10 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_secondary".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline(
                                 "cli_secondary".to_owned(),
                             )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-secondary".to_owned(),
                             )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -9454,7 +9391,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.search".to_owned(),
                 payload: serde_json::json!({
                     "query": "incident",
@@ -9541,7 +9478,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.bitable.list".to_owned(),
                 payload: serde_json::json!({
                     "app_token": "app_demo",
@@ -9629,10 +9566,10 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_work".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-work".to_owned(),
                                 )),
                                 base_url: Some(base_url),
@@ -9643,10 +9580,10 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_alerts".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-alerts".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -9665,11 +9602,11 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.search".to_owned(),
                 payload: serde_json::json!({
                     "query": "incident",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -9770,7 +9707,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -9806,6 +9743,107 @@ mod tests {
         assert!(requests[1].body.contains("\"receive_id\":\"oc_demo\""));
         assert!(requests[1].body.contains("\"msg_type\":\"text\""));
         assert!(requests[1].body.contains("\\\"text\\\":\\\"ship it\\\""));
+
+        server.abort();
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn feishu_messages_send_tool_uses_tenant_token_and_card_mode() {
+        use std::fs;
+
+        use axum::{
+            Json, Router,
+            extract::{Request, State},
+            routing::post,
+        };
+
+        let temp_dir = unique_feishu_tool_temp_dir("messages-send-card");
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let requests =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<FeishuToolMockRequest>::new()));
+        let state = FeishuToolMockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                post({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "tenant_access_token": "t-token-send-card"
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/im/v1/messages",
+                post({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "data": {
+                                    "message_id": "om_sent_card_1",
+                                    "root_id": "om_sent_card_1"
+                                }
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, server) = spawn_feishu_tool_mock_server(router).await;
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-send-card",
+            &["offline_access", "im:message:send_as_bot"],
+        );
+        let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
+
+        let outcome = execute_tool_core_with_config(
+            loong_contracts::ToolCoreRequest {
+                tool_name: "feishu.messages.send".to_owned(),
+                payload: serde_json::json!({
+                    "receive_id": "oc_demo",
+                    "text": "ship it",
+                    "as_card": true
+                }),
+            },
+            &config,
+        )
+        .expect("feishu messages send tool should succeed in card mode");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["delivery"]["message_id"], "om_sent_card_1");
+        assert_eq!(outcome.payload["delivery"]["mode"], "send");
+        assert_eq!(outcome.payload["delivery"]["msg_type"], "interactive");
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].path, "/open-apis/im/v1/messages");
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer t-token-send-card")
+        );
+        let request_body = requests[1].body.as_str();
+        assert!(request_body.contains("\"msg_type\":\"interactive\""));
+        assert!(request_body.contains("\\\"schema\\\":\\\"2.0\\\""));
+        assert!(request_body.contains("\\\"tag\\\":\\\"markdown\\\""));
+        assert!(request_body.contains("\\\"content\\\":\\\"ship it\\\""));
+        assert!(
+            !request_body.contains("\\\"card\\\":"),
+            "interactive send should serialize the card directly without a card wrapper"
+        );
 
         server.abort();
     }
@@ -9878,10 +9916,8 @@ mod tests {
                 channel: crate::config::FeishuChannelConfig {
                     enabled: true,
                     account_id: Some("feishu_primary".to_owned()),
-                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                        "cli_primary".to_owned(),
-                    )),
-                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                    app_id: Some(loong_contracts::SecretRef::Inline("cli_primary".to_owned())),
+                    app_secret: Some(loong_contracts::SecretRef::Inline(
                         "app-secret-primary".to_owned(),
                     )),
                     receive_id_type: "open_id".to_owned(),
@@ -9889,10 +9925,10 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_secondary".to_owned()),
-                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_id: Some(loong_contracts::SecretRef::Inline(
                                 "cli_secondary".to_owned(),
                             )),
-                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            app_secret: Some(loong_contracts::SecretRef::Inline(
                                 "app-secret-secondary".to_owned(),
                             )),
                             base_url: Some(base_url),
@@ -9911,11 +9947,11 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "text": "ship by ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -10035,10 +10071,10 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_work".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-work".to_owned(),
                                 )),
                                 base_url: Some(base_url),
@@ -10050,10 +10086,10 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_alerts".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-alerts".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -10073,11 +10109,11 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "text": "send from configured ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -10188,7 +10224,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10281,7 +10317,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10390,7 +10426,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10513,7 +10549,7 @@ mod tests {
         config.file_root = Some(file_root);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10568,7 +10604,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10614,7 +10650,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10653,7 +10689,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10701,7 +10737,7 @@ mod tests {
         fs::write(&escape_target, b"not allowed").expect("write outside file");
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10730,7 +10766,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "receive_id": "oc_demo",
@@ -10812,7 +10848,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_parent_1",
@@ -10839,9 +10875,15 @@ mod tests {
             requests[1].authorization.as_deref(),
             Some("Bearer t-token-reply")
         );
-        assert!(requests[1].body.contains("\"msg_type\":\"interactive\""));
-        assert!(requests[1].body.contains("\\\"tag\\\":\\\"markdown\\\""));
-        assert!(requests[1].body.contains("\\\"content\\\":\\\"on it\\\""));
+        let request_body = requests[1].body.as_str();
+        assert!(request_body.contains("\"msg_type\":\"interactive\""));
+        assert!(request_body.contains("\\\"schema\\\":\\\"2.0\\\""));
+        assert!(request_body.contains("\\\"tag\\\":\\\"markdown\\\""));
+        assert!(request_body.contains("\\\"content\\\":\\\"on it\\\""));
+        assert!(
+            !request_body.contains("\\\"card\\\":"),
+            "interactive reply should serialize the card directly without a card wrapper"
+        );
 
         server.abort();
     }
@@ -10911,7 +10953,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_parent_thread",
@@ -11015,7 +11057,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_parent_uuid",
@@ -11112,7 +11154,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_parent_post",
@@ -11217,11 +11259,11 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "text": "reply from threaded ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -11324,12 +11366,12 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "text": "reply from threaded ingress but not in thread",
                     "reply_in_thread": false,
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -11428,7 +11470,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_parent_file",
@@ -11555,7 +11597,7 @@ mod tests {
         config.file_root = Some(file_root);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "message_id": "om_parent_file_path",
@@ -11663,11 +11705,11 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "text": "reply from ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -11786,10 +11828,10 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_work".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-work".to_owned(),
                                 )),
                                 base_url: Some(base_url),
@@ -11800,10 +11842,10 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_alerts".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-alerts".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -11822,11 +11864,11 @@ mod tests {
         };
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "text": "reply from configured ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -11932,11 +11974,11 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.reply".to_owned(),
                 payload: serde_json::json!({
                     "text": "reply from parent fallback",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -11982,7 +12024,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "card": {
@@ -12012,7 +12054,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "callback_token": "callback-token-1"
@@ -12037,7 +12079,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "callback_token": "callback-token-1",
@@ -12071,7 +12113,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "card": {
@@ -12080,7 +12122,7 @@ mod tests {
                             "content": "approved"
                         }]
                     },
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -12135,7 +12177,7 @@ mod tests {
         let config =
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
-        let build_request = || loongclaw_contracts::ToolCoreRequest {
+        let build_request = || loong_contracts::ToolCoreRequest {
             tool_name: "feishu.card.update".to_owned(),
             payload: serde_json::json!({
                 "card": {
@@ -12144,7 +12186,7 @@ mod tests {
                         "content": "approved"
                     }]
                 },
-                "_loongclaw": {
+                "_loong": {
                     "ingress": {
                         "source": "channel",
                         "channel": {
@@ -12237,7 +12279,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "callback_token": "callback-token-markdown",
@@ -12331,7 +12373,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "card": {
@@ -12340,7 +12382,7 @@ mod tests {
                             "content": "approved"
                         }]
                     },
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -12457,7 +12499,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "account_id": "feishu_main",
@@ -12469,7 +12511,7 @@ mod tests {
                             "content": "shared update"
                         }]
                     },
-                    "_loongclaw": {
+                    "_loong": {
                         "feishu_callback": {
                             "callback_token": "callback-token-from-ingress",
                             "operator_open_id": "ou_card_operator"
@@ -12560,7 +12602,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "shared": true,
@@ -12570,7 +12612,7 @@ mod tests {
                             "content": "shared update explicit"
                         }]
                     },
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -12617,7 +12659,7 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.card.update".to_owned(),
                 payload: serde_json::json!({
                     "callback_token": "callback-token-shared-conflict",
@@ -12653,11 +12695,11 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = super::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "text": "ship by ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -12674,7 +12716,7 @@ mod tests {
         .expect_err("direct execution should reject reserved internal payloads");
 
         assert!(
-            error.contains("payload._loongclaw is reserved for trusted internal tool context"),
+            error.contains("payload._loong is reserved for trusted internal tool context"),
             "error={error}"
         );
     }
@@ -12693,11 +12735,11 @@ mod tests {
             build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
 
         let error = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "text": "ship by ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -12735,10 +12777,10 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_work".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-work".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -12749,10 +12791,10 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_id: Some(loong_contracts::SecretRef::Inline(
                                     "cli_alerts".to_owned(),
                                 )),
-                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                app_secret: Some(loong_contracts::SecretRef::Inline(
                                     "app-secret-alerts".to_owned(),
                                 )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
@@ -12771,11 +12813,11 @@ mod tests {
         };
 
         let error = execute_tool_core_with_test_context(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.messages.send".to_owned(),
                 payload: serde_json::json!({
                     "text": "ship by ingress",
-                    "_loongclaw": {
+                    "_loong": {
                         "ingress": {
                             "source": "channel",
                             "channel": {
@@ -12848,7 +12890,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.calendar.freebusy".to_owned(),
                 payload: serde_json::json!({
                     "time_min": "2026-03-12T09:00:00+08:00",
@@ -12942,7 +12984,7 @@ mod tests {
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
         let outcome = execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "feishu.calendar.list".to_owned(),
                 payload: serde_json::json!({
                     "primary": true
@@ -12988,11 +13030,11 @@ mod tests {
             std::env::temp_dir().join(format!("{prefix}-{nanos}"))
         }
 
-        let root = unique_temp_dir("loongclaw-tool-provider-switch");
+        let root = unique_temp_dir("loong-tool-provider-switch");
         fs::create_dir_all(&root).expect("create fixture root");
-        let config_path = root.join("loongclaw.toml");
+        let config_path = root.join("loong.toml");
 
-        let mut config = crate::config::LoongClawConfig::default();
+        let mut config = crate::config::LoongConfig::default();
         let mut openai =
             crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
         openai.model = "gpt-5".to_owned();
@@ -13033,7 +13075,7 @@ mod tests {
                 tool_name: "provider.switch".to_owned(),
                 payload: json!({
                     "selector": "deepseek",
-                    "config_path": "loongclaw.toml"
+                    "config_path": "loong.toml"
                 }),
             },
             &runtime_config,
@@ -13070,11 +13112,11 @@ mod tests {
             std::env::temp_dir().join(format!("{prefix}-{nanos}"))
         }
 
-        let root = unique_temp_dir("loongclaw-tool-provider-switch-model");
+        let root = unique_temp_dir("loong-tool-provider-switch-model");
         fs::create_dir_all(&root).expect("create fixture root");
-        let config_path = root.join("loongclaw.toml");
+        let config_path = root.join("loong.toml");
 
-        let mut config = crate::config::LoongClawConfig::default();
+        let mut config = crate::config::LoongConfig::default();
         let mut openai =
             crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
         openai.model = "gpt-5".to_owned();
@@ -13150,11 +13192,11 @@ mod tests {
             std::env::temp_dir().join(format!("{prefix}-{nanos}"))
         }
 
-        let root = unique_temp_dir("loongclaw-tool-provider-switch-inspect");
+        let root = unique_temp_dir("loong-tool-provider-switch-inspect");
         fs::create_dir_all(&root).expect("create fixture root");
-        let config_path = root.join("loongclaw.toml");
+        let config_path = root.join("loong.toml");
 
-        let mut config = crate::config::LoongClawConfig::default();
+        let mut config = crate::config::LoongConfig::default();
         let mut openai =
             crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
         openai.model = "gpt-5".to_owned();
@@ -13242,7 +13284,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-plan");
+        let root = unique_temp_dir("loong-tool-import-plan");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(
             &root,
@@ -13278,7 +13320,7 @@ mod tests {
         assert_eq!(outcome.payload["source"], "nanobot");
         assert_eq!(
             outcome.payload["config_preview"]["prompt_pack_id"],
-            "loongclaw-core-v1"
+            "loong-core-v1"
         );
         assert_eq!(
             outcome.payload["config_preview"]["memory_profile"],
@@ -13288,13 +13330,13 @@ mod tests {
             outcome.payload["config_preview"]["system_prompt_addendum"]
                 .as_str()
                 .expect("prompt addendum should exist")
-                .contains("LoongClaw")
+                .contains("Loong")
         );
         assert!(
             outcome.payload["config_preview"]["profile_note"]
                 .as_str()
                 .expect("profile note should exist")
-                .contains("LoongClaw")
+                .contains("Loong")
         );
         assert_eq!(outcome.payload["config_written"], false);
 
@@ -13325,7 +13367,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-apply");
+        let root = unique_temp_dir("loong-tool-import-apply");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(
             &root,
@@ -13338,7 +13380,7 @@ mod tests {
             "# Identity\n\n- Motto: your nanobot agent for deploys\n",
         );
 
-        let output_path = root.join("generated").join("loongclaw.toml");
+        let output_path = root.join("generated").join("loong.toml");
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root.clone()),
             ..runtime_config::ToolRuntimeConfig::default()
@@ -13353,7 +13395,7 @@ mod tests {
                         "mode": "apply",
                         "source": "nanobot",
                         "input_path": ".",
-                        "output_path": "generated/loongclaw.toml",
+                        "output_path": "generated/loong.toml",
                         "force": true
                     }),
                 },
@@ -13384,9 +13426,9 @@ mod tests {
         }
 
         let raw = fs::read_to_string(&output_path).expect("output config should exist");
-        assert!(raw.contains("prompt_pack_id = \"loongclaw-core-v1\""));
+        assert!(raw.contains("prompt_pack_id = \"loong-core-v1\""));
         assert!(raw.contains("profile = \"profile_plus_window\""));
-        assert!(raw.contains("LoongClaw"));
+        assert!(raw.contains("Loong"));
 
         fs::remove_dir_all(&root).ok();
     }
@@ -13415,7 +13457,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-discover");
+        let root = unique_temp_dir("loong-tool-import-discover");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -13478,7 +13520,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-plan-many");
+        let root = unique_temp_dir("loong-tool-import-plan-many");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -13550,7 +13592,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-merge-profiles");
+        let root = unique_temp_dir("loong-tool-import-merge-profiles");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -13630,7 +13672,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-map-external-skills");
+        let root = unique_temp_dir("loong-tool-import-map-external-skills");
         fs::create_dir_all(&root).expect("create fixture root");
         write_file(&root, "SKILLS.md", "# Skills\n\n- custom/skill-a\n");
         fs::create_dir_all(root.join(".codex/skills")).expect("create codex skills dir");
@@ -13696,7 +13738,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-apply-selected");
+        let root = unique_temp_dir("loong-tool-import-apply-selected");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -13712,8 +13754,8 @@ mod tests {
             "# Identity\n\n- role: release copilot\n- tone: steady\n",
         );
 
-        let output_path = root.join("loongclaw.toml");
-        let original_body = crate::config::render(&crate::config::LoongClawConfig::default())
+        let output_path = root.join("loong.toml");
+        let original_body = crate::config::render(&crate::config::LoongConfig::default())
             .expect("render default config");
         fs::write(&output_path, &original_body).expect("write original config");
 
@@ -13727,7 +13769,7 @@ mod tests {
                 payload: json!({
                     "mode": "apply_selected",
                     "input_path": ".",
-                    "output_path": "loongclaw.toml",
+                    "output_path": "loong.toml",
                     "source_id": "openclaw"
                 }),
             },
@@ -13781,7 +13823,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-apply-selected-external");
+        let root = unique_temp_dir("loong-tool-import-apply-selected-external");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -13803,7 +13845,7 @@ mod tests {
             "# Release Guard\n\nUse this skill when release discipline matters.\n",
         );
 
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
 
         let config = runtime_config::ToolRuntimeConfig {
             file_root: Some(root.clone()),
@@ -13815,7 +13857,7 @@ mod tests {
                 payload: json!({
                     "mode": "apply_selected",
                     "input_path": ".",
-                    "output_path": "loongclaw.toml",
+                    "output_path": "loong.toml",
                     "source_id": "openclaw",
                     "apply_external_skills_plan": true
                 }),
@@ -13884,7 +13926,7 @@ mod tests {
             fs::write(path, content).expect("write fixture");
         }
 
-        let root = unique_temp_dir("loongclaw-tool-import-rollback-selected");
+        let root = unique_temp_dir("loong-tool-import-rollback-selected");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -13900,8 +13942,8 @@ mod tests {
             "# Identity\n\n- role: release copilot\n- tone: steady\n",
         );
 
-        let output_path = root.join("loongclaw.toml");
-        let original_body = crate::config::render(&crate::config::LoongClawConfig::default())
+        let output_path = root.join("loong.toml");
+        let original_body = crate::config::render(&crate::config::LoongConfig::default())
             .expect("render default config");
         fs::write(&output_path, &original_body).expect("write original config");
 
@@ -13915,7 +13957,7 @@ mod tests {
                 payload: json!({
                     "mode": "apply_selected",
                     "input_path": ".",
-                    "output_path": "loongclaw.toml",
+                    "output_path": "loong.toml",
                     "source_id": "openclaw"
                 }),
             },
@@ -13928,7 +13970,7 @@ mod tests {
                 tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "rollback_last_apply",
-                    "output_path": "loongclaw.toml"
+                    "output_path": "loong.toml"
                 }),
             },
             &config,
@@ -13954,9 +13996,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use loongclaw_contracts::{ExecutionRoute, HarnessKind, ToolPlaneError};
-    use loongclaw_kernel::{
-        CoreToolAdapter, FixedClock, InMemoryAuditSink, LoongClawKernel, StaticPolicyEngine,
+    use loong_contracts::{ExecutionRoute, HarnessKind, ToolPlaneError};
+    use loong_kernel::{
+        CoreToolAdapter, FixedClock, InMemoryAuditSink, LoongKernel, StaticPolicyEngine,
         VerticalPackManifest,
     };
 
@@ -13990,7 +14032,7 @@ mod tests {
         capabilities: BTreeSet<Capability>,
     ) -> (KernelContext, Arc<Mutex<Vec<ToolCoreRequest>>>) {
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+        let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -14052,8 +14094,8 @@ mod tests {
         let has_tool_plane = events.iter().any(|event| {
             matches!(
                 &event.kind,
-                loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                    plane: loongclaw_contracts::ExecutionPlane::Tool,
+                loong_kernel::AuditEventKind::PlaneInvoked {
+                    plane: loong_contracts::ExecutionPlane::Tool,
                     ..
                 }
             )
@@ -14068,7 +14110,7 @@ mod tests {
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let mut kernel =
-            LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+            LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -14118,7 +14160,7 @@ mod tests {
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let mut kernel =
-            LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+            LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -14157,7 +14199,7 @@ mod tests {
                     payload: json!({
                         "command": "echo",
                         "args": ["hello"],
-                        "_loongclaw": {
+                        "_loong": {
                             "ingress": {
                                 "channel": {
                                     "platform": "feishu",
@@ -14175,7 +14217,7 @@ mod tests {
 
         assert!(
             format!("{err}")
-                .contains("payload._loongclaw is reserved for trusted internal tool context"),
+                .contains("payload._loong is reserved for trusted internal tool context"),
             "error should reject reserved internal payload, got: {err}"
         );
     }
@@ -14209,7 +14251,7 @@ mod tests {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+        let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -14261,8 +14303,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            loongclaw_kernel::KernelError::Policy(
-                loongclaw_kernel::PolicyError::MissingCapability { capability, .. }
+            loong_kernel::KernelError::Policy(
+                loong_kernel::PolicyError::MissingCapability { capability, .. }
             ) if capability == Capability::NetworkEgress
         ));
     }
@@ -14274,7 +14316,7 @@ mod tests {
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+        let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -14292,9 +14334,8 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         kernel.register_pack(pack).expect("register pack");
-        kernel.register_policy_extension(
-            loongclaw_kernel::test_support::NoNetworkEgressPolicyExtension,
-        );
+        kernel
+            .register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
         let mut config = runtime_config::ToolRuntimeConfig::default();
         config.web_fetch.enabled = true;
@@ -14322,8 +14363,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            loongclaw_kernel::KernelError::Policy(
-                loongclaw_kernel::PolicyError::ExtensionDenied { ref extension, .. }
+            loong_kernel::KernelError::Policy(
+                loong_kernel::PolicyError::ExtensionDenied { ref extension, .. }
             ) if extension == "no-network-egress"
         ));
     }

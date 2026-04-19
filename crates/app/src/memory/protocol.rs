@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use loongclaw_contracts::MemoryCoreRequest;
+use loong_contracts::MemoryCoreRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

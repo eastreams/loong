@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loongclaw-logo-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loongclaw-logo-light.png" />
-    <img src="./assets/logo/loongclaw-logo-light.png" alt="Loong" width="280" />
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loong-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loong-logo-light.png" />
+    <img src="./assets/logo/loong-logo-light.png" alt="Loong" width="280" />
   </picture>
 </p>
 <p align="center"><strong><em>“发轫于东，以会群友”</em></strong></p>
@@ -171,6 +171,14 @@ model = "auto"
 - `model = "auto"` 走 provider 端自动发现；如果你所在区域或账号下自动发现不稳，改成 `model = "<具体 id>"` 固定即可。
 
 #### 接入频道 —— 以飞书为例
+
+推荐先走命令行二维码接入：
+
+```bash
+loong feishu onboard
+```
+
+这条命令会在终端里展示二维码，走官方 Feishu/Lark 注册接口创建 bot app，并把生成的凭据写回 `loong.toml`。如果你已经有现成凭据，也可以继续用 `loong feishu onboard --manual --app-id ... --app-secret ...` 手动回填。
 
 ```toml
 [feishu]

@@ -9,7 +9,7 @@ use std::{
 use super::runtime_events::{
     ToolFileChangeKind, ToolFileChangePreview, ToolRuntimeEvent, current_tool_runtime_event_sink,
 };
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-file")]
 use regex::{Regex, RegexBuilder};
 #[cfg(feature = "tool-file")]
@@ -1371,7 +1371,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::json;
 
     use super::*;
@@ -1417,7 +1417,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_safe_file_path_rejects_symlink_escape_on_read() {
-        let base = unique_temp_dir("loongclaw-file-read");
+        let base = unique_temp_dir("loong-file-read");
         let root = base.join("root");
         let outside = base.join("outside");
         fs::create_dir_all(&root).expect("create root");
@@ -1443,7 +1443,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_write_rejects_symlink_directory_escape() {
-        let base = unique_temp_dir("loongclaw-file-write");
+        let base = unique_temp_dir("loong-file-write");
         let root = base.join("root");
         let outside_dir = base.join("outside-dir");
         fs::create_dir_all(&root).expect("create root");
@@ -1474,7 +1474,7 @@ mod tests {
 
     #[test]
     fn file_write_allows_path_inside_root() {
-        let base = unique_temp_dir("loongclaw-file-safe");
+        let base = unique_temp_dir("loong-file-safe");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1500,7 +1500,7 @@ mod tests {
 
     #[test]
     fn file_write_emits_create_change_preview_event() {
-        let base = unique_temp_dir("loongclaw-file-write-preview");
+        let base = unique_temp_dir("loong-file-write-preview");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1546,7 +1546,7 @@ mod tests {
 
     #[test]
     fn file_write_emits_overwrite_change_preview_event() {
-        let base = unique_temp_dir("loongclaw-file-write-overwrite-preview");
+        let base = unique_temp_dir("loong-file-write-overwrite-preview");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("preview.txt");
@@ -1597,7 +1597,7 @@ mod tests {
 
     #[test]
     fn file_write_rejects_existing_file_without_overwrite_flag() {
-        let base = unique_temp_dir("loongclaw-file-overwrite-denied");
+        let base = unique_temp_dir("loong-file-overwrite-denied");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1630,7 +1630,7 @@ mod tests {
 
     #[test]
     fn file_write_allows_existing_file_with_overwrite_true() {
-        let base = unique_temp_dir("loongclaw-file-overwrite-allowed");
+        let base = unique_temp_dir("loong-file-overwrite-allowed");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1662,7 +1662,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_write_rejects_dangling_symlink_even_with_overwrite_true() {
-        let base = unique_temp_dir("loongclaw-file-overwrite-symlink");
+        let base = unique_temp_dir("loong-file-overwrite-symlink");
         let root = base.join("root");
         let outside = base.join("outside");
         fs::create_dir_all(&root).expect("create root");
@@ -1713,7 +1713,7 @@ mod tests {
 
     #[test]
     fn file_edit_single_match_succeeds() {
-        let base = unique_temp_dir("loongclaw-file-edit-single");
+        let base = unique_temp_dir("loong-file-edit-single");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");
@@ -1737,7 +1737,7 @@ mod tests {
 
     #[test]
     fn file_edit_no_match_errors() {
-        let base = unique_temp_dir("loongclaw-file-edit-nomatch");
+        let base = unique_temp_dir("loong-file-edit-nomatch");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("file.txt"), "hello world").expect("write");
@@ -1757,7 +1757,7 @@ mod tests {
 
     #[test]
     fn file_edit_multiple_match_without_replace_all_errors() {
-        let base = unique_temp_dir("loongclaw-file-edit-multi");
+        let base = unique_temp_dir("loong-file-edit-multi");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("file.txt"), "a\na\n").expect("write");
@@ -1777,7 +1777,7 @@ mod tests {
 
     #[test]
     fn file_edit_replace_all_replaces_all_occurrences() {
-        let base = unique_temp_dir("loongclaw-file-edit-replaceall");
+        let base = unique_temp_dir("loong-file-edit-replaceall");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");
@@ -1800,7 +1800,7 @@ mod tests {
 
     #[test]
     fn file_edit_emits_change_preview_event() {
-        let base = unique_temp_dir("loongclaw-file-edit-preview");
+        let base = unique_temp_dir("loong-file-edit-preview");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");
@@ -1863,7 +1863,7 @@ mod tests {
 
     #[test]
     fn file_edit_empty_old_string_errors() {
-        let base = unique_temp_dir("loongclaw-file-edit-empty");
+        let base = unique_temp_dir("loong-file-edit-empty");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("file.txt"), "hello").expect("write");
@@ -1884,7 +1884,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_edit_rejects_path_escape() {
-        let base = unique_temp_dir("loongclaw-file-edit-escape");
+        let base = unique_temp_dir("loong-file-edit-escape");
         let root = base.join("root");
         let outside = base.join("outside");
         fs::create_dir_all(&root).expect("create root");
@@ -1912,7 +1912,7 @@ mod tests {
 
     #[test]
     fn glob_search_returns_workspace_relative_matches() {
-        let base = unique_temp_dir("loongclaw-glob-search");
+        let base = unique_temp_dir("loong-glob-search");
         let root = base.join("root");
         let nested = root.join("src/nested");
         fs::create_dir_all(&nested).expect("create nested root");
@@ -1945,7 +1945,7 @@ mod tests {
 
     #[test]
     fn content_search_returns_line_column_and_snippet() {
-        let base = unique_temp_dir("loongclaw-content-search");
+        let base = unique_temp_dir("loong-content-search");
         let root = base.join("root");
         let nested = root.join("src");
         fs::create_dir_all(&nested).expect("create nested root");
@@ -1985,7 +1985,7 @@ mod tests {
 
     #[test]
     fn content_search_honors_explicit_root() {
-        let base = unique_temp_dir("loongclaw-content-search-root");
+        let base = unique_temp_dir("loong-content-search-root");
         let root = base.join("root");
         let include = root.join("include");
         let exclude = root.join("exclude");
@@ -2018,7 +2018,7 @@ mod tests {
 
     #[test]
     fn content_search_does_not_mark_exact_limit_files_as_truncated() {
-        let base = unique_temp_dir("loongclaw-content-search-exact-limit");
+        let base = unique_temp_dir("loong-content-search-exact-limit");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("exact.txt"), "hello").expect("write exact-limit file");
@@ -2047,7 +2047,7 @@ mod tests {
 
     #[test]
     fn content_search_handles_unicode_case_insensitive_matches() {
-        let base = unique_temp_dir("loongclaw-content-search-unicode");
+        let base = unique_temp_dir("loong-content-search-unicode");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("city.txt"), "Key value\n").expect("write city");

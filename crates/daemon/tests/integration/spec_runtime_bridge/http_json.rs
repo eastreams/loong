@@ -1,5 +1,5 @@
 use super::*;
-use loongclaw_daemon::kernel::PluginCompatibilityMode;
+use loong_daemon::kernel::PluginCompatibilityMode;
 
 #[tokio::test]
 async fn execute_spec_http_json_bridge_executes_against_local_server() {
@@ -27,14 +27,14 @@ async fn execute_spec_http_json_bridge_executes_against_local_server() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-http-runtime-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-http-runtime-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("http_plugin.py"),
         format!(
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {{
 #   "plugin_id": "http-runtime",
 #   "provider_id": "http-runtime",
@@ -49,7 +49,7 @@ async fn execute_spec_http_json_bridge_executes_against_local_server() {
 #     "version":"1.0.0"
 #   }}
 # }}
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#
         ),
     )
@@ -144,13 +144,13 @@ async fn execute_spec_http_json_bridge_blocks_when_protocol_authorization_fails(
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-http-authz-block-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-http-authz-block-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("http_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "http-authz-block",
 #   "provider_id": "http-authz-block",
@@ -165,7 +165,7 @@ async fn execute_spec_http_json_bridge_blocks_when_protocol_authorization_fails(
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write http plugin");
@@ -283,14 +283,14 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_method_mismatch(
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-http-strict-method-mismatch-{unique}"));
+        std::env::temp_dir().join(format!("loong-http-strict-method-mismatch-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("http_plugin.py"),
         format!(
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {{
 #   "plugin_id": "http-strict-method",
 #   "provider_id": "http-strict-method",
@@ -306,7 +306,7 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_method_mismatch(
 #     "version":"1.0.0"
 #   }}
 # }}
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#
         ),
     )
@@ -410,15 +410,14 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_id_mismatch() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-http-strict-id-mismatch-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-http-strict-id-mismatch-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("http_plugin.py"),
         format!(
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {{
 #   "plugin_id": "http-strict-id",
 #   "provider_id": "http-strict-id",
@@ -434,7 +433,7 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_id_mismatch() {
 #     "version":"1.0.0"
 #   }}
 # }}
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#
         ),
     )
@@ -543,14 +542,14 @@ async fn execute_spec_http_json_bridge_strict_contract_executes_on_matching_fram
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-http-strict-pass-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-http-strict-pass-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("http_plugin.py"),
         format!(
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {{
 #   "plugin_id": "http-strict-pass",
 #   "provider_id": "http-strict-pass",
@@ -566,7 +565,7 @@ async fn execute_spec_http_json_bridge_strict_contract_executes_on_matching_fram
 #     "version":"1.0.0"
 #   }}
 # }}
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#
         ),
     )

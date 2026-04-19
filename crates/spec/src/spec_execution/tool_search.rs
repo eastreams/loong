@@ -910,8 +910,8 @@ fn metadata_plugin_dialect(
     key: &str,
 ) -> Option<PluginContractDialect> {
     metadata_optional_string(metadata, key).and_then(|value| match value.as_str() {
-        "loongclaw_package_manifest" => Some(PluginContractDialect::LoongClawPackageManifest),
-        "loongclaw_embedded_source" => Some(PluginContractDialect::LoongClawEmbeddedSource),
+        "loong_package_manifest" => Some(PluginContractDialect::LoongPackageManifest),
+        "loong_embedded_source" => Some(PluginContractDialect::LoongEmbeddedSource),
         "openclaw_modern_manifest" => Some(PluginContractDialect::OpenClawModernManifest),
         "openclaw_legacy_package" => Some(PluginContractDialect::OpenClawLegacyPackage),
         _ => None,
@@ -1740,7 +1740,7 @@ mod tests {
                 ("plugin_id".to_owned(), "tavily-search".to_owned()),
                 (
                     "plugin_source_path".to_owned(),
-                    "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                    "/tmp/tavily/loong.plugin.json".to_owned(),
                 ),
                 (
                     "plugin_source_kind".to_owned(),
@@ -1749,11 +1749,11 @@ mod tests {
                 ("plugin_package_root".to_owned(), "/tmp/tavily".to_owned()),
                 (
                     "plugin_package_manifest_path".to_owned(),
-                    "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                    "/tmp/tavily/loong.plugin.json".to_owned(),
                 ),
                 (
                     "plugin_provenance_summary".to_owned(),
-                    "package_manifest:/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                    "package_manifest:/tmp/tavily/loong.plugin.json".to_owned(),
                 ),
                 ("plugin_trust_tier".to_owned(), "official".to_owned()),
                 (
@@ -1794,7 +1794,7 @@ mod tests {
                 ),
                 (
                     "plugin_compatibility_host_api".to_owned(),
-                    "loongclaw-plugin/v1".to_owned(),
+                    "loong-plugin/v1".to_owned(),
                 ),
                 (
                     "plugin_compatibility_host_version_req".to_owned(),
@@ -1812,10 +1812,10 @@ mod tests {
             blocked_plugins: 1,
             candidates: vec![PluginActivationCandidate {
                 plugin_id: "tavily-search".to_owned(),
-                source_path: "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                source_path: "/tmp/tavily/loong.plugin.json".to_owned(),
                 source_kind: PluginSourceKind::PackageManifest,
                 package_root: "/tmp/tavily".to_owned(),
-                package_manifest_path: Some("/tmp/tavily/loongclaw.plugin.json".to_owned()),
+                package_manifest_path: Some("/tmp/tavily/loong.plugin.json".to_owned()),
                 trust_tier: kernel::PluginTrustTier::Official,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 compatibility_shim: None,
@@ -1834,7 +1834,7 @@ mod tests {
                     phase: PluginDiagnosticPhase::Activation,
                     blocking: true,
                     plugin_id: Some("tavily-search".to_owned()),
-                    source_path: Some("/tmp/tavily/loongclaw.plugin.json".to_owned()),
+                    source_path: Some("/tmp/tavily/loong.plugin.json".to_owned()),
                     source_kind: Some(PluginSourceKind::PackageManifest),
                     field_path: Some("slot_claims".to_owned()),
                     message: "slot claim `provider:web_search`:`tavily` conflicts with existing plugin `web-search`".to_owned(),
@@ -1878,12 +1878,12 @@ mod tests {
         );
         assert_eq!(
             report.results[0].package_manifest_path.as_deref(),
-            Some("/tmp/tavily/loongclaw.plugin.json")
+            Some("/tmp/tavily/loong.plugin.json")
         );
         assert!(report.results[0].compatibility_shim.is_none());
         assert_eq!(
             report.results[0].provenance_summary.as_deref(),
-            Some("package_manifest:/tmp/tavily/loongclaw.plugin.json")
+            Some("package_manifest:/tmp/tavily/loong.plugin.json")
         );
         assert_eq!(report.results[0].trust_tier.as_deref(), Some("official"));
         assert_eq!(
@@ -1924,7 +1924,7 @@ mod tests {
                 .compatibility
                 .as_ref()
                 .and_then(|compatibility| compatibility.host_api.as_deref()),
-            Some("loongclaw-plugin/v1")
+            Some("loong-plugin/v1")
         );
         assert_eq!(
             report.results[0]

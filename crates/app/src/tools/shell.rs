@@ -2,7 +2,7 @@
 use super::process_exec;
 #[cfg(feature = "tool-shell")]
 use super::runtime_events::current_tool_runtime_event_sink;
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-shell")]
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn shell_exec_defaults_cwd_to_configured_file_root() {
-        let root = unique_temp_dir("loongclaw-shell-default-cwd");
+        let root = unique_temp_dir("loong-shell-default-cwd");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = shell_test_config(&root);
         let request = ToolCoreRequest {
@@ -225,8 +225,8 @@ mod tests {
 
     #[test]
     fn shell_exec_rejects_cwd_that_escapes_configured_file_root() {
-        let root = unique_temp_dir("loongclaw-shell-cwd-root");
-        let outside = unique_temp_dir("loongclaw-shell-cwd-outside");
+        let root = unique_temp_dir("loong-shell-cwd-root");
+        let outside = unique_temp_dir("loong-shell-cwd-outside");
         std::fs::create_dir_all(&root).expect("create shell root");
         std::fs::create_dir_all(&outside).expect("create outside dir");
         let config = shell_test_config(&root);
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn shell_exec_rejects_non_directory_cwd() {
-        let root = unique_temp_dir("loongclaw-shell-cwd-file");
+        let root = unique_temp_dir("loong-shell-cwd-file");
         std::fs::create_dir_all(&root).expect("create shell root");
         let file_path = root.join("note.txt");
         std::fs::write(&file_path, "hello").expect("write shell cwd file");
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn shell_exec_rejects_non_string_cwd() {
-        let root = unique_temp_dir("loongclaw-shell-cwd-non-string");
+        let root = unique_temp_dir("loong-shell-cwd-non-string");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = shell_test_config(&root);
         let request = ToolCoreRequest {
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn shell_exec_emits_runtime_output_delta_and_metrics_events() {
-        let root = unique_temp_dir("loongclaw-shell-runtime-events");
+        let root = unique_temp_dir("loong-shell-runtime-events");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = ToolRuntimeConfig {
             file_root: Some(root),
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn shell_exec_runtime_output_delta_counts_terminal_newline_without_extra_line() {
-        let root = unique_temp_dir("loongclaw-shell-runtime-line-count");
+        let root = unique_temp_dir("loong-shell-runtime-line-count");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = ToolRuntimeConfig {
             file_root: Some(root),
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn shell_exec_emits_runtime_metrics_for_timeout_failures() {
-        let root = unique_temp_dir("loongclaw-shell-runtime-timeout-metrics");
+        let root = unique_temp_dir("loong-shell-runtime-timeout-metrics");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = ToolRuntimeConfig {
             file_root: Some(root),

@@ -9,13 +9,13 @@ repository.workspace = true
 homepage.workspace = true
 
 [lib]
-name = "loongclaw_bench"
+name = "loong_bench"
 
 [features]
 test-support = []
 
 [dependencies]
-loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec" }
+loong-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec" }
 kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
 rusqlite.workspace = true
 serde.workspace = true

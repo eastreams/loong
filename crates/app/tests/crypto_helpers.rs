@@ -1,4 +1,4 @@
-use loongclaw_app::crypto::{timing_safe_eq, verify_hmac_sha256};
+use loong_app::crypto::{timing_safe_eq, verify_hmac_sha256};
 
 #[test]
 fn timing_safe_eq_rejects_mismatched_lengths() {

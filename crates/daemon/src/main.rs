@@ -1,6 +1,10 @@
 #![recursion_limit = "256"]
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
-use loongclaw_daemon::*;
+use loong_daemon::*;
+
+const DEBUG_TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TOKIO_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+const TOKIO_WORKER_STACK_ENV: &str = "LOONG_TOKIO_WORKER_STACK_BYTES";
 
 /// Discard any unread input from the terminal's tty input queue.
 ///
@@ -56,6 +60,86 @@ fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
+fn command_prefers_large_tokio_worker_stack(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::TelegramServe { .. }
+            | Commands::FeishuServe { .. }
+            | Commands::MatrixServe { .. }
+            | Commands::WecomServe { .. }
+            | Commands::WhatsappServe { .. }
+            | Commands::MultiChannelServe { .. }
+            | Commands::Feishu {
+                command: feishu_cli::FeishuCommand::Serve(_),
+            }
+    )
+}
+
+fn default_tokio_worker_thread_stack_size(command: &Commands) -> Option<usize> {
+    #[cfg(debug_assertions)]
+    {
+        command_prefers_large_tokio_worker_stack(command).then_some(DEBUG_TOKIO_WORKER_STACK_BYTES)
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = command;
+        None
+    }
+}
+
+fn resolve_tokio_worker_thread_stack_size(
+    raw: Option<&str>,
+    command: &Commands,
+) -> CliResult<Option<usize>> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            let parsed_stack_size = value.parse::<usize>().map_err(|error| {
+                format!(
+                    "invalid {TOKIO_WORKER_STACK_ENV} value `{value}`: expected integer bytes in 1..={MAX_TOKIO_WORKER_STACK_BYTES} ({error})"
+                )
+            })?;
+
+            let stack_size_is_in_range =
+                (1..=MAX_TOKIO_WORKER_STACK_BYTES).contains(&parsed_stack_size);
+
+            if !stack_size_is_in_range {
+                return Err(format!(
+                    "invalid {TOKIO_WORKER_STACK_ENV} value `{value}`: expected integer bytes in 1..={MAX_TOKIO_WORKER_STACK_BYTES}"
+                ));
+            }
+
+            Ok(Some(parsed_stack_size))
+        }
+        None => Ok(default_tokio_worker_thread_stack_size(command)),
+    }
+}
+
+fn tokio_worker_thread_stack_size(command: &Commands) -> CliResult<Option<usize>> {
+    let raw = std::env::var(TOKIO_WORKER_STACK_ENV).ok();
+    resolve_tokio_worker_thread_stack_size(raw.as_deref(), command)
+}
+
+fn build_daemon_runtime(command: &Commands) -> CliResult<tokio::runtime::Runtime> {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+
+    if let Some(stack_size) = tokio_worker_thread_stack_size(command)? {
+        tracing::debug!(
+            target: "loong.daemon",
+            thread_stack_size = stack_size,
+            override_env = TOKIO_WORKER_STACK_ENV,
+            command = %redacted_command_name(command),
+            "using configured Tokio worker thread stack size"
+        );
+        builder.thread_stack_size(stack_size);
+    }
+
+    builder
+        .build()
+        .map_err(|error| format!("failed to build Tokio runtime: {error}"))
+}
+
 fn check_legacy_home_migration() {
     if std::env::var_os("LOONG_HOME")
         .as_deref()
@@ -81,12 +165,11 @@ fn check_legacy_home_migration() {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let _stdin_guard = StdinGuard;
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
-    loongclaw_daemon::make_env_compatible();
+    loong_daemon::make_env_compatible();
     check_legacy_home_migration();
     let cli = parse_cli();
     let command_source = if cli.command.is_some() {
@@ -98,17 +181,37 @@ async fn main() {
     let command_kind = command.command_kind_for_logging();
     let redacted_command = redacted_command_name(&command);
     tracing::debug!(
-        target: "loongclaw.daemon",
+        target: "loong.daemon",
         command_source,
         command = %redacted_command,
         "resolved CLI command"
     );
-    let result = match command {
+    let result =
+        build_daemon_runtime(&command).and_then(|runtime| runtime.block_on(run_command(command)));
+    if let Err(error) = result {
+        let error_code = error_code(error.as_str());
+        tracing::error!(
+            target: "loong.daemon",
+            command_kind = %command_kind,
+            error_code = %error_code,
+            "CLI command failed"
+        );
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("error: {error}");
+        }
+        flush_stdin();
+        std::process::exit(2);
+    }
+}
+
+async fn run_command(command: Commands) -> CliResult<()> {
+    match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
         Commands::Turn { command } => match command {
-            loongclaw_daemon::TurnCommands::Run {
+            loong_daemon::TurnCommands::Run {
                 config,
                 session,
                 message,
@@ -751,6 +854,99 @@ async fn main() {
             )
             .await
         }
+        Commands::WeixinSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_weixin_send_cli_impl(ChannelSendCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                target: Some(target.as_str()),
+                target_kind,
+                text: &text,
+                as_card: false,
+            })
+            .await
+        }
+        Commands::WeixinServe {
+            config,
+            once,
+            account,
+        } => {
+            run_weixin_serve_cli_impl(ChannelServeCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                once,
+                bind_override: None,
+                path_override: None,
+            })
+            .await
+        }
+        Commands::QqbotSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_qqbot_send_cli_impl(ChannelSendCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                target: Some(target.as_str()),
+                target_kind,
+                text: &text,
+                as_card: false,
+            })
+            .await
+        }
+        Commands::QqbotServe {
+            config,
+            once,
+            account,
+        } => {
+            run_qqbot_serve_cli_impl(ChannelServeCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                once,
+                bind_override: None,
+                path_override: None,
+            })
+            .await
+        }
+        Commands::OnebotSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_onebot_send_cli_impl(ChannelSendCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                target: Some(target.as_str()),
+                target_kind,
+                text: &text,
+                as_card: false,
+            })
+            .await
+        }
+        Commands::OnebotServe {
+            config,
+            once,
+            account,
+        } => {
+            run_onebot_serve_cli_impl(ChannelServeCliArgs {
+                config_path: config.as_deref(),
+                account: account.as_deref(),
+                once,
+                bind_override: None,
+                path_override: None,
+            })
+            .await
+        }
         Commands::WhatsappServe {
             config,
             account,
@@ -849,6 +1045,24 @@ async fn main() {
             )
             .await
         }
+        Commands::LineServe {
+            config,
+            account,
+            bind,
+            path,
+        } => {
+            run_channel_serve_cli(
+                LINE_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: bind.as_deref(),
+                    path_override: path.as_deref(),
+                },
+            )
+            .await
+        }
         Commands::WhatsappSend {
             config,
             account,
@@ -905,6 +1119,24 @@ async fn main() {
                     target_kind,
                     text: &text,
                     as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::WebhookServe {
+            config,
+            account,
+            bind,
+            path,
+        } => {
+            run_channel_serve_cli(
+                WEBHOOK_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: bind.as_deref(),
+                    path_override: path.as_deref(),
                 },
             )
             .await
@@ -1141,28 +1373,16 @@ async fn main() {
                 shell,
             })
         }
-    };
-    if let Err(error) = result {
-        let error_code = error_code(error.as_str());
-        tracing::error!(
-            target: "loongclaw.daemon",
-            command_kind = %command_kind,
-            error_code = %error_code,
-            "CLI command failed"
-        );
-        #[allow(clippy::print_stderr)]
-        {
-            eprintln!("error: {error}");
-        }
-        flush_stdin();
-        std::process::exit(2);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{error_code, redacted_command_name};
-    use loongclaw_daemon::{Commands, MultiChannelServeChannelAccount, TurnCommands};
+    use super::{
+        DEBUG_TOKIO_WORKER_STACK_BYTES, MAX_TOKIO_WORKER_STACK_BYTES, TOKIO_WORKER_STACK_ENV,
+        error_code, redacted_command_name, resolve_tokio_worker_thread_stack_size,
+    };
+    use loong_daemon::{Commands, MultiChannelServeChannelAccount, TurnCommands};
 
     #[test]
     fn command_kind_uses_stable_snake_case_labels() {
@@ -1225,5 +1445,68 @@ mod tests {
         let redacted = redacted_command_name(&Commands::Welcome);
 
         assert_eq!(redacted, "welcome");
+    }
+
+    #[test]
+    fn resolve_tokio_worker_thread_stack_size_uses_debug_default_for_multi_channel_serve() {
+        let stack_size = resolve_tokio_worker_thread_stack_size(
+            None,
+            &Commands::MultiChannelServe {
+                config: None,
+                session: "session-1".to_owned(),
+                channel_account: Vec::new(),
+            },
+        )
+        .expect("unset stack size should resolve");
+
+        assert_eq!(stack_size, Some(DEBUG_TOKIO_WORKER_STACK_BYTES));
+    }
+
+    #[test]
+    fn resolve_tokio_worker_thread_stack_size_keeps_default_for_non_serve_commands() {
+        let stack_size = resolve_tokio_worker_thread_stack_size(None, &Commands::Welcome)
+            .expect("non-serve command should resolve");
+
+        assert_eq!(stack_size, None);
+    }
+
+    #[test]
+    fn resolve_tokio_worker_thread_stack_size_accepts_explicit_override() {
+        let stack_size =
+            resolve_tokio_worker_thread_stack_size(Some("16777216"), &Commands::Welcome)
+                .expect("explicit stack size should parse");
+
+        assert_eq!(stack_size, Some(16 * 1024 * 1024));
+    }
+
+    #[test]
+    fn resolve_tokio_worker_thread_stack_size_rejects_invalid_override() {
+        let error = resolve_tokio_worker_thread_stack_size(Some("oops"), &Commands::Welcome)
+            .expect_err("invalid stack size should fail");
+
+        assert!(error.contains(TOKIO_WORKER_STACK_ENV));
+    }
+
+    #[test]
+    fn resolve_tokio_worker_thread_stack_size_rejects_zero_override() {
+        let error = resolve_tokio_worker_thread_stack_size(Some("0"), &Commands::Welcome)
+            .expect_err("zero stack size should fail");
+
+        assert!(error.contains(TOKIO_WORKER_STACK_ENV));
+        assert!(error.contains("1..="));
+    }
+
+    #[test]
+    fn resolve_tokio_worker_thread_stack_size_rejects_huge_override() {
+        let too_large_stack_size = MAX_TOKIO_WORKER_STACK_BYTES + 1;
+        let raw_stack_size = too_large_stack_size.to_string();
+        let error = resolve_tokio_worker_thread_stack_size(
+            Some(raw_stack_size.as_str()),
+            &Commands::Welcome,
+        )
+        .expect_err("too-large stack size should fail");
+
+        assert!(error.contains(TOKIO_WORKER_STACK_ENV));
+        assert!(error.contains(MAX_TOKIO_WORKER_STACK_BYTES.to_string().as_str()));
     }
 }

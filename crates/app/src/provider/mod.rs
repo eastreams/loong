@@ -51,6 +51,7 @@ mod transport_trait;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
 pub use failover::parse_provider_failover_snapshot_payload;
+pub use http_client_runtime::ProviderHttpClientRuntimeMetricsSnapshot;
 pub use rate_limit::RateLimitObservation;
 pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;
@@ -89,6 +90,10 @@ pub fn provider_tool_schema_readiness(config: &LoongConfig) -> ProviderToolSchem
         structured_tool_schema_enabled,
         effective_tool_schema_mode: effective_tool_schema_mode.to_owned(),
     }
+}
+
+pub fn provider_http_client_runtime_metrics_snapshot() -> ProviderHttpClientRuntimeMetricsSnapshot {
+    http_client_runtime::provider_http_client_runtime_metrics_snapshot()
 }
 
 pub fn is_auth_style_failure_message(message: &str) -> bool {

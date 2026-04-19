@@ -24,10 +24,8 @@ use kernel::{
     RuntimeExtensionOutcome, RuntimeExtensionRequest, ToolCoreOutcome, ToolCoreRequest,
     ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest, VerticalPackManifest,
 };
-use loongclaw_contracts::ExecutionSecurityTier;
-use loongclaw_protocol::{
-    OutboundFrame, PROTOCOL_VERSION, ProtocolRouter, RouteAuthorizationRequest,
-};
+use loong_contracts::ExecutionSecurityTier;
+use loong_protocol::{OutboundFrame, PROTOCOL_VERSION, ProtocolRouter, RouteAuthorizationRequest};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -1241,11 +1239,11 @@ fn parse_plugin_activation_runtime_source_kind(raw: &str) -> Option<PluginSource
 
 pub(crate) fn parse_plugin_activation_runtime_dialect(raw: &str) -> Option<PluginContractDialect> {
     match raw {
-        "loongclaw_package_manifest" | "loong_claw_package_manifest" => {
-            Some(PluginContractDialect::LoongClawPackageManifest)
+        "loong_package_manifest" | "loong_claw_package_manifest" => {
+            Some(PluginContractDialect::LoongPackageManifest)
         }
-        "loongclaw_embedded_source" | "loong_claw_embedded_source" => {
-            Some(PluginContractDialect::LoongClawEmbeddedSource)
+        "loong_embedded_source" | "loong_claw_embedded_source" => {
+            Some(PluginContractDialect::LoongEmbeddedSource)
         }
         "openclaw_modern_manifest" | "open_claw_modern_manifest" => {
             Some(PluginContractDialect::OpenClawModernManifest)
@@ -1761,7 +1759,7 @@ impl CoreConnectorAdapter for WebhookConnector {
         if let Some(test_config) = command
             .payload
             .as_object()
-            .and_then(|payload| payload.get("_loongclaw_test"))
+            .and_then(|payload| payload.get("_loong_test"))
             .and_then(Value::as_object)
         {
             let delay_ms = test_config
@@ -1993,7 +1991,7 @@ impl WasmEpochDeadlineController {
         let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
         let timeout = Duration::from_millis(timeout_ms);
         let engine = engine.clone();
-        let thread_name = "loongclaw-wasm-timeout".to_owned();
+        let thread_name = "loong-wasm-timeout".to_owned();
         let worker = thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
@@ -3078,7 +3076,7 @@ pub fn provider_allowed_callers(provider: &kernel::ProviderConfig) -> BTreeSet<S
 
 pub fn caller_from_payload(payload: &Value) -> Option<String> {
     payload
-        .get("_loongclaw")
+        .get("_loong")
         .and_then(Value::as_object)
         .and_then(|meta| meta.get("caller"))
         .and_then(Value::as_str)
@@ -3099,20 +3097,7 @@ pub fn caller_is_allowed(caller: Option<&str>, allowed: &BTreeSet<String>) -> bo
 }
 
 pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> bool {
-    if allowed.is_empty() {
-        return false;
-    }
-
-    let normalized = program.trim().to_ascii_lowercase();
-    if allowed.contains(&normalized) {
-        return true;
-    }
-
-    Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| allowed.contains(&name.to_ascii_lowercase()))
-        .unwrap_or(false)
+    loong_bridge_runtime::is_process_command_allowed(program, allowed)
 }
 
 pub fn detect_provider_bridge_kind(

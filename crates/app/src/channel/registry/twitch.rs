@@ -83,14 +83,14 @@ pub(super) const TWITCH_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 pub(super) const TWITCH_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
-        setup_hint: "configure a Twitch user access token in loongclaw.toml under twitch or twitch.accounts.<account>; outbound chat sends are shipped via the Twitch Chat API, while inbound EventSub or chat-listener support remains planned",
+        setup_hint: "configure a Twitch user access token in loong.toml under twitch or twitch.accounts.<account>; outbound chat sends are shipped via the Twitch Chat API, while inbound EventSub or chat-listener support remains planned",
         status_command: "loong doctor",
         repair_command: Some("loong doctor --fix"),
     };
 
 pub(super) fn build_twitch_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     _runtime_dir: &Path,
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
@@ -230,6 +230,7 @@ fn build_twitch_snapshot_for_account(
             .as_ref()
             .and_then(|_| http::redact_endpoint_status_url(resolved_api_base_url.as_str())),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -306,6 +307,7 @@ fn build_invalid_twitch_snapshot(
         enabled: false,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -316,9 +318,9 @@ mod tests {
 
     #[test]
     fn twitch_status_reports_ready_send_and_stub_serve() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.twitch.enabled = true;
-        config.twitch.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.twitch.access_token = Some(loong_contracts::SecretRef::Inline(
             "twitch-user-token".to_owned(),
         ));
         config.twitch.channel_names = vec!["streamer-a".to_owned()];
@@ -357,9 +359,9 @@ mod tests {
 
     #[test]
     fn twitch_status_hides_query_bearing_override_urls_in_snapshot_output() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.twitch.enabled = true;
-        config.twitch.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.twitch.access_token = Some(loong_contracts::SecretRef::Inline(
             "twitch-user-token".to_owned(),
         ));
         config.twitch.api_base_url = Some("https://api.twitch.test/helix?token=secret".to_owned());
@@ -405,9 +407,9 @@ mod tests {
 
     #[test]
     fn twitch_status_hides_blocked_or_invalid_urls_in_snapshot_output() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.twitch.enabled = true;
-        config.twitch.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.twitch.access_token = Some(loong_contracts::SecretRef::Inline(
             "twitch-user-token".to_owned(),
         ));
         config.twitch.api_base_url = Some("http://127.0.0.1:8080/helix".to_owned());

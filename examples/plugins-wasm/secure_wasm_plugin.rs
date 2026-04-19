@@ -1,4 +1,4 @@
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-secure-echo",
 //   "provider_id": "wasm-secure-echo",
@@ -15,4 +15,4 @@
 //     "source": "example"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END

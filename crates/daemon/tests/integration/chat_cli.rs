@@ -20,7 +20,7 @@ fn unique_temp_path(label: &str) -> PathBuf {
         .as_nanos();
     let counter = CHAT_CLI_TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "loongclaw-chat-cli-{label}-{}-{nanos}-{counter}",
+        "loong-chat-cli-{label}-{}-{nanos}-{counter}",
         std::process::id(),
     ))
 }
@@ -112,13 +112,13 @@ impl ChatCliFixture {
             "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\nexit {exit_code}\n",
             self.onboard_log_path.display()
         );
-        std::fs::write(&self.onboard_binary_path, script).expect("write fake loongclaw script");
+        std::fs::write(&self.onboard_binary_path, script).expect("write fake loong script");
         let mut permissions = std::fs::metadata(&self.onboard_binary_path)
-            .expect("fake loongclaw metadata")
+            .expect("fake loong metadata")
             .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&self.onboard_binary_path, permissions)
-            .expect("mark fake loongclaw executable");
+            .expect("mark fake loong executable");
     }
 
     fn run_chat_command(&self, config_path: Option<&Path>, stdin_bytes: Option<&[u8]>) -> Output {
@@ -131,14 +131,14 @@ impl ChatCliFixture {
         stdin_bytes: Option<&[u8]>,
         fake_onboard_exit_code: Option<i32>,
     ) -> Output {
-        let loongclaw_home = self.home_dir.join(".loongclaw");
+        let loong_home = self.home_dir.join(".loong");
         let mut command = Command::new(env!("CARGO_BIN_EXE_loong"));
         command
             .arg("chat")
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
-            .env("LOONG_HOME", &loongclaw_home)
-            .env_remove("LOONGCLAW_CONFIG_PATH")
+            .env("LOONG_HOME", &loong_home)
+            .env_remove("LOONG_CONFIG_PATH")
             .env_remove("USERPROFILE")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -148,10 +148,7 @@ impl ChatCliFixture {
         }
         if let Some(exit_code) = fake_onboard_exit_code {
             self.install_fake_onboard(exit_code);
-            command.env(
-                "LOONGCLAW_TEST_ONBOARD_EXECUTABLE",
-                &self.onboard_binary_path,
-            );
+            command.env("LOONG_TEST_ONBOARD_EXECUTABLE", &self.onboard_binary_path);
         }
 
         let mut child = command.spawn().expect("spawn chat cli");
@@ -358,7 +355,7 @@ fn chat_without_config_surfaces_config_path_access_errors() {
 
     let blocked_parent = fixture.root.join("blocked");
     std::fs::write(&blocked_parent, b"not a directory").expect("create blocking parent file");
-    let blocked_config = blocked_parent.join("loongclaw.toml");
+    let blocked_config = blocked_parent.join("loong.toml");
 
     let output = fixture.run_chat_command(Some(&blocked_config), None);
     let stdout = render_output(&output.stdout);

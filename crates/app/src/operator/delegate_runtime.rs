@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
-    ConstrainedSubagentIsolation, ConstrainedSubagentMode, ConstrainedSubagentProfile,
-    ConstrainedSubagentTerminalReason, ConversationRuntimeBinding, DelegateBuiltinProfile,
+    ConstrainedSubagentIsolation, ConstrainedSubagentMode, ConstrainedSubagentOwnerKind,
+    ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason, ConversationRuntimeBinding,
+    DelegateBuiltinProfile,
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
@@ -36,6 +37,7 @@ pub(crate) struct DelegateChildLifecycleSeed {
 pub(crate) struct DelegateChildExecutionPolicy {
     pub isolation: ConstrainedSubagentIsolation,
     pub profile: Option<DelegateBuiltinProfile>,
+    pub owner_kind: Option<ConstrainedSubagentOwnerKind>,
     pub timeout_seconds: u64,
     pub allow_shell_in_child: bool,
     pub child_tool_allowlist: Vec<String>,
@@ -114,7 +116,7 @@ pub(crate) fn next_delegate_child_depth(
 }
 
 pub(crate) fn build_delegate_child_lifecycle_seed(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     binding: ConversationRuntimeBinding<'_>,
     mode: ConstrainedSubagentMode,
     next_child_depth: usize,
@@ -151,7 +153,7 @@ pub(crate) fn build_delegate_child_lifecycle_seed(
 }
 
 fn build_delegate_child_execution(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     binding: ConversationRuntimeBinding<'_>,
     mode: ConstrainedSubagentMode,
     next_child_depth: usize,
@@ -168,6 +170,7 @@ fn build_delegate_child_execution(
     ConstrainedSubagentExecution {
         mode,
         isolation: execution_policy.isolation,
+        owner_kind: execution_policy.owner_kind,
         depth: next_child_depth,
         max_depth: config.tools.delegate.max_depth,
         active_children,
@@ -593,7 +596,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::LoongClawConfig;
+    use crate::config::LoongConfig;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{NewSessionEvent, NewSessionRecord};
     use crate::trust::extract_trust_event_payload;
@@ -605,7 +608,7 @@ mod tests {
 
     fn isolated_repo_with_path(test_name: &str) -> (SessionRepository, std::path::PathBuf) {
         let sqlite_path = std::env::temp_dir().join(format!(
-            "loongclaw-operator-delegate-runtime-{test_name}-{}.sqlite3",
+            "loong-operator-delegate-runtime-{test_name}-{}.sqlite3",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&sqlite_path);
@@ -708,10 +711,11 @@ mod tests {
 
     #[test]
     fn build_delegate_child_lifecycle_seed_uses_mode_specific_state_and_event_kind() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let execution_policy = DelegateChildExecutionPolicy {
             isolation: ConstrainedSubagentIsolation::Shared,
             profile: None,
+            owner_kind: None,
             timeout_seconds: 42,
             allow_shell_in_child: false,
             child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
@@ -742,10 +746,11 @@ mod tests {
 
     #[test]
     fn build_delegate_child_lifecycle_seed_embeds_delegate_trust_event() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let execution_policy = DelegateChildExecutionPolicy {
             isolation: ConstrainedSubagentIsolation::Shared,
             profile: None,
+            owner_kind: None,
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
@@ -881,6 +886,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: ConstrainedSubagentIsolation::default(),
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,

@@ -36,7 +36,7 @@ pub enum ChannelResolveReadModel {
 
 pub fn build_channel_resolution(
     config_path: &str,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     inventory: &mvp::channel::ChannelInventory,
     input: &str,
 ) -> CliResult<ChannelResolveOutput> {
@@ -252,7 +252,7 @@ pub fn render_channel_resolution_text(resolution: &ChannelResolveOutput) -> Stri
 }
 
 fn matched_configured_account_id_for_target(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     target: &mvp::channel::ResolvedKnownChannelSessionTarget,
 ) -> CliResult<Option<String>> {
     match target.channel_id.as_str() {
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn channel_resolution_prefers_known_session_targets_over_catalog_aliases() {
-        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "bot_token": "123456:test-token",
@@ -293,7 +293,7 @@ mod tests {
         let inventory = mvp::channel::channel_inventory(&config);
 
         let resolution =
-            build_channel_resolution("/tmp/loongclaw.toml", &config, &inventory, "telegram:123")
+            build_channel_resolution("/tmp/loong.toml", &config, &inventory, "telegram:123")
                 .expect("resolve session");
 
         match resolution.resolution {
@@ -308,12 +308,11 @@ mod tests {
 
     #[test]
     fn channel_resolution_resolves_catalog_aliases() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let inventory = mvp::channel::channel_inventory(&config);
 
-        let resolution =
-            build_channel_resolution("/tmp/loongclaw.toml", &config, &inventory, "lark")
-                .expect("resolve catalog");
+        let resolution = build_channel_resolution("/tmp/loong.toml", &config, &inventory, "lark")
+            .expect("resolve catalog");
 
         match resolution.resolution {
             ChannelResolveReadModel::Catalog(details) => {
@@ -328,7 +327,7 @@ mod tests {
 
     #[test]
     fn channel_resolution_text_renders_known_session_summary() {
-        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "enabled": true,
                 "accounts": {
@@ -343,7 +342,7 @@ mod tests {
         .expect("deserialize telegram config");
         let inventory = mvp::channel::channel_inventory(&config);
         let resolution = build_channel_resolution(
-            "/tmp/loongclaw.toml",
+            "/tmp/loong.toml",
             &config,
             &inventory,
             "telegram:Ops-Bot:123",

@@ -20,6 +20,7 @@ mod runtime_binding;
 mod safe_lane_failure;
 mod session_address;
 mod session_history;
+mod session_state;
 mod subagent;
 mod tool_discovery_state;
 mod tool_input_contract;
@@ -80,10 +81,11 @@ pub use prompt_orchestrator::{PromptCompilation, PromptCompiler};
 pub use runtime::{
     AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ContextCompactionPolicySnapshot,
     ContextEngineRuntimeSnapshot, ContextEngineSelection, ContextEngineSelectionSource,
-    ConversationRuntime, DefaultConversationRuntime, SessionContext, TurnMiddlewareRuntimeSnapshot,
-    TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
+    ConversationRuntime, DefaultConversationRuntime, HostedConversationRuntime, SessionContext,
+    TurnMiddlewareRuntimeSnapshot, TurnMiddlewareSelection, TurnMiddlewareSelectionSource,
     async_delegate_spawn_request_from_serialized_parts, collect_context_engine_runtime_snapshot,
-    execute_async_delegate_spawn_request, resolve_context_engine_selection,
+    execute_async_delegate_spawn_request, load_default_conversation_runtime,
+    load_hosted_default_conversation_runtime, resolve_context_engine_selection,
     resolve_turn_middleware_selection,
 };
 pub use runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
@@ -105,14 +107,15 @@ pub use session_history::{
     load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
     load_turn_checkpoint_event_summary,
 };
+pub(crate) use session_state::{InterAgentMessage, mailbox_for_session};
 pub use subagent::{
     ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
     ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
     ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
     ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,
-    ConstrainedSubagentMode, ConstrainedSubagentProfile, ConstrainedSubagentRole,
-    ConstrainedSubagentRuntimeBinding, ConstrainedSubagentTerminalReason, DelegateBuiltinProfile,
-    coordination_actions_for_subagent_handle, subagent_surface_fields,
+    ConstrainedSubagentMode, ConstrainedSubagentOwnerKind, ConstrainedSubagentProfile,
+    ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding, ConstrainedSubagentTerminalReason,
+    DelegateBuiltinProfile, coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;

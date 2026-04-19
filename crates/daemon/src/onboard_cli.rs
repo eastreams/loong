@@ -9,9 +9,9 @@ use std::time::Duration;
 use dialoguer::console::{Term, user_attended};
 use dialoguer::theme::ColorfulTheme;
 use kernel::ToolCoreRequest;
-use loongclaw_app as mvp;
-use loongclaw_contracts::SecretRef;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_contracts::SecretRef;
+use loong_spec::CliResult;
 use serde_json::json;
 
 use crate::copilot_onboarding::finalize_github_copilot_onboard_credentials;
@@ -70,15 +70,15 @@ mod screen_spec_support;
 
 use self::screen_spec_support::*;
 pub use crate::onboard_finalize::{
-    OnboardingAction, OnboardingActionKind, OnboardingDomainOutcome, OnboardingSuccessSummary,
-    backup_existing_config, build_onboarding_success_summary,
-    render_onboarding_success_summary_with_width,
+    OnboardingAction, OnboardingActionKind, OnboardingChannelSurfaceSummary,
+    OnboardingDomainOutcome, OnboardingSuccessSummary, backup_existing_config,
+    build_onboarding_success_summary, render_onboarding_success_summary_with_width,
 };
 const ONBOARD_CLEAR_INPUT_TOKEN: &str = ":clear";
 const ONBOARD_CUSTOM_MODEL_OPTION_SLUG: &str = "__custom_model__";
 const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
 const ONBOARD_SINGLE_LINE_INPUT_HINT: &str = "- single-line input only";
-const ONBOARD_PASTE_DRAIN_WINDOW_ENV: &str = "LOONGCLAW_ONBOARD_PASTE_DRAIN_WINDOW_MS";
+const ONBOARD_PASTE_DRAIN_WINDOW_ENV: &str = "LOONG_ONBOARD_PASTE_DRAIN_WINDOW_MS";
 const DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW: Duration = Duration::from_millis(75);
 const ONBOARD_LINE_READER_BUFFER_SIZE: usize = 64;
 const PREINSTALLED_SKILLS_PROMPT_LABEL: &str = "preinstalled skills";
@@ -169,7 +169,7 @@ fn is_explicitly_accepted_non_interactive_warning(
 
 #[cfg(test)]
 fn provider_model_probe_failure_check(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     error: String,
 ) -> OnboardCheck {
     crate::onboard_preflight::provider_model_probe_failure_check(config, error)
@@ -249,7 +249,7 @@ fn onboard_paste_drain_window() -> Duration {
 
 fn spawn_onboard_stdin_reader(sender: StdioOnboardLineSender) -> io::Result<()> {
     thread::Builder::new()
-        .name("loongclaw-onboard-stdin".to_owned())
+        .name("loong-onboard-stdin".to_owned())
         .spawn(move || {
             loop {
                 let mut line = String::new();
@@ -713,7 +713,7 @@ fn onboarding_default_external_skills_install_root(output_path: &Path) -> PathBu
 }
 
 fn apply_selected_preinstalled_skills_to_config(
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     output_path: &Path,
     selected_skill_ids: &[String],
 ) {
@@ -732,7 +732,7 @@ fn apply_selected_preinstalled_skills_to_config(
 }
 
 fn install_root_for_onboarded_skills(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     config_path: &Path,
 ) -> PathBuf {
     config
@@ -743,7 +743,7 @@ fn install_root_for_onboarded_skills(
 
 fn install_selected_preinstalled_skills(
     config_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     selected_skill_ids: &[String],
 ) -> CliResult<()> {
     if selected_skill_ids.is_empty() {
@@ -751,10 +751,8 @@ fn install_selected_preinstalled_skills(
     }
 
     let install_root = install_root_for_onboarded_skills(config, config_path);
-    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        config,
-        Some(config_path),
-    );
+    let tool_runtime_config =
+        mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, Some(config_path));
     let mut installed_now = Vec::new();
 
     for skill_id in selected_skill_ids {
@@ -810,7 +808,7 @@ pub struct ImportSurface {
 pub struct ImportCandidate {
     pub source_kind: crate::migration::ImportSourceKind,
     pub source: String,
-    pub config: mvp::config::LoongClawConfig,
+    pub config: mvp::config::LoongConfig,
     pub surfaces: Vec<ImportSurface>,
     pub domains: Vec<crate::migration::DomainPreview>,
     pub channel_candidates: Vec<crate::migration::ChannelCandidate>,
@@ -980,7 +978,7 @@ struct StartingPointFitHint {
 
 #[derive(Debug, Clone)]
 struct StartingConfigSelection {
-    config: mvp::config::LoongClawConfig,
+    config: mvp::config::LoongConfig,
     import_source: Option<String>,
     provider_selection: crate::migration::ProviderSelectionPlan,
     entry_choice: OnboardEntryChoice,
@@ -1407,7 +1405,7 @@ pub async fn run_onboard_cli_with_ui(
 
 fn resolve_guided_prompt_path(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> GuidedPromptPath {
     if options
         .system_prompt
@@ -1436,7 +1434,7 @@ fn resolve_guided_prompt_path(
 
 pub fn resolve_guided_prompt_path_label_for_test(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> &'static str {
     match resolve_guided_prompt_path(options, config) {
         GuidedPromptPath::NativePromptPack => "native",
@@ -1444,9 +1442,7 @@ pub fn resolve_guided_prompt_path_label_for_test(
     }
 }
 
-pub fn build_channel_onboarding_follow_up_lines(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<String> {
+pub fn build_channel_onboarding_follow_up_lines(config: &mvp::config::LoongConfig) -> Vec<String> {
     let inventory = mvp::channel::channel_inventory(config);
     let mut lines = Vec::with_capacity(inventory.channel_surfaces.len() + 1);
     lines.push("channel next steps:".to_owned());
@@ -1483,7 +1479,7 @@ pub fn build_channel_onboarding_follow_up_lines(
 
 fn resolve_provider_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider_selection: &crate::migration::ProviderSelectionPlan,
     guided_prompt_path: GuidedPromptPath,
     ui: &mut impl OnboardUi,
@@ -1880,7 +1876,7 @@ pub fn resolve_provider_config_from_selection(
 
 fn resolve_model_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     guided_prompt_path: GuidedPromptPath,
     available_models: &[String],
     ui: &mut impl OnboardUi,
@@ -1953,7 +1949,7 @@ fn resolve_model_selection(
 
 async fn load_onboarding_model_catalog(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<String> {
     // Volcano Engine "Coding Plan" domestic endpoint has a stable, operator-provided model list.
     // Using it avoids an interactive onboarding dependency on `GET /models`.
@@ -2086,7 +2082,7 @@ fn build_model_selection_options(
 
 fn resolve_api_key_env_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     default_api_key_env: String,
     guided_prompt_path: GuidedPromptPath,
     ui: &mut impl OnboardUi,
@@ -2180,7 +2176,7 @@ fn apply_selected_api_key_env(
 
 #[cfg(test)]
 fn apply_selected_system_prompt(
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     selection: SystemPromptSelection,
 ) {
     match selection {
@@ -2200,7 +2196,7 @@ fn apply_selected_system_prompt(
 
 fn resolve_personality_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<mvp::prompt::PromptPersonality> {
@@ -2261,7 +2257,7 @@ fn resolve_personality_selection(
 
 fn resolve_prompt_addendum_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<Option<String>> {
@@ -2285,7 +2281,7 @@ fn resolve_prompt_addendum_selection(
 
 fn resolve_system_prompt_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<SystemPromptSelection> {
@@ -2330,7 +2326,7 @@ fn resolve_system_prompt_selection(
 
 fn resolve_memory_profile_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     guided_prompt_path: GuidedPromptPath,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
@@ -2387,7 +2383,7 @@ fn resolve_memory_profile_selection(
 
 async fn resolve_web_search_provider_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     guided_prompt_path: GuidedPromptPath,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
@@ -2433,7 +2429,7 @@ async fn resolve_web_search_provider_selection(
 
 fn resolve_web_search_credential_selection(
     options: &OnboardCommandOptions,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
     guided_prompt_path: GuidedPromptPath,
     non_interactive: bool,
@@ -2521,7 +2517,7 @@ fn resolve_web_search_credential_selection(
 }
 
 fn build_web_search_provider_screen_options(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     recommended_provider: &str,
 ) -> Vec<OnboardScreenOption> {
     mvp::config::web_search_provider_descriptors()
@@ -2544,7 +2540,7 @@ fn build_web_search_provider_screen_options(
 }
 
 fn render_web_search_provider_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     recommended_provider: &str,
     default_provider: &str,
     recommendation_reason: &str,
@@ -2590,7 +2586,7 @@ fn onboard_credential_env_name_is_safe(raw: &str) -> bool {
         return false;
     }
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.api_key = Some(SecretRef::Env {
         env: trimmed.to_owned(),
     });
@@ -2641,7 +2637,7 @@ fn validate_selected_web_search_credential_env(
 }
 
 fn apply_selected_web_search_credential(
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     provider: &str,
     selection: WebSearchCredentialSelection,
 ) -> CliResult<()> {
@@ -2666,7 +2662,7 @@ fn apply_selected_web_search_credential(
 }
 
 fn validate_selected_provider_credential_env(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     selected_env_name: &str,
 ) -> CliResult<String> {
     let trimmed = selected_env_name.trim();
@@ -2698,11 +2694,11 @@ fn non_interactive_preflight_warning_message(
         "onboard preflight failed: {detail}; rerun without --non-interactive to inspect and confirm them"
     )
 }
-pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> String {
+pub fn preferred_api_key_env_default(config: &mvp::config::LoongConfig) -> String {
     provider_credential_policy::preferred_provider_credential_env_name(config)
 }
 
-pub fn collect_import_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<ImportSurface> {
+pub fn collect_import_surfaces(config: &mvp::config::LoongConfig) -> Vec<ImportSurface> {
     crate::migration::collect_import_surfaces(config)
         .into_iter()
         .map(import_surface_from_migration)
@@ -2710,7 +2706,7 @@ pub fn collect_import_surfaces(config: &mvp::config::LoongClawConfig) -> Vec<Imp
 }
 
 pub fn collect_import_surfaces_with_channel_readiness(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: ChannelImportReadiness,
 ) -> Vec<ImportSurface> {
     crate::migration::collect_import_surfaces_with_channel_readiness(
@@ -2728,7 +2724,7 @@ fn load_import_starting_config(
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<StartingConfigSelection> {
-    let default_config = mvp::config::LoongClawConfig::default();
+    let default_config = mvp::config::LoongConfig::default();
     let readiness = resolve_channel_import_readiness(&default_config);
     let current_setup_state = crate::migration::classify_current_setup(output_path);
     let candidates = collect_import_candidates_with_context(output_path, context, readiness)?;
@@ -2787,14 +2783,14 @@ pub fn build_onboard_entry_options(
     candidates: &[ImportCandidate],
 ) -> Vec<OnboardEntryOption> {
     let has_current_setup = candidates.iter().any(|candidate| {
-        candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongClawConfig
+        candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongConfig
     });
     let recommended_plan_available = candidates.iter().any(|candidate| {
         candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
     });
     let detected_source_count = detected_reusable_source_count_for_entry(
         candidates.iter().find(|candidate| {
-            candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongClawConfig
+            candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongConfig
         }),
         candidates,
     );
@@ -2868,7 +2864,7 @@ fn split_onboard_candidates(
     let mut import_candidates = Vec::new();
 
     for candidate in candidates {
-        if candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongClawConfig
+        if candidate.source_kind == crate::migration::ImportSourceKind::ExistingLoongConfig
             && current_candidate.is_none()
         {
             current_candidate = Some(candidate);
@@ -3166,7 +3162,7 @@ fn detected_reusable_source_count_for_entry(
         .filter(|candidate| {
             !matches!(
                 candidate.source_kind,
-                crate::migration::ImportSourceKind::ExistingLoongClawConfig
+                crate::migration::ImportSourceKind::ExistingLoongConfig
                     | crate::migration::ImportSourceKind::RecommendedPlan
             )
         })
@@ -3365,7 +3361,7 @@ fn collect_import_candidates_with_context(
 
 fn default_starting_config_selection() -> StartingConfigSelection {
     StartingConfigSelection {
-        config: mvp::config::LoongClawConfig::default(),
+        config: mvp::config::LoongConfig::default(),
         import_source: None,
         provider_selection: crate::migration::ProviderSelectionPlan::default(),
         entry_choice: OnboardEntryChoice::StartFresh,
@@ -3503,7 +3499,7 @@ fn print_import_candidates(
 }
 
 fn build_onboard_review_candidate_with_guidance(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
 ) -> crate::migration::ImportCandidate {
     crate::migration::build_import_candidate(
@@ -3525,7 +3521,7 @@ fn build_onboard_review_candidate_with_guidance(
 }
 
 pub fn render_onboard_review_lines_with_guidance(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
     width: usize,
@@ -3542,7 +3538,7 @@ pub fn render_onboard_review_lines_with_guidance(
 }
 
 pub fn render_current_setup_review_lines_with_guidance(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
     width: usize,
@@ -3559,7 +3555,7 @@ pub fn render_current_setup_review_lines_with_guidance(
 }
 
 pub fn render_detected_setup_review_lines_with_guidance(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
     width: usize,
@@ -3590,7 +3586,7 @@ fn channel_candidates_match(
 
 fn should_preserve_review_domain(
     kind: crate::migration::SetupDomainKind,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
     selected_candidate: &ImportCandidate,
     channels_unchanged: bool,
@@ -3636,7 +3632,7 @@ fn provider_matches_for_review(
 }
 
 fn build_onboard_review_candidate_with_selected_context(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
     selected_candidate: Option<&ImportCandidate>,
 ) -> crate::migration::ImportCandidate {
@@ -3687,7 +3683,7 @@ fn build_onboard_review_candidate_with_selected_context(
 }
 
 fn render_onboard_review_lines_with_guidance_and_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
     selected_candidate: Option<&ImportCandidate>,
@@ -3707,7 +3703,7 @@ fn render_onboard_review_lines_with_guidance_and_style(
 }
 
 fn build_onboard_review_screen_spec(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
     selected_candidate: Option<&ImportCandidate>,
@@ -3837,7 +3833,7 @@ fn render_clear_input_hint_line(description: impl AsRef<str>) -> String {
 }
 
 fn render_model_selection_default_hint_line(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     prompt_default: &str,
 ) -> String {
     let prompt_default = prompt_default.trim();
@@ -3852,7 +3848,7 @@ fn render_model_selection_default_hint_line(
 }
 
 fn render_api_key_env_selection_default_hint_line(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     suggested_env: &str,
     prompt_default: &str,
 ) -> String {
@@ -3889,7 +3885,7 @@ fn render_api_key_env_selection_default_hint_line(
 }
 
 fn render_web_search_credential_selection_default_hint_line(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
     prompt_default: &str,
 ) -> String {
@@ -3928,7 +3924,7 @@ fn render_web_search_credential_selection_default_hint_line(
 }
 
 fn render_system_prompt_selection_default_hint_line(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     prompt_default: &str,
 ) -> String {
     let prompt_default = prompt_default.trim();
@@ -4009,7 +4005,7 @@ fn render_onboard_input_screen(
 }
 
 pub fn render_continue_current_setup_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
 ) -> Vec<String> {
     render_onboard_shortcut_screen_lines_with_style(
@@ -4022,7 +4018,7 @@ pub fn render_continue_current_setup_screen_lines(
 }
 
 pub fn render_continue_detected_setup_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: &str,
     width: usize,
 ) -> Vec<String> {
@@ -4037,7 +4033,7 @@ pub fn render_continue_detected_setup_screen_lines(
 
 fn render_onboard_shortcut_screen_lines_with_style(
     shortcut_kind: OnboardShortcutKind,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     width: usize,
     color_enabled: bool,
@@ -4048,7 +4044,7 @@ fn render_onboard_shortcut_screen_lines_with_style(
 
 fn render_onboard_shortcut_header_lines_with_style(
     shortcut_kind: OnboardShortcutKind,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     import_source: Option<&str>,
     width: usize,
     color_enabled: bool,
@@ -4594,7 +4590,7 @@ fn render_provider_selection_default_choice_footer_line(
 }
 
 pub fn render_model_selection_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
 ) -> Vec<String> {
     render_model_selection_screen_lines_with_style(
@@ -4608,7 +4604,7 @@ pub fn render_model_selection_screen_lines(
 }
 
 pub fn render_model_selection_screen_lines_with_default(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     prompt_default: &str,
     width: usize,
 ) -> Vec<String> {
@@ -4623,7 +4619,7 @@ pub fn render_model_selection_screen_lines_with_default(
 }
 
 fn render_model_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     prompt_default: &str,
     guided_prompt_path: GuidedPromptPath,
     width: usize,
@@ -4686,7 +4682,7 @@ fn render_model_selection_screen_lines_with_style(
 }
 
 pub fn render_api_key_env_selection_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     default_api_key_env: &str,
     width: usize,
 ) -> Vec<String> {
@@ -4701,7 +4697,7 @@ pub fn render_api_key_env_selection_screen_lines(
 }
 
 pub fn render_api_key_env_selection_screen_lines_with_default(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     default_api_key_env: &str,
     prompt_default: &str,
     width: usize,
@@ -4717,7 +4713,7 @@ pub fn render_api_key_env_selection_screen_lines_with_default(
 }
 
 fn render_api_key_env_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     default_api_key_env: &str,
     prompt_default: &str,
     guided_prompt_path: GuidedPromptPath,
@@ -4775,7 +4771,7 @@ fn render_api_key_env_selection_screen_lines_with_style(
 }
 
 fn render_web_search_credential_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     provider: &str,
     prompt_default: &str,
     guided_prompt_path: GuidedPromptPath,
@@ -4851,7 +4847,7 @@ fn render_web_search_credential_selection_screen_lines_with_style(
 }
 
 pub fn render_system_prompt_selection_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
 ) -> Vec<String> {
     render_system_prompt_selection_screen_lines_with_style(
@@ -4864,7 +4860,7 @@ pub fn render_system_prompt_selection_screen_lines(
 }
 
 pub fn render_system_prompt_selection_screen_lines_with_default(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     prompt_default: &str,
     width: usize,
 ) -> Vec<String> {
@@ -4878,7 +4874,7 @@ pub fn render_system_prompt_selection_screen_lines_with_default(
 }
 
 fn render_system_prompt_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     prompt_default: &str,
     guided_prompt_path: GuidedPromptPath,
     width: usize,
@@ -4911,7 +4907,7 @@ fn render_system_prompt_selection_screen_lines_with_style(
 }
 
 pub fn render_personality_selection_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
 ) -> Vec<String> {
     render_personality_selection_screen_lines_with_style(
@@ -4923,7 +4919,7 @@ pub fn render_personality_selection_screen_lines(
 }
 
 fn render_personality_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     default_personality: mvp::prompt::PromptPersonality,
     width: usize,
     color_enabled: bool,
@@ -4948,7 +4944,7 @@ fn render_personality_selection_screen_lines_with_style(
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
         width,
-        "choose how LoongClaw should speak and take initiative",
+        "choose how Loong should speak and take initiative",
         "choose personality",
         Some((
             GuidedOnboardStep::Personality,
@@ -4969,13 +4965,13 @@ fn render_personality_selection_screen_lines_with_style(
 }
 
 fn render_personality_selection_header_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
 ) -> Vec<String> {
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
         width,
-        "choose how LoongClaw should speak and take initiative",
+        "choose how Loong should speak and take initiative",
         "choose personality",
         Some((
             GuidedOnboardStep::Personality,
@@ -5005,14 +5001,14 @@ fn personality_selection_description(
 }
 
 pub fn render_prompt_addendum_selection_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
 ) -> Vec<String> {
     render_prompt_addendum_selection_screen_lines_with_style(config, width, false)
 }
 
 fn render_prompt_addendum_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
@@ -5046,7 +5042,7 @@ fn render_prompt_addendum_selection_screen_lines_with_style(
 }
 
 pub fn render_memory_profile_selection_screen_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
 ) -> Vec<String> {
     render_memory_profile_selection_screen_lines_with_style(
@@ -5059,7 +5055,7 @@ pub fn render_memory_profile_selection_screen_lines(
 }
 
 fn render_memory_profile_selection_screen_lines_with_style(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     default_profile: mvp::config::MemoryProfile,
     guided_prompt_path: GuidedPromptPath,
     width: usize,
@@ -5078,7 +5074,7 @@ fn render_memory_profile_selection_screen_lines_with_style(
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
         width,
-        "choose how much memory context LoongClaw should inject",
+        "choose how much memory context Loong should inject",
         "choose memory profile",
         Some((GuidedOnboardStep::MemoryProfile, guided_prompt_path)),
         vec![format!(
@@ -5096,14 +5092,14 @@ fn render_memory_profile_selection_screen_lines_with_style(
 }
 
 fn render_memory_profile_selection_header_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     guided_prompt_path: GuidedPromptPath,
     width: usize,
 ) -> Vec<String> {
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
         width,
-        "choose how much memory context LoongClaw should inject",
+        "choose how much memory context Loong should inject",
         "choose memory profile",
         Some((GuidedOnboardStep::MemoryProfile, guided_prompt_path)),
         vec![format!(
@@ -5172,7 +5168,7 @@ fn onboard_display_line(prefix: &str, value: &str) -> String {
     format!("{prefix}{value}")
 }
 
-fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongConfig) -> Vec<String> {
     let mut lines = crate::provider_presentation::provider_profile_state_display_lines(
         config,
         Some("- provider: "),
@@ -5231,18 +5227,54 @@ fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongClawConf
         ));
     }
 
-    let enabled_channels = enabled_channel_ids(config)
-        .into_iter()
-        .filter(|channel| channel != "cli")
-        .collect::<Vec<_>>();
-    if !enabled_channels.is_empty() {
+    push_onboard_review_enabled_channel_lines(&mut lines, config);
+
+    lines
+}
+
+fn push_onboard_review_enabled_channel_lines(
+    lines: &mut Vec<String>,
+    config: &mvp::config::LoongConfig,
+) {
+    let runtime_backed_channels = config.enabled_runtime_backed_channel_ids();
+    if !runtime_backed_channels.is_empty() {
         lines.push(onboard_display_line(
-            "- channels: ",
-            &enabled_channels.join(", "),
+            "- runtime-backed channels: ",
+            &runtime_backed_channels.join(", "),
         ));
     }
 
-    lines
+    let plugin_backed_channels = config.enabled_plugin_backed_channel_ids();
+    if !plugin_backed_channels.is_empty() {
+        lines.push(onboard_display_line(
+            "- plugin-backed channels: ",
+            &plugin_backed_channels.join(", "),
+        ));
+    }
+
+    let outbound_only_channels = config.enabled_outbound_only_channel_ids();
+    if !outbound_only_channels.is_empty() {
+        lines.push(onboard_display_line(
+            "- outbound-only channels: ",
+            &outbound_only_channels.join(", "),
+        ));
+    }
+
+    let remaining_channels = enabled_channel_ids(config)
+        .into_iter()
+        .filter(|channel| channel != "cli")
+        .filter(|channel| {
+            !runtime_backed_channels.contains(channel)
+                && !plugin_backed_channels.contains(channel)
+                && !outbound_only_channels.contains(channel)
+        })
+        .collect::<Vec<_>>();
+    if !remaining_channels.is_empty() {
+        lines.push(onboard_display_line(
+            "- channels: ",
+            &remaining_channels.join(", "),
+        ));
+    }
 }
 
 fn render_onboard_review_credential_line(provider: &mvp::config::ProviderConfig) -> Option<String> {
@@ -5250,7 +5282,7 @@ fn render_onboard_review_credential_line(provider: &mvp::config::ProviderConfig)
         .map(|credential| format!("- {}: {}", credential.label, credential.value))
 }
 
-pub(crate) fn summarize_prompt_mode(config: &mvp::config::LoongClawConfig) -> String {
+pub(crate) fn summarize_prompt_mode(config: &mvp::config::LoongConfig) -> String {
     if config.cli.uses_native_prompt_pack() {
         return "native prompt pack".to_owned();
     }
@@ -5258,7 +5290,7 @@ pub(crate) fn summarize_prompt_mode(config: &mvp::config::LoongClawConfig) -> St
     "inline system prompt override".to_owned()
 }
 
-pub(crate) fn summarize_prompt_addendum(config: &mvp::config::LoongClawConfig) -> Option<String> {
+pub(crate) fn summarize_prompt_addendum(config: &mvp::config::LoongConfig) -> Option<String> {
     config
         .cli
         .system_prompt_addendum
@@ -5303,7 +5335,7 @@ pub(crate) fn summarize_provider_credential(
         })
 }
 
-fn provider_supports_blank_api_key_env(config: &mvp::config::LoongClawConfig) -> bool {
+fn provider_supports_blank_api_key_env(config: &mvp::config::LoongConfig) -> bool {
     provider_credential_policy::provider_has_inline_credential(&config.provider)
         || provider_credential_policy::provider_has_configured_credential_env(&config.provider)
 }
@@ -5347,15 +5379,13 @@ fn prompt_onboard_shortcut_choice(
 
 pub fn detect_import_starting_config_with_channel_readiness(
     readiness: ChannelImportReadiness,
-) -> mvp::config::LoongClawConfig {
+) -> mvp::config::LoongConfig {
     crate::migration::detect_import_starting_config_with_channel_readiness(to_migration_readiness(
         readiness,
     ))
 }
 
-fn resolve_channel_import_readiness(
-    config: &mvp::config::LoongClawConfig,
-) -> ChannelImportReadiness {
+fn resolve_channel_import_readiness(config: &mvp::config::LoongConfig) -> ChannelImportReadiness {
     crate::migration::resolve_channel_import_readiness_from_config(config)
 }
 
@@ -5451,7 +5481,7 @@ fn detect_render_width() -> usize {
     mvp::presentation::detect_render_width()
 }
 
-fn enabled_channel_ids(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+fn enabled_channel_ids(config: &mvp::config::LoongConfig) -> Vec<String> {
     config.enabled_channel_ids()
 }
 
@@ -5528,14 +5558,14 @@ fn onboard_has_explicit_overrides(options: &OnboardCommandOptions) -> bool {
         || option_has_non_empty_value(options.personality.as_deref())
         || option_has_non_empty_value(options.memory_profile.as_deref())
         || option_has_non_empty_value(options.system_prompt.as_deref())
-        || option_has_non_empty_value(env::var("LOONGCLAW_WEB_SEARCH_PROVIDER").ok().as_deref())
+        || option_has_non_empty_value(env::var("LOONG_WEB_SEARCH_PROVIDER").ok().as_deref())
 }
 
 fn option_has_non_empty_value(raw: Option<&str>) -> bool {
     raw.is_some_and(|value| !value.trim().is_empty())
 }
 
-fn load_existing_output_config(output_path: &Path) -> Option<mvp::config::LoongClawConfig> {
+fn load_existing_output_config(output_path: &Path) -> Option<mvp::config::LoongConfig> {
     let path_str = output_path.to_str()?;
     mvp::config::load(Some(path_str))
         .ok()
@@ -5543,8 +5573,8 @@ fn load_existing_output_config(output_path: &Path) -> Option<mvp::config::LoongC
 }
 
 pub fn should_skip_config_write(
-    existing_config: Option<&mvp::config::LoongClawConfig>,
-    draft: &mvp::config::LoongClawConfig,
+    existing_config: Option<&mvp::config::LoongConfig>,
+    draft: &mvp::config::LoongConfig,
 ) -> bool {
     existing_config.is_some_and(|existing| existing == draft)
 }
@@ -5999,7 +6029,7 @@ mod tests {
 
         fn set_ready(value: Option<&str>) -> Self {
             let lock = crate::test_support::lock_daemon_test_environment();
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let key = "LOONG_BROWSER_COMPANION_READY";
             let saved_ready = std::env::var_os(key);
             match value {
                 Some(value) => set_browser_companion_env_var(key, value),
@@ -6048,7 +6078,7 @@ mod tests {
 
     impl Drop for BrowserCompanionEnvGuard {
         fn drop(&mut self) {
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let key = "LOONG_BROWSER_COMPANION_READY";
             match self.saved_ready.take() {
                 Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
                 None => remove_browser_companion_env_var(key),
@@ -6069,7 +6099,7 @@ mod tests {
         ImportCandidate {
             source_kind,
             source: source.to_owned(),
-            config: mvp::config::LoongClawConfig::default(),
+            config: mvp::config::LoongConfig::default(),
             surfaces: Vec::new(),
             domains: domains
                 .into_iter()
@@ -6106,7 +6136,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn run_preflight_checks_includes_provider_transport_review_for_responses_compatibility_mode()
      {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "deepseek-chat".to_owned();
         config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
@@ -6128,7 +6158,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_onboard_preflight_warns_when_enabled_without_command() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("inline-openai-key".to_owned()));
         config.tools.browser_companion.enabled = true;
 
@@ -6147,7 +6177,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn run_preflight_checks_fail_for_invalid_provider_credential_env_value() {
         let secret = "sk-live-direct-secret-value";
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
         config.provider.api_key_env = Some(secret.to_owned());
         config.provider.api_key = None;
@@ -6169,7 +6199,7 @@ mod tests {
     async fn browser_companion_onboard_preflight_warns_when_runtime_gate_is_closed() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("inline-openai-key".to_owned()));
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(
@@ -6193,7 +6223,7 @@ mod tests {
     async fn browser_companion_onboard_preflight_passes_when_runtime_gate_is_open() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_open();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("inline-openai-key".to_owned()));
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(
@@ -6215,7 +6245,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_warns_for_explicit_model() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "openai/gpt-5.1-codex".to_owned();
 
         let check = provider_model_probe_failure_check(
@@ -6233,7 +6263,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_transport_failure_prioritizes_route_guidance() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "custom-explicit-model".to_owned();
 
         let check = provider_model_probe_failure_check(
@@ -6261,7 +6291,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_fails_for_auto_model() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "auto".to_owned();
 
         let check = provider_model_probe_failure_check(
@@ -6291,7 +6321,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_warns_for_preferred_model_fallbacks() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
         config.provider.preferred_models = vec![
@@ -6319,7 +6349,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_guides_reviewed_default_for_auto_model() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
 
@@ -6346,7 +6376,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_includes_region_hint_for_minimax() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
 
@@ -6367,7 +6397,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_skips_region_hint_for_non_auth_errors() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
 
@@ -6384,7 +6414,7 @@ mod tests {
 
     #[test]
     fn explicit_model_probe_warning_is_accepted_non_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "openai/gpt-5.1-codex".to_owned();
         let check = provider_model_probe_failure_check(
             &config,
@@ -6414,7 +6444,7 @@ mod tests {
 
     #[test]
     fn configured_preferred_model_probe_warning_is_accepted_non_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
         config.provider.preferred_models = vec!["MiniMax-M2.5".to_owned()];
@@ -6571,7 +6601,7 @@ mod tests {
 
     #[test]
     fn provider_credential_check_adds_volcengine_auth_guidance_when_missing() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
         config.provider.api_key = None;
         config.provider.api_key_env = None;
@@ -6595,7 +6625,7 @@ mod tests {
     fn provider_credential_check_accepts_x_api_key_provider_env_credentials() {
         let mut env = ScopedEnv::new();
         env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Anthropic;
         config.provider.api_key = None;
         config.provider.api_key_env = None;
@@ -6611,7 +6641,7 @@ mod tests {
 
     #[test]
     fn provider_credential_check_passes_for_auth_optional_provider() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Ollama;
         config.provider.api_key = None;
         config.provider.api_key_env = None;
@@ -6628,7 +6658,7 @@ mod tests {
     #[test]
     fn preferred_api_key_env_default_ignores_invalid_configured_secret_literal() {
         let secret = "sk-live-direct-secret-value";
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
         config.provider.api_key_env = Some(secret.to_owned());
 
@@ -6647,12 +6677,11 @@ mod tests {
     #[test]
     fn build_onboarding_success_summary_does_not_echo_invalid_credential_env_value() {
         let secret = "sk-live-direct-secret-value";
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
         config.provider.api_key_env = Some(secret.to_owned());
 
-        let summary =
-            build_onboarding_success_summary(Path::new("/tmp/loongclaw.toml"), &config, None);
+        let summary = build_onboarding_success_summary(Path::new("/tmp/loong.toml"), &config, None);
         let credential = summary
             .credential
             .expect("summary should still describe the configured credential lane");
@@ -6669,7 +6698,7 @@ mod tests {
 
     #[test]
     fn resolve_api_key_env_selection_accepts_explicit_clear_token_in_interactive_mode() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
         config.provider.api_key = Some(SecretRef::Inline("inline-secret".to_owned()));
         let mut ui = TestOnboardUi::with_inputs([":clear"]);
@@ -6708,7 +6737,7 @@ mod tests {
     #[test]
     fn resolve_api_key_env_selection_reprompts_after_secret_literal_interactively() {
         let secret = "sk-live-direct-secret-value";
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
         let mut ui = TestOnboardUi::with_inputs([secret, "OPENAI_API_KEY"]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -6746,7 +6775,7 @@ mod tests {
     #[test]
     fn resolve_api_key_env_selection_rejects_secret_literal_non_interactively() {
         let secret = "sk-live-direct-secret-value";
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -6788,7 +6817,7 @@ mod tests {
     #[test]
     fn resolve_api_key_env_selection_reprompts_after_uuid_secret_literal_interactively() {
         let secret = uuid_shaped_secret_fixture();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
         let mut ui = TestOnboardUi::with_inputs([secret.as_str(), "ARK_API_KEY"]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -6823,7 +6852,7 @@ mod tests {
     #[test]
     fn resolve_api_key_env_selection_rejects_uuid_secret_literal_non_interactively() {
         let secret = uuid_shaped_secret_fixture();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -6858,7 +6887,7 @@ mod tests {
 
     #[test]
     fn resolve_web_search_credential_selection_accepts_clear_token_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
         config.tools.web_search.tavily_api_key = Some("${TEAM_TAVILY_KEY}".to_owned());
@@ -6896,7 +6925,7 @@ mod tests {
 
     #[test]
     fn resolve_web_search_credential_selection_reprompts_after_secret_literal_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
         let mut ui = TestOnboardUi::with_inputs(["sk-live-direct-secret-value", "TEAM_TAVILY_KEY"]);
@@ -6936,7 +6965,7 @@ mod tests {
 
     #[test]
     fn resolve_web_search_credential_selection_keeps_inline_secret_on_blank_input() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
         config.tools.web_search.tavily_api_key = Some("inline-web-secret".to_owned());
@@ -6974,7 +7003,7 @@ mod tests {
 
     #[test]
     fn apply_selected_web_search_credential_formats_env_reference() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
 
         apply_selected_web_search_credential(
             &mut config,
@@ -6991,7 +7020,7 @@ mod tests {
 
     #[test]
     fn apply_selected_web_search_credential_updates_firecrawl_field() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let provider = mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL;
         let credential_env = "TEAM_FIRECRAWL_KEY".to_owned();
         let selection = WebSearchCredentialSelection::UseEnv(credential_env);
@@ -7005,7 +7034,7 @@ mod tests {
 
     #[test]
     fn apply_selected_web_search_credential_rejects_unknown_provider() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let error = apply_selected_web_search_credential(
             &mut config,
             "unknown-provider",
@@ -7029,7 +7058,7 @@ mod tests {
     }
     #[test]
     fn recommend_web_search_provider_from_available_credentials_prefers_unique_ready_provider() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
@@ -7055,7 +7084,7 @@ mod tests {
 
     #[test]
     fn recommend_web_search_provider_from_available_credentials_returns_none_when_multiple_ready() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
@@ -7090,7 +7119,7 @@ mod tests {
             skip_model_probe: false,
         };
         let mut env = ScopedEnv::new();
-        env.set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
+        env.set("LOONG_WEB_SEARCH_PROVIDER", "tavily");
 
         let recommendation = explicit_web_search_provider_override(&options)
             .expect("cli override should parse")
@@ -7110,7 +7139,7 @@ mod tests {
     async fn resolve_web_search_provider_selection_keeps_current_provider_on_blank_interactive_input_when_recommendation_differs()
      {
         let options = interactive_onboard_options();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
@@ -7138,7 +7167,7 @@ mod tests {
 
     #[test]
     fn render_web_search_provider_selection_screen_uses_actual_default_provider_in_footer() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let current_provider = mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO;
         let recommended_provider = mvp::config::WEB_SEARCH_PROVIDER_TAVILY;
         let current_provider_label = web_search_provider_display_name(current_provider);
@@ -7191,7 +7220,7 @@ mod tests {
             system_prompt: None,
             skip_model_probe: false,
         };
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let recommendation = WebSearchProviderRecommendation {
             provider: mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
             reason: "set by --web-search-provider".to_owned(),
@@ -7226,7 +7255,7 @@ mod tests {
             system_prompt: None,
             skip_model_probe: false,
         };
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let mut env = ScopedEnv::new();
         clear_web_search_credential_envs(&mut env);
         let recommendation = WebSearchProviderRecommendation {
@@ -7262,7 +7291,7 @@ mod tests {
             system_prompt: None,
             skip_model_probe: false,
         };
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
 
@@ -7374,7 +7403,7 @@ mod tests {
 
     #[test]
     fn resolve_system_prompt_selection_accepts_explicit_clear_token_in_interactive_mode() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.cli.system_prompt = "be terse and code-focused".to_owned();
         let mut ui = TestOnboardUi::with_inputs([":clear"]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -7410,7 +7439,7 @@ mod tests {
 
     #[test]
     fn resolve_system_prompt_selection_keeps_current_prompt_when_interactive_default_is_used() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.cli.system_prompt = "be terse and code-focused".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -7446,7 +7475,7 @@ mod tests {
 
     #[test]
     fn resolve_system_prompt_selection_keeps_prefilled_override_when_interactive_default_is_used() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.cli.system_prompt = "be terse and code-focused".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -7482,7 +7511,7 @@ mod tests {
 
     #[test]
     fn resolve_prompt_addendum_selection_keeps_current_addendum_when_blank_input_is_used() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
         let mut ui = TestOnboardUi::with_inputs([""]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -7518,7 +7547,7 @@ mod tests {
 
     #[test]
     fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_blank_first_run_input() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let mut ui = AllowEmptyOnlyTestUi::with_inputs([""]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
 
@@ -7552,7 +7581,7 @@ mod tests {
 
     #[test]
     fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_clear_input() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
         let mut ui = AllowEmptyOnlyTestUi::with_inputs(["-"]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -7587,7 +7616,7 @@ mod tests {
 
     #[test]
     fn resolve_prompt_addendum_selection_clears_current_addendum_when_dash_input_is_used() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
         let mut ui = TestOnboardUi::with_inputs(["-"]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -7622,7 +7651,7 @@ mod tests {
 
     #[test]
     fn apply_selected_system_prompt_restore_uses_rendered_native_prompt() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.cli.system_prompt = "custom review prompt".to_owned();
         config.cli.system_prompt_addendum = Some("Prefer concrete remediation steps.".to_owned());
         let expected = config.cli.rendered_native_system_prompt();
@@ -7668,7 +7697,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_selection_keeps_zai_available_in_interactive_list() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let options = interactive_onboard_options();
         let provider_selection = crate::migration::ProviderSelectionPlan::default();
         let context = onboard_test_context();
@@ -7690,7 +7719,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_selection_preserves_kimi_coding_default_variant() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let options = interactive_onboard_options();
         let provider_selection = crate::migration::ProviderSelectionPlan::default();
         let context = onboard_test_context();
@@ -7713,7 +7742,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_selection_preserves_step_plan_default_variant() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let options = interactive_onboard_options();
         let provider_selection = crate::migration::ProviderSelectionPlan::default();
         let context = onboard_test_context();
@@ -7736,7 +7765,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_selection_preserves_existing_region_endpoint_default() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let options = interactive_onboard_options();
         let provider_selection = crate::migration::ProviderSelectionPlan::default();
         let context = onboard_test_context();
@@ -7762,7 +7791,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_selection_allows_switching_step_plan_region_endpoint() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let options = interactive_onboard_options();
         let provider_selection = crate::migration::ProviderSelectionPlan::default();
         let context = onboard_test_context();
@@ -7829,7 +7858,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_prefills_minimax_recommended_model_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
@@ -7867,7 +7896,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_applies_minimax_recommended_model_non_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
@@ -7905,7 +7934,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_prefills_deepseek_recommended_model_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
@@ -7943,7 +7972,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_applies_deepseek_recommended_model_non_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
@@ -7981,7 +8010,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_prefills_reviewed_model_for_mixed_case_auto_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "  AUTO  ".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
@@ -8019,7 +8048,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_rejects_blank_explicit_model_non_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
         let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
@@ -8056,7 +8085,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_uses_catalog_choices_when_available_interactively() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
         let mut ui = TestOnboardUi::with_inputs(["2"]);
@@ -8095,7 +8124,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_keeps_auto_visible_for_noncanonical_volcengine_catalog() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider = mvp::config::ProviderConfig::fresh_for_kind(
             mvp::config::ProviderKind::VolcengineCoding,
         );
@@ -8127,7 +8156,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_rejects_blank_custom_override_when_auto_is_hidden() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider = mvp::config::ProviderConfig::fresh_for_kind(
             mvp::config::ProviderKind::VolcengineCoding,
         );
@@ -8156,7 +8185,7 @@ mod tests {
     async fn load_onboarding_model_catalog_returns_static_list_for_canonical_volcengine_endpoint() {
         let mut options = interactive_onboard_options();
         options.skip_model_probe = true;
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider = mvp::config::ProviderConfig::fresh_for_kind(
             mvp::config::ProviderKind::VolcengineCoding,
         );
@@ -8185,7 +8214,7 @@ mod tests {
     {
         let mut options = interactive_onboard_options();
         options.skip_model_probe = true;
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider = mvp::config::ProviderConfig::fresh_for_kind(
             mvp::config::ProviderKind::VolcengineCoding,
         );
@@ -8202,7 +8231,7 @@ mod tests {
 
     #[test]
     fn resolve_model_selection_allows_custom_override_when_catalog_is_available() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Openai;
         config.provider.model = "openai/gpt-5.1-codex".to_owned();
         let mut ui = TestOnboardUi::with_inputs(["2", "openai/gpt-5.2"]);
@@ -8270,7 +8299,7 @@ mod tests {
             ImportCandidate {
                 source_kind: crate::migration::ImportSourceKind::RecommendedPlan,
                 source: "recommended plan".to_owned(),
-                config: mvp::config::LoongClawConfig::default(),
+                config: mvp::config::LoongConfig::default(),
                 surfaces: Vec::new(),
                 domains: Vec::new(),
                 channel_candidates: Vec::new(),
@@ -8279,7 +8308,7 @@ mod tests {
             ImportCandidate {
                 source_kind: crate::migration::ImportSourceKind::CodexConfig,
                 source: "codex config".to_owned(),
-                config: mvp::config::LoongClawConfig::default(),
+                config: mvp::config::LoongConfig::default(),
                 surfaces: Vec::new(),
                 domains: Vec::new(),
                 channel_candidates: Vec::new(),
@@ -8306,11 +8335,11 @@ mod tests {
     #[test]
     fn resolve_write_plan_uses_select_widget_for_existing_config() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-onboard-write-plan-{}",
+            "loong-onboard-write-plan-{}",
             OffsetDateTime::now_utc().unix_timestamp_nanos()
         ));
         fs::create_dir_all(&temp_dir).expect("create temp dir");
-        let output_path = temp_dir.join("loongclaw.toml");
+        let output_path = temp_dir.join("loong.toml");
         fs::write(&output_path, "provider = 'openai'\n").expect("seed existing config");
         let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
         let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -8520,10 +8549,8 @@ mod tests {
 
     #[test]
     fn prompt_addendum_screen_mentions_single_line_terminal_input() {
-        let lines = render_prompt_addendum_selection_screen_lines(
-            &mvp::config::LoongClawConfig::default(),
-            80,
-        );
+        let lines =
+            render_prompt_addendum_selection_screen_lines(&mvp::config::LoongConfig::default(), 80);
 
         assert!(
             lines.iter().any(|line| line == "- single-line input only"),
@@ -8533,10 +8560,8 @@ mod tests {
 
     #[test]
     fn system_prompt_screen_mentions_single_line_terminal_input() {
-        let lines = render_system_prompt_selection_screen_lines(
-            &mvp::config::LoongClawConfig::default(),
-            80,
-        );
+        let lines =
+            render_system_prompt_selection_screen_lines(&mvp::config::LoongConfig::default(), 80);
 
         assert!(
             lines.iter().any(|line| line == "- single-line input only"),
@@ -8689,7 +8714,7 @@ mod tests {
         let candidate = ImportCandidate {
             source_kind: crate::migration::ImportSourceKind::CodexConfig,
             source: "Codex config at ~/.codex/config.toml".to_owned(),
-            config: mvp::config::LoongClawConfig::default(),
+            config: mvp::config::LoongConfig::default(),
             surfaces: Vec::new(),
             domains: Vec::new(),
             channel_candidates: Vec::new(),
@@ -8720,7 +8745,7 @@ mod tests {
     fn interactive_existing_config_write_screen_omits_static_options_when_selection_widget_handles_choices()
      {
         let lines = render_existing_config_write_header_lines_with_style(
-            "/tmp/loongclaw-config.toml",
+            "/tmp/loong-config.toml",
             80,
             false,
         );
@@ -8885,10 +8910,8 @@ mod tests {
 
     #[test]
     fn shortcut_screen_footer_mentions_escape_cancel() {
-        let lines = render_continue_current_setup_screen_lines(
-            &mvp::config::LoongClawConfig::default(),
-            80,
-        );
+        let lines =
+            render_continue_current_setup_screen_lines(&mvp::config::LoongConfig::default(), 80);
 
         assert!(
             lines
@@ -8902,7 +8925,7 @@ mod tests {
     fn shortcut_header_footer_mentions_escape_cancel() {
         let lines = render_onboard_shortcut_header_lines_with_style(
             OnboardShortcutKind::CurrentSetup,
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             None,
             80,
             false,
@@ -8918,7 +8941,7 @@ mod tests {
 
     #[test]
     fn detected_shortcut_snapshot_wraps_starting_point_like_review_rows() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let import_source =
             "Codex config at /very/long/path/to/a/workspace/with/a/deeply/nested/config.toml";
         let expected_label = onboard_starting_point_label(None, import_source);
@@ -8961,7 +8984,7 @@ mod tests {
 
     #[test]
     fn preflight_summary_uses_explicit_model_guidance_for_reviewed_auto_failures() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
 
@@ -8988,7 +9011,7 @@ mod tests {
 
     #[test]
     fn preflight_summary_uses_explicit_model_only_guidance_without_reviewed_default() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Custom;
         config.provider.model = "auto".to_owned();
 
@@ -9055,7 +9078,7 @@ mod tests {
 
     #[test]
     fn write_confirmation_screen_footer_mentions_escape_cancel() {
-        let lines = render_write_confirmation_screen_lines("/tmp/loongclaw.toml", false, 80);
+        let lines = render_write_confirmation_screen_lines("/tmp/loong.toml", false, 80);
 
         assert!(
             lines
@@ -9080,7 +9103,7 @@ mod tests {
 
     #[test]
     fn model_selection_screen_tells_users_to_type_auto_for_fallbacks() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
         config.provider.preferred_models = vec!["MiniMax-M2.5".to_owned()];
@@ -9162,7 +9185,7 @@ mod tests {
 
     #[test]
     fn resolve_backup_path_at_uses_formatted_timestamp() {
-        let original = Path::new("/tmp/loongclaw.toml");
+        let original = Path::new("/tmp/loong.toml");
         let timestamp = time::macros::datetime!(2026-03-14 01:23:45 +08:00);
 
         let path = match resolve_backup_path_at(original, timestamp) {
@@ -9170,16 +9193,13 @@ mod tests {
             Err(error) => panic!("backup path should resolve: {error}"),
         };
 
-        assert_eq!(
-            path,
-            PathBuf::from("/tmp/loongclaw.toml.bak-20260314-012345")
-        );
+        assert_eq!(path, PathBuf::from("/tmp/loong.toml.bak-20260314-012345"));
     }
 
     #[test]
     fn rollback_removes_partial_first_write_config() {
         let output_path = std::env::temp_dir().join(format!(
-            "loongclaw-first-write-rollback-{}.toml",
+            "loong-first-write-rollback-{}.toml",
             std::process::id()
         ));
         fs::write(&output_path, "partial = true\n").expect("write partial config");

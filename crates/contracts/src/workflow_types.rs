@@ -79,6 +79,41 @@ impl fmt::Display for WorkflowOperationScope {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernedWorkflowPhase {
+    Plan,
+    Spec,
+    Execute,
+    Verify,
+    Fix,
+    Complete,
+    Failed,
+    Cancelled,
+}
+
+impl GovernedWorkflowPhase {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Spec => "spec",
+            Self::Execute => "execute",
+            Self::Verify => "verify",
+            Self::Fix => "fix",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl fmt::Display for GovernedWorkflowPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskScopeDescriptor {
@@ -176,9 +211,11 @@ mod tests {
         let kind = serde_json::to_value(WorkflowOperationKind::Worktree).expect("kind serializes");
         let scope =
             serde_json::to_value(WorkflowOperationScope::Worktree).expect("scope serializes");
+        let phase = serde_json::to_value(GovernedWorkflowPhase::Execute).expect("phase serializes");
 
         assert_eq!(kind, json!("worktree"));
         assert_eq!(scope, json!("worktree"));
+        assert_eq!(phase, json!("execute"));
     }
 
     #[test]

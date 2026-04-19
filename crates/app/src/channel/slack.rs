@@ -4,7 +4,10 @@ use crate::{CliResult, config::ResolvedSlackChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_base_url,
+        validate_outbound_http_target,
+    },
 };
 
 pub(super) async fn run_slack_send(
@@ -29,8 +32,13 @@ pub(super) async fn run_slack_send(
         return Err("slack outbound target id is empty".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
-    let request_url = format!("{}/chat.postMessage", api_base_url.trim_end_matches('/'));
+    let raw_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url =
+        validate_outbound_http_base_url("slack api_base_url", raw_api_base_url.as_str(), policy)?;
+    let request_url = format!(
+        "{}/chat.postMessage",
+        api_base_url.as_str().trim_end_matches('/')
+    );
     let request_url =
         validate_outbound_http_target("slack api_base_url", request_url.as_str(), policy)?;
     let request_body = json!({

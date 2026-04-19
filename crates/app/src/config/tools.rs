@@ -3,11 +3,11 @@ use std::{
     path::PathBuf,
 };
 
-use loongclaw_kernel::{BridgeSupportMatrix, PluginBridgeKind};
+use loong_kernel::{BridgeSupportMatrix, PluginBridgeKind};
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
-    ConfigValidationIssue, default_loongclaw_home, expand_path, validate_numeric_range,
+    ConfigValidationIssue, default_loong_home, expand_path, validate_numeric_range,
 };
 
 pub const DEFAULT_WEB_FETCH_MAX_BYTES: usize = 1024 * 1024;
@@ -227,6 +227,8 @@ pub struct DelegateToolConfig {
     pub announce_debounce_ms: u64,
     #[serde(default = "default_delegate_announce_max_batch")]
     pub announce_max_batch: usize,
+    #[serde(default = "default_delegate_max_pending")]
+    pub max_pending: Option<usize>,
     #[serde(default)]
     pub child_runtime: DelegateChildRuntimeConfig,
 }
@@ -537,6 +539,8 @@ pub struct RuntimePluginsConfig {
     pub supported_bridges: Vec<String>,
     #[serde(default)]
     pub supported_adapter_families: Vec<String>,
+    #[serde(default)]
+    pub allowed_process_commands: Vec<String>,
 }
 
 impl Default for ToolConfig {
@@ -621,6 +625,7 @@ impl Default for DelegateToolConfig {
             max_frozen_bytes: default_delegate_max_frozen_bytes(),
             announce_debounce_ms: default_delegate_announce_debounce_ms(),
             announce_max_batch: default_delegate_announce_max_batch(),
+            max_pending: default_delegate_max_pending(),
             child_runtime: DelegateChildRuntimeConfig::default(),
         }
     }
@@ -978,7 +983,7 @@ impl BashToolConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(expand_path)
-            .unwrap_or_else(|| default_loongclaw_home().join("rules"))
+            .unwrap_or_else(|| default_loong_home().join("rules"))
     }
 }
 
@@ -1108,6 +1113,22 @@ impl RuntimePluginsConfig {
         }
 
         families.into_iter().collect()
+    }
+
+    pub fn normalized_allowed_process_commands(&self) -> Vec<String> {
+        let mut commands = BTreeSet::new();
+
+        for raw_command in &self.allowed_process_commands {
+            let trimmed_command = raw_command.trim();
+            if trimmed_command.is_empty() {
+                continue;
+            }
+
+            let normalized_command = trimmed_command.to_ascii_lowercase();
+            commands.insert(normalized_command);
+        }
+
+        commands.into_iter().collect()
     }
 
     pub fn readiness_evaluation_label(&self) -> &'static str {
@@ -1343,6 +1364,9 @@ const fn default_delegate_announce_debounce_ms() -> u64 {
 const fn default_delegate_announce_max_batch() -> usize {
     20
 }
+const fn default_delegate_max_pending() -> Option<usize> {
+    None
+}
 
 const fn default_browser_max_sessions() -> usize {
     DEFAULT_BROWSER_MAX_SESSIONS
@@ -1410,7 +1434,7 @@ fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
+    use crate::test_support::{ScopedEnv, ScopedLoongHome};
 
     #[test]
     fn tool_config_defaults_expose_session_runtime_policy() {
@@ -1758,7 +1782,7 @@ default_mode = "{raw_mode}"
 "#
             );
             let parsed =
-                toml::from_str::<crate::config::LoongClawConfig>(&raw).expect("parse tool config");
+                toml::from_str::<crate::config::LoongConfig>(&raw).expect("parse tool config");
 
             assert_eq!(parsed.tools.consent.default_mode, expected_mode);
         }
@@ -1772,8 +1796,7 @@ default_mode = "{raw_mode}"
 default_timeout_seconds = 12
 per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(
             parsed.tools.tool_execution.default_timeout_seconds,
@@ -1804,8 +1827,7 @@ per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
 [tools]
 autonomy_profile = "guided_acquisition"
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(
             parsed.tools.autonomy_profile,
@@ -1855,8 +1877,7 @@ max_sessions = 2
 max_links = 10
 max_text_chars = 1024
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(parsed.tools.approval.mode, GovernedToolApprovalMode::Strict);
         assert_eq!(
@@ -1943,8 +1964,7 @@ max_text_chars = 1024
 max_source_chars = 12345
 max_total_chars = 67890
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(parsed.tools.runtime_self.max_source_chars, 12345);
         assert_eq!(parsed.tools.runtime_self.max_total_chars, 67890);
@@ -1963,8 +1983,7 @@ timeout_seconds = 9
 max_bytes = 262144
 max_redirects = 1
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(!parsed.tools.web.enabled);
         assert!(parsed.tools.web.allow_private_hosts);
@@ -1991,8 +2010,7 @@ max_sessions = 4
 max_links = 12
 max_text_chars = 2048
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(!parsed.tools.browser.enabled);
         assert_eq!(parsed.tools.browser.max_sessions, 4);
@@ -2006,20 +2024,19 @@ max_text_chars = 2048
         let raw = r#"
 [tools.browser_companion]
 enabled = true
-command = "loongclaw-browser-companion"
+command = "loong-browser-companion"
 expected_version = "1.2.3"
 timeout_seconds = 7
 allow_private_hosts = true
 allowed_domains = ["Docs.Example.com", "docs.example.com", " api.example.com "]
 blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(parsed.tools.browser_companion.enabled);
         assert_eq!(
             parsed.tools.browser_companion.command.as_deref(),
-            Some("loongclaw-browser-companion")
+            Some("loong-browser-companion")
         );
         assert_eq!(
             parsed.tools.browser_companion.expected_version.as_deref(),
@@ -2047,8 +2064,8 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
-    fn bash_tool_config_defaults_to_loongclaw_home_rules_dir() {
-        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-home");
+    fn bash_tool_config_defaults_to_loong_home_rules_dir() {
+        let home = ScopedLoongHome::new("loong-bash-tool-config-home");
 
         assert_eq!(
             BashToolConfig::default().resolved_rules_dir(),
@@ -2068,7 +2085,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
     #[test]
     fn bash_tool_config_treats_blank_rules_dir_override_as_unset() {
-        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-blank-home");
+        let home = ScopedLoongHome::new("loong-bash-tool-config-blank-home");
         let expected_rules_dir = home.path().join("rules");
 
         for raw in ["", "   "] {
@@ -2224,6 +2241,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         assert!(config.roots.is_empty());
         assert!(config.supported_bridges.is_empty());
         assert!(config.supported_adapter_families.is_empty());
+        assert!(config.allowed_process_commands.is_empty());
         assert_eq!(
             config.readiness_evaluation_label(),
             "default_bridge_support_matrix"
@@ -2241,6 +2259,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["~/runtime-plugins".to_owned()],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let roots = config.resolved_roots();
@@ -2260,6 +2279,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             ],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let roots = config.resolved_roots();
@@ -2281,6 +2301,11 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 " web-search ".to_owned(),
                 "python-stdio-adapter".to_owned(),
                 "web-search".to_owned(),
+            ],
+            allowed_process_commands: vec![
+                " node ".to_owned(),
+                "python".to_owned(),
+                "node".to_owned(),
             ],
         };
         let default_matrix = BridgeSupportMatrix::default();
@@ -2309,6 +2334,8 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 .contains("python-stdio-adapter")
         );
         assert!(matrix.supported_adapter_families.contains("web-search"));
+        let commands = config.normalized_allowed_process_commands();
+        assert_eq!(commands, vec!["node".to_owned(), "python".to_owned()]);
         assert_eq!(
             matrix.supported_compatibility_modes,
             default_matrix.supported_compatibility_modes
@@ -2330,6 +2357,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["/tmp/runtime-plugins".to_owned()],
             supported_bridges: vec!["bogus".to_owned(), "unknown".to_owned()],
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let issues = config.validate();
@@ -2349,6 +2377,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["   ".to_owned()],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let issues = config.validate();

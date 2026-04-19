@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use loongclaw_contracts::CapabilityToken;
-use loongclaw_kernel::{
+use loong_contracts::CapabilityToken;
+use loong_kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
-    JsonlAuditSink, LoongClawKernel, StaticPolicyEngine, SystemClock, VerticalPackManifest,
+    JsonlAuditSink, LoongKernel, StaticPolicyEngine, SystemClock, VerticalPackManifest,
 };
 
-use crate::config::{AuditMode, LoongClawConfig};
+use crate::config::{AuditMode, LoongConfig};
 
 /// Default pack identifier used by MVP entry points.
 const MVP_PACK_ID: &str = "dev-automation";
@@ -24,7 +24,7 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 /// to avoid data divergence.
 #[derive(Clone)]
 pub struct KernelContext {
-    pub kernel: Arc<LoongClawKernel<StaticPolicyEngine>>,
+    pub kernel: Arc<LoongKernel<StaticPolicyEngine>>,
     pub token: CapabilityToken,
 }
 
@@ -55,7 +55,7 @@ pub(crate) fn bootstrap_test_kernel_context(
         agent_id,
         ttl_s,
         Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>,
-        &LoongClawConfig::default(),
+        &LoongConfig::default(),
     )
 }
 
@@ -66,19 +66,19 @@ pub(crate) fn bootstrap_test_kernel_context(
 /// long-lived capability token for `agent_id`.
 ///
 /// The helper intentionally stays below higher-level runtime initialization: it
-/// does not export `LOONGCLAW_*` environment variables, resolve chat session
+/// does not export `LOONG_*` environment variables, resolve chat session
 /// ids, or prepare channel/conversation state. Callers that need those side
 /// effects should compose it with `runtime_env::initialize_runtime_environment`
 /// or a surface-specific bootstrap such as `chat::initialize_cli_turn_runtime`.
 pub fn bootstrap_kernel_context_with_config(
     agent_id: &str,
     ttl_s: u64,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Result<KernelContext, String> {
     bootstrap_kernel_context_with_audit_sink(agent_id, ttl_s, build_audit_sink(config)?, config)
 }
 
-fn build_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, String> {
+fn build_audit_sink(config: &LoongConfig) -> Result<Arc<dyn AuditSink>, String> {
     match config.audit.mode {
         AuditMode::InMemory => Ok(Arc::new(InMemoryAuditSink::default()) as Arc<dyn AuditSink>),
         AuditMode::Jsonl => build_jsonl_audit_sink(config),
@@ -96,7 +96,7 @@ fn build_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, Stri
     }
 }
 
-fn build_jsonl_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, String> {
+fn build_jsonl_audit_sink(config: &LoongConfig) -> Result<Arc<dyn AuditSink>, String> {
     let path = config.audit.resolved_path();
     JsonlAuditSink::new(path.clone())
         .map(|sink| Arc::new(sink) as Arc<dyn AuditSink>)
@@ -112,9 +112,9 @@ fn bootstrap_kernel_context_with_audit_sink(
     agent_id: &str,
     ttl_s: u64,
     audit_sink: Arc<dyn AuditSink>,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Result<KernelContext, String> {
-    let mut kernel = LoongClawKernel::with_runtime(
+    let mut kernel = LoongKernel::with_runtime(
         StaticPolicyEngine::default(),
         Arc::new(SystemClock) as Arc<dyn Clock>,
         audit_sink,
@@ -157,8 +157,7 @@ fn bootstrap_kernel_context_with_audit_sink(
             .map_err(|e| format!("set default memory adapter failed: {e}"))?;
     }
 
-    let tool_rt =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+    let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let file_root = tool_rt.file_root.clone();
     kernel.register_core_tool_adapter(crate::tools::MvpToolAdapter::with_config(tool_rt));
     kernel
@@ -167,7 +166,7 @@ fn bootstrap_kernel_context_with_audit_sink(
 
     // Register policy extensions for unified security enforcement.
     let tool_policy_rt =
-        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     kernel.register_policy_extension(
         crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_policy_rt),
     );
@@ -197,7 +196,7 @@ mod tests {
     fn bootstrap_kernel_context_with_config_writes_jsonl_audit_events() {
         let tempdir = tempdir().expect("tempdir");
         let audit_path = tempdir.path().join("audit").join("events.jsonl");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.audit.mode = AuditMode::Jsonl;
         config.audit.path = audit_path.display().to_string();
         config.audit.retain_in_memory = false;
@@ -223,7 +222,7 @@ mod tests {
     fn bootstrap_kernel_context_with_config_writes_fanout_audit_events() {
         let tempdir = tempdir().expect("tempdir");
         let audit_path = tempdir.path().join("audit").join("events.jsonl");
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.audit.mode = AuditMode::Fanout;
         config.audit.path = audit_path.display().to_string();
         config.audit.retain_in_memory = true;
@@ -247,7 +246,7 @@ mod tests {
 
     #[test]
     fn bootstrap_kernel_context_with_config_grants_network_egress() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.audit.mode = AuditMode::InMemory;
 
         let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)

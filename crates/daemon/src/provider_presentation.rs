@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use crate::provider_credential_policy;
 
@@ -14,7 +14,7 @@ pub fn provider_identity_summary(config: &mvp::config::ProviderConfig) -> String
     provider_identity_summary_with_credential_state(config, provider_credential_state(config))
 }
 
-pub fn active_provider_label(config: &mvp::config::LoongClawConfig) -> String {
+pub fn active_provider_label(config: &mvp::config::LoongConfig) -> String {
     config
         .active_provider_id()
         .and_then(|profile_id| config.providers.get(profile_id))
@@ -22,7 +22,7 @@ pub fn active_provider_label(config: &mvp::config::LoongClawConfig) -> String {
         .unwrap_or_else(|| guided_provider_label(config.provider.kind).to_owned())
 }
 
-pub fn active_provider_detail_label(config: &mvp::config::LoongClawConfig) -> String {
+pub fn active_provider_detail_label(config: &mvp::config::LoongConfig) -> String {
     let profile_id = config
         .active_provider_id()
         .unwrap_or(config.provider.kind.profile().id);
@@ -34,7 +34,7 @@ pub fn active_provider_detail_label(config: &mvp::config::LoongClawConfig) -> St
     format!("{} [{profile_id}]", guided_provider_label(kind))
 }
 
-pub fn saved_provider_profile_ids(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+pub fn saved_provider_profile_ids(config: &mvp::config::LoongConfig) -> Vec<String> {
     if config.providers.is_empty() {
         return vec![
             config
@@ -56,7 +56,7 @@ pub fn saved_provider_profile_ids(config: &mvp::config::LoongClawConfig) -> Vec<
 }
 
 pub fn render_provider_profile_state_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     width: usize,
     single_provider_prefix: Option<&str>,
 ) -> Vec<String> {
@@ -69,7 +69,7 @@ pub fn render_provider_profile_state_lines(
 }
 
 pub fn provider_profile_state_display_lines(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     single_provider_prefix: Option<&str>,
 ) -> Vec<String> {
     render_provider_profile_state_lines_from_parts(

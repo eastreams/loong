@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use kernel::{
     Capability, CapabilityToken, ConnectorCommand, ExecutionRoute, HarnessAdapter, HarnessError,
-    HarnessKind, HarnessOutcome, HarnessRequest, LoongClawKernel, PolicyEngine, StaticPolicyEngine,
+    HarnessKind, HarnessOutcome, HarnessRequest, LoongKernel, PolicyEngine, StaticPolicyEngine,
     TaskIntent, TaskState, TaskSupervisor,
 };
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ pub struct DaemonTaskExecution {
 /// dispatch fails so CLI/API surfaces can report the supervisor's terminal
 /// state instead of collapsing everything into a plain transport error.
 pub(crate) async fn execute_daemon_task_with_supervisor<P: PolicyEngine>(
-    kernel: &LoongClawKernel<P>,
+    kernel: &LoongKernel<P>,
     pack_id: &str,
     token: &CapabilityToken,
     intent: TaskIntent,
@@ -60,7 +60,7 @@ struct DaemonTurnTaskPayload {
     config_path: Option<String>,
     session_hint: Option<String>,
     message: Option<String>,
-    turn_mode: loongclaw_app::agent_runtime::AgentTurnMode,
+    turn_mode: loong_app::agent_runtime::AgentTurnMode,
     metadata: std::collections::BTreeMap<String, String>,
     acp: bool,
     acp_event_stream: bool,
@@ -84,12 +84,12 @@ impl HarnessAdapter for EmbeddedAgentHarness {
         let payload = serde_json::from_value::<DaemonTurnTaskPayload>(request.payload)
             .map_err(|error| HarnessError::Execution(format!("invalid_turn_payload: {error}")))?;
         let message = payload.message.unwrap_or(request.objective);
-        let runtime = loongclaw_app::agent_runtime::AgentRuntime::new();
+        let runtime = loong_app::agent_runtime::AgentRuntime::new();
         let turn_result = runtime
             .run_turn(
                 payload.config_path.as_deref(),
                 payload.session_hint.as_deref(),
-                &loongclaw_app::agent_runtime::AgentTurnRequest {
+                &loong_app::agent_runtime::AgentTurnRequest {
                     message,
                     turn_mode: payload.turn_mode,
                     channel_id: None,
@@ -104,7 +104,7 @@ impl HarnessAdapter for EmbeddedAgentHarness {
                     acp_cwd: payload.acp_cwd,
                     live_surface_enabled: matches!(
                         payload.turn_mode,
-                        loongclaw_app::agent_runtime::AgentTurnMode::Interactive
+                        loong_app::agent_runtime::AgentTurnMode::Interactive
                     ),
                 },
             )
@@ -125,7 +125,7 @@ impl HarnessAdapter for EmbeddedAgentHarness {
 /// This starts from the spec/kernel bootstrap defaults and then registers the
 /// embedded agent harness so daemon task intents can route back into the shared
 /// `AgentRuntime` pipeline without spawning an external process.
-fn build_daemon_runtime_kernel() -> LoongClawKernel<StaticPolicyEngine> {
+fn build_daemon_runtime_kernel() -> LoongKernel<StaticPolicyEngine> {
     let mut kernel = kernel_bootstrap::BootstrapBuilder::default().into_builder();
     kernel.register_harness_adapter(EmbeddedAgentHarness);
     kernel
@@ -232,7 +232,7 @@ pub(crate) async fn run_turn_cli(
     if message.trim().is_empty() {
         return Err("turn message must not be empty".to_owned());
     }
-    let (_resolved_path, config) = loongclaw_app::config::load(config_path)?;
+    let (_resolved_path, config) = loong_app::config::load(config_path)?;
     if !config.cli.enabled {
         return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
     }
@@ -246,9 +246,9 @@ pub(crate) async fn run_turn_cli(
         session_hint: session_hint.map(ToOwned::to_owned),
         message: Some(message.to_owned()),
         turn_mode: if acp {
-            loongclaw_app::agent_runtime::AgentTurnMode::Acp
+            loong_app::agent_runtime::AgentTurnMode::Acp
         } else {
-            loongclaw_app::agent_runtime::AgentTurnMode::Oneshot
+            loong_app::agent_runtime::AgentTurnMode::Oneshot
         },
         metadata: std::collections::BTreeMap::new(),
         acp,
@@ -275,10 +275,9 @@ pub(crate) async fn run_turn_cli(
     )
     .await?;
     let (_, outcome) = require_successful_daemon_task_execution(&dispatch)?;
-    let result = serde_json::from_value::<loongclaw_app::agent_runtime::AgentTurnResult>(
-        outcome.output.clone(),
-    )
-    .map_err(|error| format!("parse turn result failed: {error}"))?;
+    let result =
+        serde_json::from_value::<loong_app::agent_runtime::AgentTurnResult>(outcome.output.clone())
+            .map_err(|error| format!("parse turn result failed: {error}"))?;
     println!("{}", result.output_text);
     Ok(())
 }
@@ -339,7 +338,7 @@ mod tests {
                     Capability::InvokeTool,
                     Capability::MemoryRead,
                 ]),
-                payload: json!({"repo":"loongclaw-ai/loongclaw"}),
+                payload: json!({"repo":"loong-ai/loong"}),
             },
         )
         .await

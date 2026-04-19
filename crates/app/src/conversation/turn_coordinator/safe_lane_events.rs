@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn emit_safe_lane_event<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     event_name: &str,
@@ -97,7 +97,7 @@ pub(super) async fn emit_turn_ingress_event<R: ConversationRuntime + ?Sized>(
 }
 
 pub(super) fn should_emit_safe_lane_event(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     event_name: &str,
     payload: &Value,
 ) -> bool {

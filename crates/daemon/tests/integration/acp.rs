@@ -15,15 +15,15 @@ fn unique_sqlite_path(prefix: &str) -> std::path::PathBuf {
 #[test]
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 fn resolve_acp_status_session_key_supports_conversation_lookup() {
-    let sqlite_path = unique_sqlite_path("loongclaw-daemon-acp-status");
+    let sqlite_path = unique_sqlite_path("loong-daemon-acp-status");
     let _ = fs::remove_file(&sqlite_path);
 
-    let config = mvp::config::LoongClawConfig {
+    let config = mvp::config::LoongConfig {
         memory: mvp::config::MemoryConfig {
             sqlite_path: sqlite_path.display().to_string(),
             ..mvp::config::MemoryConfig::default()
         },
-        ..mvp::config::LoongClawConfig::default()
+        ..mvp::config::LoongConfig::default()
     };
     let store = mvp::acp::AcpSqliteSessionStore::new(Some(sqlite_path));
     mvp::acp::AcpSessionStore::upsert(
@@ -61,15 +61,15 @@ fn resolve_acp_status_session_key_supports_conversation_lookup() {
 #[test]
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 fn resolve_acp_status_session_key_supports_binding_route_lookup() {
-    let sqlite_path = unique_sqlite_path("loongclaw-daemon-acp-route-status");
+    let sqlite_path = unique_sqlite_path("loong-daemon-acp-route-status");
     let _ = fs::remove_file(&sqlite_path);
 
-    let config = mvp::config::LoongClawConfig {
+    let config = mvp::config::LoongConfig {
         memory: mvp::config::MemoryConfig {
             sqlite_path: sqlite_path.display().to_string(),
             ..mvp::config::MemoryConfig::default()
         },
-        ..mvp::config::LoongClawConfig::default()
+        ..mvp::config::LoongConfig::default()
     };
     let store = mvp::acp::AcpSqliteSessionStore::new(Some(sqlite_path));
     mvp::acp::AcpSessionStore::upsert(
@@ -492,7 +492,7 @@ fn acp_event_summary_json_keeps_counts_and_last_fields() {
 #[test]
 fn acp_doctor_json_uses_effective_backend_when_cli_overrides_default() {
     let payload = acp_doctor_json(
-        "/tmp/loongclaw.toml",
+        "/tmp/loong.toml",
         "planning_stub",
         "acpx",
         &mvp::acp::AcpDoctorReport {
@@ -512,7 +512,7 @@ fn acp_doctor_json_uses_effective_backend_when_cli_overrides_default() {
 #[test]
 fn resolve_acp_status_session_key_rejects_missing_selector() {
     let error =
-        resolve_acp_status_session_key(&mvp::config::LoongClawConfig::default(), None, None, None)
+        resolve_acp_status_session_key(&mvp::config::LoongConfig::default(), None, None, None)
             .expect_err("missing selector should fail");
 
     assert!(error.contains("--route-session-id <route_session_id>"));

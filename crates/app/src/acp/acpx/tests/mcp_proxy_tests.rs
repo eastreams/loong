@@ -90,7 +90,7 @@ fn fake_acpx_script_helpers_work_with_empty_path() {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let temp_dir = unique_temp_dir("loongclaw-acpx-script-builtins");
+    let temp_dir = unique_temp_dir("loong-acpx-script-builtins");
     let log_path = temp_dir.join("calls.log");
     let script_path = write_fake_acpx_script(
         &temp_dir,
@@ -165,7 +165,7 @@ fn build_mcp_proxy_agent_command_preserves_server_cwd() {
     let payload: Value = serde_json::from_slice(payload_bytes.as_slice()).expect("parse payload");
 
     assert!(
-        script_path.contains("loongclaw-acpx-mcp-proxy-"),
+        script_path.contains("loong-acpx-mcp-proxy-"),
         "expected versioned script path, got: {script_path}"
     );
     let script_file_name = std::path::Path::new(script_path.as_str())
@@ -173,7 +173,7 @@ fn build_mcp_proxy_agent_command_preserves_server_cwd() {
         .and_then(|name| name.to_str())
         .expect("script file name");
     assert!(
-        script_file_name != "loongclaw-acpx-mcp-proxy.mjs",
+        script_file_name != "loong-acpx-mcp-proxy.mjs",
         "expected hashed script file name, got: {script_file_name}"
     );
     assert!(
@@ -212,7 +212,7 @@ fn probe_mcp_proxy_support_invokes_script_runtime() {
         .build()
         .expect("create test runtime");
     let _guard = runtime.block_on(lock_acpx_runtime_tests());
-    let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-probe-runtime");
+    let temp_dir = unique_temp_dir("loong-acpx-mcp-probe-runtime");
     let node_log_path = temp_dir.join("node-args.log");
     let node_script_path = temp_dir.join("fake-node.sh");
     let node_script = format!(
@@ -260,7 +260,7 @@ fn probe_mcp_proxy_support_kills_timed_out_runtime() {
         .build()
         .expect("create test runtime");
     let _guard = runtime.block_on(lock_acpx_runtime_tests());
-    let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-probe-timeout");
+    let temp_dir = unique_temp_dir("loong-acpx-mcp-probe-timeout");
     let pid_path = temp_dir.join("node.pid");
     let node_script_path = temp_dir.join("fake-node-timeout.sh");
     let node_script = format!(

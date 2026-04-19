@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     preparation: &ProviderTurnPreparation,

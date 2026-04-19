@@ -47,6 +47,20 @@ pub const WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
         serve_bootstrap_agent_id: "channel-whatsapp",
     };
 
+pub const LINE_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "line",
+        platform: ChannelPlatform::Line,
+        serve_bootstrap_agent_id: "channel-line",
+    };
+
+pub const WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "webhook",
+        platform: ChannelPlatform::Webhook,
+        serve_bootstrap_agent_id: "channel-webhook",
+    };
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelCommandFamilyDescriptor {
     pub runtime: ChannelRuntimeCommandDescriptor,
@@ -116,6 +130,7 @@ pub struct ChannelCatalogOperationRequirement {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelCatalogOperationAvailability {
     Implemented,
+    ManagedBridge,
     Stub,
 }
 
@@ -123,7 +138,15 @@ impl ChannelCatalogOperationAvailability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Implemented => "implemented",
+            Self::ManagedBridge => "managed_bridge",
             Self::Stub => "stub",
+        }
+    }
+
+    pub const fn is_runnable(self) -> bool {
+        match self {
+            Self::Implemented | Self::ManagedBridge => true,
+            Self::Stub => false,
         }
     }
 }
@@ -156,6 +179,7 @@ impl ChannelCapability {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelOnboardingStrategy {
     ManualConfig,
+    QrRegistration,
     PluginBridge,
     Planned,
 }
@@ -164,6 +188,7 @@ impl ChannelOnboardingStrategy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ManualConfig => "manual_config",
+            Self::QrRegistration => "qr_registration",
             Self::PluginBridge => "plugin_bridge",
             Self::Planned => "planned",
         }

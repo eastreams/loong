@@ -11,9 +11,14 @@ mod shared;
 mod tools;
 
 #[allow(unused_imports)]
-pub use crate::channel::{ChannelDescriptor, ChannelRuntimeKind};
+pub use crate::channel::{ChannelDescriptor, ChannelOperationalModel, ChannelRuntimeKind};
 #[allow(unused_imports)]
-pub use crate::channel::{channel_descriptor, service_channel_descriptors};
+pub use crate::channel::{
+    catalog_only_channel_descriptors, channel_descriptor, gateway_supervised_channel_descriptors,
+    outbound_only_channel_descriptors, plugin_backed_channel_descriptors,
+    runtime_backed_channel_descriptors, service_channel_descriptors,
+    standalone_runtime_channel_descriptors,
+};
 pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
@@ -103,14 +108,14 @@ pub(crate) use runtime::inject_test_config_write_failure;
 pub use runtime::{
     AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
     AcpDispatchThreadRoutingMode, AcpxBackendConfig, AcpxMcpServerConfig,
-    ConfigValidationDiagnostic, ControlPlaneConfig, LoongClawConfig,
-    PROVIDER_SELECTOR_COMPACT_NOTE, PROVIDER_SELECTOR_HUMAN_SUMMARY, PROVIDER_SELECTOR_NOTE,
-    PROVIDER_SELECTOR_PLACEHOLDER, PROVIDER_SELECTOR_TARGET_SUMMARY, ProviderSelectorProfileRef,
-    ProviderSelectorResolution, accepted_provider_selectors, default_config_path,
-    default_loong_home, default_loongclaw_home, describe_provider_selector_target, load,
-    normalize_validation_locale, preferred_provider_selector, provider_selector_catalog,
-    provider_selector_recommendation_hint, render, resolve_provider_selector,
-    supported_validation_locales, validate_file, validate_file_with_locale, write, write_template,
+    ConfigValidationDiagnostic, ControlPlaneConfig, LoongConfig, PROVIDER_SELECTOR_COMPACT_NOTE,
+    PROVIDER_SELECTOR_HUMAN_SUMMARY, PROVIDER_SELECTOR_NOTE, PROVIDER_SELECTOR_PLACEHOLDER,
+    PROVIDER_SELECTOR_TARGET_SUMMARY, ProviderSelectorProfileRef, ProviderSelectorResolution,
+    accepted_provider_selectors, default_config_path, default_loong_home,
+    describe_provider_selector_target, load, normalize_validation_locale,
+    preferred_provider_selector, provider_selector_catalog, provider_selector_recommendation_hint,
+    render, resolve_provider_selector, supported_validation_locales, validate_file,
+    validate_file_with_locale, write, write_template,
 };
 pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
 pub(crate) use shared::ConfigValidationIssue;
@@ -122,15 +127,12 @@ pub use shared::{
     set_active_cli_command_name,
 };
 pub(crate) use shared::{
-    pop_default_loongclaw_home_env_override_for_tests,
-    push_default_loongclaw_home_env_override_for_tests,
+    pop_default_loong_home_env_override_for_tests, push_default_loong_home_env_override_for_tests,
 };
 #[cfg(test)]
 pub(crate) use shared::{
-    pop_default_loongclaw_home_override_for_tests, push_default_loongclaw_home_override_for_tests,
+    pop_default_loong_home_override_for_tests, push_default_loong_home_override_for_tests,
 };
-
-pub type LoongConfig = LoongClawConfig;
 #[allow(unused_imports)]
 pub use tools::{
     AUTONOMY_PROFILE_VALID_VALUES, AutonomyProfile, BrowserCompanionToolConfig, BrowserToolConfig,
@@ -165,19 +167,19 @@ pub(crate) use tools::{
 mod tests {
     use std::path::PathBuf;
 
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
 
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
+    use crate::test_support::{ScopedEnv, ScopedLoongHome};
     use std::collections::BTreeSet;
 
     fn clear_config_test_secret_envs(env: &mut ScopedEnv) {
         for key in [
-            "LOONGCLAW_TEST_API_KEY_REF",
-            "LOONGCLAW_TEST_MISSING_API_KEY",
-            "LOONGCLAW_TEST_LEGACY_FALLBACK",
-            "LOONGCLAW_TEST_TYPED_SECRET_REF",
-            "LOONGCLAW_TEST_TELEGRAM_SECRET_REF",
+            "LOONG_TEST_API_KEY_REF",
+            "LOONG_TEST_MISSING_API_KEY",
+            "LOONG_TEST_LEGACY_FALLBACK",
+            "LOONG_TEST_TYPED_SECRET_REF",
+            "LOONG_TEST_TELEGRAM_SECRET_REF",
         ] {
             env.remove(key);
         }
@@ -185,20 +187,28 @@ mod tests {
 
     fn expected_service_channel_ids() -> Vec<&'static str> {
         vec![
-            "telegram",
-            "feishu",
-            "matrix",
-            "wecom",
-            "weixin",
-            "qqbot",
-            "onebot",
+            "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook",
+        ]
+    }
+
+    fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
+        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+    }
+
+    fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
+        vec!["line", "webhook"]
+    }
+
+    fn expected_plugin_backed_channel_ids() -> Vec<&'static str> {
+        vec!["weixin", "qqbot", "onebot"]
+    }
+
+    fn expected_outbound_channel_ids() -> Vec<&'static str> {
+        vec![
             "discord",
             "slack",
-            "line",
             "dingtalk",
-            "whatsapp",
             "email",
-            "webhook",
             "google-chat",
             "signal",
             "twitch",
@@ -237,134 +247,181 @@ mod tests {
         let telegram = channel_descriptor("telegram").expect("telegram descriptor");
         assert_eq!(telegram.id, "telegram");
         assert_eq!(telegram.surface_label, "telegram channel");
-        assert_eq!(telegram.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(telegram.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            telegram.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(telegram.serve_subcommand, Some("telegram-serve"));
 
         let feishu = channel_descriptor("feishu").expect("feishu descriptor");
         assert_eq!(feishu.id, "feishu");
         assert_eq!(feishu.surface_label, "feishu channel");
-        assert_eq!(feishu.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(feishu.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            feishu.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(feishu.serve_subcommand, Some("feishu-serve"));
 
         let wecom = channel_descriptor("wecom").expect("wecom descriptor");
         assert_eq!(wecom.id, "wecom");
         assert_eq!(wecom.surface_label, "wecom channel");
-        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            wecom.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
 
         let weixin = channel_descriptor("wechat").expect("weixin descriptor");
         assert_eq!(weixin.id, "weixin");
         assert_eq!(weixin.surface_label, "weixin channel");
-        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            weixin.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(weixin.serve_subcommand, None);
 
         let qqbot = channel_descriptor("qq").expect("qqbot descriptor");
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
-        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            qqbot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(qqbot.serve_subcommand, None);
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
         assert_eq!(onebot.id, "onebot");
         assert_eq!(onebot.surface_label, "onebot channel");
-        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            onebot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(onebot.serve_subcommand, None);
 
         let discord = channel_descriptor("discord").expect("discord descriptor");
         assert_eq!(discord.id, "discord");
         assert_eq!(discord.surface_label, "discord channel");
-        assert_eq!(discord.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(discord.runtime_kind, ChannelRuntimeKind::OutboundOnly);
+        assert_eq!(
+            discord.operational_model,
+            ChannelOperationalModel::OutboundOnly
+        );
         assert_eq!(discord.serve_subcommand, None);
 
         let slack = channel_descriptor("slack").expect("slack descriptor");
         assert_eq!(slack.id, "slack");
         assert_eq!(slack.surface_label, "slack channel");
-        assert_eq!(slack.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(slack.runtime_kind, ChannelRuntimeKind::OutboundOnly);
+        assert_eq!(
+            slack.operational_model,
+            ChannelOperationalModel::OutboundOnly
+        );
         assert_eq!(slack.serve_subcommand, None);
 
         let line = channel_descriptor("line").expect("line descriptor");
         assert_eq!(line.id, "line");
         assert_eq!(line.surface_label, "line channel");
-        assert_eq!(line.runtime_kind, ChannelRuntimeKind::Service);
-        assert_eq!(line.serve_subcommand, None);
+        assert_eq!(line.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            line.operational_model,
+            ChannelOperationalModel::StandaloneRuntime
+        );
+        assert_eq!(line.serve_subcommand, Some("line-serve"));
 
         let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
         assert_eq!(dingtalk.id, "dingtalk");
         assert_eq!(dingtalk.surface_label, "dingtalk channel");
-        assert_eq!(dingtalk.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(dingtalk.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(dingtalk.serve_subcommand, None);
 
         let whatsapp = channel_descriptor("whatsapp").expect("whatsapp descriptor");
         assert_eq!(whatsapp.id, "whatsapp");
         assert_eq!(whatsapp.surface_label, "whatsapp channel");
-        assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            whatsapp.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
         assert_eq!(whatsapp.serve_subcommand, Some("whatsapp-serve"));
 
         let email = channel_descriptor("email").expect("email descriptor");
         assert_eq!(email.id, "email");
         assert_eq!(email.surface_label, "email channel");
-        assert_eq!(email.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(email.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(email.serve_subcommand, None);
 
         let webhook = channel_descriptor("webhook").expect("webhook descriptor");
         assert_eq!(webhook.id, "webhook");
         assert_eq!(webhook.surface_label, "webhook channel");
-        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::Service);
-        assert_eq!(webhook.serve_subcommand, None);
+        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
+        assert_eq!(
+            webhook.operational_model,
+            ChannelOperationalModel::StandaloneRuntime
+        );
+        assert_eq!(webhook.serve_subcommand, Some("webhook-serve"));
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.id, "google-chat");
         assert_eq!(google_chat.surface_label, "google chat channel");
-        assert_eq!(google_chat.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(google_chat.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(google_chat.serve_subcommand, None);
 
         let signal = channel_descriptor("signal").expect("signal descriptor");
         assert_eq!(signal.id, "signal");
         assert_eq!(signal.surface_label, "signal channel");
-        assert_eq!(signal.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(signal.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(signal.serve_subcommand, None);
 
         let irc = channel_descriptor("irc").expect("irc descriptor");
         assert_eq!(irc.id, "irc");
         assert_eq!(irc.surface_label, "irc channel");
-        assert_eq!(irc.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(irc.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(irc.serve_subcommand, None);
 
         let twitch = channel_descriptor("twitch").expect("twitch descriptor");
         assert_eq!(twitch.id, "twitch");
         assert_eq!(twitch.surface_label, "twitch channel");
-        assert_eq!(twitch.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(twitch.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(twitch.serve_subcommand, None);
 
         let teams = channel_descriptor("teams").expect("teams descriptor");
         assert_eq!(teams.id, "teams");
         assert_eq!(teams.surface_label, "teams channel");
-        assert_eq!(teams.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(teams.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(teams.serve_subcommand, None);
 
         let mattermost = channel_descriptor("mattermost").expect("mattermost descriptor");
         assert_eq!(mattermost.id, "mattermost");
         assert_eq!(mattermost.surface_label, "mattermost channel");
-        assert_eq!(mattermost.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(mattermost.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(mattermost.serve_subcommand, None);
 
         let nextcloud_talk =
             channel_descriptor("nextcloud-talk").expect("nextcloud talk descriptor");
         assert_eq!(nextcloud_talk.id, "nextcloud-talk");
         assert_eq!(nextcloud_talk.surface_label, "nextcloud talk channel");
-        assert_eq!(nextcloud_talk.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(
+            nextcloud_talk.runtime_kind,
+            ChannelRuntimeKind::OutboundOnly
+        );
         assert_eq!(nextcloud_talk.serve_subcommand, None);
 
         let synology_chat = channel_descriptor("synology-chat").expect("synology chat descriptor");
         assert_eq!(synology_chat.id, "synology-chat");
         assert_eq!(synology_chat.surface_label, "synology chat channel");
-        assert_eq!(synology_chat.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(synology_chat.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(synology_chat.serve_subcommand, None);
 
         let imessage = channel_descriptor("imessage").expect("imessage descriptor");
         assert_eq!(imessage.id, "imessage");
         assert_eq!(imessage.surface_label, "imessage channel");
-        assert_eq!(imessage.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(imessage.runtime_kind, ChannelRuntimeKind::OutboundOnly);
         assert_eq!(imessage.serve_subcommand, None);
 
         assert!(channel_descriptor("unknown").is_none());
@@ -372,17 +429,29 @@ mod tests {
 
     #[test]
     fn enabled_channel_views_follow_shared_catalog_order() {
-        let default_config = LoongClawConfig::default();
+        let default_config = LoongConfig::default();
         assert_eq!(default_config.enabled_channel_ids(), vec!["cli"]);
         assert!(default_config.enabled_service_channel_ids().is_empty());
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let expected_service_ids = expected_service_channel_ids();
+        let expected_plugin_backed_ids = expected_plugin_backed_channel_ids();
+        let expected_outbound_ids = expected_outbound_channel_ids();
         let expected_enabled_service_ids = expected_service_ids
             .iter()
             .map(|channel_id| (*channel_id).to_owned())
             .collect::<Vec<_>>();
         let mut expected_enabled_channel_ids = vec!["cli".to_owned()];
         expected_enabled_channel_ids.extend(expected_enabled_service_ids.iter().cloned());
+        expected_enabled_channel_ids.extend(
+            expected_plugin_backed_ids
+                .iter()
+                .map(|channel_id| (*channel_id).to_owned()),
+        );
+        expected_enabled_channel_ids.extend(
+            expected_outbound_ids
+                .iter()
+                .map(|channel_id| (*channel_id).to_owned()),
+        );
 
         config.telegram.enabled = true;
         config.feishu.enabled = true;
@@ -428,7 +497,7 @@ mod tests {
         let matrix = channel_descriptor("matrix").expect("matrix descriptor");
         assert_eq!(matrix.id, "matrix");
         assert_eq!(matrix.surface_label, "matrix channel");
-        assert_eq!(matrix.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(matrix.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(matrix.serve_subcommand, Some("matrix-serve"));
     }
 
@@ -439,6 +508,73 @@ mod tests {
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
         assert_eq!(service_ids, expected_service_channel_ids());
+    }
+
+    #[test]
+    fn channel_descriptor_helper_groups_follow_runtime_taxonomy() {
+        let runtime_backed_ids = runtime_backed_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let gateway_supervised_ids = gateway_supervised_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let standalone_runtime_ids = standalone_runtime_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let plugin_backed_ids = plugin_backed_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let outbound_only_ids = outbound_only_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let catalog_only_ids = catalog_only_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(runtime_backed_ids, expected_service_channel_ids());
+        assert_eq!(
+            gateway_supervised_ids,
+            expected_gateway_supervised_channel_ids()
+        );
+        assert_eq!(
+            standalone_runtime_ids,
+            expected_standalone_runtime_channel_ids()
+        );
+        assert_eq!(plugin_backed_ids, expected_plugin_backed_channel_ids());
+        assert_eq!(outbound_only_ids, expected_outbound_channel_ids());
+        assert_eq!(catalog_only_ids, vec!["zalo", "zalo-personal", "webchat"]);
+    }
+
+    #[test]
+    fn enabled_channel_runtime_groups_follow_runtime_taxonomy() {
+        let mut config = LoongConfig::default();
+        config.telegram.enabled = true;
+        config.weixin.enabled = true;
+        config.discord.enabled = true;
+
+        assert_eq!(
+            config.enabled_runtime_backed_channel_ids(),
+            vec!["telegram".to_owned()]
+        );
+        assert_eq!(
+            config.enabled_service_channel_ids(),
+            vec!["telegram".to_owned()]
+        );
+        assert_eq!(
+            config.enabled_plugin_backed_channel_ids(),
+            vec!["weixin".to_owned()]
+        );
+        assert_eq!(
+            config.enabled_outbound_only_channel_ids(),
+            vec!["discord".to_owned()]
+        );
+        assert!(config.enabled_catalog_only_channel_ids().is_empty());
     }
 
     #[test]
@@ -920,9 +1056,9 @@ mod tests {
             Some(std::path::PathBuf::from(":memory:"))
         );
 
-        let _home = ScopedLoongClawHome::new("loongclaw-provider-profile-home");
+        let _home = ScopedLoongHome::new("loong-provider-profile-home");
         let profile_sqlite_default = ProviderConfig::default();
-        let expected_default = default_loongclaw_home().join("provider-profile-state.sqlite3");
+        let expected_default = default_loong_home().join("provider-profile-state.sqlite3");
         assert_eq!(
             profile_sqlite_default.resolved_profile_state_sqlite_path_with_default(),
             expected_default
@@ -987,7 +1123,7 @@ mod tests {
         // causing `api_key()` to return only the first segment.
         let mut env = ScopedEnv::new();
         clear_config_test_secret_envs(&mut env);
-        let env_key = "LOONGCLAW_TEST_API_KEY_REF";
+        let env_key = "LOONG_TEST_API_KEY_REF";
         let env_val = "test-secret-value-for-env-ref";
         env.set(env_key, env_val);
 
@@ -1026,7 +1162,7 @@ mod tests {
         let config = ProviderConfig {
             kind: ProviderKind::Ollama,
             api_key: Some(SecretRef::Inline(
-                "${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned(),
+                "${LOONG_TEST_MISSING_API_KEY}".to_owned(),
             )),
             api_key_env: None,
             ..ProviderConfig::default()
@@ -1044,7 +1180,7 @@ mod tests {
         let config = ProviderConfig {
             kind: ProviderKind::Openai,
             api_key: Some(SecretRef::Inline(
-                "${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned(),
+                "${LOONG_TEST_MISSING_API_KEY}".to_owned(),
             )),
             api_key_env: Some("PATH".to_owned()),
             ..ProviderConfig::default()
@@ -1060,7 +1196,7 @@ mod tests {
         // which `split_secret_candidates` treats as a candidate separator.
         let mut env = ScopedEnv::new();
         clear_config_test_secret_envs(&mut env);
-        let env_key = "LOONGCLAW_TEST_LEGACY_FALLBACK";
+        let env_key = "LOONG_TEST_LEGACY_FALLBACK";
         let env_val = "test-secret-value-for-legacy";
         env.set(env_key, env_val);
 
@@ -1078,7 +1214,7 @@ mod tests {
     fn provider_api_key_supports_typed_env_secret_ref() {
         let mut env = ScopedEnv::new();
         clear_config_test_secret_envs(&mut env);
-        let env_key = "LOONGCLAW_TEST_TYPED_SECRET_REF";
+        let env_key = "LOONG_TEST_TYPED_SECRET_REF";
         let env_val = "typed-secret-value";
         env.set(env_key, env_val);
 
@@ -1105,7 +1241,7 @@ mod tests {
 [provider]
 api_key = { file = "/run/secrets/openai" }
 "#;
-        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("secret table should parse");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("secret table should parse");
 
         assert_eq!(
             parsed.provider.api_key,
@@ -1124,7 +1260,7 @@ kind = "volcengine_custom"
 model = "model-example"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse legacy kind alias should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse legacy kind alias should pass");
         assert_eq!(parsed.provider.kind, ProviderKind::Volcengine);
     }
 
@@ -1137,7 +1273,7 @@ kind = "xai_compatible"
 model = "model-example"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse compatible alias should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse compatible alias should pass");
         assert_eq!(parsed.provider.kind, ProviderKind::Xai);
     }
 
@@ -1150,7 +1286,7 @@ kind = "kimi_coding_compatible"
 model = "model-example"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse kimi coding alias should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse kimi coding alias should pass");
         assert_eq!(parsed.provider.kind, ProviderKind::KimiCoding);
     }
 
@@ -1161,8 +1297,7 @@ model = "model-example"
 [provider]
 kind = "kimi_coding"
 "#;
-        let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse minimal kimi coding config");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse minimal kimi coding config");
         assert_eq!(parsed.provider.kind, ProviderKind::KimiCoding);
         assert_eq!(
             parsed.provider.endpoint(),
@@ -1187,7 +1322,7 @@ kind = "kimi_coding"
 kind = "bailian_coding"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse minimal bailian coding config");
+            toml::from_str::<LoongConfig>(raw).expect("parse minimal bailian coding config");
         assert_eq!(parsed.provider.kind, ProviderKind::BailianCoding);
         assert_eq!(
             parsed.provider.endpoint(),
@@ -1227,8 +1362,8 @@ kind = "{kind}"
 model = "model-example"
 "#
             );
-            let parsed = toml::from_str::<LoongClawConfig>(&raw)
-                .expect("parse provider alias should succeed");
+            let parsed =
+                toml::from_str::<LoongConfig>(&raw).expect("parse provider alias should succeed");
             assert_eq!(parsed.provider.kind, expected, "kind={kind}");
         }
     }
@@ -1241,7 +1376,7 @@ model = "model-example"
 kind = "byteplus_coding"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse minimal byteplus coding config");
+            toml::from_str::<LoongConfig>(raw).expect("parse minimal byteplus coding config");
         assert_eq!(parsed.provider.kind, ProviderKind::ByteplusCoding);
         assert_eq!(
             parsed.provider.endpoint(),
@@ -1265,7 +1400,7 @@ kind = "byteplus_coding"
 kind = "volcengine_coding"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse minimal volcengine coding config");
+            toml::from_str::<LoongConfig>(raw).expect("parse minimal volcengine coding config");
         assert_eq!(parsed.provider.kind, ProviderKind::VolcengineCoding);
         assert_eq!(
             parsed.provider.endpoint(),
@@ -1532,7 +1667,7 @@ kind = "openrouter"
 profile_health_mode = "enforce"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse profile health mode should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse profile health mode should pass");
         assert_eq!(parsed.provider.kind, ProviderKind::Openrouter);
         assert_eq!(
             parsed.provider.resolved_profile_health_mode_config(),
@@ -1548,7 +1683,7 @@ profile_health_mode = "enforce"
 kind = "openai"
 profile_health_mode = "observe_only"
 "#;
-        let observe_only = toml::from_str::<LoongClawConfig>(observe_only_raw)
+        let observe_only = toml::from_str::<LoongConfig>(observe_only_raw)
             .expect("parse observe_only profile health mode should pass");
         assert_eq!(
             observe_only.provider.resolved_profile_health_mode_config(),
@@ -1560,7 +1695,7 @@ profile_health_mode = "observe_only"
 kind = "openrouter"
 profile_health_mode = "provider_default"
 "#;
-        let provider_default = toml::from_str::<LoongClawConfig>(provider_default_raw)
+        let provider_default = toml::from_str::<LoongConfig>(provider_default_raw)
             .expect("parse provider_default profile health mode should pass");
         assert_eq!(
             provider_default
@@ -1579,7 +1714,7 @@ kind = "openai"
 tool_schema_mode = "enabled_strict"
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse tool schema mode should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse tool schema mode should pass");
         assert_eq!(parsed.provider.kind, ProviderKind::Openai);
         assert_eq!(
             parsed.provider.resolved_tool_schema_mode_config(),
@@ -1595,7 +1730,7 @@ tool_schema_mode = "enabled_strict"
 kind = "openai"
 tool_schema_mode = "disabled"
 "#;
-        let disabled = toml::from_str::<LoongClawConfig>(disabled_raw)
+        let disabled = toml::from_str::<LoongConfig>(disabled_raw)
             .expect("parse disabled tool schema mode should pass");
         assert_eq!(
             disabled.provider.resolved_tool_schema_mode_config(),
@@ -1607,7 +1742,7 @@ tool_schema_mode = "disabled"
 kind = "openai"
 tool_schema_mode = "enabled_with_downgrade"
 "#;
-        let downgraded = toml::from_str::<LoongClawConfig>(downgraded_raw)
+        let downgraded = toml::from_str::<LoongConfig>(downgraded_raw)
             .expect("parse enabled_with_downgrade tool schema mode should pass");
         assert_eq!(
             downgraded.provider.resolved_tool_schema_mode_config(),
@@ -1619,7 +1754,7 @@ tool_schema_mode = "enabled_with_downgrade"
 kind = "openai"
 tool_schema_mode = "provider_default"
 "#;
-        let provider_default = toml::from_str::<LoongClawConfig>(provider_default_raw)
+        let provider_default = toml::from_str::<LoongConfig>(provider_default_raw)
             .expect("parse provider_default tool schema mode should pass");
         assert_eq!(
             provider_default.provider.resolved_tool_schema_mode_config(),
@@ -1635,7 +1770,7 @@ tool_schema_mode = "provider_default"
 kind = "openai"
 reasoning_extra_body_mode = "kimi_thinking"
 "#;
-        let kimi_thinking = toml::from_str::<LoongClawConfig>(kimi_thinking_raw)
+        let kimi_thinking = toml::from_str::<LoongConfig>(kimi_thinking_raw)
             .expect("parse kimi_thinking reasoning mode should pass");
         assert_eq!(
             kimi_thinking
@@ -1649,8 +1784,8 @@ reasoning_extra_body_mode = "kimi_thinking"
 kind = "openai"
 reasoning_extra_body_mode = "omit"
 "#;
-        let omit = toml::from_str::<LoongClawConfig>(omit_raw)
-            .expect("parse omit reasoning mode should pass");
+        let omit =
+            toml::from_str::<LoongConfig>(omit_raw).expect("parse omit reasoning mode should pass");
         assert_eq!(
             omit.provider.resolved_reasoning_extra_body_mode_config(),
             ProviderReasoningExtraBodyModeConfig::Omit
@@ -1661,7 +1796,7 @@ reasoning_extra_body_mode = "omit"
 kind = "openai"
 reasoning_extra_body_mode = "provider_default"
 "#;
-        let provider_default = toml::from_str::<LoongClawConfig>(provider_default_raw)
+        let provider_default = toml::from_str::<LoongConfig>(provider_default_raw)
             .expect("parse provider_default reasoning mode should pass");
         assert_eq!(
             provider_default
@@ -1682,7 +1817,7 @@ tool_schema_strict_model_hints = ["strict-schema"]
 reasoning_extra_body_kimi_model_hints = ["enable-thinking"]
 reasoning_extra_body_omit_model_hints = ["disable-thinking"]
 "#;
-        let parsed = toml::from_str::<LoongClawConfig>(raw)
+        let parsed = toml::from_str::<LoongConfig>(raw)
             .expect("parse provider capability model hints should pass");
 
         assert_eq!(
@@ -1743,7 +1878,7 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
     #[cfg(feature = "channel-telegram")]
     fn telegram_token_prefers_inline_secret() {
         let config = TelegramChannelConfig {
-            bot_token: Some(loongclaw_contracts::SecretRef::Inline(
+            bot_token: Some(loong_contracts::SecretRef::Inline(
                 "inline-token".to_owned(),
             )),
             bot_token_env: Some("SHOULD_NOT_BE_READ".to_owned()),
@@ -1757,7 +1892,7 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
     fn telegram_bot_token_supports_typed_env_secret_ref() {
         let mut env = ScopedEnv::new();
         clear_config_test_secret_envs(&mut env);
-        let env_key = "LOONGCLAW_TEST_TELEGRAM_SECRET_REF";
+        let env_key = "LOONG_TEST_TELEGRAM_SECRET_REF";
         let env_val = "123456789:telegram-secret";
         env.set(env_key, env_val);
 
@@ -1779,7 +1914,7 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
 [telegram]
 bot_token = { file = "/run/secrets/telegram" }
 "#;
-        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("secret table should parse");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("secret table should parse");
 
         assert_eq!(
             parsed.telegram.bot_token,
@@ -1815,7 +1950,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_secret_literal_in_provider_api_key_env() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("sk-live-direct-secret-value".to_owned());
         config.provider.api_key = None;
 
@@ -1830,7 +1965,7 @@ bot_token = { file = "/run/secrets/telegram" }
     #[test]
     fn config_validation_message_does_not_echo_secret_literal() {
         let secret = "sk-live-direct-secret-value";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some(secret.to_owned());
         config.provider.api_key = None;
 
@@ -1845,7 +1980,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_uses_provider_specific_example_env_name() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.kind = ProviderKind::Minimax;
         config.provider.api_key_env = Some("sk-minimax-inline-secret".to_owned());
 
@@ -1857,7 +1992,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_secret_literal_in_telegram_bot_token_env() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.bot_token_env = Some("123456789:telegram-secret-token-literal".to_owned());
         config.telegram.bot_token = None;
 
@@ -1871,7 +2006,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_duplicate_normalized_telegram_account_ids() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "accounts": {
                     "Work Bot": {
@@ -1896,7 +2031,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_duplicate_normalized_feishu_account_ids() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "feishu": {
                 "accounts": {
                     "Lark Prod": {
@@ -1923,7 +2058,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_unknown_telegram_default_account() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "telegram": {
                 "default_account": "missing",
                 "accounts": {
@@ -1950,7 +2085,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_accepts_shell_style_env_names() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("KIMI_CODING_API_KEY".to_owned());
         config.telegram.bot_token_env = Some("TELEGRAM_BOT_TOKEN".to_owned());
 
@@ -1961,7 +2096,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_accepts_non_shell_env_names_for_compatibility() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("OPENAI-API-KEY".to_owned());
 
         config
@@ -1971,7 +2106,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_accepts_long_compatible_env_names() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("VERY-LONG-ENV-NAME-WITH-DASHES-AND-DOTS.v2".to_owned());
 
         config
@@ -1981,7 +2116,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_zero_memory_sliding_window() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.memory.sliding_window = 0;
 
         let error = config
@@ -1993,7 +2128,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_memory_sliding_window_above_adapter_cap() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.memory.sliding_window = 129;
 
         let error = config
@@ -2006,7 +2141,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_assignment_style_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("OPENAI_API_KEY=sk-1234567890".to_owned());
 
         let error = config
@@ -2018,7 +2153,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_export_assignment_style_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("export OPENAI_API_KEY=sk-1234567890".to_owned());
 
         let error = config
@@ -2030,7 +2165,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_set_assignment_style_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("set OPENAI_API_KEY=sk-1234567890".to_owned());
 
         let error = config
@@ -2042,7 +2177,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_dollar_prefixed_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("$OPENAI_API_KEY".to_owned());
 
         let error = config
@@ -2054,7 +2189,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_braced_dollar_prefixed_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("${OPENAI_API_KEY}".to_owned());
 
         let error = config
@@ -2067,7 +2202,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_percent_wrapped_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("%OPENAI_API_KEY%".to_owned());
 
         let error = config
@@ -2080,7 +2215,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_bare_dollar_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("$".to_owned());
 
         let error = config
@@ -2093,7 +2228,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_invalid_env_pointer_name() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("OPENAI API KEY".to_owned());
 
         let error = config
@@ -2105,7 +2240,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_bearer_prefixed_secret_in_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("Bearer sk-live-token-value".to_owned());
 
         let error = config
@@ -2117,7 +2252,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_uuid_shaped_secret_in_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("9f479837-0a12-4b56-89ab-cdef01234567".to_owned());
 
         let error = config
@@ -2129,7 +2264,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_invalid_typed_secret_ref_env_names() {
-        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+        let config: LoongConfig = serde_json::from_value(serde_json::json!({
             "provider": {
                 "api_key": {
                     "env": "$OPENAI_API_KEY"
@@ -2173,7 +2308,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_rejects_telegram_like_token_in_env_pointer() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.telegram.bot_token_env = Some("123456789:AAEZZ_exampleTokenValue".to_owned());
 
         let error = config
@@ -2185,7 +2320,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn config_validation_reports_multiple_env_pointer_issues_in_one_pass() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("OPENAI_API_KEY=sk-inline".to_owned());
         config.telegram.bot_token_env = Some("123456789:telegram-inline-secret-literal".to_owned());
 
@@ -2252,7 +2387,7 @@ bot_token = { file = "/run/secrets/telegram" }
 
     #[test]
     fn turn_loop_policy_defaults_are_stable() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         assert_eq!(config.conversation.turn_loop.max_rounds, 4);
         assert_eq!(config.conversation.turn_loop.max_tool_steps_per_round, 1);
         assert_eq!(
@@ -2294,7 +2429,7 @@ max_followup_tool_payload_chars = 1200
 max_followup_tool_payload_chars_total = 3200
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse turn-loop config should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse turn-loop config should pass");
         assert_eq!(parsed.conversation.turn_loop.max_rounds, 6);
         assert_eq!(parsed.conversation.turn_loop.max_tool_steps_per_round, 3);
         assert_eq!(
@@ -2330,7 +2465,7 @@ max_followup_tool_payload_chars_total = 3200
 tool_result_payload_summary_limit_chars = 4096
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation config should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse conversation config should pass");
         assert_eq!(
             parsed.conversation.tool_result_payload_summary_limit_chars,
             4096
@@ -2352,7 +2487,7 @@ fast_lane_parallel_tool_execution_enabled = true
 fast_lane_parallel_tool_execution_max_in_flight = 7
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation config should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse conversation config should pass");
         assert!(
             parsed
                 .conversation
@@ -2383,7 +2518,7 @@ safe_lane_health_verify_failure_warn_threshold = 0.45
 safe_lane_health_replan_warn_threshold = 0.55
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation config should pass");
+            toml::from_str::<LoongConfig>(raw).expect("parse conversation config should pass");
         assert_eq!(
             parsed
                 .conversation
@@ -2568,8 +2703,7 @@ safe_lane_health_replan_warn_threshold = 0.55
 [conversation]
 context_engine = " Legacy "
 "#;
-        let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation context_engine");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse conversation context_engine");
         assert_eq!(
             parsed.conversation.context_engine_id().as_deref(),
             Some("legacy")
@@ -2584,7 +2718,7 @@ context_engine = " Legacy "
 turn_middlewares = [" Alpha ", "beta", "", "alpha"]
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation turn_middlewares");
+            toml::from_str::<LoongConfig>(raw).expect("parse conversation turn_middlewares");
         assert_eq!(
             parsed.conversation.turn_middleware_ids(),
             vec!["alpha".to_owned(), "beta".to_owned()]
@@ -2598,7 +2732,7 @@ turn_middlewares = [" Alpha ", "beta", "", "alpha"]
 [memory]
 system = " Builtin "
 "#;
-        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse memory.system");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse memory.system");
         assert_eq!(parsed.memory.resolved_system().as_str(), "builtin");
     }
 
@@ -2609,7 +2743,7 @@ system = " Builtin "
 [memory]
 system_id = " LuCid "
 "#;
-        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse memory.system_id");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse memory.system_id");
         assert_eq!(parsed.memory.system_id.as_deref(), Some("lucid"));
         assert_eq!(parsed.memory.resolved_system_id(), "lucid");
     }
@@ -2621,8 +2755,7 @@ system_id = " LuCid "
 [memory]
 system = " LuCid "
 "#;
-        let error =
-            toml::from_str::<LoongClawConfig>(raw).expect_err("lucid should stay unsupported");
+        let error = toml::from_str::<LoongConfig>(raw).expect_err("lucid should stay unsupported");
         assert!(
             error.to_string().contains("available: builtin"),
             "error should keep builtin-only surface: {error}"
@@ -2641,7 +2774,7 @@ compact_preserve_recent_turns = 4
 compact_fail_open = false
 "#;
         let parsed =
-            toml::from_str::<LoongClawConfig>(raw).expect("parse conversation compaction config");
+            toml::from_str::<LoongConfig>(raw).expect("parse conversation compaction config");
         assert!(parsed.conversation.compact_enabled);
         assert_eq!(parsed.conversation.compact_min_messages(), Some(6));
         assert_eq!(
@@ -2746,7 +2879,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/workspace/project"]
 [acp.backends.acpx.mcp_servers.filesystem.env]
 MCP_LOG = "warn"
 "#;
-        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse ACP config");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse ACP config");
         assert!(parsed.acp.enabled);
         assert_eq!(parsed.acp.backend_id().as_deref(), Some("acpx"));
         assert_eq!(parsed.acp.resolved_default_agent().as_deref(), Ok("claude"));
@@ -2873,7 +3006,7 @@ allowed_channels = [" Telegram ", "feishu"]
 allowed_account_ids = [" Work Bot ", "ops-bot"]
 thread_routing = "thread_only"
 "#;
-        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse ACP dispatch config");
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse ACP dispatch config");
         assert!(parsed.acp.enabled);
         assert!(!parsed.acp.dispatch.enabled);
         assert_eq!(

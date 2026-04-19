@@ -225,8 +225,8 @@ fn tool_lease_secret() -> Result<String, String> {
 }
 
 fn default_tool_lease_secret_path() -> PathBuf {
-    let loongclaw_home = crate::config::default_loongclaw_home();
-    loongclaw_home.join(TOOL_LEASE_SECRET_FILE_NAME)
+    let loong_home = crate::config::default_loong_home();
+    loong_home.join(TOOL_LEASE_SECRET_FILE_NAME)
 }
 
 fn load_or_create_tool_lease_secret(secret_path: &Path) -> Result<String, String> {
@@ -440,15 +440,15 @@ mod tests {
     use super::read_tool_lease_secret_after_competitor_publish;
     use super::read_tool_lease_secret_file;
     use super::validate_tool_lease;
-    use crate::test_support::ScopedLoongClawHome;
+    use crate::test_support::ScopedLoongHome;
 
-    fn scoped_tool_lease_home(prefix: &str) -> ScopedLoongClawHome {
-        ScopedLoongClawHome::new(prefix)
+    fn scoped_tool_lease_home(prefix: &str) -> ScopedLoongHome {
+        ScopedLoongHome::new(prefix)
     }
 
     #[test]
     fn issue_tool_lease_persists_secret_under_loong_home() {
-        let _home = scoped_tool_lease_home("loongclaw-tool-lease-home");
+        let _home = scoped_tool_lease_home("loong-tool-lease-home");
         let payload = serde_json::Map::new();
 
         let lease = issue_tool_lease("file.read", &payload).expect("lease");
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn issued_tool_lease_survives_authority_cache_reset() {
-        let _home = scoped_tool_lease_home("loongclaw-tool-lease-cache-home");
+        let _home = scoped_tool_lease_home("loong-tool-lease-cache-home");
         let payload = serde_json::Map::new();
 
         let lease = issue_tool_lease("file.read", &payload).expect("lease");
@@ -480,7 +480,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Barrier;
 
-        let home = scoped_tool_lease_home("loongclaw-tool-lease-parallel-home");
+        let home = scoped_tool_lease_home("loong-tool-lease-parallel-home");
         let home_path = home.path().to_path_buf();
         let thread_count = 8;
         let barrier = Arc::new(Barrier::new(thread_count));
@@ -490,8 +490,7 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             let home_path = home_path.clone();
             let handle = std::thread::spawn(move || {
-                let _thread_home =
-                    crate::test_support::ScopedLoongClawHome::from_existing(home_path);
+                let _thread_home = crate::test_support::ScopedLoongHome::from_existing(home_path);
                 let payload = serde_json::Map::new();
                 barrier.wait();
                 issue_tool_lease("file.read", &payload)
@@ -515,7 +514,7 @@ mod tests {
 
     #[test]
     fn read_tool_lease_secret_after_competitor_publish_waits_for_visible_secret() {
-        let _home = scoped_tool_lease_home("loongclaw-tool-lease-visibility-home");
+        let _home = scoped_tool_lease_home("loong-tool-lease-visibility-home");
         let secret_path = default_tool_lease_secret_path();
         let parent_dir = secret_path.parent().expect("secret parent").to_path_buf();
         std::fs::create_dir_all(&parent_dir).expect("create secret parent");
@@ -542,16 +541,54 @@ mod tests {
 
     #[test]
     fn issued_tool_lease_is_home_scoped() {
-        let home_a = scoped_tool_lease_home("loongclaw-tool-lease-home-a");
+        let home_a = scoped_tool_lease_home("loong-tool-lease-home-a");
         let payload = serde_json::Map::new();
         let lease = issue_tool_lease("file.read", &payload).expect("lease");
 
         drop(home_a);
 
-        let _home_b = scoped_tool_lease_home("loongclaw-tool-lease-home-b");
+        let _home_b = scoped_tool_lease_home("loong-tool-lease-home-b");
         let validation_result = validate_tool_lease("file.read", &lease, &payload);
         let error = validation_result.expect_err("different home should reject lease");
 
         assert!(error.contains("signature mismatch"), "error={error}");
+    }
+
+    #[test]
+    fn concurrent_issue_tool_lease_initializes_secret_without_empty_file_race() {
+        use std::sync::Arc;
+        use std::sync::Barrier;
+
+        let home = scoped_tool_lease_home("loong-tool-lease-concurrent-home");
+        let home_path = home.path().to_path_buf();
+        let payload = serde_json::Map::new();
+        let thread_count = 6usize;
+        let barrier = Arc::new(Barrier::new(thread_count));
+        let mut handles = Vec::new();
+
+        for _ in 0..thread_count {
+            let barrier = Arc::clone(&barrier);
+            let home_path = home_path.clone();
+            let payload = payload.clone();
+            let handle = std::thread::spawn(move || {
+                let _thread_home = crate::test_support::ScopedLoongHome::from_existing(home_path);
+                barrier.wait();
+                issue_tool_lease("file.read", &payload)
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let join_result = handle.join();
+            let issue_result = join_result.expect("thread join");
+            issue_result.expect("lease issuance should succeed");
+        }
+
+        let secret_path = default_tool_lease_secret_path();
+        let persisted_secret =
+            read_tool_lease_secret_file(secret_path.as_path()).expect("persisted secret");
+
+        assert!(secret_path.exists());
+        assert!(persisted_secret.is_some());
     }
 }

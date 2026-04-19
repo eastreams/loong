@@ -2,14 +2,14 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loongclaw_contracts::Capability;
+use loong_contracts::Capability;
 #[cfg(feature = "memory-sqlite")]
 use serde_json::json;
 
 use crate::CliResult;
 use crate::acp::resolve_acp_backend_selection;
 use crate::config;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::conversation::ContextCompactionReport;
 use crate::conversation::ConversationRuntimeBinding;
@@ -35,9 +35,13 @@ use crate::tui_surface::render_tui_screen_spec;
 use super::CLI_CHAT_COMPACT_COMMAND;
 use super::CLI_CHAT_HELP_COMMAND;
 use super::CLI_CHAT_HISTORY_COMMAND;
+use super::CLI_CHAT_MISSION_COMMAND;
+use super::CLI_CHAT_REVIEW_COMMAND;
+use super::CLI_CHAT_SESSIONS_COMMAND;
 use super::CLI_CHAT_STATUS_COMMAND;
 use super::CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND;
 use super::CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS;
+use super::CLI_CHAT_WORKERS_COMMAND;
 use super::CliChatOptions;
 use super::CliTurnRuntime;
 use super::DEFAULT_FIRST_PROMPT;
@@ -64,9 +68,12 @@ use super::render_cli_chat_message_spec_with_width;
 use super::render_turn_checkpoint_health_error_lines_with_width;
 use super::tui_plain_item;
 
-const PRIMARY_QUICK_COMMANDS_HINT: &str = "Quick commands: /help · /status · /history · /compact";
-const STATUS_QUICK_COMMANDS_HINT: &str = "Quick commands: /history · /compact · /help";
-const TRANSCRIPT_START_HINT: &str = "Type any request to start the transcript.";
+const PRIMARY_QUICK_COMMANDS_HINT: &str =
+    "Start with a first answer, then keep moving with /help · /status · /history · /compact.";
+const STATUS_QUICK_COMMANDS_HINT: &str =
+    "Inspect runtime state, then jump back into work with /history · /compact · /help.";
+const TRANSCRIPT_START_HINT: &str =
+    "Type any request to start the transcript, or use the command deck before your first turn.";
 const STATUS_OR_COMPACT_HINT: &str =
     "Use /status for runtime state or /compact before the next turn.";
 const CONTINUE_OR_STATUS_HINT: &str =
@@ -384,9 +391,9 @@ pub(super) fn render_cli_chat_status_lines_with_width(
     render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
+pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
     let first_prompt_action = TuiActionSpec {
-        label: "first prompt".to_owned(),
+        label: "first answer".to_owned(),
         command: DEFAULT_FIRST_PROMPT.to_owned(),
     };
     let start_here_section = TuiSectionSpec::ActionGroup {
@@ -394,18 +401,46 @@ fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScr
         inline_title_when_wide: true,
         items: vec![first_prompt_action],
     };
-    let narrative_section = TuiSectionSpec::Narrative {
-        title: None,
-        lines: vec!["- type your request, or use /help for commands".to_owned()],
+    let command_deck_section = TuiSectionSpec::ActionGroup {
+        title: Some("command deck".to_owned()),
+        inline_title_when_wide: false,
+        items: vec![
+            TuiActionSpec {
+                label: "slash commands".to_owned(),
+                command: "/help".to_owned(),
+            },
+            TuiActionSpec {
+                label: "runtime status".to_owned(),
+                command: "/status".to_owned(),
+            },
+            TuiActionSpec {
+                label: "recent window".to_owned(),
+                command: "/history".to_owned(),
+            },
+            TuiActionSpec {
+                label: "manual checkpoint".to_owned(),
+                command: "/compact".to_owned(),
+            },
+        ],
+    };
+    let narrative_section = TuiSectionSpec::Callout {
+        tone: TuiCalloutTone::Info,
+        title: Some("how this surface works".to_owned()),
+        lines: vec![
+            "Type your request in the composer to run the next assistant turn.".to_owned(),
+            "Use the control deck for runtime posture, tool activity, and shortcuts.".to_owned(),
+            "Use the command menu and help surfaces before you need lower-level runtime detail."
+                .to_owned(),
+        ],
     };
     let runtime_sections = build_cli_chat_runtime_sections(summary);
-    let mut sections = vec![start_here_section, narrative_section];
+    let mut sections = vec![start_here_section, command_deck_section, narrative_section];
     sections.extend(runtime_sections);
 
     TuiScreenSpec {
         header_style: TuiHeaderStyle::Compact,
         subtitle: Some("interactive chat".to_owned()),
-        title: Some("chat ready".to_owned()),
+        title: Some("operator cockpit ready".to_owned()),
         progress_line: None,
         intro_lines: Vec::new(),
         sections,
@@ -422,15 +457,15 @@ fn build_cli_chat_status_message_spec(summary: &CliChatStartupSummary) -> TuiMes
     let mut sections = build_cli_chat_runtime_sections(summary);
     let operator_callout = TuiSectionSpec::Callout {
         tone: TuiCalloutTone::Info,
-        title: Some("operator controls".to_owned()),
+        title: Some("next moves".to_owned()),
         lines: vec![format!(
-            "Use {CLI_CHAT_COMPACT_COMMAND} to checkpoint the active session window on demand."
+            "Use {CLI_CHAT_COMPACT_COMMAND} to checkpoint the active session window on demand, then return to the transcript."
         )],
     };
     sections.push(operator_callout);
 
     TuiMessageSpec {
-        role: "status".to_owned(),
+        role: "control deck".to_owned(),
         caption: Some(caption),
         sections,
         footer_lines: vec![STATUS_QUICK_COMMANDS_HINT.to_owned()],
@@ -464,7 +499,7 @@ fn build_cli_chat_runtime_sections(summary: &CliChatStartupSummary) -> Vec<TuiSe
         summary.context_engine_id, summary.context_engine_source
     );
     let session_section = TuiSectionSpec::KeyValues {
-        title: Some("session details".to_owned()),
+        title: Some("session anchor".to_owned()),
         items: vec![
             tui_plain_item("session", summary.session_id.clone()),
             tui_plain_item("config", summary.config_path.clone()),
@@ -472,14 +507,14 @@ fn build_cli_chat_runtime_sections(summary: &CliChatStartupSummary) -> Vec<TuiSe
         ],
     };
     let runtime_section = TuiSectionSpec::KeyValues {
-        title: Some("runtime details".to_owned()),
+        title: Some("runtime posture".to_owned()),
         items: vec![
             tui_plain_item("context engine", context_engine_value),
             tui_plain_item("acp", runtime_value),
         ],
     };
     let continuity_section = TuiSectionSpec::KeyValues {
-        title: Some("continuity maintenance".to_owned()),
+        title: Some("continuity guardrails".to_owned()),
         items: vec![
             tui_plain_item("compaction", summary.compaction_enabled.to_string()),
             tui_plain_item("min messages", compaction_min_messages),
@@ -545,6 +580,24 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
             value: "print the current session sliding window".to_owned(),
         },
         TuiKeyValueSpec::Plain {
+            key: CLI_CHAT_SESSIONS_COMMAND.to_owned(),
+            value: "inspect visible sessions rooted at the current session scope".to_owned(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: CLI_CHAT_MISSION_COMMAND.to_owned(),
+            value: "open the orchestration/mission control overview for the current session scope"
+                .to_owned(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: CLI_CHAT_REVIEW_COMMAND.to_owned(),
+            value: "reopen the latest approval/review summary in the current session".to_owned(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: CLI_CHAT_WORKERS_COMMAND.to_owned(),
+            value: "inspect visible worker/delegate sessions from the current session scope"
+                .to_owned(),
+        },
+        TuiKeyValueSpec::Plain {
             key: "/fast_lane_summary [limit]".to_owned(),
             value: "summarize fast-lane batch execution events".to_owned(),
         },
@@ -565,12 +618,39 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
             value: "quit chat".to_owned(),
         },
     ];
+    let command_menu_section = TuiSectionSpec::Callout {
+        tone: TuiCalloutTone::Info,
+        title: Some("surface controls".to_owned()),
+        lines: vec![
+            "Use : from an empty composer to open the command menu for session-level actions."
+                .to_owned(),
+            "Use Esc to clear draft input first, then Esc again to leave the surface.".to_owned(),
+            "Use the control deck and timeline overlay when you need transcript navigation instead of a new turn.".to_owned(),
+        ],
+    };
+    let keyboard_section = TuiSectionSpec::Narrative {
+        title: Some("keyboard".to_owned()),
+        lines: vec![
+            "Enter sends the current draft. A trailing \\ keeps composing on a new line."
+                .to_owned(),
+            "Tab cycles transcript / composer / control deck focus. [ and ] switch control-deck tabs."
+                .to_owned(),
+            "PgUp / PgDn scroll the transcript, j / k move selected entries, and t opens the transcript timeline."
+                .to_owned(),
+            "M opens the mission-control overview for the current session scope.".to_owned(),
+            "r reopens the latest approval screen when one is available.".to_owned(),
+            "S opens the visible session queue when related sessions are available.".to_owned(),
+            "W opens the worker queue when delegate sessions are visible.".to_owned(),
+        ],
+    };
     let usage_section = TuiSectionSpec::Callout {
         tone: TuiCalloutTone::Info,
         title: Some("usage notes".to_owned()),
         lines: vec![
             "Type any non-command text to send a normal assistant turn.".to_owned(),
             "Use /status to inspect runtime maintenance settings without sending a turn."
+                .to_owned(),
+            "Use /mission to inspect orchestration posture before spawning or reviewing lanes."
                 .to_owned(),
             "Use /history to inspect the active memory window when a reply feels off.".to_owned(),
             "Use /compact to checkpoint the active session before the next turn.".to_owned(),
@@ -582,12 +662,17 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
     };
 
     TuiMessageSpec {
-        role: "chat".to_owned(),
-        caption: Some("commands".to_owned()),
-        sections: vec![command_section, usage_section],
+        role: "help".to_owned(),
+        caption: Some("operator deck".to_owned()),
+        sections: vec![
+            command_section,
+            command_menu_section,
+            keyboard_section,
+            usage_section,
+        ],
         footer_lines: vec![
             "Send normal text to continue the transcript.".to_owned(),
-            "Use /exit to leave chat.".to_owned(),
+            "Use /exit to leave chat, or Esc from an empty composer to confirm exit.".to_owned(),
         ],
     }
 }
@@ -771,7 +856,7 @@ pub(super) async fn print_history(
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn load_manual_compaction_result(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     turn_coordinator: &ConversationTurnCoordinator,
     binding: ConversationRuntimeBinding<'_>,
@@ -809,7 +894,7 @@ async fn load_manual_compaction_window_snapshot(
         .kernel_context()
         .ok_or_else(|| "manual compaction requires a kernel-bound session".to_owned())?;
     let caps = BTreeSet::from([Capability::MemoryRead]);
-    let request = loongclaw_contracts::MemoryCoreRequest {
+    let request = loong_contracts::MemoryCoreRequest {
         operation: memory::MEMORY_OP_WINDOW.to_owned(),
         payload: json!({
             "session_id": session_id,

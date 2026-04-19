@@ -32,10 +32,20 @@ fn append_session_turn(
         .expect("append session turn");
 }
 
+fn append_session_conversation_event(
+    root: &super::tasks_cli::TempDirGuard,
+    session_id: &str,
+    payload: Value,
+) {
+    let serialized_payload =
+        serde_json::to_string(&payload).expect("serialize session conversation event");
+    append_session_turn(root, session_id, "assistant", &serialized_payload);
+}
+
 #[test]
 fn sessions_list_cli_parses_global_flags_after_subcommand() {
     let cli = try_parse_cli([
-        "loongclaw",
+        "loong",
         "sessions",
         "list",
         "--kind",
@@ -46,11 +56,11 @@ fn sessions_list_cli_parses_global_flags_after_subcommand() {
         "ops-root",
         "--json",
         "--config",
-        "/tmp/loongclaw.toml",
+        "/tmp/loong.toml",
     ])
     .expect("sessions list CLI should parse");
 
-    let Some(loongclaw_daemon::Commands::Sessions {
+    let Some(loong_daemon::Commands::Sessions {
         config,
         json,
         session,
@@ -60,11 +70,11 @@ fn sessions_list_cli_parses_global_flags_after_subcommand() {
         panic!("expected sessions command, got: {:?}", cli.command);
     };
 
-    assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+    assert_eq!(config.as_deref(), Some("/tmp/loong.toml"));
     assert!(json, "expected --json flag to be preserved");
     assert_eq!(session, "ops-root");
 
-    let loongclaw_daemon::sessions_cli::SessionsCommands::List {
+    let loong_daemon::sessions_cli::SessionsCommands::List {
         limit,
         state,
         kind,
@@ -109,7 +119,7 @@ fn cli_sessions_help_mentions_operator_facing_session_shell() {
 
 #[tokio::test]
 async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_metadata() {
-    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-list");
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-list");
     let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let repo = super::tasks_cli::load_session_repository(&config_path);
@@ -138,6 +148,7 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
                 "timeout_seconds": 60,
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["file.read"],
+                "workspace_root": "/tmp/loong/sessions-cli/delegate-session-1",
                 "kernel_bound": false,
                 "runtime_narrowing": {}
             }
@@ -145,12 +156,12 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
     })
     .expect("append queued event");
 
-    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::List {
+            command: loong_daemon::sessions_cli::SessionsCommands::List {
                 limit: 20,
                 state: None,
                 kind: Some("delegate_child".to_owned()),
@@ -171,18 +182,34 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
         execution.payload["sessions"][0]["workflow"]["task"],
         "research release readiness"
     );
+    assert_eq!(
+        execution.payload["sessions"][0]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(
+        execution.payload["sessions"][0]["workflow"]["phase"],
+        "execute"
+    );
+    assert_eq!(
+        execution.payload["sessions"][0]["workflow"]["binding"]["mode"],
+        "advisory_only"
+    );
 
-    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions list");
     assert!(
         rendered.contains("task=research release readiness"),
         "list render should surface workflow task: {rendered}"
     );
+    assert!(
+        rendered.contains("workflow_phase=execute"),
+        "list render should surface workflow phase: {rendered}"
+    );
 }
 
 #[tokio::test]
 async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_summary() {
-    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-status");
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-status");
     let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let repo = super::tasks_cli::load_session_repository(&config_path);
@@ -211,6 +238,7 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
                 "timeout_seconds": 90,
                 "allow_shell_in_child": false,
                 "child_tool_allowlist": ["file.read"],
+                "workspace_root": "/tmp/loong/sessions-cli/delegate-session-1",
                 "kernel_bound": false,
                 "runtime_narrowing": {}
             },
@@ -251,13 +279,119 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         },
     )
     .expect("append assistant turn");
+    let prompt_frame_event = json!({
+        "type": "conversation_event",
+        "event": "provider_prompt_frame_snapshot",
+        "payload": {
+            "provider_round": 1,
+            "phase": "initial",
+            "prompt_frame": {
+                "schema_version": 1,
+                "total_estimated_tokens": 42,
+                "stable_runtime_segment_count": 1,
+                "stable_runtime_estimated_tokens": 12,
+                "session_latched_segment_count": 1,
+                "session_latched_estimated_tokens": 8,
+                "advisory_profile_segment_count": 1,
+                "advisory_profile_estimated_tokens": 6,
+                "session_local_recall_segment_count": 1,
+                "session_local_recall_estimated_tokens": 5,
+                "recent_window_segment_count": 1,
+                "recent_window_estimated_tokens": 7,
+                "turn_ephemeral_segment_count": 0,
+                "turn_ephemeral_estimated_tokens": 0,
+                "stable_runtime_hash": "stable-a",
+                "session_latched_hash": "latched-a",
+                "stable_prefix_hash_sha256": "prefix-a",
+                "cached_prefix_sha256": "cached-a",
+                "advisory_profile_hash": "profile-a",
+                "session_local_recall_hash": "recall-a",
+                "recent_window_hash": "window-a",
+                "turn_ephemeral_hash": null
+            }
+        }
+    });
+    append_session_conversation_event(&root, "delegate:session-1", prompt_frame_event);
+    append_session_conversation_event(
+        &root,
+        "delegate:session-1",
+        json!({
+            "type": "conversation_event",
+            "event": "plan_round_started",
+            "payload": {
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 0,
+                    "rounds_failed": 0,
+                    "verify_failures": 0,
+                    "replans_triggered": 0,
+                    "total_attempts_used": 1
+                },
+                "health_signal": {
+                    "severity": "warn",
+                    "flags": ["warmup"]
+                }
+            }
+        }),
+    );
+    append_session_conversation_event(
+        &root,
+        "delegate:session-1",
+        json!({
+            "type": "conversation_event",
+            "event": "final_status",
+            "payload": {
+                "status": "succeeded",
+                "route_decision": "return",
+                "route_reason": "completed",
+                "metrics": {
+                    "rounds_started": 1,
+                    "rounds_succeeded": 1,
+                    "rounds_failed": 0,
+                    "verify_failures": 0,
+                    "replans_triggered": 0,
+                    "total_attempts_used": 1
+                },
+                "health_signal": {
+                    "severity": "warn",
+                    "flags": ["warmup"]
+                }
+            }
+        }),
+    );
+    append_session_conversation_event(
+        &root,
+        "delegate:session-1",
+        json!({
+            "type": "conversation_event",
+            "event": "turn_checkpoint",
+            "payload": {
+                "schema_version": 1,
+                "stage": "finalized",
+                "checkpoint": {
+                    "lane": {
+                        "lane": "safe",
+                        "result_kind": "final_text"
+                    },
+                    "finalization": {
+                        "persistence_mode": "success"
+                    }
+                },
+                "finalization_progress": {
+                    "after_turn": "completed",
+                    "compaction": "completed"
+                },
+                "failure": null
+            }
+        }),
+    );
 
-    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::Status {
+            command: loong_daemon::sessions_cli::SessionsCommands::Status {
                 session_id: "delegate:session-1".to_owned(),
             },
         },
@@ -271,10 +405,47 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "research continuity"
     );
     assert_eq!(
+        execution.payload["detail"]["workflow"]["workflow_id"],
+        "ops-root"
+    );
+    assert_eq!(execution.payload["detail"]["workflow"]["phase"], "execute");
+    assert_eq!(
         execution.payload["detail"]["workflow"]["lineage_root_session_id"],
         "ops-root"
     );
-    assert_eq!(execution.payload["detail"]["session"]["turn_count"], 2);
+    assert_eq!(
+        execution.payload["detail"]["workflow"]["binding"]["execution_surface"],
+        "delegate.async"
+    );
+    assert_eq!(
+        execution.payload["detail"]["workflow"]["binding"]["worktree"]["worktree_id"],
+        "delegate:session-1"
+    );
+    assert_eq!(execution.payload["detail"]["session"]["turn_count"], 6);
+    assert_eq!(
+        execution.payload["detail"]["prompt_frame"]["summary"]["latest_phase"],
+        "initial"
+    );
+    assert_eq!(
+        execution.payload["detail"]["prompt_frame"]["summary"]["latest_total_estimated_tokens"],
+        42
+    );
+    assert_eq!(
+        execution.payload["detail"]["safe_lane"]["summary"]["final_status"],
+        "succeeded"
+    );
+    assert_eq!(
+        execution.payload["detail"]["safe_lane"]["summary"]["round_started_events"],
+        1
+    );
+    assert_eq!(
+        execution.payload["detail"]["turn_checkpoint"]["summary"]["session_state"],
+        "finalized"
+    );
+    assert_eq!(
+        execution.payload["detail"]["turn_checkpoint"]["summary"]["checkpoint_durable"],
+        true
+    );
     let recipes = execution.payload["recipes"]
         .as_array()
         .expect("recipes array");
@@ -307,8 +478,16 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "expected events recipe in {recipe_values:?}"
     );
 
-    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions status");
+    assert!(
+        rendered.contains("workflow_id: ops-root"),
+        "status render should surface workflow id: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_phase: execute"),
+        "status render should surface workflow phase: {rendered}"
+    );
     assert!(
         rendered.contains("task: research continuity"),
         "status render should surface workflow task: {rendered}"
@@ -318,14 +497,50 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "status render should surface lineage root: {rendered}"
     );
     assert!(
+        rendered.contains("workflow_binding_mode: advisory_only"),
+        "status render should surface workflow binding mode: {rendered}"
+    );
+    assert!(
+        rendered.contains("workflow_worktree_id: delegate:session-1"),
+        "status render should surface workflow worktree id: {rendered}"
+    );
+    assert!(
         rendered.contains("runtime_self_continuity: present"),
         "status render should surface continuity summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("prompt_frame: phase=initial total_tokens=42"),
+        "status render should surface prompt-frame summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("stable_prefix=prefix-a"),
+        "status render should surface prompt-frame stable prefix hash: {rendered}"
+    );
+    assert!(
+        rendered.contains("safe_lane: status=succeeded rounds_started=1"),
+        "status render should surface safe-lane summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("health=warn"),
+        "status render should surface safe-lane health: {rendered}"
+    );
+    assert!(
+        rendered.contains("turn_checkpoint: session_state=finalized durable=yes"),
+        "status render should surface turn-checkpoint durability: {rendered}"
+    );
+    assert!(
+        rendered.contains("stage=finalized after_turn=completed"),
+        "status render should surface turn-checkpoint stage detail: {rendered}"
+    );
+    assert!(
+        rendered.contains("compaction=completed"),
+        "status render should surface turn-checkpoint compaction detail: {rendered}"
     );
 }
 
 #[tokio::test]
 async fn execute_sessions_command_events_history_and_wait_surface_incremental_payloads() {
-    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-events");
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-events");
     let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let repo = super::tasks_cli::load_session_repository(&config_path);
@@ -362,12 +577,12 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
     append_session_turn(&root, "delegate:session-1", "user", "hello");
     append_session_turn(&root, "delegate:session-1", "assistant", "world");
 
-    let events_execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let events_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::Events {
+            command: loong_daemon::sessions_cli::SessionsCommands::Events {
                 session_id: "delegate:session-1".to_owned(),
                 after_id: None,
                 limit: 20,
@@ -380,9 +595,8 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
     let next_after_id = events_execution.payload["next_after_id"]
         .as_i64()
         .expect("next_after_id");
-    let rendered_events =
-        loongclaw_daemon::sessions_cli::render_sessions_cli_text(&events_execution)
-            .expect("render sessions events");
+    let rendered_events = loong_daemon::sessions_cli::render_sessions_cli_text(&events_execution)
+        .expect("render sessions events");
 
     assert_eq!(events_execution.payload["command"], "events");
     assert_eq!(events_execution.payload["session_id"], "delegate:session-1");
@@ -396,12 +610,12 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
         "events render should surface event kind: {rendered_events}"
     );
 
-    let history_execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let history_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::History {
+            command: loong_daemon::sessions_cli::SessionsCommands::History {
                 session_id: "delegate:session-1".to_owned(),
                 limit: 20,
             },
@@ -410,9 +624,8 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
     .await
     .expect("sessions history should succeed");
 
-    let rendered_history =
-        loongclaw_daemon::sessions_cli::render_sessions_cli_text(&history_execution)
-            .expect("render sessions history");
+    let rendered_history = loong_daemon::sessions_cli::render_sessions_cli_text(&history_execution)
+        .expect("render sessions history");
 
     assert_eq!(history_execution.payload["command"], "history");
     assert_eq!(
@@ -426,12 +639,12 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
         "history render should surface transcript turns: {rendered_history}"
     );
 
-    let wait_execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let wait_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::Wait {
+            command: loong_daemon::sessions_cli::SessionsCommands::Wait {
                 session_id: "delegate:session-1".to_owned(),
                 after_id: Some(next_after_id),
                 timeout_ms: 1,
@@ -441,7 +654,7 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
     .await
     .expect("sessions wait should succeed");
 
-    let rendered_wait = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&wait_execution)
+    let rendered_wait = loong_daemon::sessions_cli::render_sessions_cli_text(&wait_execution)
         .expect("render sessions wait");
 
     assert_eq!(wait_execution.payload["command"], "wait");
@@ -460,7 +673,7 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
 
 #[tokio::test]
 async fn execute_sessions_command_cancel_dry_run_surfaces_cancel_action() {
-    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-cancel");
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-cancel");
     let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let repo = super::tasks_cli::load_session_repository(&config_path);
@@ -484,12 +697,12 @@ async fn execute_sessions_command_cancel_dry_run_surfaces_cancel_action() {
     })
     .expect("append delegate_queued event");
 
-    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::Cancel {
+            command: loong_daemon::sessions_cli::SessionsCommands::Cancel {
                 session_id: "delegate:session-1".to_owned(),
                 dry_run: true,
             },
@@ -498,7 +711,7 @@ async fn execute_sessions_command_cancel_dry_run_surfaces_cancel_action() {
     .await
     .expect("sessions cancel dry run should succeed");
 
-    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions cancel");
 
     assert_eq!(execution.payload["command"], "cancel");
@@ -516,7 +729,7 @@ async fn execute_sessions_command_cancel_dry_run_surfaces_cancel_action() {
 
 #[tokio::test]
 async fn execute_sessions_command_recover_dry_run_surfaces_non_recoverable_result() {
-    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-recover");
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-recover");
     let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let repo = super::tasks_cli::load_session_repository(&config_path);
@@ -540,12 +753,12 @@ async fn execute_sessions_command_recover_dry_run_surfaces_non_recoverable_resul
     })
     .expect("append delegate_queued event");
 
-    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::Recover {
+            command: loong_daemon::sessions_cli::SessionsCommands::Recover {
                 session_id: "delegate:session-1".to_owned(),
                 dry_run: true,
             },
@@ -554,7 +767,7 @@ async fn execute_sessions_command_recover_dry_run_surfaces_non_recoverable_resul
     .await
     .expect("sessions recover dry run should succeed");
 
-    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions recover");
 
     assert_eq!(execution.payload["command"], "recover");
@@ -576,7 +789,7 @@ async fn execute_sessions_command_recover_dry_run_surfaces_non_recoverable_resul
 
 #[tokio::test]
 async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
-    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-archive");
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-archive");
     let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let repo = super::tasks_cli::load_session_repository(&config_path);
@@ -608,12 +821,12 @@ async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
     )
     .expect("finalize child session");
 
-    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
-        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+    let execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
             config: Some(config_path.display().to_string()),
             json: false,
             session: "ops-root".to_owned(),
-            command: loongclaw_daemon::sessions_cli::SessionsCommands::Archive {
+            command: loong_daemon::sessions_cli::SessionsCommands::Archive {
                 session_id: "delegate:session-1".to_owned(),
                 dry_run: true,
             },
@@ -622,7 +835,7 @@ async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
     .await
     .expect("sessions archive dry run should succeed");
 
-    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions archive");
 
     assert_eq!(execution.payload["command"], "archive");
@@ -641,8 +854,8 @@ async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
 
 #[test]
 fn render_sessions_status_text_escapes_control_characters() {
-    let execution = loongclaw_daemon::sessions_cli::SessionsCommandExecution {
-        resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+    let execution = loong_daemon::sessions_cli::SessionsCommandExecution {
+        resolved_config_path: "/tmp/loong.toml".to_owned(),
         current_session_id: "ops-root".to_owned(),
         payload: json!({
             "command": "status",
@@ -683,7 +896,7 @@ fn render_sessions_status_text_escapes_control_characters() {
         }),
     };
 
-    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions status");
 
     assert!(
@@ -706,8 +919,8 @@ fn render_sessions_status_text_escapes_control_characters() {
 
 #[test]
 fn render_sessions_history_text_escapes_control_characters() {
-    let execution = loongclaw_daemon::sessions_cli::SessionsCommandExecution {
-        resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+    let execution = loong_daemon::sessions_cli::SessionsCommandExecution {
+        resolved_config_path: "/tmp/loong.toml".to_owned(),
         current_session_id: "ops-root".to_owned(),
         payload: json!({
             "command": "history",
@@ -722,7 +935,7 @@ fn render_sessions_history_text_escapes_control_characters() {
         }),
     };
 
-    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
         .expect("render sessions history");
 
     assert!(

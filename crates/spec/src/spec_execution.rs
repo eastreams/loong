@@ -12,7 +12,7 @@ use kernel::{
     AutoProvisionRequest, BootstrapPolicy, BootstrapReport, BootstrapTaskStatus,
     BridgeSupportMatrix, Clock, CodebaseAwarenessConfig, CodebaseAwarenessEngine,
     CodebaseAwarenessSnapshot, ConnectorCommand, InMemoryAuditSink, IntegrationCatalog,
-    LoongClawKernel, MemoryCoreRequest, MemoryExtensionRequest, PluginAbsorbReport,
+    LoongKernel, MemoryCoreRequest, MemoryExtensionRequest, PluginAbsorbReport,
     PluginActivationPlan, PluginActivationStatus, PluginBootstrapExecutor, PluginBridgeKind,
     PluginCompatibility, PluginCompatibilityShimSupport, PluginDescriptor, PluginScanReport,
     PluginScanner, PluginSetup, PluginSetupReadinessContext, PluginSlotClaim,
@@ -1155,7 +1155,7 @@ struct SecurityScanDelta {
 }
 
 fn emit_security_scan_audit_event(
-    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<StaticPolicyEngine>,
     pack_id: &str,
     agent_id: &str,
     report: &SecurityScanReport,
@@ -1199,7 +1199,7 @@ fn emit_security_scan_audit_event(
 }
 
 fn emit_plugin_trust_audit_event(
-    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<StaticPolicyEngine>,
     pack_id: &str,
     agent_id: &str,
     summary: &PluginTrustSummary,
@@ -1243,7 +1243,7 @@ fn emit_plugin_trust_audit_event(
 }
 
 fn emit_tool_search_audit_event(
-    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<StaticPolicyEngine>,
     pack_id: &str,
     agent_id: &str,
     summary: &ToolSearchOperationSummary,
@@ -2214,7 +2214,7 @@ fn default_integration_catalog() -> IntegrationCatalog {
 }
 
 fn register_dynamic_catalog_connectors(
-    kernel: &mut LoongClawKernel<StaticPolicyEngine>,
+    kernel: &mut LoongKernel<StaticPolicyEngine>,
     catalog: Arc<Mutex<IntegrationCatalog>>,
     bridge_runtime_policy: BridgeRuntimePolicy,
 ) {
@@ -2273,7 +2273,7 @@ fn operation_connector_name(operation: &OperationSpec) -> Option<String> {
 }
 
 async fn execute_spec_operation(
-    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<StaticPolicyEngine>,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     integration_catalog: &IntegrationCatalog,
@@ -2690,7 +2690,7 @@ async fn execute_spec_operation(
 }
 
 fn apply_default_selection(
-    kernel: &mut LoongClawKernel<StaticPolicyEngine>,
+    kernel: &mut LoongKernel<StaticPolicyEngine>,
     defaults: Option<&DefaultCoreSelection>,
 ) -> CliResult<()> {
     if let Some(defaults) = defaults {
@@ -2996,7 +2996,7 @@ mod bridge_runtime_policy_tests {
         spec.bridge_support = Some(bridge);
         spec.plugin_scan = Some(PluginScanSpec {
             enabled: true,
-            roots: vec!["/definitely/missing/loongclaw-plugin-root".to_owned()],
+            roots: vec!["/definitely/missing/loong-plugin-root".to_owned()],
         });
 
         let report = execute_spec(&spec, false).await;
@@ -3024,7 +3024,7 @@ mod plugin_metadata_tests {
 
     fn test_descriptor(source_kind: PluginSourceKind) -> PluginDescriptor {
         let path = match source_kind {
-            PluginSourceKind::PackageManifest => "/tmp/pkg/loongclaw.plugin.json".to_owned(),
+            PluginSourceKind::PackageManifest => "/tmp/pkg/loong.plugin.json".to_owned(),
             PluginSourceKind::EmbeddedSource => "/tmp/pkg/plugin.py".to_owned(),
         };
         let package_manifest_path = match source_kind {
@@ -3040,10 +3040,8 @@ mod plugin_metadata_tests {
             path,
             source_kind,
             dialect: match source_kind {
-                PluginSourceKind::PackageManifest => {
-                    PluginContractDialect::LoongClawPackageManifest
-                }
-                PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+                PluginSourceKind::PackageManifest => PluginContractDialect::LoongPackageManifest,
+                PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongEmbeddedSource,
             },
             dialect_version: Some("v1alpha1".to_owned()),
             compatibility_mode: PluginCompatibilityMode::Native,
@@ -3082,7 +3080,7 @@ mod plugin_metadata_tests {
                     mode: PluginSlotMode::Exclusive,
                 }],
                 compatibility: Some(PluginCompatibility {
-                    host_api: Some("loongclaw-plugin/v1".to_owned()),
+                    host_api: Some("loong-plugin/v1".to_owned()),
                     host_version_req: Some(">=0.1.0-alpha.1".to_owned()),
                 }),
             },
@@ -3195,6 +3193,9 @@ mod plugin_metadata_tests {
                         "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
                     ),
                     account_scope: Some("multi_account".to_owned()),
+                    runtime_contract: Some("loong_channel_bridge_v1".to_owned()),
+                    runtime_operations: vec!["send_message".to_owned(), "receive_batch".to_owned()],
+                    runtime_metadata_issues: Vec::new(),
                     readiness: kernel::PluginChannelBridgeReadiness {
                         ready: true,
                         missing_fields: Vec::new(),
@@ -3242,13 +3243,13 @@ mod plugin_metadata_tests {
             metadata
                 .get("plugin_provenance_summary")
                 .map(String::as_str),
-            Some("package_manifest:/tmp/pkg/loongclaw.plugin.json")
+            Some("package_manifest:/tmp/pkg/loong.plugin.json")
         );
         assert_eq!(
             metadata
                 .get("plugin_package_manifest_path")
                 .map(String::as_str),
-            Some("/tmp/pkg/loongclaw.plugin.json")
+            Some("/tmp/pkg/loong.plugin.json")
         );
         assert_eq!(
             metadata.get("plugin_setup_mode").map(String::as_str),
@@ -3288,7 +3289,7 @@ mod plugin_metadata_tests {
             metadata
                 .get("plugin_compatibility_host_api")
                 .map(String::as_str),
-            Some("loongclaw-plugin/v1")
+            Some("loong-plugin/v1")
         );
         assert_eq!(
             metadata
@@ -3382,7 +3383,7 @@ mod plugin_metadata_tests {
 
         assert_eq!(
             metadata.get("plugin_source_path").map(String::as_str),
-            Some("/tmp/pkg/loongclaw.plugin.json")
+            Some("/tmp/pkg/loong.plugin.json")
         );
         assert_eq!(
             metadata.get("plugin_source_kind").map(String::as_str),
@@ -3396,7 +3397,7 @@ mod plugin_metadata_tests {
             metadata
                 .get("plugin_provenance_summary")
                 .map(String::as_str),
-            Some("package_manifest:/tmp/pkg/loongclaw.plugin.json")
+            Some("package_manifest:/tmp/pkg/loong.plugin.json")
         );
         assert_eq!(
             metadata.get("plugin_trust_tier").map(String::as_str),
@@ -3406,7 +3407,7 @@ mod plugin_metadata_tests {
             metadata
                 .get("plugin_package_manifest_path")
                 .map(String::as_str),
-            Some("/tmp/pkg/loongclaw.plugin.json")
+            Some("/tmp/pkg/loong.plugin.json")
         );
     }
 

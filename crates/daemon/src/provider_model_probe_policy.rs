@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 pub(crate) const MODEL_CATALOG_PROBE_FAILED_MARKER: &str = "model catalog probe failed";
 
@@ -36,7 +36,7 @@ pub(crate) struct ProviderModelProbeRecoveryAdvice {
 }
 
 pub(crate) fn provider_model_probe_failure(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     error: &str,
 ) -> ProviderModelProbeFailure {
     let provider_prefix = crate::provider_presentation::active_provider_detail_label(config);
@@ -86,7 +86,7 @@ pub(crate) fn provider_model_probe_auth_failure_detail(detail: &str) -> bool {
 }
 
 pub(crate) fn provider_model_probe_recovery_advice(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     detail: &str,
 ) -> Option<ProviderModelProbeRecoveryAdvice> {
     let matches_probe_failure_detail = provider_model_probe_failed_detail(detail);
@@ -198,7 +198,7 @@ fn render_model_candidate_list(models: &[String]) -> String {
 }
 
 fn append_region_hint(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     error: &str,
     mut detail: String,
 ) -> String {
@@ -219,7 +219,7 @@ fn append_region_hint(
 }
 
 fn provider_model_probe_region_endpoint_hint(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     detail: &str,
 ) -> Option<String> {
     let is_auth_style_failure = provider_model_probe_auth_failure_detail(detail);
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_marks_transport_route_failures() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let failure = provider_model_probe_failure(
             &config,
             "provider model-list request failed on attempt 3/3: operation timed out",
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_preserves_reviewed_model_recovery() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_preserves_xiaomi_reviewed_model_recovery() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Xiaomi;
         config.provider.model = "auto".to_owned();
 
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_failure_appends_region_hint_for_auth_failures() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
 
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_recovery_advice_reconstructs_transport_failures_from_detail() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.model = "custom-explicit-model".to_owned();
 
         let failure = provider_model_probe_failure(
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_recovery_advice_preserves_reviewed_default_recovery() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Deepseek;
         config.provider.model = "auto".to_owned();
 
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn provider_model_probe_recovery_advice_keeps_region_hint_for_auth_failures() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
 

@@ -4,9 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use clap::Subcommand;
 use kernel::ToolCoreRequest;
-use loongclaw_app as mvp;
-use loongclaw_contracts::ToolCoreOutcome;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_contracts::ToolCoreOutcome;
+use loong_spec::CliResult;
 use serde_json::{Value, json};
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -76,129 +76,6 @@ pub struct TasksCommandExecution {
     pub resolved_config_path: String,
     pub current_session_id: String,
     pub payload: Value,
-}
-
-#[cfg(feature = "memory-sqlite")]
-struct DetachedTasksRuntime {
-    inner: mvp::conversation::DefaultConversationRuntime<
-        Box<dyn mvp::conversation::ConversationContextEngine>,
-    >,
-    background_task_spawner: Arc<dyn mvp::conversation::AsyncDelegateSpawner>,
-}
-
-#[cfg(feature = "memory-sqlite")]
-impl DetachedTasksRuntime {
-    fn from_config(config: &mvp::config::LoongClawConfig) -> CliResult<Self> {
-        let inner = mvp::conversation::DefaultConversationRuntime::from_config_or_env(config)?;
-        let background_task_spawner = Arc::new(DetachedTasksSpawner);
-
-        Ok(Self {
-            inner,
-            background_task_spawner,
-        })
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
-#[async_trait]
-impl mvp::conversation::ConversationRuntime for DetachedTasksRuntime {
-    fn session_context(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<mvp::conversation::SessionContext> {
-        self.inner.session_context(config, session_id, binding)
-    }
-
-    fn tool_view(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<mvp::tools::ToolView> {
-        self.inner.tool_view(config, session_id, binding)
-    }
-
-    fn background_task_spawner(
-        &self,
-        _config: &mvp::config::LoongClawConfig,
-    ) -> Option<Arc<dyn mvp::conversation::AsyncDelegateSpawner>> {
-        Some(self.background_task_spawner.clone())
-    }
-
-    async fn build_messages(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        include_system_prompt: bool,
-        tool_view: &mvp::tools::ToolView,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Vec<Value>> {
-        self.inner
-            .build_messages(
-                config,
-                session_id,
-                include_system_prompt,
-                tool_view,
-                binding,
-            )
-            .await
-    }
-
-    async fn request_completion(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        messages: &[Value],
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        self.inner
-            .request_completion(config, messages, binding)
-            .await
-    }
-
-    async fn request_turn(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        turn_id: &str,
-        messages: &[Value],
-        tool_view: &mvp::tools::ToolView,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<mvp::conversation::ProviderTurn> {
-        self.inner
-            .request_turn(config, session_id, turn_id, messages, tool_view, binding)
-            .await
-    }
-
-    async fn request_turn_streaming(
-        &self,
-        config: &mvp::config::LoongClawConfig,
-        session_id: &str,
-        turn_id: &str,
-        messages: &[Value],
-        tool_view: &mvp::tools::ToolView,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-        on_token: mvp::provider::StreamingTokenCallback,
-    ) -> CliResult<mvp::conversation::ProviderTurn> {
-        self.inner
-            .request_turn_streaming(
-                config, session_id, turn_id, messages, tool_view, binding, on_token,
-            )
-            .await
-    }
-
-    async fn persist_turn(
-        &self,
-        session_id: &str,
-        role: &str,
-        content: &str,
-        binding: mvp::conversation::ConversationRuntimeBinding<'_>,
-    ) -> CliResult<()> {
-        self.inner
-            .persist_turn(session_id, role, content, binding)
-            .await
-    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -272,36 +149,45 @@ pub async fn execute_tasks_command(
             state,
             overdue_only,
             include_archived,
-        } => execute_list_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            limit,
-            state.as_deref(),
-            overdue_only,
-            include_archived,
-        )?,
-        TasksCommands::Status { task_id } => execute_status_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-        )?,
+        } => {
+            execute_list_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                limit,
+                state.as_deref(),
+                overdue_only,
+                include_archived,
+            )
+            .await?
+        }
+        TasksCommands::Status { task_id } => {
+            execute_status_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+            )
+            .await?
+        }
         TasksCommands::Events {
             task_id,
             after_id,
             limit,
-        } => execute_events_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-            after_id,
-            limit,
-        )?,
+        } => {
+            execute_events_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+                after_id,
+                limit,
+            )
+            .await?
+        }
         TasksCommands::Wait {
             task_id,
             after_id,
@@ -318,22 +204,28 @@ pub async fn execute_tasks_command(
             )
             .await?
         }
-        TasksCommands::Cancel { task_id, dry_run } => execute_cancel_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-            dry_run,
-        )?,
-        TasksCommands::Recover { task_id, dry_run } => execute_recover_command(
-            &resolved_path.display().to_string(),
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &task_id,
-            dry_run,
-        )?,
+        TasksCommands::Cancel { task_id, dry_run } => {
+            execute_cancel_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+                dry_run,
+            )
+            .await?
+        }
+        TasksCommands::Recover { task_id, dry_run } => {
+            execute_recover_command(
+                &resolved_path.display().to_string(),
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &task_id,
+                dry_run,
+            )
+            .await?
+        }
     };
 
     Ok(TasksCommandExecution {
@@ -345,7 +237,7 @@ pub async fn execute_tasks_command(
 
 async fn execute_create_command(
     resolved_config_path: &str,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -373,7 +265,8 @@ async fn execute_create_command(
     .await?;
     let task_id = required_string_field(&queued.payload, "child_session_id", "tasks create")?;
     let (task_detail, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, &task_id);
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, &task_id)
+            .await;
     let recipes = build_task_recipes(resolved_config_path, current_session_id, &task_id);
     let next_steps = build_task_next_steps();
     let payload = json!({
@@ -390,7 +283,7 @@ async fn execute_create_command(
 }
 
 fn build_tasks_create_runtime(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> CliResult<impl mvp::conversation::ConversationRuntime> {
     // Background task creation prefers the detached sqlite-backed runtime when
     // available so delegated child sessions can survive outside the foreground
@@ -398,18 +291,20 @@ fn build_tasks_create_runtime(
     // conversation runtime.
     #[cfg(feature = "memory-sqlite")]
     {
-        let runtime = DetachedTasksRuntime::from_config(config)?;
+        let background_task_spawner = Arc::new(DetachedTasksSpawner);
+        let runtime = mvp::conversation::load_hosted_default_conversation_runtime(config)?
+            .with_background_task_spawner(background_task_spawner);
         Ok(runtime)
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
     {
-        let runtime = mvp::conversation::DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = mvp::conversation::load_default_conversation_runtime(config)?;
         Ok(runtime)
     }
 }
 
-fn execute_list_command(
+async fn execute_list_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -435,7 +330,8 @@ fn execute_list_command(
         if tasks.len() >= raw_limit {
             break;
         }
-        let task = build_task_detail(memory_config, tool_config, current_session_id, &session_id)?;
+        let task =
+            build_task_detail(memory_config, tool_config, current_session_id, &session_id).await?;
         tasks.push(task);
     }
 
@@ -457,14 +353,14 @@ fn execute_list_command(
     Ok(payload)
 }
 
-fn execute_status_command(
+async fn execute_status_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     task_id: &str,
 ) -> CliResult<Value> {
-    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let payload = json!({
         "command": "status",
         "config": resolved_config_path,
@@ -474,7 +370,7 @@ fn execute_status_command(
     Ok(payload)
 }
 
-fn execute_events_command(
+async fn execute_events_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -483,7 +379,7 @@ fn execute_events_command(
     after_id: Option<i64>,
     limit: usize,
 ) -> CliResult<Value> {
-    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let event_limit = limit.clamp(1, 200);
     let payload = json!({
         "session_id": task_id,
@@ -528,7 +424,7 @@ async fn execute_wait_command(
     after_id: Option<i64>,
     timeout_ms: u64,
 ) -> CliResult<Value> {
-    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let _ = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let payload = json!({
         "session_id": task_id,
         "after_id": after_id,
@@ -541,7 +437,7 @@ async fn execute_wait_command(
         tool_config,
     )
     .await?;
-    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id).await?;
     let wait_payload = outcome.payload;
     let next_after_id = wait_payload
         .get("next_after_id")
@@ -566,7 +462,7 @@ async fn execute_wait_command(
     Ok(output)
 }
 
-fn execute_cancel_command(
+async fn execute_cancel_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -587,7 +483,8 @@ fn execute_cancel_command(
         payload,
     )?;
     let (task, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id);
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id)
+            .await;
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -624,7 +521,7 @@ fn execute_cancel_command(
     Ok(output)
 }
 
-fn execute_recover_command(
+async fn execute_recover_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
@@ -645,7 +542,8 @@ fn execute_recover_command(
         payload,
     )?;
     let (task, task_lookup_error) =
-        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id);
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id)
+            .await;
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -866,7 +764,7 @@ fn current_unix_timestamp() -> i64 {
     duration.as_secs().min(i64::MAX as u64) as i64
 }
 
-fn build_task_detail(
+async fn build_task_detail(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
@@ -875,10 +773,18 @@ fn build_task_detail(
     let status_payload =
         load_task_status_payload(memory_config, tool_config, current_session_id, task_id)?;
     ensure_background_task_status_payload(&status_payload, task_id)?;
-    let approvals_payload =
-        load_task_approvals_payload(memory_config, tool_config, current_session_id, task_id)?;
-    let tool_policy_payload =
-        load_task_tool_policy_payload(memory_config, tool_config, current_session_id, task_id)?;
+    let (approvals_payload, approval_lookup_error) = load_best_effort_task_approvals_payload(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+    );
+    let (tool_policy_payload, tool_policy_lookup_error) = load_best_effort_task_tool_policy_payload(
+        memory_config,
+        tool_config,
+        current_session_id,
+        task_id,
+    );
 
     let session = status_payload
         .get("session")
@@ -892,8 +798,17 @@ fn build_task_detail(
     let session_state = session.get("state").cloned().unwrap_or(Value::Null);
     let phase = delegate.get("phase").cloned().unwrap_or(Value::Null);
     let mode = delegate.get("mode").cloned().unwrap_or(Value::Null);
+    let owner_kind = delegate
+        .get("execution")
+        .and_then(|value| value.get("owner_kind"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let timeout_seconds = delegate
         .get("timeout_seconds")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let workflow = status_payload
+        .get("workflow")
         .cloned()
         .unwrap_or(Value::Null);
     let created_at = session.get("created_at").cloned().unwrap_or(Value::Null);
@@ -940,45 +855,70 @@ fn build_task_detail(
         .get("recent_events")
         .cloned()
         .unwrap_or_else(|| json!([]));
+    let task_status = build_task_status_payload(
+        &session,
+        &delegate,
+        &approval_requests,
+        &approval_attention_summary,
+        &tool_policy,
+        &recent_events,
+    );
+    let prompt_frame =
+        crate::session_prompt_frame_cli::load_session_prompt_frame_payload(memory_config, task_id)
+            .await;
+    let safe_lane =
+        crate::session_runtime_truth_cli::load_session_safe_lane_payload(memory_config, task_id)
+            .await;
+    let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
+        memory_config,
+        task_id,
+    )
+    .await;
 
-    let detail = json!({
-        "task_id": task_id,
-        "session_id": task_id,
-        "scope_session_id": current_session_id,
-        "label": label,
-        "session_state": session_state,
-        "phase": phase,
-        "mode": mode,
-        "timeout_seconds": timeout_seconds,
-        "created_at": created_at,
-        "updated_at": updated_at,
-        "archived": archived,
-        "last_error": last_error,
-        "approval": {
-            "matched_count": approval_matched_count,
-            "returned_count": approval_returned_count,
-            "attention_summary": approval_attention_summary,
-            "requests": approval_requests,
-        },
-        "tool_policy": tool_policy,
-        "session": session,
-        "delegate": delegate,
-        "terminal_outcome_state": terminal_outcome_state,
-        "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
-        "recovery": recovery,
-        "terminal_outcome": terminal_outcome,
-        "recent_events": recent_events,
-    });
+    let detail = compose_task_detail_payload(
+        current_session_id,
+        task_id,
+        session,
+        delegate,
+        label,
+        session_state,
+        phase,
+        mode,
+        owner_kind,
+        timeout_seconds,
+        workflow,
+        created_at,
+        updated_at,
+        archived,
+        last_error,
+        approval_requests,
+        approval_attention_summary,
+        approval_matched_count,
+        approval_returned_count,
+        approval_lookup_error,
+        tool_policy,
+        tool_policy_lookup_error,
+        task_status,
+        terminal_outcome_state,
+        terminal_outcome_missing_reason,
+        recovery,
+        terminal_outcome,
+        recent_events,
+        prompt_frame,
+        safe_lane,
+        turn_checkpoint,
+    );
     Ok(detail)
 }
 
-fn build_best_effort_task_detail(
+async fn build_best_effort_task_detail(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     current_session_id: &str,
     task_id: &str,
 ) -> (Value, Value) {
-    let detail_result = build_task_detail(memory_config, tool_config, current_session_id, task_id);
+    let detail_result =
+        build_task_detail(memory_config, tool_config, current_session_id, task_id).await;
     match detail_result {
         Ok(task_detail) => (task_detail, Value::Null),
         Err(error) => {
@@ -990,6 +930,7 @@ fn build_best_effort_task_detail(
 }
 
 fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
+    let task_status = unknown_task_status_payload();
     json!({
         "task_id": task_id,
         "session_id": task_id,
@@ -997,7 +938,13 @@ fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
         "label": Value::Null,
         "session_state": Value::Null,
         "phase": Value::Null,
+        "mode": Value::Null,
+        "owner_kind": Value::Null,
         "timeout_seconds": Value::Null,
+        "workflow": Value::Null,
+        "created_at": Value::Null,
+        "updated_at": Value::Null,
+        "archived": Value::Null,
         "last_error": Value::Null,
         "approval": {
             "matched_count": 0,
@@ -1005,7 +952,20 @@ fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
             "attention_summary": Value::Null,
             "requests": [],
         },
+        "approval_lookup_error": Value::Null,
         "tool_policy": Value::Null,
+        "tool_policy_lookup_error": Value::Null,
+        "task_status": task_status,
+        "session": Value::Null,
+        "delegate": Value::Null,
+        "terminal_outcome_state": Value::Null,
+        "terminal_outcome_missing_reason": Value::Null,
+        "recovery": Value::Null,
+        "terminal_outcome": Value::Null,
+        "recent_events": [],
+        "prompt_frame": Value::Null,
+        "safe_lane": Value::Null,
+        "turn_checkpoint": Value::Null,
     })
 }
 
@@ -1071,6 +1031,278 @@ struct TaskStatusSummary {
     is_overdue: bool,
 }
 
+fn build_task_status_payload(
+    session: &Value,
+    delegate: &Value,
+    approval_requests: &Value,
+    approval_attention_summary: &Value,
+    tool_policy: &Value,
+    recent_events: &Value,
+) -> Value {
+    let session_state = session
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let phase = delegate
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let staleness_state = delegate
+        .get("staleness")
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str);
+    let cancellation_state = delegate
+        .get("cancellation")
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str);
+    let approval_attention_count = approval_attention_summary
+        .get("needs_attention_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let has_approval_attention = approval_attention_count > 0;
+    let approval_primary_action = primary_approval_action(approval_requests).map(ToOwned::to_owned);
+    let recovered = recent_events_contains_kind(recent_events, "delegate_recovery_applied");
+    let tool_narrowing_active = task_tool_narrowing_active(tool_policy);
+    let kind = derive_task_status_kind(
+        session_state,
+        phase,
+        staleness_state,
+        cancellation_state,
+        has_approval_attention,
+    );
+    let display = render_task_status_display(kind, recovered);
+    let blocked = task_status_is_blocked(kind);
+    let terminal = task_status_is_terminal(kind);
+    let status = kind;
+    let needs_attention = task_status_needs_attention(kind, approval_primary_action.as_deref());
+    let next_action = task_status_next_action(kind, approval_primary_action.as_deref());
+    let signals = build_task_status_signals(
+        kind,
+        recovered,
+        tool_narrowing_active,
+        has_approval_attention,
+        staleness_state,
+        cancellation_state,
+    );
+
+    json!({
+        "status": status,
+        "kind": kind,
+        "display": display,
+        "blocked": blocked,
+        "terminal": terminal,
+        "needs_attention": needs_attention,
+        "next_action": next_action,
+        "approval_primary_action": approval_primary_action,
+        "recovered": recovered,
+        "tool_narrowing_active": tool_narrowing_active,
+        "signals": signals,
+    })
+}
+
+fn unknown_task_status_payload() -> Value {
+    json!({
+        "status": "unknown",
+        "kind": "unknown",
+        "display": "unknown",
+        "blocked": false,
+        "terminal": false,
+        "needs_attention": false,
+        "next_action": "status",
+        "approval_primary_action": Value::Null,
+        "recovered": false,
+        "tool_narrowing_active": false,
+        "signals": [],
+    })
+}
+
+fn derive_task_status_kind(
+    session_state: &str,
+    phase: &str,
+    staleness_state: Option<&str>,
+    cancellation_state: Option<&str>,
+    has_approval_attention: bool,
+) -> &'static str {
+    if session_state == "completed" {
+        return "completed";
+    }
+
+    if session_state == "failed" {
+        return "failed";
+    }
+
+    if session_state == "timed_out" {
+        return "timed_out";
+    }
+
+    let is_overdue = staleness_state == Some("overdue");
+    if is_overdue {
+        return "overdue";
+    }
+
+    let cancel_requested = cancellation_state == Some("requested");
+    if cancel_requested {
+        return "cancel_requested";
+    }
+
+    if has_approval_attention {
+        return "approval_pending";
+    }
+
+    if session_state == "running" {
+        return "running";
+    }
+
+    let queued_state = session_state == "ready";
+    let queued_phase = phase == "queued";
+    if queued_state || queued_phase {
+        return "queued";
+    }
+
+    "unknown"
+}
+
+fn render_task_status_display(kind: &str, recovered: bool) -> String {
+    let base = kind.to_owned();
+    if !recovered {
+        return base;
+    }
+
+    let display = format!("{base} (recovered)");
+    display
+}
+
+fn task_status_is_blocked(kind: &str) -> bool {
+    matches!(kind, "approval_pending" | "overdue")
+}
+
+fn task_status_is_terminal(kind: &str) -> bool {
+    matches!(kind, "completed" | "failed" | "timed_out")
+}
+
+fn task_status_needs_attention(kind: &str, approval_primary_action: Option<&str>) -> bool {
+    let status_requires_attention = matches!(
+        kind,
+        "approval_pending" | "overdue" | "failed" | "timed_out"
+    );
+    if status_requires_attention {
+        return true;
+    }
+
+    approval_primary_action.is_some()
+}
+
+fn task_status_next_action(kind: &str, approval_primary_action: Option<&str>) -> String {
+    if let Some(approval_primary_action) = approval_primary_action {
+        let next_action = approval_primary_action.to_owned();
+        return next_action;
+    }
+
+    match kind {
+        "approval_pending" => "status".to_owned(),
+        "overdue" => "recover".to_owned(),
+        "queued" => "wait".to_owned(),
+        "running" => "wait".to_owned(),
+        "cancel_requested" => "wait".to_owned(),
+        "completed" => "events".to_owned(),
+        "failed" => "events".to_owned(),
+        "timed_out" => "events".to_owned(),
+        _ => "status".to_owned(),
+    }
+}
+
+fn build_task_status_signals(
+    kind: &str,
+    recovered: bool,
+    tool_narrowing_active: bool,
+    has_approval_attention: bool,
+    staleness_state: Option<&str>,
+    cancellation_state: Option<&str>,
+) -> Vec<String> {
+    let mut signals = Vec::new();
+
+    if has_approval_attention {
+        signals.push("approval_pending".to_owned());
+    }
+
+    if staleness_state == Some("overdue") {
+        signals.push("overdue".to_owned());
+    }
+
+    if cancellation_state == Some("requested") {
+        signals.push("cancel_requested".to_owned());
+    }
+
+    if recovered {
+        signals.push("recovered".to_owned());
+    }
+
+    if tool_narrowing_active {
+        signals.push("tool_narrowing_active".to_owned());
+    }
+
+    let terminal = task_status_is_terminal(kind);
+    if terminal {
+        signals.push("terminal".to_owned());
+    }
+
+    signals
+}
+
+fn recent_events_contains_kind(recent_events: &Value, expected_kind: &str) -> bool {
+    let Some(events) = recent_events.as_array() else {
+        return false;
+    };
+
+    for event in events {
+        let event_kind = event
+            .get("event_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let matches_kind = event_kind == expected_kind;
+        if matches_kind {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn primary_approval_action(approval_requests: &Value) -> Option<&str> {
+    let requests = approval_requests.as_array()?;
+
+    for request in requests {
+        let action = request
+            .get("attention")
+            .and_then(|value| value.get("primary_action"))
+            .and_then(Value::as_str);
+        if action.is_some() {
+            return action;
+        }
+    }
+
+    None
+}
+
+fn task_tool_narrowing_active(tool_policy: &Value) -> bool {
+    let effective_tool_ids = tool_policy
+        .get("effective_tool_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let base_tool_ids = tool_policy
+        .get("base_tool_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let runtime_narrowing = tool_policy.get("effective_runtime_narrowing");
+    let runtime_narrowing = runtime_narrowing.cloned().unwrap_or(Value::Null);
+    let tool_ids_changed = effective_tool_ids != base_tool_ids;
+    let runtime_narrowing_active = !runtime_narrowing.is_null();
+
+    tool_ids_changed || runtime_narrowing_active
+}
+
 fn load_task_status_payload(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -1110,6 +1342,18 @@ fn load_task_approvals_payload(
     Ok(outcome.payload)
 }
 
+fn load_best_effort_task_approvals_payload(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    task_id: &str,
+) -> (Value, Value) {
+    let result =
+        load_task_approvals_payload(memory_config, tool_config, current_session_id, task_id);
+    let fallback_payload = fallback_task_approvals_payload();
+    best_effort_task_lookup_payload(result, fallback_payload)
+}
+
 fn load_task_tool_policy_payload(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -1127,6 +1371,109 @@ fn load_task_tool_policy_payload(
         payload,
     )?;
     Ok(outcome.payload)
+}
+
+fn load_best_effort_task_tool_policy_payload(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    task_id: &str,
+) -> (Value, Value) {
+    let result =
+        load_task_tool_policy_payload(memory_config, tool_config, current_session_id, task_id);
+    let fallback_payload = Value::Null;
+    best_effort_task_lookup_payload(result, fallback_payload)
+}
+
+fn best_effort_task_lookup_payload(
+    result: CliResult<Value>,
+    fallback_payload: Value,
+) -> (Value, Value) {
+    match result {
+        Ok(payload) => (payload, Value::Null),
+        Err(error) => (fallback_payload, Value::String(error)),
+    }
+}
+
+fn fallback_task_approvals_payload() -> Value {
+    json!({
+        "matched_count": 0,
+        "returned_count": 0,
+        "attention_summary": Value::Null,
+        "requests": [],
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compose_task_detail_payload(
+    current_session_id: &str,
+    task_id: &str,
+    session: Value,
+    delegate: Value,
+    label: Value,
+    session_state: Value,
+    phase: Value,
+    mode: Value,
+    owner_kind: Value,
+    timeout_seconds: Value,
+    workflow: Value,
+    created_at: Value,
+    updated_at: Value,
+    archived: Value,
+    last_error: Value,
+    approval_requests: Value,
+    approval_attention_summary: Value,
+    approval_matched_count: Value,
+    approval_returned_count: Value,
+    approval_lookup_error: Value,
+    tool_policy: Value,
+    tool_policy_lookup_error: Value,
+    task_status: Value,
+    terminal_outcome_state: Value,
+    terminal_outcome_missing_reason: Value,
+    recovery: Value,
+    terminal_outcome: Value,
+    recent_events: Value,
+    prompt_frame: Value,
+    safe_lane: Value,
+    turn_checkpoint: Value,
+) -> Value {
+    json!({
+        "task_id": task_id,
+        "session_id": task_id,
+        "scope_session_id": current_session_id,
+        "label": label,
+        "session_state": session_state,
+        "phase": phase,
+        "mode": mode,
+        "owner_kind": owner_kind,
+        "timeout_seconds": timeout_seconds,
+        "workflow": workflow,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "archived": archived,
+        "last_error": last_error,
+        "approval": {
+            "matched_count": approval_matched_count,
+            "returned_count": approval_returned_count,
+            "attention_summary": approval_attention_summary,
+            "requests": approval_requests,
+        },
+        "approval_lookup_error": approval_lookup_error,
+        "tool_policy": tool_policy,
+        "tool_policy_lookup_error": tool_policy_lookup_error,
+        "task_status": task_status,
+        "session": session,
+        "delegate": delegate,
+        "terminal_outcome_state": terminal_outcome_state,
+        "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
+        "recovery": recovery,
+        "terminal_outcome": terminal_outcome,
+        "recent_events": recent_events,
+        "prompt_frame": prompt_frame,
+        "safe_lane": safe_lane,
+        "turn_checkpoint": turn_checkpoint,
+    })
 }
 
 fn build_task_recipes(
@@ -1205,35 +1552,50 @@ fn render_tasks_create_text(payload: &Value) -> CliResult<String> {
         .get("next_steps")
         .and_then(Value::as_array)
         .ok_or_else(|| "tasks create payload missing next_steps".to_owned())?;
+    let scope = payload
+        .get("current_session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
 
     let mut lines = Vec::new();
+    let sanitized_scope = crate::sessions_cli::sanitize_terminal_text(scope);
     lines.push(format!(
-        "background task queued in session `{}`",
-        payload
-            .get("current_session_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
+        "background task queued in session `{sanitized_scope}`"
     ));
     lines.extend(render_task_detail_lines(task)?);
     append_task_lookup_error_line(payload, &mut lines);
 
     if !recipes.is_empty() {
-        lines.push("recipes:".to_owned());
         for recipe in recipes {
             let text = recipe.as_str().unwrap_or("");
-            lines.push(format!("- {text}"));
+            let sanitized_text = crate::sessions_cli::sanitize_terminal_text(text);
+            lines.push(format!("- {sanitized_text}"));
         }
     }
 
+    let mut next_lines = Vec::new();
     if !next_steps.is_empty() {
-        lines.push("next steps:".to_owned());
         for step in next_steps {
             let text = step.as_str().unwrap_or("");
-            lines.push(format!("- {text}"));
+            let sanitized_text = crate::sessions_cli::sanitize_terminal_text(text);
+            next_lines.push(format!("- {sanitized_text}"));
         }
     }
 
-    Ok(lines.join("\n"))
+    let mut sections = Vec::new();
+    if !next_lines.is_empty() {
+        sections.push(("next steps", next_lines));
+    }
+    sections.push(("queued task", lines));
+    Ok(render_tasks_surface(
+        "task queued",
+        "background tasks",
+        Vec::new(),
+        sections,
+        vec![
+            "Use the next-step commands to inspect, wait on, or cancel the queued task.".to_owned(),
+        ],
+    ))
 }
 
 fn render_tasks_list_text(payload: &Value) -> CliResult<String> {
@@ -1255,12 +1617,22 @@ fn render_tasks_list_text(payload: &Value) -> CliResult<String> {
         .unwrap_or("unknown");
 
     let mut lines = Vec::new();
+    let sanitized_scope = crate::sessions_cli::sanitize_terminal_text(scope);
     lines.push(format!(
-        "visible background tasks from session `{scope}`: {returned_count}/{matched_count}"
+        "visible background tasks from session `{sanitized_scope}`: {returned_count}/{matched_count}"
     ));
     if tasks.is_empty() {
         lines.push("No async background tasks are currently visible.".to_owned());
-        return Ok(lines.join("\n"));
+        return Ok(render_tasks_surface(
+            "visible tasks",
+            "background tasks",
+            Vec::new(),
+            vec![("tasks", lines)],
+            vec![
+                "Use `tasks create` to queue a new background delegate from the current session."
+                    .to_owned(),
+            ],
+        ));
     }
 
     for task in tasks {
@@ -1268,7 +1640,16 @@ fn render_tasks_list_text(payload: &Value) -> CliResult<String> {
         lines.push(format!("- {line}"));
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_tasks_surface(
+        "visible tasks",
+        "background tasks",
+        Vec::new(),
+        vec![("tasks", lines)],
+        vec![
+            "Use `tasks status <id>` for one task or `tasks wait <id>` to follow it incrementally."
+                .to_owned(),
+        ],
+    ))
 }
 
 fn render_tasks_status_text(payload: &Value) -> CliResult<String> {
@@ -1276,7 +1657,16 @@ fn render_tasks_status_text(payload: &Value) -> CliResult<String> {
         .get("task")
         .ok_or_else(|| "tasks status payload missing task".to_owned())?;
     let lines = render_task_detail_lines(task)?;
-    Ok(lines.join("\n"))
+    Ok(render_tasks_surface(
+        "task detail",
+        "background tasks",
+        Vec::new(),
+        vec![("task", lines)],
+        vec![
+            "Use `tasks events <id>` or `tasks wait <id>` to keep inspecting the task lifecycle."
+                .to_owned(),
+        ],
+    ))
 }
 
 fn render_tasks_events_text(payload: &Value) -> CliResult<String> {
@@ -1294,12 +1684,19 @@ fn render_tasks_events_text(payload: &Value) -> CliResult<String> {
         .unwrap_or(0);
 
     let mut lines = Vec::new();
+    let sanitized_task_id = crate::sessions_cli::sanitize_terminal_text(task_id);
     lines.push(format!(
-        "events for `{task_id}` (next_after_id={next_after_id})"
+        "events for `{sanitized_task_id}` (next_after_id={next_after_id})"
     ));
     if events.is_empty() {
         lines.push("No newer events.".to_owned());
-        return Ok(lines.join("\n"));
+        return Ok(render_tasks_surface(
+            "task events",
+            "background tasks",
+            Vec::new(),
+            vec![("events", lines)],
+            vec!["Use `tasks wait <id>` to continue following this task.".to_owned()],
+        ));
     }
 
     for event in events {
@@ -1309,10 +1706,17 @@ fn render_tasks_events_text(payload: &Value) -> CliResult<String> {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let ts = event.get("ts").and_then(Value::as_i64).unwrap_or_default();
-        lines.push(format!("- #{event_id} {event_kind} ts={ts}"));
+        let sanitized_event_kind = crate::sessions_cli::sanitize_terminal_text(event_kind);
+        lines.push(format!("- #{event_id} {sanitized_event_kind} ts={ts}"));
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_tasks_surface(
+        "task events",
+        "background tasks",
+        Vec::new(),
+        vec![("events", lines)],
+        vec!["Use `tasks wait <id>` to continue following this task.".to_owned()],
+    ))
 }
 
 fn render_tasks_wait_text(payload: &Value) -> CliResult<String> {
@@ -1345,11 +1749,18 @@ fn render_tasks_wait_text(payload: &Value) -> CliResult<String> {
                 .get("event_kind")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            lines.push(format!("- #{event_id} {event_kind}"));
+            let sanitized_event_kind = crate::sessions_cli::sanitize_terminal_text(event_kind);
+            lines.push(format!("- #{event_id} {sanitized_event_kind}"));
         }
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_tasks_surface(
+        "task wait",
+        "background tasks",
+        Vec::new(),
+        vec![("result", lines)],
+        vec!["Re-run `tasks wait` with the returned cursor when you need more updates.".to_owned()],
+    ))
 }
 
 fn render_tasks_mutation_text(payload: &Value) -> CliResult<String> {
@@ -1371,10 +1782,12 @@ fn render_tasks_mutation_text(payload: &Value) -> CliResult<String> {
     let mut lines = Vec::new();
     lines.push(format!("{command} dry_run={dry_run}"));
     if let Some(result) = result {
-        lines.push(format!("result: {result}"));
+        let sanitized_result = crate::sessions_cli::sanitize_terminal_text(result);
+        lines.push(format!("result: {sanitized_result}"));
     }
     if let Some(message) = message {
-        lines.push(format!("message: {message}"));
+        let sanitized_message = crate::sessions_cli::sanitize_terminal_text(message);
+        lines.push(format!("message: {sanitized_message}"));
     }
     if !action.is_null() {
         let rendered_action = serde_json::to_string_pretty(&action)
@@ -1384,7 +1797,47 @@ fn render_tasks_mutation_text(payload: &Value) -> CliResult<String> {
     }
     lines.extend(render_task_detail_lines(task)?);
     append_task_lookup_error_line(payload, &mut lines);
-    Ok(lines.join("\n"))
+    Ok(render_tasks_surface(
+        "task action",
+        "background tasks",
+        Vec::new(),
+        vec![("action result", lines)],
+        vec!["Use `tasks status <id>` to verify the task state after the action.".to_owned()],
+    ))
+}
+
+fn render_tasks_surface(
+    title: &str,
+    subtitle: &str,
+    intro_lines: Vec<String>,
+    sections: Vec<(&str, Vec<String>)>,
+    footer_lines: Vec<String>,
+) -> String {
+    let sections = sections
+        .into_iter()
+        .map(
+            |(section_title, lines)| mvp::tui_surface::TuiSectionSpec::Narrative {
+                title: Some(section_title.to_owned()),
+                lines,
+            },
+        )
+        .collect();
+    let screen = mvp::tui_surface::TuiScreenSpec {
+        header_style: mvp::tui_surface::TuiHeaderStyle::Compact,
+        subtitle: Some(subtitle.to_owned()),
+        title: Some(title.to_owned()),
+        progress_line: None,
+        intro_lines,
+        sections,
+        choices: Vec::new(),
+        footer_lines,
+    };
+    mvp::tui_surface::render_tui_screen_spec_ratatui(
+        &screen,
+        mvp::presentation::detect_render_width(),
+        false,
+    )
+    .join("\n")
 }
 
 fn render_task_brief_line(task: &Value) -> CliResult<String> {
@@ -1397,6 +1850,23 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .get("phase")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let task_status = task
+        .get("task_status")
+        .cloned()
+        .unwrap_or_else(unknown_task_status_payload);
+    let status_display = task_status
+        .get("display")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let blocked = task_status
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let workflow_phase = task
+        .get("workflow")
+        .and_then(|value| value.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let label = task.get("label").and_then(Value::as_str).unwrap_or("-");
     let approval_attention = task
         .get("approval")
@@ -1404,8 +1874,20 @@ fn render_task_brief_line(task: &Value) -> CliResult<String> {
         .and_then(|value| value.get("needs_attention_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let owner_kind = task
+        .get("owner_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let signals = task_status
+        .get("signals")
+        .and_then(Value::as_array)
+        .map(|values| render_string_array(values))
+        .unwrap_or_else(|| "-".to_owned());
+    let sanitized_task_id = crate::sessions_cli::sanitize_terminal_text(task_id.as_str());
+    let sanitized_label = crate::sessions_cli::sanitize_terminal_text(label);
+    let sanitized_owner_kind = crate::sessions_cli::sanitize_terminal_text(owner_kind);
     let line = format!(
-        "{task_id} state={state} phase={phase} label={label} approval_attention={approval_attention}"
+        "{sanitized_task_id} status={status_display} blocked={blocked} state={state} workflow_phase={workflow_phase} delegate_phase={phase} label={sanitized_label} owner_kind={sanitized_owner_kind} approval_attention={approval_attention} signals={signals}"
     );
     Ok(line)
 }
@@ -1416,6 +1898,31 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .get("scope_session_id")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let task_status = task
+        .get("task_status")
+        .cloned()
+        .unwrap_or_else(unknown_task_status_payload);
+    let task_status_display = task_status
+        .get("display")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let blocked = task_status
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let needs_attention = task_status
+        .get("needs_attention")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let next_action = task_status
+        .get("next_action")
+        .and_then(Value::as_str)
+        .unwrap_or("status");
+    let task_signals = task_status
+        .get("signals")
+        .and_then(Value::as_array)
+        .map(|values| render_string_array(values))
+        .unwrap_or_else(|| "-".to_owned());
     let label = task.get("label").and_then(Value::as_str).unwrap_or("-");
     let state = task
         .get("session_state")
@@ -1425,6 +1932,61 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .get("phase")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let owner_kind = task
+        .get("owner_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let workflow_id = task
+        .get("workflow")
+        .and_then(|value| value.get("workflow_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_phase = task
+        .get("workflow")
+        .and_then(|value| value.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_operation_kind = task
+        .get("workflow")
+        .and_then(|value| value.get("operation_kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_operation_scope = task
+        .get("workflow")
+        .and_then(|value| value.get("operation_scope"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_task_session_id = task
+        .get("workflow")
+        .and_then(|value| value.get("task_session_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_binding_mode = task
+        .get("workflow")
+        .and_then(|value| value.get("binding"))
+        .and_then(|value| value.get("mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_execution_surface = task
+        .get("workflow")
+        .and_then(|value| value.get("binding"))
+        .and_then(|value| value.get("execution_surface"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_worktree_id = task
+        .get("workflow")
+        .and_then(|value| value.get("binding"))
+        .and_then(|value| value.get("worktree"))
+        .and_then(|value| value.get("worktree_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_workspace_root = task
+        .get("workflow")
+        .and_then(|value| value.get("binding"))
+        .and_then(|value| value.get("worktree"))
+        .and_then(|value| value.get("workspace_root"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
     let timeout_seconds = task
         .get("timeout_seconds")
         .and_then(Value::as_u64)
@@ -1456,27 +2018,96 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         .and_then(|value| value.get("effective_runtime_narrowing"))
         .cloned()
         .unwrap_or(Value::Null);
+    let prompt_frame_summary =
+        crate::session_prompt_frame_cli::render_prompt_frame_summary(task.get("prompt_frame"));
+    let safe_lane_summary =
+        crate::session_runtime_truth_cli::render_safe_lane_summary(task.get("safe_lane"));
+    let turn_checkpoint_summary = crate::session_runtime_truth_cli::render_turn_checkpoint_summary(
+        task.get("turn_checkpoint"),
+    );
     let rendered_runtime_narrowing = if effective_runtime_narrowing.is_null() {
         "-".to_owned()
     } else {
         serde_json::to_string(&effective_runtime_narrowing)
             .map_err(|error| format!("render runtime narrowing failed: {error}"))?
     };
+    let sanitized_task_id = crate::sessions_cli::sanitize_terminal_text(task_id.as_str());
+    let sanitized_scope_session_id = crate::sessions_cli::sanitize_terminal_text(scope_session_id);
+    let sanitized_label = crate::sessions_cli::sanitize_terminal_text(label);
+    let sanitized_last_error = crate::sessions_cli::sanitize_terminal_text(last_error);
+    let sanitized_effective_tool_ids =
+        crate::sessions_cli::sanitize_terminal_text(effective_tool_ids.as_str());
+    let sanitized_runtime_narrowing =
+        crate::sessions_cli::sanitize_terminal_text(rendered_runtime_narrowing.as_str());
+    let sanitized_prompt_frame_summary =
+        crate::sessions_cli::sanitize_terminal_text(prompt_frame_summary.as_str());
+    let sanitized_safe_lane_summary =
+        crate::sessions_cli::sanitize_terminal_text(safe_lane_summary.as_str());
+    let sanitized_turn_checkpoint_summary =
+        crate::sessions_cli::sanitize_terminal_text(turn_checkpoint_summary.as_str());
+    let approval_lookup_error = task
+        .get("approval_lookup_error")
+        .and_then(Value::as_str)
+        .map(crate::sessions_cli::sanitize_terminal_text);
+    let tool_policy_lookup_error = task
+        .get("tool_policy_lookup_error")
+        .and_then(Value::as_str)
+        .map(crate::sessions_cli::sanitize_terminal_text);
 
     let mut lines = Vec::new();
-    lines.push(format!("task_id: {task_id}"));
-    lines.push(format!("scope_session_id: {scope_session_id}"));
-    lines.push(format!("label: {label}"));
+    lines.push(format!("task_id: {sanitized_task_id}"));
+    lines.push(format!("scope_session_id: {sanitized_scope_session_id}"));
+    lines.push(format!("label: {sanitized_label}"));
+    lines.push(format!("task_status: {task_status_display}"));
+    lines.push(format!("task_blocked: {blocked}"));
+    lines.push(format!("task_needs_attention: {needs_attention}"));
+    lines.push(format!("task_next_action: {next_action}"));
+    lines.push(format!("task_signals: {task_signals}"));
     lines.push(format!("state: {state}"));
+    lines.push(format!("workflow_id: {workflow_id}"));
+    lines.push(format!("workflow_phase: {workflow_phase}"));
+    lines.push(format!(
+        "workflow_operation_kind: {workflow_operation_kind}"
+    ));
+    lines.push(format!(
+        "workflow_operation_scope: {workflow_operation_scope}"
+    ));
+    lines.push(format!(
+        "workflow_task_session_id: {workflow_task_session_id}"
+    ));
+    lines.push(format!("workflow_binding_mode: {workflow_binding_mode}"));
+    lines.push(format!(
+        "workflow_execution_surface: {workflow_execution_surface}"
+    ));
+    lines.push(format!("workflow_worktree_id: {workflow_worktree_id}"));
+    lines.push(format!(
+        "workflow_workspace_root: {workflow_workspace_root}"
+    ));
     lines.push(format!("phase: {phase}"));
+    lines.push(format!("owner_kind: {owner_kind}"));
     lines.push(format!("timeout_seconds: {timeout_seconds}"));
-    lines.push(format!("last_error: {last_error}"));
+    lines.push(format!("last_error: {sanitized_last_error}"));
     lines.push(format!("approval_requests: {approval_total}"));
     lines.push(format!("approval_attention: {approval_attention}"));
-    lines.push(format!("effective_tool_ids: {effective_tool_ids}"));
     lines.push(format!(
-        "effective_runtime_narrowing: {rendered_runtime_narrowing}"
+        "effective_tool_ids: {sanitized_effective_tool_ids}"
     ));
+    lines.push(format!(
+        "effective_runtime_narrowing: {sanitized_runtime_narrowing}"
+    ));
+    lines.push(format!("prompt_frame: {sanitized_prompt_frame_summary}"));
+    lines.push(format!("safe_lane: {sanitized_safe_lane_summary}"));
+    lines.push(format!(
+        "turn_checkpoint: {sanitized_turn_checkpoint_summary}"
+    ));
+    if let Some(approval_lookup_error) = approval_lookup_error {
+        lines.push(format!("approval_lookup_error: {approval_lookup_error}"));
+    }
+    if let Some(tool_policy_lookup_error) = tool_policy_lookup_error {
+        lines.push(format!(
+            "tool_policy_lookup_error: {tool_policy_lookup_error}"
+        ));
+    }
     Ok(lines)
 }
 
@@ -1484,7 +2115,9 @@ fn append_task_lookup_error_line(payload: &Value, lines: &mut Vec<String>) {
     let Some(task_lookup_error) = payload.get("task_lookup_error").and_then(Value::as_str) else {
         return;
     };
-    lines.push(format!("task_lookup_error: {task_lookup_error}"));
+    let sanitized_task_lookup_error =
+        crate::sessions_cli::sanitize_terminal_text(task_lookup_error);
+    lines.push(format!("task_lookup_error: {sanitized_task_lookup_error}"));
 }
 
 fn render_string_array(values: &[Value]) -> String {
@@ -1498,4 +2131,301 @@ fn render_string_array(values: &[Value]) -> String {
         return "-".to_owned();
     }
     items.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_task_payload(
+        session_state: &str,
+        phase: &str,
+        approval_primary_action: Option<&str>,
+        tool_narrowing_active: bool,
+        recovered: bool,
+        staleness_state: Option<&str>,
+    ) -> Value {
+        let approval_requests = approval_primary_action
+            .map(|primary_action| {
+                vec![json!({
+                    "attention": {
+                        "primary_action": primary_action,
+                    },
+                })]
+            })
+            .unwrap_or_default();
+        let approval_summary = json!({
+            "needs_attention_count": u64::from(approval_primary_action.is_some()),
+        });
+        let tool_policy = if tool_narrowing_active {
+            json!({
+                "base_tool_ids": ["file.read", "web.fetch"],
+                "effective_tool_ids": ["file.read"],
+                "effective_runtime_narrowing": {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"],
+                    },
+                },
+            })
+        } else {
+            json!({
+                "base_tool_ids": ["file.read"],
+                "effective_tool_ids": ["file.read"],
+                "effective_runtime_narrowing": Value::Null,
+            })
+        };
+        let recent_events = if recovered {
+            json!([
+                {
+                    "event_kind": "delegate_recovery_applied",
+                }
+            ])
+        } else {
+            json!([])
+        };
+        let delegate = json!({
+            "phase": phase,
+            "staleness": staleness_state.map(|value| {
+                json!({
+                    "state": value,
+                })
+            }),
+            "cancellation": Value::Null,
+        });
+        let session = json!({
+            "state": session_state,
+        });
+        let task_status = build_task_status_payload(
+            &session,
+            &delegate,
+            &json!(approval_requests),
+            &approval_summary,
+            &tool_policy,
+            &recent_events,
+        );
+
+        json!({
+            "task_id": "delegate:task-1",
+            "scope_session_id": "ops-root",
+            "label": "Release Check",
+            "session_state": session_state,
+            "phase": phase,
+            "timeout_seconds": 60,
+            "last_error": Value::Null,
+            "approval": {
+                "matched_count": approval_requests.len(),
+                "attention_summary": approval_summary,
+            },
+            "tool_policy": tool_policy,
+            "task_status": task_status,
+        })
+    }
+
+    #[test]
+    fn build_task_status_payload_uses_approval_action_and_tool_narrowing_signal() {
+        let task = build_task_payload(
+            "ready",
+            "queued",
+            Some("resolve_request"),
+            true,
+            false,
+            None,
+        );
+        let task_status = &task["task_status"];
+
+        assert_eq!(task_status["kind"], "approval_pending");
+        assert_eq!(task_status["blocked"], true);
+        assert_eq!(task_status["status"], "approval_pending");
+        assert_eq!(task_status["needs_attention"], true);
+        assert_eq!(task_status["next_action"], "resolve_request");
+        assert_eq!(task_status["tool_narrowing_active"], true);
+        assert!(
+            task_status["signals"]
+                .as_array()
+                .expect("signals array")
+                .iter()
+                .any(|value| value == "tool_narrowing_active"),
+            "signals should include narrowing"
+        );
+    }
+
+    #[test]
+    fn build_task_status_payload_marks_failed_task_as_recovered_when_event_present() {
+        let task = build_task_payload("failed", "failed", None, false, true, None);
+        let task_status = &task["task_status"];
+
+        assert_eq!(task_status["status"], "failed");
+        assert_eq!(task_status["kind"], "failed");
+        assert_eq!(task_status["display"], "failed (recovered)");
+        assert_eq!(task_status["needs_attention"], true);
+        assert_eq!(task_status["recovered"], true);
+        assert_eq!(task_status["next_action"], "events");
+    }
+
+    #[test]
+    fn build_task_status_payload_marks_overdue_task_recoverable() {
+        let task = build_task_payload("running", "running", None, false, false, Some("overdue"));
+        let task_status = &task["task_status"];
+
+        assert_eq!(task_status["kind"], "overdue");
+        assert_eq!(task_status["blocked"], true);
+        assert_eq!(task_status["status"], "overdue");
+        assert_eq!(task_status["needs_attention"], true);
+        assert_eq!(task_status["next_action"], "recover");
+    }
+
+    #[test]
+    fn render_task_detail_lines_surface_task_status_summary() {
+        let task = build_task_payload(
+            "ready",
+            "queued",
+            Some("resolve_request"),
+            true,
+            false,
+            None,
+        );
+        let rendered = render_task_detail_lines(&task).expect("render task detail");
+        let joined = rendered.join("\n");
+
+        assert!(joined.contains("task_status: approval_pending"));
+        assert!(joined.contains("task_blocked: true"));
+        assert!(joined.contains("task_needs_attention: true"));
+        assert!(joined.contains("task_next_action: resolve_request"));
+        assert!(joined.contains("task_signals: approval_pending, tool_narrowing_active"));
+    }
+
+    #[test]
+    fn render_task_brief_line_prefers_derived_task_status_summary() {
+        let task = build_task_payload(
+            "ready",
+            "queued",
+            Some("resolve_request"),
+            false,
+            false,
+            None,
+        );
+        let rendered = render_task_brief_line(&task).expect("render task brief");
+
+        assert!(rendered.contains("status=approval_pending"));
+        assert!(rendered.contains("blocked=true"));
+        assert!(rendered.contains("signals=approval_pending"));
+    }
+
+    #[test]
+    fn best_effort_task_approvals_payload_falls_back_when_session_tools_are_disabled() {
+        let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::default();
+        let mut tool_config = mvp::config::ToolConfig::default();
+        tool_config.sessions.enabled = false;
+
+        let (payload, lookup_error) = load_best_effort_task_approvals_payload(
+            &memory_config,
+            &tool_config,
+            "ops-root",
+            "delegate:task-1",
+        );
+
+        assert_eq!(payload["matched_count"], 0);
+        assert_eq!(payload["returned_count"], 0);
+        assert_eq!(payload["requests"], json!([]));
+        assert!(
+            lookup_error
+                .as_str()
+                .expect("lookup error")
+                .contains("session tools are disabled"),
+            "expected degraded approval lookup error, got: {lookup_error:?}"
+        );
+    }
+
+    #[test]
+    fn best_effort_task_tool_policy_payload_falls_back_when_session_tools_are_disabled() {
+        let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::default();
+        let mut tool_config = mvp::config::ToolConfig::default();
+        tool_config.sessions.enabled = false;
+
+        let (payload, lookup_error) = load_best_effort_task_tool_policy_payload(
+            &memory_config,
+            &tool_config,
+            "ops-root",
+            "delegate:task-1",
+        );
+
+        assert!(
+            payload.is_null(),
+            "expected null fallback payload, got: {payload:?}"
+        );
+        assert!(
+            lookup_error
+                .as_str()
+                .expect("lookup error")
+                .contains("session tools are disabled"),
+            "expected degraded tool-policy lookup error, got: {lookup_error:?}"
+        );
+    }
+
+    #[test]
+    fn compose_task_detail_payload_keeps_core_status_truth_when_secondary_lookups_degrade() {
+        let session = json!({
+            "session_id": "delegate:task-1",
+            "kind": "delegate_child",
+            "state": "running",
+            "created_at": 10,
+            "updated_at": 20,
+            "archived": false,
+            "label": "Release Check",
+            "last_error": Value::Null,
+        });
+        let delegate = json!({
+            "mode": "async",
+            "phase": "running",
+            "execution": {
+                "owner_kind": "background_task_host"
+            },
+            "timeout_seconds": 60
+        });
+        let detail = compose_task_detail_payload(
+            "ops-root",
+            "delegate:task-1",
+            session.clone(),
+            delegate.clone(),
+            json!("Release Check"),
+            json!("running"),
+            json!("running"),
+            json!("async"),
+            json!("background_task_host"),
+            json!(60),
+            Value::Null,
+            json!(10),
+            json!(20),
+            json!(false),
+            Value::Null,
+            json!([]),
+            Value::Null,
+            json!(0),
+            json!(0),
+            json!("approval lookup failed"),
+            Value::Null,
+            json!("tool policy lookup failed"),
+            unknown_task_status_payload(),
+            json!("missing"),
+            json!("not_terminal"),
+            Value::Null,
+            Value::Null,
+            json!([]),
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        );
+
+        assert_eq!(detail["session"], session);
+        assert_eq!(detail["delegate"], delegate);
+        assert_eq!(detail["task_id"], "delegate:task-1");
+        assert_eq!(detail["approval_lookup_error"], "approval lookup failed");
+        assert_eq!(
+            detail["tool_policy_lookup_error"],
+            "tool policy lookup failed"
+        );
+        assert_eq!(detail["tool_policy"], Value::Null);
+        assert_eq!(detail["approval"]["matched_count"], 0);
+        assert_eq!(detail["terminal_outcome_state"], "missing");
+    }
 }

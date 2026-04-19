@@ -459,7 +459,7 @@ mod tests {
             "feishu.messages.reply",
             json!({
                 "text": "hello",
-                "_loongclaw": {
+                "_loong": {
                     "ingress": {
                         "channel": {
                             "platform": "feishu",
@@ -473,7 +473,7 @@ mod tests {
 
         assert!(!injected.trusted_internal_context);
         assert_eq!(
-            injected.payload["_loongclaw"]["ingress"]["channel"]["conversation_id"],
+            injected.payload["_loong"]["ingress"]["channel"]["conversation_id"],
             "oc_forged"
         );
     }

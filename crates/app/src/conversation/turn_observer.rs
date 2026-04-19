@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::acp::{StreamingTokenEvent, TokenDelta, ToolCallDelta};
 use crate::tools::runtime_events::ToolRuntimeEvent;
@@ -296,10 +297,12 @@ pub type ConversationTurnObserverHandle = Arc<dyn ConversationTurnObserver>;
 
 pub(crate) fn build_observer_streaming_token_callback(
     observer: &ConversationTurnObserverHandle,
+    request_started_at: Instant,
 ) -> crate::provider::StreamingTokenCallback {
     let observer = Arc::clone(observer);
     let callback = move |data: crate::provider::StreamingCallbackData| {
-        let event = map_streaming_callback_data_to_token_event(data);
+        let elapsed_ms = saturating_elapsed_ms(request_started_at);
+        let event = map_streaming_callback_data_to_token_event_with_elapsed(data, Some(elapsed_ms));
         observer.on_streaming_token(event);
     };
     Some(Arc::new(callback))
@@ -307,6 +310,13 @@ pub(crate) fn build_observer_streaming_token_callback(
 
 pub(crate) fn map_streaming_callback_data_to_token_event(
     data: crate::provider::StreamingCallbackData,
+) -> StreamingTokenEvent {
+    map_streaming_callback_data_to_token_event_with_elapsed(data, None)
+}
+
+pub(crate) fn map_streaming_callback_data_to_token_event_with_elapsed(
+    data: crate::provider::StreamingCallbackData,
+    elapsed_ms: Option<u64>,
 ) -> StreamingTokenEvent {
     match data {
         crate::provider::StreamingCallbackData::Text { text } => StreamingTokenEvent {
@@ -316,6 +326,7 @@ pub(crate) fn map_streaming_callback_data_to_token_event(
                 tool_call: None,
             },
             index: None,
+            elapsed_ms,
         },
         crate::provider::StreamingCallbackData::ToolCallStart { index, name, id } => {
             let tool_call = ToolCallDelta {
@@ -331,6 +342,7 @@ pub(crate) fn map_streaming_callback_data_to_token_event(
                 event_type: "tool_call_start".to_owned(),
                 delta,
                 index: Some(index),
+                elapsed_ms,
             }
         }
         crate::provider::StreamingCallbackData::ToolCallInput {
@@ -350,9 +362,16 @@ pub(crate) fn map_streaming_callback_data_to_token_event(
                 event_type: "tool_call_input_delta".to_owned(),
                 delta,
                 index: Some(index),
+                elapsed_ms,
             }
         }
     }
+}
+
+fn saturating_elapsed_ms(started_at: Instant) -> u64 {
+    let elapsed = started_at.elapsed();
+    let elapsed_ms = elapsed.as_millis();
+    u64::try_from(elapsed_ms).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -370,6 +389,7 @@ mod tests {
         assert_eq!(event.delta.text.as_deref(), Some("hello"));
         assert!(event.delta.tool_call.is_none());
         assert!(event.index.is_none());
+        assert_eq!(event.elapsed_ms, None);
     }
 
     #[test]
@@ -389,6 +409,7 @@ mod tests {
         assert_eq!(tool_call.args.as_deref(), Some("{\"query\":\"rust\"}"));
         assert!(tool_call.name.is_none());
         assert!(tool_call.id.is_none());
+        assert_eq!(event.elapsed_ms, None);
     }
 
     #[test]
@@ -409,5 +430,18 @@ mod tests {
         assert_eq!(tool_call.name.as_deref(), Some("search"));
         assert_eq!(tool_call.id.as_deref(), Some("call_123"));
         assert!(tool_call.args.is_none());
+        assert_eq!(event.elapsed_ms, None);
+    }
+
+    #[test]
+    fn map_streaming_callback_data_to_token_event_with_elapsed_keeps_latency_metadata() {
+        let data = crate::provider::StreamingCallbackData::Text {
+            text: "hello".to_owned(),
+        };
+        let event = map_streaming_callback_data_to_token_event_with_elapsed(data, Some(42));
+
+        assert_eq!(event.event_type, "text_delta");
+        assert_eq!(event.delta.text.as_deref(), Some("hello"));
+        assert_eq!(event.elapsed_ms, Some(42));
     }
 }

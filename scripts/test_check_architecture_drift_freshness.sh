@@ -105,7 +105,7 @@ run_fresh_report_passes_test() {
   local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/generate_architecture_drift_report.sh "$report_file"
     git add "$report_file"
     git commit -qm "seed fresh architecture drift report"
@@ -114,7 +114,7 @@ run_fresh_report_passes_test() {
   local output_file="$fixture/fresh.out"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
   )
 
@@ -131,9 +131,9 @@ run_fresh_report_with_adjacent_baseline_passes_test() {
 
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2098-12" \
+    LOONG_ARCH_REPORT_MONTH="2098-12" \
       scripts/generate_architecture_drift_report.sh "$baseline_file"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/generate_architecture_drift_report.sh "$report_file"
     git add "$baseline_file"
     git add "$report_file"
@@ -143,7 +143,7 @@ run_fresh_report_with_adjacent_baseline_passes_test() {
   local output_file="$fixture/fresh-with-baseline.out"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
   )
 
@@ -158,7 +158,7 @@ run_stale_report_fails_test() {
   local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/generate_architecture_drift_report.sh "$report_file"
     git add "$report_file"
     git commit -qm "seed stale architecture drift report"
@@ -174,7 +174,7 @@ run_stale_report_fails_test() {
   local output_file="$fixture/stale.out"
   if (
     cd "$fixture" &&
-      LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      LOONG_ARCH_REPORT_MONTH="2099-01" \
         scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
   ); then
     echo "expected freshness check to fail when the tracked report drifts from generated output" >&2
@@ -194,11 +194,11 @@ run_report_with_baseline_passes_test() {
   local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2098-12" \
+    LOONG_ARCH_REPORT_MONTH="2098-12" \
       scripts/generate_architecture_drift_report.sh "$previous_report"
     git add "$previous_report"
     git commit -qm "seed previous architecture drift report"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/generate_architecture_drift_report.sh "$report_file"
     git add "$report_file"
     git commit -qm "seed fresh architecture drift report with baseline"
@@ -207,7 +207,7 @@ run_report_with_baseline_passes_test() {
   local output_file="$fixture/baseline.out"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
   )
 
@@ -222,7 +222,7 @@ run_temp_report_path_uses_real_unique_name_test() {
   local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/generate_architecture_drift_report.sh "$report_file"
     git add "$report_file"
     git commit -qm "seed fresh architecture drift report"
@@ -231,7 +231,7 @@ run_temp_report_path_uses_real_unique_name_test() {
   local output_file="$fixture/temp-report-name.out"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
   )
 
@@ -248,7 +248,7 @@ run_untracked_report_fails_test() {
   local output_file="$fixture/untracked.out"
   if (
     cd "$fixture" &&
-      LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      LOONG_ARCH_REPORT_MONTH="2099-01" \
         scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
   ); then
     echo "expected freshness check to fail when the report path is not tracked by git" >&2
@@ -268,14 +268,14 @@ run_temp_regeneration_preserves_tracked_baseline_test() {
   local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2098-12" \
+    LOONG_ARCH_REPORT_MONTH="2098-12" \
       scripts/generate_architecture_drift_report.sh "$baseline_file"
     git add "$baseline_file"
     git commit -qm "seed baseline architecture drift report"
   )
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/generate_architecture_drift_report.sh "$report_file"
     git add "$report_file"
     git commit -qm "seed tracked architecture drift report with baseline"
@@ -284,7 +284,7 @@ run_temp_regeneration_preserves_tracked_baseline_test() {
   local output_file="$fixture/temp-regeneration.out"
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
   )
 
@@ -310,7 +310,7 @@ run_baseline_path_alias_preserves_freshness_test() {
 
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2098-12" \
+    LOONG_ARCH_REPORT_MONTH="2098-12" \
       scripts/generate_architecture_drift_report.sh "$baseline_path"
     git add "$baseline_file"
     git commit -qm "seed baseline architecture drift report"
@@ -318,7 +318,7 @@ run_baseline_path_alias_preserves_freshness_test() {
 
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
       scripts/generate_architecture_drift_report.sh "$report_path"
     git add "$report_file"
     git commit -qm "seed tracked architecture drift report with relative baseline path"
@@ -332,8 +332,8 @@ run_baseline_path_alias_preserves_freshness_test() {
 
   (
     cd "$fixture"
-    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
-      LOONGCLAW_ARCH_DRIFT_BASELINE_DIR="$tracked_dir" \
+    LOONG_ARCH_REPORT_MONTH="2099-01" \
+      LOONG_ARCH_DRIFT_BASELINE_DIR="$tracked_dir" \
       scripts/check_architecture_drift_freshness.sh "$report_path" >"$output_file" 2>&1
   )
 

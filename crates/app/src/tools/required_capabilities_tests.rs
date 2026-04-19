@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use loongclaw_contracts::{Capability, ToolCoreRequest};
+use loong_contracts::{Capability, ToolCoreRequest};
 use serde_json::json;
 
 use super::{canonical_tool_name, required_capabilities_for_request};
@@ -27,7 +27,7 @@ fn required_capabilities_follow_effective_tool_request() {
 
     let direct_content_search = ToolCoreRequest {
         tool_name: "content.search".to_owned(),
-        payload: json!({"query": "LoongClaw"}),
+        payload: json!({"query": "Loong"}),
     };
     assert_eq!(
         required_capabilities_for_request(&direct_content_search),
@@ -114,7 +114,7 @@ fn required_capabilities_follow_effective_tool_request() {
 
     let direct_web_search = ToolCoreRequest {
         tool_name: "web.search".to_owned(),
-        payload: json!({"query": "loongclaw"}),
+        payload: json!({"query": "loong"}),
     };
     assert_eq!(
         required_capabilities_for_request(&direct_web_search),
@@ -240,7 +240,7 @@ fn required_capabilities_follow_effective_tool_request() {
             "arguments": {
                 "mode": "apply",
                 "input_path": "imports/nanobot",
-                "output_path": "loongclaw.toml"
+                "output_path": "loong.toml"
             }
         }),
     };
@@ -261,7 +261,7 @@ fn required_capabilities_follow_effective_tool_request() {
             "arguments": {
                 "mode": "apply_selected",
                 "input_path": "imports/nanobot",
-                "output_path": "loongclaw.toml",
+                "output_path": "loong.toml",
                 "source_id": "source-1"
             }
         }),
@@ -282,7 +282,7 @@ fn required_capabilities_follow_effective_tool_request() {
             "lease": "unused",
             "arguments": {
                 "mode": "rollback_last_apply",
-                "output_path": "loongclaw.toml"
+                "output_path": "loong.toml"
             }
         }),
     };

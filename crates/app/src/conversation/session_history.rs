@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
-use loongclaw_contracts::{Capability, MemoryCoreRequest};
+use loong_contracts::{Capability, MemoryCoreRequest};
 #[cfg(feature = "memory-sqlite")]
 use serde_json::{Value, json};
 

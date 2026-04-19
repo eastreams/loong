@@ -1,4 +1,4 @@
-use loongclaw_contracts::MemoryCoreRequest;
+use loong_contracts::MemoryCoreRequest;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -68,13 +68,12 @@ fn supported_memory_core_operations_for_sqlite_are_stable() {
 async fn mvp_memory_adapter_routes_through_kernel() {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use loongclaw_contracts::Capability;
-    use loongclaw_kernel::{
-        ExecutionRoute, HarnessKind, LoongClawKernel, StaticPolicyEngine, VerticalPackManifest,
+    use loong_contracts::Capability;
+    use loong_kernel::{
+        ExecutionRoute, HarnessKind, LoongKernel, StaticPolicyEngine, VerticalPackManifest,
     };
 
-    let (mut kernel, _audit) =
-        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
 
     kernel.register_core_memory_adapter(MvpMemoryAdapter::new());
     kernel
@@ -118,7 +117,7 @@ async fn mvp_memory_adapter_routes_through_kernel() {
 fn memory_write_read_round_trip_uses_injected_config() {
     use std::fs;
 
-    let tmp = std::env::temp_dir().join(format!("loongclaw-test-memory-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("loong-test-memory-{}", std::process::id()));
     let _ = fs::create_dir_all(&tmp);
     let db_path = tmp.join("isolated-test.sqlite3");
     let _ = fs::remove_file(&db_path);
@@ -151,7 +150,7 @@ fn memory_window_limit_semantics_cover_explicit_fallback_and_bounds() {
     use std::fs;
 
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-test-memory-window-semantics-{}",
+        "loong-test-memory-window-semantics-{}",
         std::process::id()
     ));
     let _ = fs::create_dir_all(&tmp);
@@ -250,7 +249,7 @@ fn load_prompt_context_with_diagnostics_omits_legacy_identity_from_profile_proje
     use std::fs;
 
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-test-memory-profile-diagnostics-{}",
+        "loong-test-memory-profile-diagnostics-{}",
         std::process::id()
     ));
     let _ = fs::create_dir_all(&tmp);
@@ -300,7 +299,7 @@ fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_p
     use crate::config::{MemoryMode, MemoryProfile};
 
     let workspace_root = crate::test_support::unique_temp_dir(
-        "loongclaw-test-memory-profile-diagnostics-personalization",
+        "loong-test-memory-profile-diagnostics-personalization",
     );
     std::fs::create_dir_all(&workspace_root).expect("create diagnostics workspace");
 
@@ -362,7 +361,7 @@ fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_p
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn load_prompt_context_with_diagnostics_uses_selected_memory_system_id_in_provenance() {
-    let (root, mut config) = isolated_memory_workspace("loongclaw-selected-system-provenance");
+    let (root, mut config) = isolated_memory_workspace("loong-selected-system-provenance");
     let session_id = "selected-system-provenance-session";
 
     config.resolved_system_id = Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
@@ -398,8 +397,7 @@ fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
         .build()
         .expect("current-thread runtime");
 
-    let (workspace_root, config) =
-        isolated_memory_workspace("loongclaw-pre-compaction-durable-flush");
+    let (workspace_root, config) = isolated_memory_workspace("loong-pre-compaction-durable-flush");
 
     append_turn_direct(
         "durable-flush-session",
@@ -467,7 +465,7 @@ fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
         .expect("current-thread runtime");
 
     let (workspace_root, config) =
-        isolated_memory_workspace("loongclaw-pre-compaction-durable-flush-empty");
+        isolated_memory_workspace("loong-pre-compaction-durable-flush-empty");
 
     append_turn_direct(
         "durable-flush-empty-session",
@@ -502,7 +500,7 @@ fn append_turn_direct_bypasses_core_dispatch() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-test-memory-append-fast-path-{}",
+        "loong-test-memory-append-fast-path-{}",
         std::process::id()
     ));
     let _ = fs::create_dir_all(&tmp);
@@ -539,7 +537,7 @@ fn window_direct_bypasses_core_dispatch() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-test-memory-window-fast-path-{}",
+        "loong-test-memory-window-fast-path-{}",
         std::process::id()
     ));
     let _ = fs::create_dir_all(&tmp);
@@ -576,7 +574,7 @@ fn replace_session_turns_direct_rewrites_window() {
     use std::fs;
 
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-test-memory-replace-turns-{}",
+        "loong-test-memory-replace-turns-{}",
         std::process::id()
     ));
     let _ = fs::create_dir_all(&tmp);
@@ -627,7 +625,7 @@ fn replace_session_turns_direct_requires_explicit_timestamps() {
     use std::fs;
 
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-test-memory-replace-turns-ts-{}",
+        "loong-test-memory-replace-turns-ts-{}",
         std::process::id()
     ));
     let _ = fs::create_dir_all(&tmp);

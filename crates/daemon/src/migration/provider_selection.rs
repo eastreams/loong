@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use crate::provider_credential_policy;
 
@@ -516,9 +516,9 @@ mod tests {
         let mut provider = mvp::config::ProviderConfig::fresh_for_kind(kind);
         provider.set_api_key_env(Some(credential_env.to_owned()));
 
-        let config = mvp::config::LoongClawConfig {
+        let config = mvp::config::LoongConfig {
             provider,
-            ..mvp::config::LoongClawConfig::default()
+            ..mvp::config::LoongConfig::default()
         };
 
         ImportCandidate {
@@ -550,7 +550,7 @@ mod tests {
 
         assert_eq!(
             merged.api_key,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "OPENAI_API_KEY".to_owned(),
             })
         );
@@ -575,7 +575,7 @@ mod tests {
 
         assert_eq!(
             choice.config.api_key,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "DEEPSEEK_API_KEY".to_owned(),
             })
         );
@@ -596,7 +596,7 @@ mod tests {
 
         assert_eq!(
             resolved.api_key,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "OPENAI_API_KEY".to_owned(),
             })
         );

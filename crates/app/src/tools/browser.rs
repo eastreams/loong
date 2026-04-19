@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use reqwest::blocking::Client;
 use reqwest::header::{CONTENT_TYPE, LOCATION};
 use scraper::{Html, Selector};
@@ -291,7 +291,7 @@ fn build_browser_client(
         .dns_resolver(Arc::new(resolver))
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(config.web_fetch.timeout_seconds))
-        .user_agent("LoongClaw-Browser/0.1")
+        .user_agent("Loong-Browser/0.1")
         .no_proxy()
         .build()
         .map_err(|error| format!("failed to build HTTP client for browser tools: {error}"))

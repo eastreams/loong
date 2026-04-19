@@ -1,15 +1,73 @@
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-discord",
+    feature = "channel-dingtalk",
+    feature = "channel-email",
+    feature = "channel-feishu",
+    feature = "channel-google-chat",
+    feature = "channel-webhook",
+    feature = "channel-nostr",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-mattermost",
+    feature = "channel-nextcloud-talk",
+    feature = "channel-signal",
+    feature = "channel-slack",
+    feature = "channel-synology-chat",
+    feature = "channel-irc",
+    feature = "channel-twitch",
+    feature = "channel-teams",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-plugin-bridge",
+    feature = "channel-imessage"
+))]
 use std::future::Future;
 use std::path::PathBuf;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-discord",
+    feature = "channel-dingtalk",
+    feature = "channel-email",
+    feature = "channel-feishu",
+    feature = "channel-google-chat",
+    feature = "channel-webhook",
+    feature = "channel-nostr",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-mattermost",
+    feature = "channel-nextcloud-talk",
+    feature = "channel-signal",
+    feature = "channel-slack",
+    feature = "channel-synology-chat",
+    feature = "channel-irc",
+    feature = "channel-twitch",
+    feature = "channel-teams",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-plugin-bridge",
+    feature = "channel-imessage"
+))]
 use std::pin::Pin;
 use std::{fmt, str::FromStr};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-plugin-bridge",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
 use serde_json::Value;
 
 use crate::CliResult;
 use crate::conversation::{ConversationSessionAddress, encode_route_session_segment};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChannelDelivery {
     #[allow(dead_code)]
     pub ack_cursor: Option<String>,
@@ -27,14 +85,14 @@ pub struct ChannelDelivery {
     pub feishu_callback: Option<ChannelDeliveryFeishuCallback>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelDeliveryResource {
     pub resource_type: String,
     pub file_key: String,
     pub file_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelDeliveryFeishuCallback {
     pub callback_token: Option<String>,
     pub open_message_id: Option<String>,
@@ -49,12 +107,19 @@ pub(crate) struct ChannelSendReceipt {
     pub target: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChannelPlatform {
     Telegram,
     Feishu,
     Matrix,
     Wecom,
+    Line,
+    Webhook,
+    Weixin,
+    Qqbot,
+    Onebot,
+    #[serde(rename = "whatsapp", alias = "whats_app")]
     WhatsApp,
     Irc,
 }
@@ -66,13 +131,18 @@ impl ChannelPlatform {
             Self::Feishu => "feishu",
             Self::Matrix => "matrix",
             Self::Wecom => "wecom",
+            Self::Line => "line",
+            Self::Webhook => "webhook",
+            Self::Weixin => "weixin",
+            Self::Qqbot => "qqbot",
+            Self::Onebot => "onebot",
             Self::WhatsApp => "whatsapp",
             Self::Irc => "irc",
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelSession {
     pub platform: ChannelPlatform,
     pub configured_account_id: Option<String>,
@@ -213,7 +283,7 @@ impl ChannelSession {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelOutboundTargetKind {
     Conversation,
@@ -259,7 +329,7 @@ impl FromStr for ChannelOutboundTargetKind {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelOutboundDeliveryOptions {
     pub idempotency_key: Option<String>,
     pub feishu_receive_id_type: Option<String>,
@@ -267,7 +337,7 @@ pub struct ChannelOutboundDeliveryOptions {
     pub feishu_reply_chat_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelOutboundTarget {
     pub platform: ChannelPlatform,
     pub kind: ChannelOutboundTargetKind,
@@ -374,7 +444,17 @@ impl ChannelOutboundTarget {
     }
 }
 
-#[derive(Debug, Clone)]
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-plugin-bridge",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelInboundMessage {
     pub session: ChannelSession,
     pub reply_target: ChannelOutboundTarget,
@@ -385,9 +465,12 @@ pub struct ChannelInboundMessage {
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
+    feature = "channel-plugin-bridge",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
 ))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::channel) struct ChannelResolvedAcpTurnHints {
@@ -395,7 +478,17 @@ pub(in crate::channel) struct ChannelResolvedAcpTurnHints {
     pub(in crate::channel) working_directory: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-plugin-bridge",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ChannelOutboundMessage {
     Text(String),
     MarkdownCard(String),
@@ -404,7 +497,17 @@ pub enum ChannelOutboundMessage {
     File { file_key: String },
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-plugin-bridge",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelStreamingMode {
     #[default]
     Off,
@@ -426,8 +529,70 @@ pub struct FeishuChannelSendRequest {
     pub uuid: Option<String>,
 }
 
-pub(in crate::channel) type ChannelProcessFuture =
-    Pin<Box<dyn Future<Output = CliResult<String>> + Send>>;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-plugin-bridge",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send>>;
 
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-discord",
+    feature = "channel-dingtalk",
+    feature = "channel-email",
+    feature = "channel-feishu",
+    feature = "channel-google-chat",
+    feature = "channel-webhook",
+    feature = "channel-nostr",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-mattermost",
+    feature = "channel-nextcloud-talk",
+    feature = "channel-signal",
+    feature = "channel-slack",
+    feature = "channel-synology-chat",
+    feature = "channel-irc",
+    feature = "channel-twitch",
+    feature = "channel-teams",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-plugin-bridge",
+    feature = "channel-imessage"
+))]
 pub(in crate::channel) type ChannelCommandFuture<'a> =
     Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
+
+#[cfg(test)]
+mod tests {
+    use super::{ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform};
+
+    #[test]
+    fn channel_platform_serializes_as_stable_snake_case() {
+        let weixin_target = ChannelOutboundTarget::new(
+            ChannelPlatform::Weixin,
+            ChannelOutboundTargetKind::Conversation,
+            "weixin:default:contact:wxid_alice",
+        );
+        let whatsapp_target = ChannelOutboundTarget::new(
+            ChannelPlatform::WhatsApp,
+            ChannelOutboundTargetKind::Address,
+            "+15551234567",
+        );
+
+        let weixin_value = serde_json::to_value(&weixin_target).expect("serialize weixin target");
+        let whatsapp_value =
+            serde_json::to_value(&whatsapp_target).expect("serialize whatsapp target");
+        let parsed_platform =
+            serde_json::from_str::<ChannelPlatform>("\"whatsapp\"").expect("parse whatsapp");
+
+        assert_eq!(weixin_value["platform"], "weixin");
+        assert_eq!(whatsapp_value["platform"], "whatsapp");
+        assert_eq!(parsed_platform, ChannelPlatform::WhatsApp);
+    }
+}

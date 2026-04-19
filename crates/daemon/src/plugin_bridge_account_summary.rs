@@ -250,6 +250,7 @@ mod tests {
             enabled: true,
             api_base_url: None,
             notes,
+            reserved_runtime_fields: Vec::new(),
             operations,
         }
     }

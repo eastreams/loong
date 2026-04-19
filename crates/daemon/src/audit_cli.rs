@@ -9,7 +9,7 @@ use crate::kernel::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, PluginTrustTier, repair_jsonl_audit_journal,
     verify_jsonl_audit_journal,
 };
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 use serde_json::{Map, Value, json};
 
 const MAX_AUDIT_WINDOW: usize = 10_000;
@@ -2854,7 +2854,7 @@ fn audit_event_kind_label(kind: &AuditEventKind) -> &'static str {
         AuditEventKind::ToolSearchEvaluated { .. } => "ToolSearchEvaluated",
         AuditEventKind::ProviderFailover { .. } => "ProviderFailover",
         AuditEventKind::AuthorizationDenied { .. } => "AuthorizationDenied",
-        // AuditEventKind is non_exhaustive in loongclaw-contracts, so keep a visible
+        // AuditEventKind is non_exhaustive in loong-contracts, so keep a visible
         // fallback label instead of silently collapsing future variants into "Unknown".
         _ => "UnknownAuditEventKind",
     }
@@ -3162,8 +3162,8 @@ mod tests {
         mode: crate::mvp::config::AuditMode,
     ) -> PathBuf {
         fs::create_dir_all(root).expect("create config root");
-        let config_path = root.join("loongclaw.toml");
-        let mut config = crate::mvp::config::LoongClawConfig::default();
+        let config_path = root.join("loong.toml");
+        let mut config = crate::mvp::config::LoongConfig::default();
         config.audit.mode = mode;
         config.audit.path = journal_path.display().to_string();
         crate::mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
@@ -3202,7 +3202,7 @@ mod tests {
 
     #[test]
     fn audit_recent_execution_keeps_last_events_in_order() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent");
+        let root = unique_temp_dir("loong-audit-cli-recent");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -3278,7 +3278,7 @@ mod tests {
 
     #[test]
     fn audit_recent_json_includes_loaded_events_and_journal_path() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent-json");
+        let root = unique_temp_dir("loong-audit-cli-recent-json");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -3325,7 +3325,7 @@ mod tests {
 
     #[test]
     fn audit_recent_waits_for_existing_audit_journal_lock_before_reading() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent-lock");
+        let root = unique_temp_dir("loong-audit-cli-recent-lock");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -3401,7 +3401,7 @@ mod tests {
     #[test]
     fn audit_recent_rejects_zero_limit() {
         let mut env = ScopedEnv::new();
-        env.set("HOME", unique_temp_dir("loongclaw-audit-cli-missing-home"));
+        env.set("HOME", unique_temp_dir("loong-audit-cli-missing-home"));
 
         let error = execute_audit_command(AuditCommandOptions {
             config: None,
@@ -3428,10 +3428,7 @@ mod tests {
     #[test]
     fn audit_recent_rejects_excessive_limit() {
         let mut env = ScopedEnv::new();
-        env.set(
-            "HOME",
-            unique_temp_dir("loongclaw-audit-cli-large-limit-home"),
-        );
+        env.set("HOME", unique_temp_dir("loong-audit-cli-large-limit-home"));
 
         let error = execute_audit_command(AuditCommandOptions {
             config: None,
@@ -3458,7 +3455,7 @@ mod tests {
     #[test]
     fn audit_recent_text_renders_tool_search_trust_conflict_details() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_000),
             until_epoch_s_filter: Some(1_700_010_060),
@@ -3516,7 +3513,7 @@ mod tests {
 
     #[test]
     fn audit_recent_filters_by_kind_and_uses_filtered_window_limit() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent-kind-filter");
+        let root = unique_temp_dir("loong-audit-cli-recent-kind-filter");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -3634,7 +3631,7 @@ mod tests {
 
     #[test]
     fn audit_recent_filters_by_query_contains_and_trust_tier() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent-tool-search-filter");
+        let root = unique_temp_dir("loong-audit-cli-recent-tool-search-filter");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -3745,7 +3742,7 @@ mod tests {
 
     #[test]
     fn audit_recent_filters_by_time_window_inclusively() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent-time-window");
+        let root = unique_temp_dir("loong-audit-cli-recent-time-window");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -3821,7 +3818,7 @@ mod tests {
 
     #[test]
     fn audit_recent_filters_by_pack_id_and_agent_id() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent-pack-agent-filter");
+        let root = unique_temp_dir("loong-audit-cli-recent-pack-agent-filter");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -3917,7 +3914,7 @@ mod tests {
 
     #[test]
     fn audit_recent_filters_by_event_id_and_token_id() {
-        let root = unique_temp_dir("loongclaw-audit-cli-recent-event-token-filter");
+        let root = unique_temp_dir("loong-audit-cli-recent-event-token-filter");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -4093,7 +4090,7 @@ mod tests {
 
     #[test]
     fn audit_token_trail_filters_token_events_and_summarizes_lifecycle() {
-        let root = unique_temp_dir("loongclaw-audit-cli-token-trail");
+        let root = unique_temp_dir("loong-audit-cli-token-trail");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -4253,7 +4250,7 @@ mod tests {
 
     #[test]
     fn audit_token_trail_reports_truncated_matching_events() {
-        let root = unique_temp_dir("loongclaw-audit-cli-token-trail-truncated");
+        let root = unique_temp_dir("loong-audit-cli-token-trail-truncated");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -4348,7 +4345,7 @@ mod tests {
     #[test]
     fn audit_token_trail_text_and_json_render_lifecycle() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_500),
             until_epoch_s_filter: Some(1_700_010_599),
@@ -4493,7 +4490,7 @@ mod tests {
 
     #[test]
     fn audit_summary_filters_by_triage_label() {
-        let root = unique_temp_dir("loongclaw-audit-cli-summary-triage-filter");
+        let root = unique_temp_dir("loong-audit-cli-summary-triage-filter");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -4607,7 +4604,7 @@ mod tests {
 
     #[test]
     fn audit_summary_filters_by_agent_id() {
-        let root = unique_temp_dir("loongclaw-audit-cli-summary-agent-filter");
+        let root = unique_temp_dir("loong-audit-cli-summary-agent-filter");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -4712,7 +4709,7 @@ mod tests {
 
     #[test]
     fn audit_discovery_filters_tool_search_events_and_rolls_up_trust_context() {
-        let root = unique_temp_dir("loongclaw-audit-cli-discovery");
+        let root = unique_temp_dir("loong-audit-cli-discovery");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -4935,7 +4932,7 @@ mod tests {
         let mut env = ScopedEnv::new();
         env.set(
             "HOME",
-            unique_temp_dir("loongclaw-audit-cli-large-discovery-limit-home"),
+            unique_temp_dir("loong-audit-cli-large-discovery-limit-home"),
         );
 
         let error = execute_audit_command(AuditCommandOptions {
@@ -4965,7 +4962,7 @@ mod tests {
         let mut env = ScopedEnv::new();
         env.set(
             "HOME",
-            unique_temp_dir("loongclaw-audit-cli-invalid-time-range-home"),
+            unique_temp_dir("loong-audit-cli-invalid-time-range-home"),
         );
 
         let error = execute_audit_command(AuditCommandOptions {
@@ -4994,7 +4991,7 @@ mod tests {
 
     #[test]
     fn audit_discovery_groups_by_agent() {
-        let root = unique_temp_dir("loongclaw-audit-cli-discovery-group-by-agent");
+        let root = unique_temp_dir("loong-audit-cli-discovery-group-by-agent");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -5283,7 +5280,7 @@ mod tests {
     #[test]
     fn audit_discovery_group_drill_down_command_preserves_filters() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_400),
             until_epoch_s_filter: Some(1_700_010_499),
@@ -5331,14 +5328,14 @@ mod tests {
 
         assert_eq!(
             command,
-            "loong audit recent --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --event-id 'evt-2' --kind 'ToolSearchEvaluated' --triage-label 'tool_search_trust_conflict' --query-contains 'trust:official' --trust-tier 'official'"
+            "loong audit recent --config '/tmp/loong.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --event-id 'evt-2' --kind 'ToolSearchEvaluated' --triage-label 'tool_search_trust_conflict' --query-contains 'trust:official' --trust-tier 'official'"
         );
     }
 
     #[test]
     fn audit_discovery_group_correlated_summary_command_broadens_to_workload_window() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_400),
             until_epoch_s_filter: Some(1_700_010_499),
@@ -5387,14 +5384,14 @@ mod tests {
 
         assert_eq!(
             command,
-            "loong audit summary --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b'"
+            "loong audit summary --config '/tmp/loong.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b'"
         );
     }
 
     #[test]
     fn audit_discovery_group_correlated_remediation_command_targets_token_summary() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_400),
             until_epoch_s_filter: Some(1_700_010_499),
@@ -5452,14 +5449,14 @@ mod tests {
 
         assert_eq!(
             command,
-            "loong audit summary --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --triage-label 'authorization_denied' --group-by 'token'"
+            "loong audit summary --config '/tmp/loong.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --triage-label 'authorization_denied' --group-by 'token'"
         );
     }
 
     #[test]
     fn audit_discovery_text_and_json_render_trust_rollups() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_400),
             until_epoch_s_filter: Some(1_700_010_499),
@@ -5580,7 +5577,7 @@ mod tests {
 
     #[test]
     fn audit_recent_reports_missing_journal_with_first_write_hint() {
-        let root = unique_temp_dir("loongclaw-audit-cli-missing");
+        let root = unique_temp_dir("loong-audit-cli-missing");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
 
@@ -5609,7 +5606,7 @@ mod tests {
 
     #[test]
     fn audit_recent_reports_in_memory_mode_when_journal_is_missing() {
-        let root = unique_temp_dir("loongclaw-audit-cli-in-memory");
+        let root = unique_temp_dir("loong-audit-cli-in-memory");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config_with_mode(
             &root,
@@ -5643,7 +5640,7 @@ mod tests {
 
     #[test]
     fn audit_verify_reports_missing_journal_with_first_write_hint() {
-        let root = unique_temp_dir("loongclaw-audit-cli-verify-missing");
+        let root = unique_temp_dir("loong-audit-cli-verify-missing");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
 
@@ -5660,7 +5657,7 @@ mod tests {
 
     #[test]
     fn audit_verify_reports_in_memory_mode_when_journal_is_missing() {
-        let root = unique_temp_dir("loongclaw-audit-cli-verify-in-memory");
+        let root = unique_temp_dir("loong-audit-cli-verify-in-memory");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config_with_mode(
             &root,
@@ -5682,7 +5679,7 @@ mod tests {
 
     #[test]
     fn audit_summary_rolls_up_event_kinds_and_last_seen_fields() {
-        let root = unique_temp_dir("loongclaw-audit-cli-summary");
+        let root = unique_temp_dir("loong-audit-cli-summary");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -5877,7 +5874,7 @@ mod tests {
 
     #[test]
     fn audit_summary_groups_by_token() {
-        let root = unique_temp_dir("loongclaw-audit-cli-summary-group-by-token");
+        let root = unique_temp_dir("loong-audit-cli-summary-group-by-token");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -6013,7 +6010,7 @@ mod tests {
 
     #[test]
     fn audit_summary_ignores_non_blocking_security_scan_for_triage_rollups() {
-        let root = unique_temp_dir("loongclaw-audit-cli-summary-non-blocking-scan");
+        let root = unique_temp_dir("loong-audit-cli-summary-non-blocking-scan");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -6122,7 +6119,7 @@ mod tests {
 
     #[test]
     fn audit_summary_ignores_non_blocking_plugin_trust_for_triage_rollups() {
-        let root = unique_temp_dir("loongclaw-audit-cli-summary-non-blocking-plugin-trust");
+        let root = unique_temp_dir("loong-audit-cli-summary-non-blocking-plugin-trust");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -6225,7 +6222,7 @@ mod tests {
 
     #[test]
     fn audit_summary_tracks_tool_search_trust_conflict_triage() {
-        let root = unique_temp_dir("loongclaw-audit-cli-summary-tool-search-trust");
+        let root = unique_temp_dir("loong-audit-cli-summary-tool-search-trust");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         write_journal(
@@ -6345,7 +6342,7 @@ mod tests {
         let mut env = ScopedEnv::new();
         env.set(
             "HOME",
-            unique_temp_dir("loongclaw-audit-cli-large-summary-limit-home"),
+            unique_temp_dir("loong-audit-cli-large-summary-limit-home"),
         );
 
         let error = execute_audit_command(AuditCommandOptions {
@@ -6372,7 +6369,7 @@ mod tests {
     #[test]
     fn audit_summary_text_includes_triage_counts_and_last_seen_fields() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_100),
             until_epoch_s_filter: Some(1_700_010_199),
@@ -6447,7 +6444,7 @@ mod tests {
     #[test]
     fn audit_summary_json_includes_triage_fields() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: Some(1_700_010_200),
             until_epoch_s_filter: Some(1_700_010_299),
@@ -6515,7 +6512,7 @@ mod tests {
 
     #[test]
     fn audit_verify_reports_valid_chain_for_fresh_journal() {
-        let root = unique_temp_dir("loongclaw-audit-cli-verify");
+        let root = unique_temp_dir("loong-audit-cli-verify");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         let sink =
@@ -6565,7 +6562,7 @@ mod tests {
 
     #[test]
     fn audit_verify_reports_first_invalid_line_for_tampered_chain() {
-        let root = unique_temp_dir("loongclaw-audit-cli-verify-tamper");
+        let root = unique_temp_dir("loong-audit-cli-verify-tamper");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
@@ -6612,7 +6609,7 @@ mod tests {
 
     #[test]
     fn audit_verify_accepts_legacy_prefix_and_verifies_protected_tail() {
-        let root = unique_temp_dir("loongclaw-audit-cli-verify-legacy-prefix");
+        let root = unique_temp_dir("loong-audit-cli-verify-legacy-prefix");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         let legacy_event = sample_audit_event(
@@ -6655,7 +6652,7 @@ mod tests {
 
     #[test]
     fn audit_repair_reports_healthy_for_valid_chain() {
-        let root = unique_temp_dir("loongclaw-audit-cli-repair-healthy");
+        let root = unique_temp_dir("loong-audit-cli-repair-healthy");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         let sink =
@@ -6716,7 +6713,7 @@ mod tests {
 
     #[test]
     fn audit_repair_reports_repaired_for_legacy_prefix() {
-        let root = unique_temp_dir("loongclaw-audit-cli-repair-legacy-prefix");
+        let root = unique_temp_dir("loong-audit-cli-repair-legacy-prefix");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         let legacy_event = sample_audit_event(
@@ -6786,7 +6783,7 @@ mod tests {
 
     #[test]
     fn audit_repair_reports_refused_for_tampered_journal() {
-        let root = unique_temp_dir("loongclaw-audit-cli-repair-refused");
+        let root = unique_temp_dir("loong-audit-cli-repair-refused");
         let journal_path = root.join("audit").join("events.jsonl");
         let config_path = write_audit_config(&root, &journal_path);
         let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
@@ -6865,7 +6862,7 @@ mod tests {
     #[test]
     fn audit_summary_json_uses_empty_and_null_triage_fields_when_no_triage_events_exist() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: None,
             until_epoch_s_filter: None,
@@ -6916,7 +6913,7 @@ mod tests {
     #[test]
     fn audit_summary_text_uses_placeholders_when_no_triage_events_exist() {
         let execution = AuditCommandExecution {
-            resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
             journal_path: "/tmp/audit/events.jsonl".to_owned(),
             since_epoch_s_filter: None,
             until_epoch_s_filter: None,

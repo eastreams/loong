@@ -22,8 +22,9 @@ context lives in `docs/`, while the public reader-facing docs surface lives in
 contracts (leaf — zero internal deps)
 ├── kernel → contracts
 ├── protocol (independent leaf)
+├── bridge-runtime → contracts, kernel, protocol
 ├── app → contracts, kernel
-├── spec → contracts, kernel, protocol
+├── spec → contracts, kernel, protocol, bridge-runtime
 ├── bench → contracts, kernel, spec
 └── daemon (binary) → all of the above
 ```
@@ -55,7 +56,7 @@ directly.
 - **Before every commit**, run CI-parity checks. Any manual edit after fmt must be re-checked.
 - Every released version must map to `docs/releases/vX.Y.Z.md` with process log and detail links.
 - Local agent debug context for a release should be recorded in `.docs/releases/vX.Y.Z-debug.md`.
-- Public-repo issues, PRs, and public-doc wording should stay LoongClaw-centric; keep detailed external project comparisons in `eastreams/knowledge-base` unless naming an external project is strictly necessary.
+- Public-repo issues, PRs, and public-doc wording should stay Loong-centric; keep detailed external project comparisons in `eastreams/knowledge-base` unless naming an external project is strictly necessary.
 
 ## 5. Verification Gates
 

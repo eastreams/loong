@@ -3,11 +3,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use loongclaw_contracts::{ExecutionSecurityTier, SecretRef};
+use loong_contracts::{ExecutionSecurityTier, SecretRef};
 use serde::{Deserialize, Serialize};
 
 use super::{bash_rules, shell_policy_ext::ShellPolicyDefault};
-use crate::config::{AutonomyProfile, LoongClawConfig};
+use crate::config::{AutonomyProfile, LoongConfig};
 #[cfg(feature = "feishu-integration")]
 use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
 use crate::conversation::{
@@ -628,7 +628,7 @@ pub struct FeishuToolRuntimeConfig {
 
 #[cfg(feature = "feishu-integration")]
 impl FeishuToolRuntimeConfig {
-    pub fn from_loongclaw_config(config: &LoongClawConfig) -> Option<Self> {
+    pub fn from_loong_config(config: &LoongConfig) -> Option<Self> {
         has_enabled_feishu_runtime_credentials(&config.feishu).then(|| Self {
             channel: config.feishu.clone(),
             integration: config.feishu_integration.clone(),
@@ -751,11 +751,7 @@ impl ToolRuntimeConfig {
         configured_root.unwrap_or(fallback_root)
     }
 
-    pub fn from_loong_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
-        Self::from_loongclaw_config(config, config_path)
-    }
-
-    pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
+    pub fn from_loong_config(config: &LoongConfig, config_path: Option<&Path>) -> Self {
         let file_root = config.tools.configured_file_root();
         let workspace_root = config
             .tools
@@ -811,7 +807,7 @@ impl ToolRuntimeConfig {
             },
             browser_companion: browser_companion_runtime_policy(
                 config.tools.browser_companion.enabled,
-                parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+                parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
                 config.tools.browser_companion.command.as_deref(),
                 config.tools.browser_companion.expected_version.as_deref(),
                 config.tools.browser_companion.timeout_seconds,
@@ -918,84 +914,79 @@ impl ToolRuntimeConfig {
                     .collect(),
             },
             #[cfg(feature = "feishu-integration")]
-            feishu: FeishuToolRuntimeConfig::from_loongclaw_config(config),
+            feishu: FeishuToolRuntimeConfig::from_loong_config(config),
         }
     }
 
     /// Build a config by reading the legacy environment variables.
     ///
     /// Keeps full backward compatibility for callers that still rely on
-    /// `LOONGCLAW_FILE_ROOT`.
+    /// `LOONG_FILE_ROOT`.
     pub fn from_env() -> Self {
-        let file_root = parse_env_path("LOONGCLAW_FILE_ROOT");
-        let workspace_root =
-            parse_env_path("LOONGCLAW_WORKSPACE_ROOT").or_else(|| file_root.clone());
-        let memory_sqlite_path = std::env::var_os("LOONGCLAW_SQLITE_PATH")
+        let file_root = parse_env_path("LOONG_FILE_ROOT");
+        let workspace_root = parse_env_path("LOONG_WORKSPACE_ROOT").or_else(|| file_root.clone());
+        let memory_sqlite_path = std::env::var_os("LOONG_SQLITE_PATH")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
         let memory_sqlite_path = memory_sqlite_path.or_else(|| {
-            let default_config = crate::config::LoongClawConfig::default();
+            let default_config = crate::config::LoongConfig::default();
             Some(default_config.memory.resolved_sqlite_path())
         });
         let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
         let config_path = std::env::var("LOONG_CONFIG_PATH")
             .ok()
-            .or_else(|| std::env::var("LOONGCLAW_CONFIG_PATH").ok())
+            .or_else(|| std::env::var("LOONG_CONFIG_PATH").ok())
             .map(PathBuf::from);
         let shell_allow: BTreeSet<String> = crate::config::DEFAULT_SHELL_ALLOW
             .iter()
             .map(|value| (*value).to_owned())
             .collect();
         let shell_deny = BTreeSet::new();
-        let sessions_enabled = parse_env_bool("LOONGCLAW_TOOL_SESSIONS_ENABLED").unwrap_or(true);
+        let sessions_enabled = parse_env_bool("LOONG_TOOL_SESSIONS_ENABLED").unwrap_or(true);
         let sessions_allow_mutation =
-            parse_env_bool("LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(false);
-        let messages_enabled = parse_env_bool("LOONGCLAW_TOOL_MESSAGES_ENABLED").unwrap_or(false);
-        let delegate_enabled = parse_env_bool("LOONGCLAW_TOOL_DELEGATE_ENABLED").unwrap_or(true);
-        let runtime_self_max_source_chars =
-            parse_env_usize("LOONGCLAW_RUNTIME_SELF_MAX_SOURCE_CHARS")
-                .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS);
-        let runtime_self_max_total_chars =
-            parse_env_usize("LOONGCLAW_RUNTIME_SELF_MAX_TOTAL_CHARS")
-                .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS);
+            parse_env_bool("LOONG_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(false);
+        let messages_enabled = parse_env_bool("LOONG_TOOL_MESSAGES_ENABLED").unwrap_or(false);
+        let delegate_enabled = parse_env_bool("LOONG_TOOL_DELEGATE_ENABLED").unwrap_or(true);
+        let runtime_self_max_source_chars = parse_env_usize("LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS")
+            .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS);
+        let runtime_self_max_total_chars = parse_env_usize("LOONG_RUNTIME_SELF_MAX_TOTAL_CHARS")
+            .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS);
         let runtime_self_policy = RuntimeSelfRuntimePolicy::from_limits(
             runtime_self_max_source_chars,
             runtime_self_max_total_chars,
         );
-        let browser_enabled = parse_env_bool("LOONGCLAW_BROWSER_ENABLED").unwrap_or(true);
-        let browser_max_sessions = parse_env_usize("LOONGCLAW_BROWSER_MAX_SESSIONS")
+        let browser_enabled = parse_env_bool("LOONG_BROWSER_ENABLED").unwrap_or(true);
+        let browser_max_sessions = parse_env_usize("LOONG_BROWSER_MAX_SESSIONS")
             .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_SESSIONS);
-        let browser_max_links = parse_env_usize("LOONGCLAW_BROWSER_MAX_LINKS")
+        let browser_max_links = parse_env_usize("LOONG_BROWSER_MAX_LINKS")
             .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_LINKS);
-        let browser_max_text_chars = parse_env_usize("LOONGCLAW_BROWSER_MAX_TEXT_CHARS")
+        let browser_max_text_chars = parse_env_usize("LOONG_BROWSER_MAX_TEXT_CHARS")
             .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_TEXT_CHARS);
         let browser_companion_enabled =
-            parse_env_bool("LOONGCLAW_BROWSER_COMPANION_ENABLED").unwrap_or(false);
+            parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false);
         let browser_companion_ready =
-            parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false);
-        let browser_companion_command = parse_env_string("LOONGCLAW_BROWSER_COMPANION_COMMAND");
+            parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false);
+        let browser_companion_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
         let browser_companion_expected_version =
-            parse_env_string("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
+            parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
         let browser_companion_timeout_seconds =
-            parse_env_u64("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS")
+            parse_env_u64("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS")
                 .unwrap_or(crate::config::DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS);
-        let web_fetch_enabled = parse_env_bool("LOONGCLAW_WEB_FETCH_ENABLED").unwrap_or(true);
+        let web_fetch_enabled = parse_env_bool("LOONG_WEB_FETCH_ENABLED").unwrap_or(true);
         let web_fetch_allow_private_hosts =
-            parse_env_bool("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false);
-        let web_fetch_allowed_domains =
-            parse_env_domain_list("LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS");
-        let web_fetch_blocked_domains =
-            parse_env_domain_list("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS");
-        let web_fetch_timeout_seconds = parse_env_u64("LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS")
+            parse_env_bool("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false);
+        let web_fetch_allowed_domains = parse_env_domain_list("LOONG_WEB_FETCH_ALLOWED_DOMAINS");
+        let web_fetch_blocked_domains = parse_env_domain_list("LOONG_WEB_FETCH_BLOCKED_DOMAINS");
+        let web_fetch_timeout_seconds = parse_env_u64("LOONG_WEB_FETCH_TIMEOUT_SECONDS")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_TIMEOUT_SECONDS);
-        let web_fetch_max_bytes = parse_env_usize("LOONGCLAW_WEB_FETCH_MAX_BYTES")
+        let web_fetch_max_bytes = parse_env_usize("LOONG_WEB_FETCH_MAX_BYTES")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_BYTES);
-        let web_fetch_max_redirects = parse_env_usize("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS")
+        let web_fetch_max_redirects = parse_env_usize("LOONG_WEB_FETCH_MAX_REDIRECTS")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS);
-        let web_search_enabled = parse_env_bool("LOONGCLAW_WEB_SEARCH_ENABLED").unwrap_or(true);
+        let web_search_enabled = parse_env_bool("LOONG_WEB_SEARCH_ENABLED").unwrap_or(true);
         let web_search_default_provider = parse_env_string("LOONG_WEB_SEARCH_PROVIDER")
-            .or_else(|| parse_env_string("LOONGCLAW_WEB_SEARCH_PROVIDER"))
+            .or_else(|| parse_env_string("LOONG_WEB_SEARCH_PROVIDER"))
             .as_deref()
             .and_then(crate::config::normalize_web_search_provider)
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
@@ -1037,30 +1028,29 @@ impl ToolRuntimeConfig {
             ),
         );
         let web_search_timeout_seconds = parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS")
-            .or_else(|| parse_env_u64("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS"))
+            .or_else(|| parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS"))
             .map(|seconds| seconds.clamp(1, 60))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS);
         let web_search_max_results = parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS")
-            .or_else(|| parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS"))
+            .or_else(|| parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS"))
             .map(|count| count.clamp(1, 10))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
         let autonomy_profile = resolve_autonomy_profile_from_env();
-        let enabled = parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
+        let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
         let require_download_approval =
-            parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
-        let allowed_domains = parse_env_domain_list("LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
-        let blocked_domains = parse_env_domain_list("LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
-        let install_root = std::env::var("LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT")
+            parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
+        let allowed_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
+        let blocked_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
+        let install_root = std::env::var("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT")
             .ok()
             .map(PathBuf::from);
         let auto_expose_installed =
-            parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(false);
+            parse_env_bool("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(false);
 
-        let tool_execution_default_timeout =
-            parse_env_u64("LOONGCLAW_TOOL_DEFAULT_TIMEOUT_SECONDS");
+        let tool_execution_default_timeout = parse_env_u64("LOONG_TOOL_DEFAULT_TIMEOUT_SECONDS");
         let mut tool_execution_per_tool_timeout = BTreeMap::new();
         for (key, value) in std::env::vars() {
-            if let Some(tool_name) = key.strip_prefix("LOONGCLAW_TOOL_")
+            if let Some(tool_name) = key.strip_prefix("LOONG_TOOL_")
                 && let Some(stripped) = tool_name.strip_suffix("_TIMEOUT_SECONDS")
                 && !stripped.is_empty()
                 && stripped != "DEFAULT"
@@ -1483,7 +1473,7 @@ pub(crate) fn browser_companion_runtime_policy_from_tool_config(
     let enforce_allowed_domains = !allowed_domains.is_empty();
     browser_companion_runtime_policy(
         config.browser_companion.enabled,
-        parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+        parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
         config.browser_companion.command.as_deref(),
         config.browser_companion.expected_version.as_deref(),
         config.browser_companion.timeout_seconds,
@@ -1501,17 +1491,17 @@ pub(crate) fn browser_companion_runtime_policy_from_tool_config(
 pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
     config: &crate::config::ToolConfig,
 ) -> BrowserCompanionRuntimePolicy {
-    let env_command = parse_env_string("LOONGCLAW_BROWSER_COMPANION_COMMAND");
-    let env_expected_version = parse_env_string("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
+    let env_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
+    let env_expected_version = parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
     let default_browser_companion = crate::config::BrowserCompanionToolConfig::default();
     let use_env_web_policy = config.browser_companion == default_browser_companion;
     let allow_private_hosts = if use_env_web_policy {
-        parse_env_bool("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false)
+        parse_env_bool("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false)
     } else {
         config.browser_companion.allow_private_hosts
     };
     let allowed_domains = if use_env_web_policy {
-        parse_env_domain_list("LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS")
+        parse_env_domain_list("LOONG_WEB_FETCH_ALLOWED_DOMAINS")
     } else {
         config
             .browser_companion
@@ -1520,7 +1510,7 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
             .collect()
     };
     let blocked_domains = if use_env_web_policy {
-        parse_env_domain_list("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS")
+        parse_env_domain_list("LOONG_WEB_FETCH_BLOCKED_DOMAINS")
     } else {
         config
             .browser_companion
@@ -1531,8 +1521,8 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
     let enforce_allowed_domains = !allowed_domains.is_empty();
     browser_companion_runtime_policy(
         config.browser_companion.enabled
-            || parse_env_bool("LOONGCLAW_BROWSER_COMPANION_ENABLED").unwrap_or(false),
-        parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
+            || parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false),
+        parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
         config
             .browser_companion
             .command
@@ -1543,7 +1533,7 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
             .expected_version
             .as_deref()
             .or(env_expected_version.as_deref()),
-        parse_env_u64("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS")
+        parse_env_u64("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS")
             .unwrap_or(config.browser_companion.timeout_seconds),
         allow_private_hosts,
         allowed_domains,
@@ -1627,7 +1617,7 @@ fn parse_env_domain_list(key: &str) -> BTreeSet<String> {
 }
 
 fn resolve_autonomy_profile_from_env() -> AutonomyProfile {
-    let raw_profile = parse_env_string("LOONGCLAW_AUTONOMY_PROFILE");
+    let raw_profile = parse_env_string("LOONG_AUTONOMY_PROFILE");
     let Some(raw_profile) = raw_profile else {
         return AutonomyProfile::default();
     };
@@ -1641,7 +1631,7 @@ fn resolve_autonomy_profile_from_env() -> AutonomyProfile {
         #[allow(clippy::print_stderr)]
         {
             eprintln!(
-                "warning: invalid LOONGCLAW_AUTONOMY_PROFILE `{raw_profile}`; falling back to `{default_profile_id}`. supported values: {valid_values}"
+                "warning: invalid LOONG_AUTONOMY_PROFILE `{raw_profile}`; falling back to `{default_profile_id}`. supported values: {valid_values}"
             );
         }
         return default_profile;
@@ -1740,7 +1730,7 @@ pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
+    use crate::test_support::{ScopedEnv, ScopedLoongHome};
     #[cfg(feature = "feishu-integration")]
     use std::collections::BTreeMap;
 
@@ -1748,40 +1738,40 @@ mod tests {
         for key in [
             "LOONG_HOME",
             "LOONG_CONFIG_PATH",
-            "LOONGCLAW_CONFIG_PATH",
-            "LOONGCLAW_FILE_ROOT",
-            "LOONGCLAW_WORKSPACE_ROOT",
-            "LOONGCLAW_SQLITE_PATH",
-            "LOONGCLAW_TOOL_SESSIONS_ENABLED",
-            "LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION",
-            "LOONGCLAW_TOOL_MESSAGES_ENABLED",
-            "LOONGCLAW_TOOL_DELEGATE_ENABLED",
-            "LOONGCLAW_RUNTIME_SELF_MAX_SOURCE_CHARS",
-            "LOONGCLAW_RUNTIME_SELF_MAX_TOTAL_CHARS",
-            "LOONGCLAW_BROWSER_ENABLED",
-            "LOONGCLAW_BROWSER_MAX_SESSIONS",
-            "LOONGCLAW_BROWSER_MAX_LINKS",
-            "LOONGCLAW_BROWSER_MAX_TEXT_CHARS",
-            "LOONGCLAW_BROWSER_COMPANION_ENABLED",
-            "LOONGCLAW_BROWSER_COMPANION_READY",
-            "LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS",
-            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
-            "LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION",
-            "LOONGCLAW_WEB_FETCH_ENABLED",
-            "LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS",
-            "LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS",
-            "LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS",
-            "LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS",
-            "LOONGCLAW_WEB_FETCH_MAX_BYTES",
-            "LOONGCLAW_WEB_FETCH_MAX_REDIRECTS",
-            "LOONGCLAW_WEB_SEARCH_ENABLED",
+            "LOONG_CONFIG_PATH",
+            "LOONG_FILE_ROOT",
+            "LOONG_WORKSPACE_ROOT",
+            "LOONG_SQLITE_PATH",
+            "LOONG_TOOL_SESSIONS_ENABLED",
+            "LOONG_TOOL_SESSIONS_ALLOW_MUTATION",
+            "LOONG_TOOL_MESSAGES_ENABLED",
+            "LOONG_TOOL_DELEGATE_ENABLED",
+            "LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS",
+            "LOONG_RUNTIME_SELF_MAX_TOTAL_CHARS",
+            "LOONG_BROWSER_ENABLED",
+            "LOONG_BROWSER_MAX_SESSIONS",
+            "LOONG_BROWSER_MAX_LINKS",
+            "LOONG_BROWSER_MAX_TEXT_CHARS",
+            "LOONG_BROWSER_COMPANION_ENABLED",
+            "LOONG_BROWSER_COMPANION_READY",
+            "LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS",
+            "LOONG_BROWSER_COMPANION_COMMAND",
+            "LOONG_BROWSER_COMPANION_EXPECTED_VERSION",
+            "LOONG_WEB_FETCH_ENABLED",
+            "LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS",
+            "LOONG_WEB_FETCH_ALLOWED_DOMAINS",
+            "LOONG_WEB_FETCH_BLOCKED_DOMAINS",
+            "LOONG_WEB_FETCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_FETCH_MAX_BYTES",
+            "LOONG_WEB_FETCH_MAX_REDIRECTS",
+            "LOONG_WEB_SEARCH_ENABLED",
             "LOONG_WEB_SEARCH_PROVIDER",
-            "LOONGCLAW_WEB_SEARCH_PROVIDER",
+            "LOONG_WEB_SEARCH_PROVIDER",
             "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
-            "LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
             "LOONG_WEB_SEARCH_MAX_RESULTS",
-            "LOONGCLAW_WEB_SEARCH_MAX_RESULTS",
-            "LOONGCLAW_AUTONOMY_PROFILE",
+            "LOONG_WEB_SEARCH_MAX_RESULTS",
+            "LOONG_AUTONOMY_PROFILE",
             "BRAVE_API_KEY",
             "TAVILY_API_KEY",
             "PERPLEXITY_API_KEY",
@@ -1789,12 +1779,12 @@ mod tests {
             "FIRECRAWL_API_KEY",
             "JINA_API_KEY",
             "JINA_AUTH_TOKEN",
-            "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
-            "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
-            "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
-            "LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
-            "LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT",
-            "LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
+            "LOONG_EXTERNAL_SKILLS_ENABLED",
+            "LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
+            "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
+            "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
+            "LOONG_EXTERNAL_SKILLS_INSTALL_ROOT",
+            "LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
         ] {
             env.remove(key);
         }
@@ -1899,11 +1889,11 @@ mod tests {
     }
 
     #[test]
-    fn autonomy_profile_runtime_config_from_loongclaw_config_uses_explicit_profile() {
-        let mut config = crate::config::LoongClawConfig::default();
+    fn autonomy_profile_runtime_config_from_loong_config_uses_explicit_profile() {
+        let mut config = crate::config::LoongConfig::default();
         config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
         let snapshot = runtime.autonomy_policy_snapshot();
 
         assert_eq!(runtime.autonomy_profile, AutonomyProfile::GuidedAcquisition);
@@ -1965,23 +1955,23 @@ mod tests {
     fn tool_runtime_config_projects_bash_login_shell_flag() {
         let config: crate::config::ToolConfig =
             toml::from_str("[bash]\nlogin_shell = true\n").expect("bash tool config");
-        let loongclaw = crate::config::LoongClawConfig {
+        let loong = crate::config::LoongConfig {
             tools: config,
-            ..crate::config::LoongClawConfig::default()
+            ..crate::config::LoongConfig::default()
         };
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&loongclaw, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&loong, None);
 
         assert!(runtime.bash_exec.login_shell);
     }
 
     #[test]
-    fn tool_runtime_config_uses_loongclaw_home_rules_dir_when_unset() {
-        let home = ScopedLoongClawHome::new("loongclaw-runtime-config-home");
+    fn tool_runtime_config_uses_loong_home_rules_dir_when_unset() {
+        let home = ScopedLoongHome::new("loong-runtime-config-home");
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(
-            &LoongClawConfig::default(),
-            Some(std::path::Path::new("/tmp/work/loongclaw.toml")),
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &LoongConfig::default(),
+            Some(std::path::Path::new("/tmp/work/loong.toml")),
         );
 
         assert_eq!(
@@ -1994,14 +1984,14 @@ mod tests {
     fn tool_runtime_config_keeps_relative_bash_rules_dir_override_relative() {
         let config: crate::config::ToolConfig =
             toml::from_str("[bash]\nrules_dir = \"custom/rules\"\n").expect("bash tool config");
-        let loongclaw = crate::config::LoongClawConfig {
+        let loong = crate::config::LoongConfig {
             tools: config,
-            ..crate::config::LoongClawConfig::default()
+            ..crate::config::LoongConfig::default()
         };
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(
-            &loongclaw,
-            Some(std::path::Path::new("/tmp/work/loongclaw.toml")),
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &loong,
+            Some(std::path::Path::new("/tmp/work/loong.toml")),
         );
 
         assert_eq!(
@@ -2012,11 +2002,11 @@ mod tests {
 
     #[test]
     fn bash_governance_runtime_treats_missing_rules_dir_as_empty_rule_set() {
-        let home = ScopedLoongClawHome::new("loongclaw-runtime-governance-home");
-        let config_path = home.path().join("loongclaw.toml");
+        let home = ScopedLoongHome::new("loong-runtime-governance-home");
+        let config_path = home.path().join("loong.toml");
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(
-            &LoongClawConfig::default(),
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &LoongConfig::default(),
             Some(config_path.as_path()),
         );
 
@@ -2026,15 +2016,15 @@ mod tests {
 
     #[test]
     fn bash_governance_runtime_preserves_rule_load_error_for_broken_rule_file() {
-        let home = ScopedLoongClawHome::new("loongclaw-runtime-governance-broken-home");
+        let home = ScopedLoongHome::new("loong-runtime-governance-broken-home");
         let rules_dir = home.path().join("rules");
         std::fs::create_dir_all(&rules_dir).expect("create rules dir");
         std::fs::write(rules_dir.join("broken.rules"), "not valid starlark")
             .expect("write broken rule file");
-        let config_path = home.path().join("loongclaw.toml");
+        let config_path = home.path().join("loong.toml");
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(
-            &LoongClawConfig::default(),
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &LoongConfig::default(),
             Some(config_path.as_path()),
         );
 
@@ -2043,11 +2033,11 @@ mod tests {
 
     #[cfg(not(feature = "tool-shell"))]
     #[test]
-    fn tool_runtime_config_from_loongclaw_config_does_not_probe_bash_when_tool_shell_disabled() {
-        let mut config = crate::config::LoongClawConfig::default();
+    fn tool_runtime_config_from_loong_config_does_not_probe_bash_when_tool_shell_disabled() {
+        let mut config = crate::config::LoongConfig::default();
         config.tools.bash.login_shell = true;
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert!(!runtime.bash_exec.available);
         assert!(runtime.bash_exec.command.is_none());
@@ -2098,7 +2088,7 @@ mod tests {
     fn autonomy_profile_runtime_config_from_env_invalid_value_fails_closed() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_AUTONOMY_PROFILE", "chaos");
+        env.set("LOONG_AUTONOMY_PROFILE", "chaos");
 
         let runtime = ToolRuntimeConfig::from_env();
         let snapshot = runtime.autonomy_policy_snapshot();
@@ -2111,7 +2101,7 @@ mod tests {
     fn autonomy_profile_runtime_config_from_env_uses_valid_value() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_AUTONOMY_PROFILE", "guided_acquisition");
+        env.set("LOONG_AUTONOMY_PROFILE", "guided_acquisition");
 
         let runtime = ToolRuntimeConfig::from_env();
         let snapshot = runtime.autonomy_policy_snapshot();
@@ -2139,7 +2129,7 @@ mod tests {
             delegate_enabled: false,
             shell_allow: BTreeSet::from(["git".to_owned(), "cargo".to_owned()]),
             file_root: Some(PathBuf::from("/tmp/test-root")),
-            config_path: Some(PathBuf::from("/tmp/test-root/loongclaw.toml")),
+            config_path: Some(PathBuf::from("/tmp/test-root/loong.toml")),
             runtime_self: RuntimeSelfRuntimePolicy::from_limits(4_096, 32_768),
             browser: BrowserRuntimePolicy {
                 enabled: false,
@@ -2150,7 +2140,7 @@ mod tests {
             browser_companion: BrowserCompanionRuntimePolicy {
                 enabled: true,
                 ready: true,
-                command: Some("loongclaw-browser-companion".to_owned()),
+                command: Some("loong-browser-companion".to_owned()),
                 expected_version: Some("1.2.3".to_owned()),
                 timeout_seconds: 9,
                 allow_private_hosts: false,
@@ -2184,7 +2174,7 @@ mod tests {
         assert_eq!(config.file_root, Some(PathBuf::from("/tmp/test-root")));
         assert_eq!(
             config.config_path,
-            Some(PathBuf::from("/tmp/test-root/loongclaw.toml"))
+            Some(PathBuf::from("/tmp/test-root/loong.toml"))
         );
         assert!(!config.sessions_enabled);
         assert!(config.sessions_allow_mutation);
@@ -2200,7 +2190,7 @@ mod tests {
         assert!(config.browser_companion.ready);
         assert_eq!(
             config.browser_companion.command.as_deref(),
-            Some("loongclaw-browser-companion")
+            Some("loong-browser-companion")
         );
         assert_eq!(
             config.browser_companion.expected_version.as_deref(),
@@ -2243,18 +2233,18 @@ mod tests {
     }
 
     #[test]
-    fn tool_runtime_config_from_loongclaw_config_keeps_file_root_unset_when_not_configured() {
-        let config = crate::config::LoongClawConfig::default();
+    fn tool_runtime_config_from_loong_config_keeps_file_root_unset_when_not_configured() {
+        let config = crate::config::LoongConfig::default();
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert_eq!(runtime.file_root, None);
     }
 
     #[test]
     fn memory_sqlite_path_uses_injected_config() {
-        let config = crate::config::LoongClawConfig::default();
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let config = crate::config::LoongConfig::default();
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert_eq!(
             runtime.memory_sqlite_path,
@@ -2264,10 +2254,10 @@ mod tests {
 
     #[test]
     fn selected_memory_system_id_uses_injected_config() {
-        let mut config = crate::config::LoongClawConfig::default();
+        let mut config = crate::config::LoongConfig::default();
         config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
     }
@@ -2276,7 +2266,7 @@ mod tests {
     fn memory_sqlite_path_from_env_uses_legacy_override() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_SQLITE_PATH", "/tmp/tool-runtime-memory.sqlite3");
+        env.set("LOONG_SQLITE_PATH", "/tmp/tool-runtime-memory.sqlite3");
 
         let runtime = ToolRuntimeConfig::from_env();
 
@@ -2312,10 +2302,10 @@ mod tests {
     }
 
     #[test]
-    fn memory_sqlite_path_from_env_falls_back_to_loongclaw_home() {
+    fn memory_sqlite_path_from_env_falls_back_to_loong_home() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-memory-home");
+        let runtime_home = ScopedLoongHome::new("loong-tool-runtime-memory-home");
 
         let runtime = ToolRuntimeConfig::from_env();
 
@@ -2326,11 +2316,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_legacy_memory_sqlite_path_falls_back_to_loongclaw_home() {
+    fn empty_legacy_memory_sqlite_path_falls_back_to_loong_home() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        let runtime_home = ScopedLoongClawHome::new("loongclaw-tool-runtime-empty-sqlite-home");
-        env.set("LOONGCLAW_SQLITE_PATH", "");
+        let runtime_home = ScopedLoongHome::new("loong-tool-runtime-empty-sqlite-home");
+        env.set("LOONG_SQLITE_PATH", "");
 
         let runtime = ToolRuntimeConfig::from_env();
 
@@ -2352,14 +2342,14 @@ mod tests {
     }
 
     #[test]
-    fn from_loongclaw_config_projects_browser_companion_policy() {
+    fn from_loong_config_projects_browser_companion_policy() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
-        let mut config = crate::config::LoongClawConfig::default();
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
+        let mut config = crate::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.timeout_seconds = 7;
-        config.tools.browser_companion.command = Some("loongclaw-browser-companion".to_owned());
+        config.tools.browser_companion.command = Some("loong-browser-companion".to_owned());
         config.tools.browser_companion.expected_version = Some("1.2.3".to_owned());
         config.tools.browser_companion.allow_private_hosts = true;
         config.tools.browser_companion.allowed_domains =
@@ -2369,12 +2359,12 @@ mod tests {
             " INTERNAL.EXAMPLE ".to_owned(),
         ];
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
         assert!(runtime.browser_companion.enabled);
         assert!(runtime.browser_companion.ready);
         assert_eq!(
             runtime.browser_companion.command.as_deref(),
-            Some("loongclaw-browser-companion")
+            Some("loong-browser-companion")
         );
         assert_eq!(
             runtime.browser_companion.expected_version.as_deref(),
@@ -2394,17 +2384,17 @@ mod tests {
     }
 
     #[test]
-    fn from_loongclaw_config_projects_runtime_self_policy() {
+    fn from_loong_config_projects_runtime_self_policy() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
 
-        let mut config = crate::config::LoongClawConfig::default();
+        let mut config = crate::config::LoongConfig::default();
         config.tools.runtime_self.max_source_chars = 12_345;
         config.tools.runtime_self.max_total_chars = 67_890;
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert_eq!(runtime.runtime_self.max_source_chars, 12_345);
         assert_eq!(runtime.runtime_self.max_total_chars, 67_890);
@@ -2415,22 +2405,22 @@ mod tests {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
 
-        env.set("LOONGCLAW_FILE_ROOT", "/tmp/loongclaw-tool-root");
-        env.set("LOONGCLAW_WORKSPACE_ROOT", "/tmp/loongclaw-workspace-root");
+        env.set("LOONG_FILE_ROOT", "/tmp/loong-tool-root");
+        env.set("LOONG_WORKSPACE_ROOT", "/tmp/loong-workspace-root");
 
         let runtime = ToolRuntimeConfig::from_env();
 
         assert_eq!(
             runtime.file_root.as_deref(),
-            Some(Path::new("/tmp/loongclaw-tool-root"))
+            Some(Path::new("/tmp/loong-tool-root"))
         );
         assert_eq!(
             runtime.workspace_root.as_deref(),
-            Some(Path::new("/tmp/loongclaw-workspace-root"))
+            Some(Path::new("/tmp/loong-workspace-root"))
         );
         assert_eq!(
             runtime.effective_workspace_root(),
-            Some(Path::new("/tmp/loongclaw-workspace-root"))
+            Some(Path::new("/tmp/loong-workspace-root"))
         );
     }
 
@@ -2439,54 +2429,54 @@ mod tests {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
 
-        let mut config = crate::config::LoongClawConfig::default();
-        config.tools.file_root = Some("/tmp/loongclaw-tool-root".to_owned());
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.file_root = Some("/tmp/loong-tool-root".to_owned());
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
         let runtime =
-            runtime.with_workspace_root_override(PathBuf::from("/tmp/loongclaw-runtime-workspace"));
+            runtime.with_workspace_root_override(PathBuf::from("/tmp/loong-runtime-workspace"));
 
         assert_eq!(
             runtime.file_root.as_deref(),
-            Some(Path::new("/tmp/loongclaw-tool-root"))
+            Some(Path::new("/tmp/loong-tool-root"))
         );
         assert_eq!(
             runtime.workspace_root.as_deref(),
-            Some(Path::new("/tmp/loongclaw-runtime-workspace"))
+            Some(Path::new("/tmp/loong-runtime-workspace"))
         );
         assert_eq!(
             runtime.effective_workspace_root(),
-            Some(Path::new("/tmp/loongclaw-runtime-workspace"))
+            Some(Path::new("/tmp/loong-runtime-workspace"))
         );
     }
 
     #[test]
-    fn from_loongclaw_config_projects_session_mutation_toggle() {
+    fn from_loong_config_projects_session_mutation_toggle() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
 
-        let mut config = crate::config::LoongClawConfig::default();
+        let mut config = crate::config::LoongConfig::default();
         config.tools.sessions.allow_mutation = true;
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert!(runtime.sessions_enabled);
         assert!(runtime.sessions_allow_mutation);
     }
 
     #[test]
-    fn from_loongclaw_config_canonicalizes_web_search_provider_alias() {
+    fn from_loong_config_canonicalizes_web_search_provider_alias() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
 
-        let mut config = crate::config::LoongClawConfig::default();
+        let mut config = crate::config::LoongConfig::default();
         config.tools.web_search.default_provider = "ddg".to_owned();
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert_eq!(
             runtime.web_search.default_provider,
@@ -2500,7 +2490,7 @@ mod tests {
         let _env = ScopedEnv::new();
         let injected_root = tempfile::tempdir().expect("create injected file root");
         let injected_root_path = injected_root.path().to_path_buf();
-        let config_path = injected_root_path.join("loongclaw.toml");
+        let config_path = injected_root_path.join("loong.toml");
         let config = ToolRuntimeConfig {
             file_root: Some(injected_root_path),
             shell_allow: BTreeSet::from(["echo".to_owned()]),
@@ -2508,7 +2498,7 @@ mod tests {
             ..ToolRuntimeConfig::default()
         };
         let result = crate::tools::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "shell.exec".to_owned(),
                 payload: serde_json::json!({"command": "echo", "args": ["injected"]}),
             },
@@ -2530,50 +2520,41 @@ mod tests {
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
-        env.set("LOONGCLAW_TOOL_SESSIONS_ENABLED", "false");
-        env.set("LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION", "true");
-        env.set("LOONGCLAW_TOOL_MESSAGES_ENABLED", "true");
-        env.set("LOONGCLAW_TOOL_DELEGATE_ENABLED", "false");
-        env.set("LOONGCLAW_BROWSER_ENABLED", "false");
-        env.set("LOONGCLAW_BROWSER_MAX_SESSIONS", "4");
-        env.set("LOONGCLAW_BROWSER_MAX_LINKS", "12");
-        env.set("LOONGCLAW_BROWSER_MAX_TEXT_CHARS", "2048");
-        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
-        env.set("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
+        env.set("LOONG_TOOL_SESSIONS_ENABLED", "false");
+        env.set("LOONG_TOOL_SESSIONS_ALLOW_MUTATION", "true");
+        env.set("LOONG_TOOL_MESSAGES_ENABLED", "true");
+        env.set("LOONG_TOOL_DELEGATE_ENABLED", "false");
+        env.set("LOONG_BROWSER_ENABLED", "false");
+        env.set("LOONG_BROWSER_MAX_SESSIONS", "4");
+        env.set("LOONG_BROWSER_MAX_LINKS", "12");
+        env.set("LOONG_BROWSER_MAX_TEXT_CHARS", "2048");
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
+        env.set("LOONG_BROWSER_COMPANION_COMMAND", "loong-browser-companion");
+        env.set("LOONG_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
+        env.set("LOONG_WEB_FETCH_ENABLED", "false");
+        env.set("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
         env.set(
-            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
-            "loongclaw-browser-companion",
-        );
-        env.set("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
-        env.set("LOONGCLAW_WEB_FETCH_ENABLED", "false");
-        env.set("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
-        env.set(
-            "LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS",
+            "LOONG_WEB_FETCH_ALLOWED_DOMAINS",
             "docs.example.com,api.example.com",
         );
-        env.set("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
-        env.set("LOONGCLAW_WEB_FETCH_TIMEOUT_SECONDS", "9");
-        env.set("LOONGCLAW_WEB_FETCH_MAX_BYTES", "262144");
-        env.set("LOONGCLAW_WEB_FETCH_MAX_REDIRECTS", "1");
-        env.set("LOONGCLAW_EXTERNAL_SKILLS_ENABLED", "true");
+        env.set("LOONG_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
+        env.set("LOONG_WEB_FETCH_TIMEOUT_SECONDS", "9");
+        env.set("LOONG_WEB_FETCH_MAX_BYTES", "262144");
+        env.set("LOONG_WEB_FETCH_MAX_REDIRECTS", "1");
+        env.set("LOONG_EXTERNAL_SKILLS_ENABLED", "true");
+        env.set("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL", "false");
         env.set(
-            "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
-            "false",
-        );
-        env.set(
-            "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
+            "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
             "skills.sh,clawhub.ai",
         );
         env.set(
-            "LOONGCLAW_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
+            "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
             "malicious.example,*.clawhub.io",
         );
-        env.set(
-            "LOONGCLAW_EXTERNAL_SKILLS_INSTALL_ROOT",
-            "/tmp/managed-skills",
-        );
-        env.set("LOONGCLAW_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
+        env.set("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT", "/tmp/managed-skills");
+        env.set("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
 
         let config = ToolRuntimeConfig::from_env();
         assert!(!config.sessions_enabled);
@@ -2588,7 +2569,7 @@ mod tests {
         assert!(config.browser_companion.ready);
         assert_eq!(
             config.browser_companion.command.as_deref(),
-            Some("loongclaw-browser-companion")
+            Some("loong-browser-companion")
         );
         assert_eq!(
             config.browser_companion.expected_version.as_deref(),
@@ -2682,8 +2663,8 @@ mod tests {
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
-        env.set("LOONGCLAW_RUNTIME_SELF_MAX_SOURCE_CHARS", "999999");
-        env.set("LOONGCLAW_RUNTIME_SELF_MAX_TOTAL_CHARS", "1");
+        env.set("LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS", "999999");
+        env.set("LOONG_RUNTIME_SELF_MAX_TOTAL_CHARS", "1");
 
         let config = ToolRuntimeConfig::from_env();
 
@@ -2768,9 +2749,9 @@ mod tests {
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
-        env.set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
-        env.set("LOONGCLAW_WEB_SEARCH_TIMEOUT_SECONDS", "41");
-        env.set("LOONGCLAW_WEB_SEARCH_MAX_RESULTS", "7");
+        env.set("LOONG_WEB_SEARCH_PROVIDER", "tavily");
+        env.set("LOONG_WEB_SEARCH_TIMEOUT_SECONDS", "41");
+        env.set("LOONG_WEB_SEARCH_MAX_RESULTS", "7");
 
         let config = ToolRuntimeConfig::from_env();
 
@@ -2780,19 +2761,19 @@ mod tests {
     }
 
     #[test]
-    fn from_loongclaw_config_resolves_inline_env_refs_for_web_search_credentials() {
+    fn from_loong_config_resolves_inline_env_refs_for_web_search_credentials() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
         env.set("TEAM_EXA_KEY", "exa-inline-env");
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.tools.web_search.default_provider =
             crate::config::WEB_SEARCH_PROVIDER_EXA.to_owned();
         config.tools.web_search.exa_api_key = Some("${TEAM_EXA_KEY}".to_owned());
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert_eq!(
             runtime.web_search.default_provider,
@@ -2805,21 +2786,21 @@ mod tests {
     }
 
     #[test]
-    fn from_loongclaw_config_resolves_inline_env_refs_for_firecrawl_web_search_credentials() {
+    fn from_loong_config_resolves_inline_env_refs_for_firecrawl_web_search_credentials() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
         clear_feishu_runtime_env(&mut env);
         env.set("TEAM_FIRECRAWL_KEY", "firecrawl-inline-env");
 
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let provider_id = crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
         let credential_ref = "${TEAM_FIRECRAWL_KEY}".to_owned();
 
         config.tools.web_search.default_provider = provider_id;
         config.tools.web_search.firecrawl_api_key = Some(credential_ref);
 
-        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
         let runtime_provider = runtime.web_search.default_provider.as_str();
         let runtime_credential = runtime.web_search.firecrawl_api_key.as_deref();
 
@@ -2877,7 +2858,7 @@ mod tests {
         let policy = BrowserCompanionRuntimePolicy {
             enabled: true,
             ready: false,
-            command: Some("loongclaw-browser-companion".to_owned()),
+            command: Some("loong-browser-companion".to_owned()),
             expected_version: Some("1.2.3".to_owned()),
             timeout_seconds: 9,
             allow_private_hosts: false,
@@ -2889,10 +2870,7 @@ mod tests {
         assert!(policy.enabled);
         assert!(!policy.ready);
         assert!(!policy.is_runtime_ready());
-        assert_eq!(
-            policy.command.as_deref(),
-            Some("loongclaw-browser-companion")
-        );
+        assert_eq!(policy.command.as_deref(), Some("loong-browser-companion"));
         assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
         assert_eq!(policy.timeout_seconds, 9);
         assert!(!policy.allow_private_hosts);
@@ -2935,14 +2913,11 @@ mod tests {
     fn browser_companion_policy_with_env_fallback_uses_runtime_exports_for_default_config() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
-        env.set(
-            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
-            "loongclaw-browser-companion",
-        );
-        env.set("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
-        env.set("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "false");
+        env.set("LOONG_BROWSER_COMPANION_COMMAND", "loong-browser-companion");
+        env.set("LOONG_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
+        env.set("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
 
         let policy = browser_companion_runtime_policy_with_env_fallback(
             &crate::config::ToolConfig::default(),
@@ -2950,10 +2925,7 @@ mod tests {
 
         assert!(policy.enabled);
         assert!(!policy.ready);
-        assert_eq!(
-            policy.command.as_deref(),
-            Some("loongclaw-browser-companion")
-        );
+        assert_eq!(policy.command.as_deref(), Some("loong-browser-companion"));
         assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
         assert_eq!(policy.timeout_seconds, 11);
     }
@@ -2962,14 +2934,14 @@ mod tests {
     fn browser_companion_runtime_policy_with_env_fallback_reuses_web_fetch_boundaries() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
-        env.set("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
         env.set(
-            "LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS",
+            "LOONG_WEB_FETCH_ALLOWED_DOMAINS",
             "docs.example.com,api.example.com",
         );
-        env.set("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
+        env.set("LOONG_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
 
         let policy = browser_companion_runtime_policy_with_env_fallback(
             &crate::config::ToolConfig::default(),
@@ -3365,6 +3337,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: crate::conversation::ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 2,
             active_children: 0,
@@ -3568,7 +3541,7 @@ Treat these as enforced limits for this child session."
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         clear_feishu_runtime_env(&mut env);
-        let _home = ScopedLoongClawHome::new("loongclaw-feishu-runtime-home");
+        let _home = ScopedLoongHome::new("loong-feishu-runtime-home");
         env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
         env.set("FEISHU_APP_SECRET", "env-secret");
 
@@ -3586,41 +3559,41 @@ Treat these as enforced limits for this child session."
         );
         assert_eq!(
             feishu.integration.resolved_sqlite_path(),
-            crate::config::default_loongclaw_home().join("feishu.sqlite3")
+            crate::config::default_loong_home().join("feishu.sqlite3")
         );
     }
 
     #[cfg(feature = "feishu-integration")]
     #[test]
-    fn from_loongclaw_config_ignores_disabled_feishu_channel_even_when_root_credentials_exist() {
-        let config = crate::config::LoongClawConfig {
+    fn from_loong_config_ignores_disabled_feishu_channel_even_when_root_credentials_exist() {
+        let config = crate::config::LoongConfig {
             feishu: crate::config::FeishuChannelConfig {
                 enabled: false,
-                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                app_id: Some(loong_contracts::SecretRef::Inline(
                     "cli_disabled_root".to_owned(),
                 )),
-                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                app_secret: Some(loong_contracts::SecretRef::Inline(
                     "disabled-root-secret".to_owned(),
                 )),
                 ..crate::config::FeishuChannelConfig::default()
             },
-            ..crate::config::LoongClawConfig::default()
+            ..crate::config::LoongConfig::default()
         };
 
         assert!(
-            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_none(),
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_none(),
             "disabled Feishu channel should not expose Feishu tools through runtime config"
         );
     }
 
     #[cfg(feature = "feishu-integration")]
     #[test]
-    fn from_loongclaw_config_ignores_disabled_feishu_accounts_when_detecting_runtime() {
+    fn from_loong_config_ignores_disabled_feishu_accounts_when_detecting_runtime() {
         let mut env = ScopedEnv::new();
         env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
         env.set("FEISHU_APP_SECRET", "env-secret");
 
-        let config = crate::config::LoongClawConfig {
+        let config = crate::config::LoongConfig {
             feishu: crate::config::FeishuChannelConfig {
                 enabled: true,
                 app_id_env: None,
@@ -3629,10 +3602,10 @@ Treat these as enforced limits for this child session."
                     "disabled_account".to_owned(),
                     crate::config::FeishuAccountConfig {
                         enabled: Some(false),
-                        app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                        app_id: Some(loong_contracts::SecretRef::Inline(
                             "cli_disabled_account".to_owned(),
                         )),
-                        app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        app_secret: Some(loong_contracts::SecretRef::Inline(
                             "disabled-account-secret".to_owned(),
                         )),
                         ..crate::config::FeishuAccountConfig::default()
@@ -3640,39 +3613,39 @@ Treat these as enforced limits for this child session."
                 )]),
                 ..crate::config::FeishuChannelConfig::default()
             },
-            ..crate::config::LoongClawConfig::default()
+            ..crate::config::LoongConfig::default()
         };
 
         assert!(
-            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_none(),
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_none(),
             "disabled Feishu accounts should not enable Feishu tool runtime on their own"
         );
     }
 
     #[cfg(feature = "feishu-integration")]
     #[test]
-    fn from_loongclaw_config_requires_resolved_env_values_for_typed_feishu_secret_refs() {
+    fn from_loong_config_requires_resolved_env_values_for_typed_feishu_secret_refs() {
         let mut env = ScopedEnv::new();
         clear_feishu_runtime_env(&mut env);
 
-        let config = crate::config::LoongClawConfig {
+        let config = crate::config::LoongConfig {
             feishu: crate::config::FeishuChannelConfig {
                 enabled: true,
-                app_id: Some(loongclaw_contracts::SecretRef::Env {
+                app_id: Some(loong_contracts::SecretRef::Env {
                     env: "FEISHU_APP_ID".to_owned(),
                 }),
-                app_secret: Some(loongclaw_contracts::SecretRef::Env {
+                app_secret: Some(loong_contracts::SecretRef::Env {
                     env: "FEISHU_APP_SECRET".to_owned(),
                 }),
                 app_id_env: None,
                 app_secret_env: None,
                 ..crate::config::FeishuChannelConfig::default()
             },
-            ..crate::config::LoongClawConfig::default()
+            ..crate::config::LoongConfig::default()
         };
 
         assert!(
-            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_none(),
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_none(),
             "missing env values should not enable Feishu runtime for typed env refs"
         );
 
@@ -3680,7 +3653,7 @@ Treat these as enforced limits for this child session."
         env.set("FEISHU_APP_SECRET", "env-secret");
 
         assert!(
-            FeishuToolRuntimeConfig::from_loongclaw_config(&config).is_some(),
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_some(),
             "resolved env values should enable Feishu runtime for typed env refs"
         );
     }

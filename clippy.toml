@@ -1,5 +1,5 @@
 # Clippy configuration for loong workspace
-# Derived from: loongclaw-research/11-code-quality/synthesis/loongclaw-code-quality-strategy-v2.md
+# Derived from: loong-research/11-code-quality/synthesis/loong-code-quality-strategy-v2.md
 
 # Complexity thresholds
 cognitive-complexity-threshold = 20

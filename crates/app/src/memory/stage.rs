@@ -180,6 +180,16 @@ impl MemoryTrustLevel {
             Self::WorkspaceLog => "workspace_log",
         }
     }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "session" => Some(Self::Session),
+            "derived" => Some(Self::Derived),
+            "workspace_curated" => Some(Self::WorkspaceCurated),
+            "workspace_log" => Some(Self::WorkspaceLog),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +204,14 @@ impl MemoryAuthority {
         match self {
             Self::Advisory => "advisory",
             Self::IdentityForbidden => "identity_forbidden",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "advisory" => Some(Self::Advisory),
+            "identity_forbidden" => Some(Self::IdentityForbidden),
+            _ => None,
         }
     }
 }
@@ -214,6 +232,16 @@ impl MemoryRecordStatus {
             Self::Superseded => "superseded",
             Self::Tombstoned => "tombstoned",
             Self::Archived => "archived",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "active" => Some(Self::Active),
+            "superseded" => Some(Self::Superseded),
+            "tombstoned" => Some(Self::Tombstoned),
+            "archived" => Some(Self::Archived),
+            _ => None,
         }
     }
 

@@ -358,7 +358,7 @@ impl Drop for GatewayOwnerTracker {
 }
 
 pub fn default_gateway_runtime_state_dir() -> PathBuf {
-    mvp::config::default_loongclaw_home().join("gateway-runtime")
+    mvp::config::default_loong_home().join("gateway-runtime")
 }
 
 pub fn load_gateway_owner_status(runtime_dir: &Path) -> Option<GatewayOwnerStatus> {
@@ -773,14 +773,14 @@ mod tests {
             .expect("system clock before unix epoch")
             .as_nanos();
         let runtime_dir =
-            std::env::temp_dir().join(format!("loongclaw-gateway-runtime-{label}-{suffix}"));
+            std::env::temp_dir().join(format!("loong-gateway-runtime-{label}-{suffix}"));
         fs::create_dir_all(&runtime_dir).expect("create gateway runtime dir");
         runtime_dir
     }
 
     fn sample_status(running: bool, last_heartbeat_at: u64) -> GatewayOwnerStatus {
         GatewayOwnerStatus {
-            runtime_dir: "/tmp/loongclaw-gateway-runtime".to_owned(),
+            runtime_dir: "/tmp/loong-gateway-runtime".to_owned(),
             phase: if running {
                 "running".to_owned()
             } else {
@@ -791,7 +791,7 @@ mod tests {
             pid: Some(4242),
             mode: GatewayOwnerMode::GatewayHeadless,
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            config_path: "/tmp/loongclaw.toml".to_owned(),
+            config_path: "/tmp/loong.toml".to_owned(),
             attached_cli_session: None,
             started_at_ms: 1_710_000_000_000,
             last_heartbeat_at,
@@ -832,7 +832,7 @@ mod tests {
         let tracker = GatewayOwnerTracker::acquire(
             runtime_dir.as_path(),
             GatewayOwnerMode::GatewayHeadless,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             None,
             0,
         )
@@ -928,7 +928,7 @@ mod tests {
         let tracker = GatewayOwnerTracker::acquire(
             runtime_dir.as_path(),
             GatewayOwnerMode::GatewayHeadless,
-            Path::new("/tmp/loongclaw.toml"),
+            Path::new("/tmp/loong.toml"),
             None,
             0,
         )

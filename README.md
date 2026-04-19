@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loongclaw-logo-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loongclaw-logo-light.png" />
-    <img src="./assets/logo/loongclaw-logo-light.png" alt="Loong" width="280" />
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loong-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loong-logo-light.png" />
+    <img src="./assets/logo/loong-logo-light.png" alt="Loong" width="280" />
   </picture>
 </p>
 <p align="center"><strong><em>"Originated from the East, here to benefit the world"</em></strong></p>
@@ -171,6 +171,14 @@ model = "auto"
 - `model = "auto"` uses provider-side discovery; pin `model = "<id>"` when discovery is unreliable for your region or account.
 
 #### Channels — Lark
+
+Recommended first-run setup:
+
+```bash
+loong feishu onboard --domain lark
+```
+
+That flow shows an in-terminal QR code, creates the bot app through the official Lark/Feishu registration API, and writes the generated credentials into `loong.toml`. Manual fallback is still available through `loong feishu onboard --manual --app-id ... --app-secret ...`.
 
 ```toml
 [feishu]

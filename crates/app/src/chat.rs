@@ -17,6 +17,7 @@ use crate::acp::{
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 mod cli_input;
+mod control_plane;
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_session_selector_tests;
@@ -113,11 +114,14 @@ use crate::tools::runtime_events::{ToolFileChangeKind, ToolRuntimeEvent, ToolRun
 
 pub const DEFAULT_FIRST_PROMPT: &str = "Summarize this repository and suggest the best next step.";
 const TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONG_TEST_ONBOARD_EXECUTABLE";
-const LEGACY_TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONGCLAW_TEST_ONBOARD_EXECUTABLE";
 const CLI_CHAT_HELP_COMMAND: &str = "/help";
 const CLI_CHAT_COMPACT_COMMAND: &str = "/compact";
 const CLI_CHAT_STATUS_COMMAND: &str = "/status";
 const CLI_CHAT_HISTORY_COMMAND: &str = "/history";
+const CLI_CHAT_MISSION_COMMAND: &str = "/mission";
+const CLI_CHAT_REVIEW_COMMAND: &str = "/review";
+const CLI_CHAT_WORKERS_COMMAND: &str = "/workers";
+const CLI_CHAT_SESSIONS_COMMAND: &str = "/sessions";
 const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND: &str = "/turn_checkpoint_repair";
 const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS: &str = "/turn-checkpoint-repair";
 const CLI_CHAT_COMPOSER_PROMPT: &str = "╰─ you · compose › ";
@@ -208,7 +212,6 @@ fn append_onboard_target_args(
 fn resolve_onboard_executable_path() -> CliResult<PathBuf> {
     if cfg!(debug_assertions)
         && let Some(executable_path) = std::env::var_os(TEST_ONBOARD_EXECUTABLE_ENV)
-            .or_else(|| std::env::var_os(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV))
     {
         return Ok(PathBuf::from(executable_path));
     }
@@ -3504,10 +3507,10 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     use async_trait::async_trait;
     #[cfg(feature = "memory-sqlite")]
-    use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError};
+    use loong_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError};
     #[cfg(feature = "memory-sqlite")]
-    use loongclaw_kernel::{
-        CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongClawKernel, MemoryCoreOutcome,
+    use loong_kernel::{
+        CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,
         MemoryCoreRequest, StaticPolicyEngine, VerticalPackManifest,
     };
     #[cfg(feature = "memory-sqlite")]
@@ -3528,7 +3531,7 @@ mod tests {
     ) -> crate::KernelContext {
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let audit = Arc::new(InMemoryAuditSink::default());
-        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+        let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack-memory".to_owned(),
@@ -3600,7 +3603,7 @@ mod tests {
     fn build_onboard_command_defaults_to_current_executable() {
         let expected_executable = std::env::current_exe().expect("current executable");
         let command =
-            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
+            build_onboard_command(None, Path::new("/tmp/loong.toml")).expect("onboard command");
 
         assert_eq!(command.get_program(), expected_executable.as_os_str());
         assert_eq!(
@@ -3616,38 +3619,23 @@ mod tests {
     fn build_onboard_command_prefers_loong_test_override() {
         let mut env = ScopedEnv::new();
         env.remove(TEST_ONBOARD_EXECUTABLE_ENV);
-        env.remove(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV);
         env.set(TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/loong-onboard");
-        env.set(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/legacy-onboard");
 
         let command =
-            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
+            build_onboard_command(None, Path::new("/tmp/loong.toml")).expect("onboard command");
 
         assert_eq!(command.get_program(), OsStr::new("/tmp/loong-onboard"));
     }
 
     #[test]
-    fn build_onboard_command_falls_back_to_legacy_override() {
-        let mut env = ScopedEnv::new();
-        env.remove(TEST_ONBOARD_EXECUTABLE_ENV);
-        env.remove(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV);
-        env.set(LEGACY_TEST_ONBOARD_EXECUTABLE_ENV, "/tmp/legacy-onboard");
-
-        let command =
-            build_onboard_command(None, Path::new("/tmp/loongclaw.toml")).expect("onboard command");
-
-        assert_eq!(command.get_program(), OsStr::new("/tmp/legacy-onboard"));
-    }
-
-    #[test]
     fn build_onboard_command_forwards_explicit_config_path_to_output() {
         let command = build_onboard_command_for_executable(
-            PathBuf::from("/tmp/loongclaw"),
+            PathBuf::from("/tmp/loong"),
             Some("custom.toml"),
             Path::new("/tmp/custom.toml"),
         );
 
-        assert_eq!(command.get_program(), OsStr::new("/tmp/loongclaw"));
+        assert_eq!(command.get_program(), OsStr::new("/tmp/loong"));
         assert_eq!(
             command
                 .get_args()
@@ -3671,7 +3659,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     fn unique_chat_sqlite_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-chat-binding-{label}-{}.sqlite3",
+            "loong-chat-binding-{label}-{}.sqlite3",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
@@ -3766,7 +3754,7 @@ mod tests {
     ) -> (crate::KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+        let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
 
         let pack = VerticalPackManifest {
             pack_id: "chat-test-pack".to_owned(),
@@ -4011,7 +3999,7 @@ mod tests {
     fn concurrent_cli_host_requires_explicit_session_id() {
         let shutdown = ConcurrentCliShutdown::new();
         let error = run_concurrent_cli_host(&ConcurrentCliHostOptions {
-            resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+            resolved_path: PathBuf::from("/tmp/loong.toml"),
             config: LoongConfig::default(),
             session_id: "   ".to_owned(),
             shutdown,
@@ -4032,7 +4020,7 @@ mod tests {
         config.audit.mode = crate::config::AuditMode::InMemory;
         let options = CliChatOptions::default();
         let runtime = initialize_cli_turn_runtime_with_loaded_config(
-            PathBuf::from("/tmp/loongclaw.toml"),
+            PathBuf::from("/tmp/loong.toml"),
             config,
             Some("cli-supervisor"),
             &options,
@@ -4466,8 +4454,8 @@ mod tests {
     fn render_cli_chat_startup_lines_prioritize_first_turn_guidance() {
         let lines = render_cli_chat_startup_lines_with_width(
             &CliChatStartupSummary {
-                config_path: "/tmp/loongclaw.toml".to_owned(),
-                memory_label: "/tmp/loongclaw.db".to_owned(),
+                config_path: "/tmp/loong.toml".to_owned(),
+                memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "default".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "config".to_owned(),
@@ -4495,29 +4483,32 @@ mod tests {
             "chat startup should now use the shared compact brand header: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| {
-                line == "start here: Summarize this repository and suggest the best next step."
-            }),
-            "chat startup should render the first prompt through the structured action group: {lines:#?}"
+            lines.iter().any(|line| line
+                == "start here: Summarize this repository and suggest the best next step."),
+            "chat startup should render the first answer handoff through the structured action group: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("command deck")),
+            "chat startup should surface a command deck section beside the first answer handoff: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- type your request, or use /help for commands"),
-            "chat startup should keep the usage hint, but under the assistant-first opening block: {lines:#?}"
+                .any(|line| line.contains("note: how this surface works")),
+            "chat startup should keep the usage guidance as a structured callout: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("session details")),
+            lines.iter().any(|line| line.contains("session anchor")),
             "chat startup should keep session/config facts in a structured key-value section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("runtime details")),
+            lines.iter().any(|line| line.contains("runtime posture")),
             "chat startup should still preserve runtime context in a compact secondary section: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("continuity maintenance")),
+                .any(|line| line.contains("continuity guardrails")),
             "chat startup should show compaction maintenance settings in a dedicated section: {lines:#?}"
         );
         assert!(
@@ -4534,8 +4525,8 @@ mod tests {
     fn render_cli_chat_startup_lines_surface_explicit_acp_overrides() {
         let lines = render_cli_chat_startup_lines_with_width(
             &CliChatStartupSummary {
-                config_path: "/tmp/loongclaw.toml".to_owned(),
-                memory_label: "/tmp/loongclaw.db".to_owned(),
+                config_path: "/tmp/loong.toml".to_owned(),
+                memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "thread-42".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "env".to_owned(),
@@ -4582,8 +4573,8 @@ mod tests {
     fn render_cli_chat_status_lines_focus_on_runtime_state_without_start_here() {
         let lines = render_cli_chat_status_lines_with_width(
             &CliChatStartupSummary {
-                config_path: "/tmp/loongclaw.toml".to_owned(),
-                memory_label: "/tmp/loongclaw.db".to_owned(),
+                config_path: "/tmp/loong.toml".to_owned(),
+                memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "default".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "config".to_owned(),
@@ -4606,25 +4597,23 @@ mod tests {
             80,
         );
 
-        assert_eq!(lines[0], "╭─ status · session=default");
+        assert_eq!(lines[0], "╭─ control deck · session=default");
         assert!(
-            lines.iter().any(|line| line.contains("session details")),
+            lines.iter().any(|line| line.contains("session anchor")),
             "status output should keep session facts grouped under a section: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("runtime details")),
+            lines.iter().any(|line| line.contains("runtime posture")),
             "status output should keep runtime facts grouped under a section: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("continuity maintenance")),
+                .any(|line| line.contains("continuity guardrails")),
             "status output should surface compaction maintenance settings: {lines:#?}"
         );
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("note: operator controls")),
+            lines.iter().any(|line| line.contains("note: next moves")),
             "status output should include the operator control callout: {lines:#?}"
         );
         assert!(
@@ -4643,7 +4632,7 @@ mod tests {
 
     #[test]
     fn render_cli_chat_missing_config_lines_wrap_setup_prompt_in_surface() {
-        let command = "loong onboard --output /tmp/loongclaw.toml";
+        let command = "loong onboard --output /tmp/loong.toml";
         let lines = render_cli_chat_missing_config_lines_with_width(command, 80);
 
         assert!(
@@ -4657,7 +4646,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "setup command: loong onboard --output /tmp/loongclaw.toml"),
+                .any(|line| line == "setup command: loong onboard --output /tmp/loong.toml"),
             "missing-config setup prompt should surface the setup command block: {lines:#?}"
         );
         assert!(
@@ -5015,7 +5004,7 @@ mod tests {
     fn render_cli_chat_help_lines_promotes_commands_to_surface() {
         let lines = render_cli_chat_help_lines_with_width(72);
 
-        assert_eq!(lines[0], "╭─ chat · commands");
+        assert_eq!(lines[0], "╭─ help · operator deck");
         assert!(
             lines.iter().any(|line| line.contains("slash commands")),
             "help output should keep a dedicated slash-command section: {lines:#?}"
@@ -5027,6 +5016,34 @@ mod tests {
             "help output should render slash commands as readable key-value rows: {lines:#?}"
         );
         assert!(
+            lines.iter().any(|line| {
+                line.contains("/review: reopen the latest approval/review summary")
+            }),
+            "help output should surface the review command: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("/mission:") && line.contains("mission control"))
+                || lines.iter().any(|line| line.contains("/mission:"))
+                    && lines
+                        .iter()
+                        .any(|line| line.contains("current session scope")),
+            "help output should surface the mission-control command: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("/sessions: inspect visible sessions")),
+            "help output should surface the session queue command: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| {
+                line.contains("/workers: inspect visible worker/delegate sessions")
+            }),
+            "help output should surface the workers command: {lines:#?}"
+        );
+        assert!(
             lines.iter().any(|line| line
                 .contains("/status: show session, runtime, compaction, and durability status")),
             "help output should surface the status command: {lines:#?}"
@@ -5035,6 +5052,16 @@ mod tests {
             lines.iter().any(|line| line
                 .contains("/compact: write a continuity-safe checkpoint into the active window")),
             "help output should surface the manual compaction command: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("note: surface controls")),
+            "help output should surface the command-menu control deck: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("keyboard")),
+            "help output should surface keyboard shortcuts as a first-class section: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| line.contains("note: usage notes")),
@@ -5060,7 +5087,7 @@ mod tests {
     #[test]
     fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
         let summary = CliChatStartupSummary {
-            config_path: "/tmp/loongclaw.toml".to_owned(),
+            config_path: "/tmp/loong.toml".to_owned(),
             memory_label: "window_plus_summary".to_owned(),
             session_id: "session-status".to_owned(),
             context_engine_id: "default".to_owned(),
@@ -5084,11 +5111,11 @@ mod tests {
 
         let lines = render_cli_chat_status_lines_with_width(&summary, 80);
 
-        assert_eq!(lines[0], "╭─ status · session=session-status");
+        assert_eq!(lines[0], "╭─ control deck · session=session-status");
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("continuity maintenance")),
+                .any(|line| line.contains("continuity guardrails")),
             "status output should expose compaction settings as a dedicated section: {lines:#?}"
         );
         assert!(
@@ -5102,9 +5129,7 @@ mod tests {
             "status output should surface the compaction token trigger: {lines:#?}"
         );
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("note: operator controls")),
+            lines.iter().any(|line| line.contains("note: next moves")),
             "status output should append the operator controls callout: {lines:#?}"
         );
         assert!(
@@ -5310,12 +5335,16 @@ allowed_decisions: yes / auto / full / esc";
             tool_call_count: 0,
             message_count: Some(4),
             estimated_tokens: Some(128),
+            first_token_latency_ms: Some(123),
             draft_preview: Some("Inspecting the repo layout...".to_owned()),
             tools: Vec::new(),
         };
         let lines = render_cli_chat_live_surface_lines_with_width(&snapshot, 72);
 
-        assert_eq!(lines[0], "╭─ loong · live · round 1 · 4 msgs · ~128 tok");
+        assert_eq!(
+            lines[0],
+            "╭─ loong · live · round 1 · 4 msgs · ~128 tok · ttft 123ms"
+        );
         assert!(
             lines
                 .iter()
@@ -5328,9 +5357,15 @@ allowed_decisions: yes / auto / full / esc";
         );
         assert!(
             lines.iter().any(|line| {
-                line.contains("[WARN] call model") && line.contains("provider round 1 in progress")
+                line.contains("[WARN] call model") && line.contains("first token in 123 ms")
             }),
             "live surface should keep the model step actively highlighted: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("first token") && line.contains("123 ms")),
+            "live surface should surface first-token latency in status rows: {lines:#?}"
         );
         assert!(
             !lines
@@ -5377,6 +5412,7 @@ allowed_decisions: yes / auto / full / esc";
                 tool_call: None,
             },
             index: None,
+            elapsed_ms: Some(42),
         });
 
         let batches = captured_batches
@@ -5396,6 +5432,10 @@ allowed_decisions: yes / auto / full / esc";
                 .iter()
                 .any(|line| line.contains("Draft response")),
             "preview batch should include the streamed text: {preview_batch:#?}"
+        );
+        assert!(
+            preview_batch.iter().any(|line| line.contains("ttft 42ms")),
+            "preview batch should include the first-token latency in the title: {preview_batch:#?}"
         );
     }
 
@@ -5429,6 +5469,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
         observer.on_streaming_token(crate::acp::StreamingTokenEvent {
             event_type: "tool_call_input_delta".to_owned(),
@@ -5441,6 +5482,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
         observer.on_tool(ConversationTurnToolEvent::completed(
             "call-tool-1",
@@ -5579,6 +5621,7 @@ allowed_decisions: yes / auto / full / esc";
                 ExecutionLane::Fast,
                 1,
             )),
+            first_token_latency_ms: Some(88),
             ..CliChatLiveSurfaceState::default()
         };
 
@@ -5613,6 +5656,7 @@ allowed_decisions: yes / auto / full / esc";
         assert_eq!(tool.stdout.text, "hello");
         assert_eq!(tool.duration_ms, Some(12));
         assert_eq!(tool.exit_code, Some(0));
+        assert_eq!(snapshot.first_token_latency_ms, Some(88));
     }
 
     #[test]
@@ -5651,6 +5695,7 @@ allowed_decisions: yes / auto / full / esc";
                 tool_call: None,
             },
             index: None,
+            elapsed_ms: Some(55),
         });
         observer.on_streaming_token(crate::acp::StreamingTokenEvent {
             event_type: "tool_call_input_delta".to_owned(),
@@ -5663,6 +5708,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
         observer.on_phase(ConversationTurnPhaseEvent::requesting_followup_provider(
             2,
@@ -5684,6 +5730,10 @@ allowed_decisions: yes / auto / full / esc";
         assert!(
             !last_batch.iter().any(|line| line.contains("tool activity")),
             "follow-up provider requests should not reuse prior tool activity lines: {last_batch:#?}"
+        );
+        assert!(
+            !last_batch.iter().any(|line| line.contains("ttft 55ms")),
+            "follow-up provider requests should reset prior first-token latency: {last_batch:#?}"
         );
         assert!(
             !last_batch
@@ -5729,6 +5779,7 @@ allowed_decisions: yes / auto / full / esc";
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         });
 
         let batch_count_after_tool_delta = captured_batches
@@ -5767,7 +5818,7 @@ allowed_decisions: yes / auto / full / esc";
     #[cfg(feature = "config-toml")]
     fn reload_cli_turn_config_refreshes_provider_state_without_mutating_cli_settings() {
         let path = std::env::temp_dir().join(format!(
-            "loongclaw-chat-provider-reload-{}.toml",
+            "loong-chat-provider-reload-{}.toml",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
@@ -5985,6 +6036,35 @@ allowed_decisions: yes / auto / full / esc";
         )
         .expect_err("history should reject extra args");
         assert_eq!(history_error, "usage: /history");
+
+        let sessions_error = parse_exact_chat_command(
+            "/sessions now",
+            &[CLI_CHAT_SESSIONS_COMMAND],
+            "usage: /sessions",
+        )
+        .expect_err("sessions should reject extra args");
+        assert_eq!(sessions_error, "usage: /sessions");
+
+        let mission_error = parse_exact_chat_command(
+            "/mission now",
+            &[CLI_CHAT_MISSION_COMMAND],
+            "usage: /mission",
+        )
+        .expect_err("mission should reject extra args");
+        assert_eq!(mission_error, "usage: /mission");
+
+        let review_error =
+            parse_exact_chat_command("/review now", &[CLI_CHAT_REVIEW_COMMAND], "usage: /review")
+                .expect_err("review should reject extra args");
+        assert_eq!(review_error, "usage: /review");
+
+        let workers_error = parse_exact_chat_command(
+            "/workers now",
+            &[CLI_CHAT_WORKERS_COMMAND],
+            "usage: /workers",
+        )
+        .expect_err("workers should reject extra args");
+        assert_eq!(workers_error, "usage: /workers");
     }
 
     #[test]

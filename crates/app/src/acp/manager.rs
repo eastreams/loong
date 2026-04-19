@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use crate::CliResult;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 
 #[path = "manager_actor.rs"]
 mod actor;
@@ -71,7 +71,7 @@ impl AcpSessionManager {
 
     pub async fn ensure_session(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         bootstrap: &AcpSessionBootstrap,
     ) -> CliResult<AcpSessionMetadata> {
         self.cleanup_idle_sessions(config).await?;
@@ -83,7 +83,7 @@ impl AcpSessionManager {
             redact_identifier_for_log(bootstrap.conversation_id.as_deref());
         let redacted_binding_scope = redact_binding_scope_for_log(binding_scope.as_ref());
         tracing::debug!(
-            target: "loongclaw.acp",
+            target: "loong.acp",
             backend_id = %selection.id,
             has_conversation_id,
             mode = ?bootstrap.mode,
@@ -95,7 +95,7 @@ impl AcpSessionManager {
             self.resolve_existing_session(config, selection.id.as_str(), bootstrap)?
         {
             tracing::debug!(
-                target: "loongclaw.acp",
+                target: "loong.acp",
                 backend_id = %existing.backend_id,
                 state = ?existing.state,
                 "reused ACP session"
@@ -119,7 +119,7 @@ impl AcpSessionManager {
             .and_then(|value| AcpRoutingOrigin::parse(value));
         self.store.upsert(metadata.clone())?;
         tracing::debug!(
-            target: "loongclaw.acp",
+            target: "loong.acp",
             backend_id = %metadata.backend_id,
             activation_origin = ?metadata.activation_origin.map(AcpRoutingOrigin::as_str),
             "created ACP session"
@@ -129,7 +129,7 @@ impl AcpSessionManager {
 
     pub async fn run_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         bootstrap: &AcpSessionBootstrap,
         request: &AcpTurnRequest,
     ) -> CliResult<AcpTurnResult> {
@@ -139,7 +139,7 @@ impl AcpSessionManager {
 
     pub async fn run_turn_with_sink(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         bootstrap: &AcpSessionBootstrap,
         request: &AcpTurnRequest,
         sink: Option<&dyn AcpTurnEventSink>,
@@ -157,7 +157,7 @@ impl AcpSessionManager {
         let redacted_trace_id = redact_identifier_for_log(trace_id);
         let has_trace_id = redacted_trace_id.is_some();
         tracing::debug!(
-            target: "loongclaw.acp",
+            target: "loong.acp",
             backend_id = %metadata.backend_id,
             has_trace_id,
             input_len = request.input.chars().count(),
@@ -224,7 +224,7 @@ impl AcpSessionManager {
                 metadata.touch();
                 self.store.upsert(metadata)?;
                 tracing::debug!(
-                    target: "loongclaw.acp",
+                    target: "loong.acp",
                     backend_id = %handle.backend_id,
                     has_trace_id,
                     state = ?result.state,
@@ -246,7 +246,7 @@ impl AcpSessionManager {
                 metadata.set_error(error.clone());
                 self.store.upsert(metadata)?;
                 tracing::warn!(
-                    target: "loongclaw.acp",
+                    target: "loong.acp",
                     backend_id = %handle.backend_id,
                     trace_id = ?redacted_trace_id,
                     has_trace_id,
@@ -263,7 +263,7 @@ impl AcpSessionManager {
 
     pub async fn get_status(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_key: &str,
     ) -> CliResult<AcpSessionStatus> {
         let registered = self
@@ -345,7 +345,7 @@ impl AcpSessionManager {
 
     pub async fn set_mode(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_key: &str,
         mode: AcpSessionMode,
     ) -> CliResult<()> {
@@ -381,7 +381,7 @@ impl AcpSessionManager {
 
     pub async fn set_config_option(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_key: &str,
         patch: &AcpConfigPatch,
     ) -> CliResult<()> {
@@ -417,7 +417,7 @@ impl AcpSessionManager {
         }
     }
 
-    pub async fn cancel(&self, config: &LoongClawConfig, session_key: &str) -> CliResult<()> {
+    pub async fn cancel(&self, config: &LoongConfig, session_key: &str) -> CliResult<()> {
         let registered = self
             .store
             .get(session_key)?
@@ -455,7 +455,7 @@ impl AcpSessionManager {
         }
     }
 
-    pub async fn close(&self, config: &LoongClawConfig, session_key: &str) -> CliResult<()> {
+    pub async fn close(&self, config: &LoongConfig, session_key: &str) -> CliResult<()> {
         let registered = self
             .store
             .get(session_key)?
@@ -482,7 +482,7 @@ impl AcpSessionManager {
 
     pub async fn observability_snapshot(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
     ) -> CliResult<AcpManagerObservabilitySnapshot> {
         self.cleanup_idle_sessions(config).await?;
 
@@ -584,7 +584,7 @@ impl AcpSessionManager {
 
     pub async fn doctor(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         backend_id: Option<&str>,
     ) -> CliResult<AcpDoctorReport> {
         let selected = backend_id
@@ -629,7 +629,7 @@ mod tests {
         AcpTurnRequest, AcpTurnResult, AcpTurnStopReason, register_acp_backend,
     };
     use crate::CliResult;
-    use crate::config::{AcpConfig, LoongClawConfig};
+    use crate::config::{AcpConfig, LoongConfig};
 
     #[cfg(feature = "memory-sqlite")]
     use super::super::AcpSqliteSessionStore;
@@ -892,7 +892,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             self.state.lock().expect("counting state").ensure_calls += 1;
@@ -909,7 +909,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -925,18 +925,14 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             self.state.lock().expect("counting state").cancel_calls += 1;
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             self.state.lock().expect("counting state").close_calls += 1;
             Ok(())
         }
@@ -954,7 +950,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -970,7 +966,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -985,17 +981,13 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             Ok(())
         }
     }
@@ -1008,7 +1000,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -1024,7 +1016,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             _request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -1033,17 +1025,13 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             Ok(())
         }
     }
@@ -1064,7 +1052,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -1080,7 +1068,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -1095,17 +1083,13 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             self.state.close_calls.fetch_add(1, Ordering::SeqCst);
             Err("synthetic ACP close failure".to_owned())
         }
@@ -1131,7 +1115,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -1147,7 +1131,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -1178,17 +1162,13 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             Ok(())
         }
     }
@@ -1214,7 +1194,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -1230,7 +1210,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -1254,7 +1234,7 @@ mod tests {
 
         async fn set_mode(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             mode: AcpSessionMode,
         ) -> CliResult<()> {
@@ -1274,7 +1254,7 @@ mod tests {
 
         async fn get_status(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             session: &AcpSessionHandle,
         ) -> CliResult<Option<AcpSessionStatus>> {
             self.state.status_calls.fetch_add(1, Ordering::SeqCst);
@@ -1300,17 +1280,13 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             Ok(())
         }
     }
@@ -1334,7 +1310,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -1350,7 +1326,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -1365,7 +1341,7 @@ mod tests {
 
         async fn set_mode(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             _mode: AcpSessionMode,
         ) -> CliResult<()> {
@@ -1375,17 +1351,13 @@ mod tests {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             Ok(())
         }
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
@@ -1413,7 +1385,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -1429,7 +1401,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -1444,7 +1416,7 @@ mod tests {
 
         async fn run_turn_with_sink(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             _request: &AcpTurnRequest,
             abort: Option<AcpAbortSignal>,
@@ -1474,18 +1446,14 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             self.state.cancel_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             self.state.close_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -1511,7 +1479,7 @@ mod tests {
 
         async fn ensure_session(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             request: &AcpSessionBootstrap,
         ) -> CliResult<AcpSessionHandle> {
             Ok(AcpSessionHandle {
@@ -1527,7 +1495,7 @@ mod tests {
 
         async fn run_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
         ) -> CliResult<AcpTurnResult> {
@@ -1542,7 +1510,7 @@ mod tests {
 
         async fn run_turn_with_sink(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
             request: &AcpTurnRequest,
             _abort: Option<AcpAbortSignal>,
@@ -1570,17 +1538,13 @@ mod tests {
 
         async fn cancel(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session: &AcpSessionHandle,
         ) -> CliResult<()> {
             Ok(())
         }
 
-        async fn close(
-            &self,
-            _config: &LoongClawConfig,
-            _session: &AcpSessionHandle,
-        ) -> CliResult<()> {
+        async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
             Ok(())
         }
     }
@@ -1589,12 +1553,12 @@ mod tests {
     async fn ensure_session_reuses_existing_metadata_without_respawning_backend() {
         let counts = install_manager_backends("manager-counting-reuse", "manager-alt-reuse");
         let manager = AcpSessionManager::default();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-counting-reuse".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-reuse".to_owned(),
@@ -1633,13 +1597,13 @@ mod tests {
             "manager-alt-binding-reuse",
         );
         let manager = AcpSessionManager::default();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-counting-binding-reuse".to_owned()),
                 bindings_enabled: true,
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let first_bootstrap = AcpSessionBootstrap {
             session_key: "session-bound-a".to_owned(),
@@ -1681,13 +1645,13 @@ mod tests {
             "manager-alt-route-binding-reuse",
         );
         let manager = AcpSessionManager::default();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-counting-route-binding-reuse".to_owned()),
                 bindings_enabled: true,
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let binding_metadata = BTreeMap::from([
             (
@@ -1756,12 +1720,12 @@ mod tests {
     async fn run_turn_updates_persisted_session_state() {
         let counts = install_manager_backends("manager-counting-turn", "manager-alt-turn");
         let manager = AcpSessionManager::default();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-counting-turn".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-turn".to_owned(),
@@ -1807,12 +1771,12 @@ mod tests {
         .expect("register failing backend");
 
         let manager = AcpSessionManager::default();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-failing-turn".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-error".to_owned(),
@@ -1864,19 +1828,19 @@ mod tests {
         .expect("register failing observe backend");
 
         let manager = AcpSessionManager::default();
-        let success_config = LoongClawConfig {
+        let success_config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-counting-observe".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
-        let failure_config = LoongClawConfig {
+        let failure_config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-failing-observe".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         manager
@@ -1971,12 +1935,12 @@ mod tests {
         .expect("register queued backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-queued-turn".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-queued".to_owned(),
@@ -2093,12 +2057,12 @@ mod tests {
         .expect("register abortable backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-abortable-turn".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-abortable".to_owned(),
@@ -2185,12 +2149,12 @@ mod tests {
         .expect("register abortable status backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-abortable-turn-status".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-abortable-status".to_owned(),
@@ -2291,12 +2255,12 @@ mod tests {
         .expect("register abortable close backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-abortable-turn-close".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-abortable-close".to_owned(),
@@ -2409,12 +2373,12 @@ mod tests {
         .expect("register streaming sink backend");
 
         let manager = AcpSessionManager::default();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backend: Some(backend_id.to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let bootstrap = AcpSessionBootstrap {
             session_key: "stream-session".to_owned(),
@@ -2463,12 +2427,12 @@ mod tests {
         .expect("register serialized status backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-serialized-status".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-status-serialized".to_owned(),
@@ -2554,12 +2518,12 @@ mod tests {
         .expect("register serialized control backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-serialized-control".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-control-serialized".to_owned(),
@@ -2686,13 +2650,13 @@ mod tests {
         .expect("register slow control backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-slow-control".to_owned()),
                 session_idle_ttl_ms: Some(1),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-slow-control".to_owned(),
@@ -2768,13 +2732,13 @@ mod tests {
         .expect("register close-failure backend");
 
         let manager = Arc::new(AcpSessionManager::default());
-        let config = Arc::new(LoongClawConfig {
+        let config = Arc::new(LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-close-failure".to_owned()),
                 session_idle_ttl_ms: Some(1),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         });
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-close-failure".to_owned(),
@@ -2881,19 +2845,19 @@ mod tests {
     async fn ensure_session_rejects_backend_mismatch_for_existing_session() {
         install_manager_backends("manager-counting-mismatch", "manager-alt-mismatch");
         let manager = AcpSessionManager::default();
-        let initial = LoongClawConfig {
+        let initial = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-counting-mismatch".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
-        let switched = LoongClawConfig {
+        let switched = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-alt-mismatch".to_owned()),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let bootstrap = AcpSessionBootstrap {
             session_key: "session-boundary".to_owned(),
@@ -2922,13 +2886,13 @@ mod tests {
     async fn ensure_session_honors_max_concurrent_sessions() {
         install_manager_backends("manager-counting-cap", "manager-alt-cap");
         let manager = AcpSessionManager::default();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backend: Some("manager-counting-cap".to_owned()),
                 max_concurrent_sessions: Some(1),
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         manager
@@ -2974,10 +2938,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn sqlite_store_roundtrips_session_metadata() {
-        let sqlite_path = std::env::temp_dir().join(format!(
-            "loongclaw-acp-store-{}.sqlite3",
-            std::process::id()
-        ));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("loong-acp-store-{}.sqlite3", std::process::id()));
         let _ = std::fs::remove_file(&sqlite_path);
 
         let store = AcpSqliteSessionStore::new(Some(sqlite_path.clone()));
@@ -3030,7 +2992,7 @@ mod tests {
     #[test]
     fn sqlite_store_migrates_legacy_schema_before_creating_conversation_index() {
         let sqlite_path = std::env::temp_dir().join(format!(
-            "loongclaw-acp-legacy-store-{}.sqlite3",
+            "loong-acp-legacy-store-{}.sqlite3",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&sqlite_path);

@@ -5,7 +5,9 @@ use crate::{CliResult, config::ResolvedNextcloudTalkChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_base_url,
+    },
 };
 
 type NextcloudTalkHmacSha256 = hmac::Hmac<sha2::Sha256>;
@@ -91,7 +93,7 @@ fn build_nextcloud_talk_request_url(
     conversation_token: &str,
     policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<String> {
-    let mut url = validate_outbound_http_target("nextcloud talk server_url", server_url, policy)?;
+    let mut url = validate_outbound_http_base_url("nextcloud talk server_url", server_url, policy)?;
     let mut path_segments = url.path_segments_mut().map_err(|_path_error| {
         "nextcloud talk server_url cannot be used as a hierarchical base url".to_owned()
     })?;

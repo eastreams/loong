@@ -5,8 +5,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::CliResult;
 use crate::config::{
-    LoongClawConfig, MemoryBackendKind, MemoryIngestMode, MemoryMode, MemoryProfile,
-    MemorySystemKind,
+    LoongConfig, MemoryBackendKind, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
 };
 
 use super::runtime_config::MemoryRuntimeConfig;
@@ -19,7 +18,7 @@ use super::system_runtime::{
     MemorySystemRuntime, MetadataOnlyMemorySystemRuntime, SystemBackedMemorySystemRuntime,
 };
 
-pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
+pub const MEMORY_SYSTEM_ENV: &str = "LOONG_MEMORY_SYSTEM";
 
 type MemorySystemFactory = Arc<dyn Fn() -> Box<dyn MemorySystem> + Send + Sync>;
 
@@ -283,7 +282,7 @@ pub fn supported_memory_system_kind_from_env() -> Option<MemorySystemKind> {
         .and_then(MemorySystemKind::parse_id)
 }
 
-pub fn resolve_memory_system_selection(config: &LoongClawConfig) -> MemorySystemSelection {
+pub fn resolve_memory_system_selection(config: &LoongConfig) -> MemorySystemSelection {
     if let Some(system_id) = registered_memory_system_id_from_env() {
         return MemorySystemSelection {
             id: system_id,
@@ -312,7 +311,7 @@ pub fn resolve_memory_system_selection(config: &LoongClawConfig) -> MemorySystem
 }
 
 pub fn collect_memory_system_runtime_snapshot(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> CliResult<MemorySystemRuntimeSnapshot> {
     let selected = resolve_memory_system_selection(config);
     let runtime = MemoryRuntimeConfig::from_memory_config(&config.memory);
@@ -343,14 +342,14 @@ mod tests {
 
     fn clear_memory_runtime_env_overrides(env: &mut ScopedEnv) {
         env.remove(MEMORY_SYSTEM_ENV);
-        env.remove("LOONGCLAW_MEMORY_BACKEND");
-        env.remove("LOONGCLAW_MEMORY_PROFILE");
-        env.remove("LOONGCLAW_MEMORY_FAIL_OPEN");
-        env.remove("LOONGCLAW_MEMORY_INGEST_MODE");
-        env.remove("LOONGCLAW_SQLITE_PATH");
-        env.remove("LOONGCLAW_SLIDING_WINDOW");
-        env.remove("LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS");
-        env.remove("LOONGCLAW_MEMORY_PROFILE_NOTE");
+        env.remove("LOONG_MEMORY_BACKEND");
+        env.remove("LOONG_MEMORY_PROFILE");
+        env.remove("LOONG_MEMORY_FAIL_OPEN");
+        env.remove("LOONG_MEMORY_INGEST_MODE");
+        env.remove("LOONG_SQLITE_PATH");
+        env.remove("LOONG_SLIDING_WINDOW");
+        env.remove("LOONG_MEMORY_SUMMARY_MAX_CHARS");
+        env.remove("LOONG_MEMORY_PROFILE_NOTE");
     }
 
     struct MatchingRegistrySystem;
@@ -568,8 +567,8 @@ mod tests {
 
         fn execute_core(
             &self,
-            _request: loongclaw_contracts::MemoryCoreRequest,
-        ) -> Result<loongclaw_contracts::MemoryCoreOutcome, String> {
+            _request: loong_contracts::MemoryCoreRequest,
+        ) -> Result<loong_contracts::MemoryCoreOutcome, String> {
             let error = "snapshot-only runtime should not execute core in this test".to_owned();
 
             Err(error)
@@ -785,7 +784,7 @@ mod tests {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
         env.set(MEMORY_SYSTEM_ENV, "builtin");
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let selection = resolve_memory_system_selection(&config);
         assert_eq!(selection.id, DEFAULT_MEMORY_SYSTEM_ID);
         assert_eq!(selection.source, MemorySystemSelectionSource::Env);
@@ -805,14 +804,14 @@ mod tests {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
 
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             memory: crate::config::MemoryConfig {
                 profile: crate::config::MemoryProfile::WindowPlusSummary,
                 fail_open: false,
                 ingest_mode: crate::config::MemoryIngestMode::AsyncBackground,
                 ..crate::config::MemoryConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot =
@@ -845,18 +844,18 @@ mod tests {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
         env.set(MEMORY_SYSTEM_ENV, "builtin");
-        env.set("LOONGCLAW_MEMORY_PROFILE", "profile_plus_window");
-        env.set("LOONGCLAW_MEMORY_FAIL_OPEN", "true");
-        env.set("LOONGCLAW_MEMORY_INGEST_MODE", "async_background");
+        env.set("LOONG_MEMORY_PROFILE", "profile_plus_window");
+        env.set("LOONG_MEMORY_FAIL_OPEN", "true");
+        env.set("LOONG_MEMORY_INGEST_MODE", "async_background");
 
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             memory: crate::config::MemoryConfig {
                 profile: crate::config::MemoryProfile::WindowOnly,
                 fail_open: false,
                 ingest_mode: crate::config::MemoryIngestMode::SyncMinimal,
                 ..crate::config::MemoryConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot =
@@ -895,7 +894,7 @@ mod tests {
         .expect("register custom registry system");
         env.set(MEMORY_SYSTEM_ENV, "registry-custom-env");
 
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
 
@@ -909,7 +908,7 @@ mod tests {
         clear_memory_runtime_env_overrides(&mut env);
         env.set(MEMORY_SYSTEM_ENV, "lucid");
 
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
 
@@ -931,7 +930,7 @@ mod tests {
         clear_memory_runtime_env_overrides(&mut env);
         env.set(MEMORY_SYSTEM_ENV, "registry-stage-aware-snapshot");
 
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
 
@@ -959,12 +958,12 @@ mod tests {
         })
         .expect("register runtime metadata override system");
 
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             memory: crate::config::MemoryConfig {
                 system_id: Some("registry-runtime-metadata-override".to_owned()),
                 ..crate::config::MemoryConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
@@ -995,12 +994,12 @@ mod tests {
         })
         .expect("register config-selected registry system");
 
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             memory: crate::config::MemoryConfig {
                 system_id: Some("registry-stage-aware-snapshot-config".to_owned()),
                 ..crate::config::MemoryConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
@@ -1027,12 +1026,12 @@ mod tests {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
 
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             memory: crate::config::MemoryConfig {
                 system_id: Some("lucid".to_owned()),
                 ..crate::config::MemoryConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");

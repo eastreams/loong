@@ -11,13 +11,12 @@ Set-StrictMode -Version Latest
 $Prefix = [IO.Path]::GetFullPath(($Prefix -replace '^~', $HOME))
 $ReleaseBaseUrl = if ($env:LOONG_INSTALL_RELEASE_BASE_URL) {
     $env:LOONG_INSTALL_RELEASE_BASE_URL
-} elseif ($env:LOONGCLAW_INSTALL_RELEASE_BASE_URL) {
-    $env:LOONGCLAW_INSTALL_RELEASE_BASE_URL
+} elseif ($env:LOONG_INSTALL_RELEASE_BASE_URL) {
+    $env:LOONG_INSTALL_RELEASE_BASE_URL
 } else {
     "https://github.com/$Repository/releases"
 }
 $BinName = "loong"
-$LegacyBinName = "loongclaw"
 
 function Write-Usage {
     @"
@@ -96,20 +95,17 @@ function Get-ReleaseChecksumName([string]$PackageName, [string]$Tag, [string]$Ta
     return "$(Get-ReleaseArchiveName -PackageName $PackageName -Tag $Tag -Target $Target).sha256"
 }
 
-function Install-CompatibilityBinaries([string]$SourceBinary) {
+function Install-Binary([string]$SourceBinary) {
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
     $primaryBinary = Join-Path $Prefix "$BinName.exe"
-    $legacyBinary = Join-Path $Prefix "$LegacyBinName.exe"
     Copy-Item -Force $SourceBinary $primaryBinary
-    Copy-Item -Force $SourceBinary $legacyBinary
     return @{
         Primary = $primaryBinary
-        Legacy = $legacyBinary
     }
 }
 
 function Install-FromSource {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $scriptDir = $PSScriptRoot
     $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
     $cargoToml = Join-Path $repoRoot "Cargo.toml"
     if (-not (Test-Path $cargoToml)) {
@@ -140,7 +136,7 @@ function Install-FromSource {
         throw "built binary not found at $sourceBinary"
     }
 
-    return Install-CompatibilityBinaries -SourceBinary $sourceBinary
+    return Install-Binary -SourceBinary $sourceBinary
 }
 
 function Install-FromRelease {
@@ -185,7 +181,7 @@ function Install-FromRelease {
             throw "extracted binary not found at $sourceBinary"
         }
 
-        return Install-CompatibilityBinaries -SourceBinary $sourceBinary
+        return Install-Binary -SourceBinary $sourceBinary
     } finally {
         if (Test-Path $tmpRoot) {
             Remove-Item -Recurse -Force $tmpRoot
@@ -208,7 +204,6 @@ function Resolve-NormalizedPathEntryOrNull([string]$PathEntry) {
 $installResult = if ($Source) { Install-FromSource } else { Install-FromRelease }
 
 Write-Host "==> Installed loong to $($installResult.Primary)"
-Write-Host "==> Installed compatible loongclaw command to $($installResult.Legacy)"
 
 $normalizedPrefix = $Prefix
 $pathItems = ($env:PATH -split [IO.Path]::PathSeparator) |

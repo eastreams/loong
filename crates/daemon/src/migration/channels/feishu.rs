@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use super::ChannelDoctorCheck;
 use super::ensure_default_env_binding;
@@ -12,12 +12,13 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     id: ID,
     label: "feishu",
     surface_label: "feishu channel",
-    runtime_kind: mvp::config::ChannelRuntimeKind::Service,
+    runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
+    operational_model: mvp::config::ChannelOperationalModel::GatewaySupervised,
     serve_subcommand: Some("feishu-serve"),
 };
 
 pub(super) fn collect_preview(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
     source: &str,
 ) -> Option<ChannelPreview> {
@@ -72,13 +73,13 @@ pub(super) fn collect_preview(
 }
 
 pub(super) fn apply(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
 ) -> bool {
     merge_feishu_config(&mut target.feishu, &source.feishu)
 }
 
-pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelCredentialState {
+pub(super) fn readiness_state(config: &mvp::config::LoongConfig) -> ChannelCredentialState {
     let app_id_resolved = config.feishu.app_id().is_some();
     let app_secret_resolved = config.feishu.app_secret().is_some();
     match (app_id_resolved, app_secret_resolved) {
@@ -89,7 +90,7 @@ pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelC
 }
 
 pub(super) fn apply_import_readiness(
-    target: &mut mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
     state: ChannelCredentialState,
 ) {
     if state.is_ready() {
@@ -98,7 +99,7 @@ pub(super) fn apply_import_readiness(
 }
 
 pub(super) fn collect_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<ChannelPreflightCheck> {
     let credential_state = readiness_state(config);
     let (transport_level, transport_detail) = inbound_transport_check(config);
@@ -125,9 +126,7 @@ pub(super) fn collect_preflight_checks(
     ]
 }
 
-pub(super) fn collect_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<ChannelDoctorCheck> {
+pub(super) fn collect_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck> {
     let credential_state = readiness_state(config);
     let (transport_level, transport_detail) = inbound_transport_check(config);
 
@@ -153,7 +152,7 @@ pub(super) fn collect_doctor_checks(
     ]
 }
 
-pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConfig) -> Vec<String> {
+pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongConfig) -> Vec<String> {
     let mut fixes = Vec::new();
     let default = mvp::config::FeishuChannelConfig::default();
     ensure_default_env_binding(
@@ -282,7 +281,7 @@ fn descriptor() -> &'static mvp::config::ChannelDescriptor {
     mvp::config::channel_descriptor(ID).unwrap_or(&FALLBACK_DESCRIPTOR)
 }
 
-fn inbound_transport_check(config: &mvp::config::LoongClawConfig) -> (ChannelCheckLevel, String) {
+fn inbound_transport_check(config: &mvp::config::LoongConfig) -> (ChannelCheckLevel, String) {
     if config
         .feishu
         .mode
@@ -315,8 +314,8 @@ fn inbound_transport_check(config: &mvp::config::LoongClawConfig) -> (ChannelChe
 mod tests {
     use super::*;
 
-    fn parse_config(raw: &str) -> mvp::config::LoongClawConfig {
-        toml::from_str(raw).expect("deserialize loongclaw config")
+    fn parse_config(raw: &str) -> mvp::config::LoongConfig {
+        toml::from_str(raw).expect("deserialize loong config")
     }
 
     #[test]

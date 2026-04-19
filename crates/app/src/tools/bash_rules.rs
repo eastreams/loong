@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn rules_dir_loads_rule_files_in_stable_lexical_order() {
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let rules_dir = tempdir.path().join(".loongclaw").join("rules");
+        let rules_dir = tempdir.path().join(".loong").join("rules");
         fs::create_dir_all(&rules_dir).expect("create rules dir");
         fs::write(
             rules_dir.join("10-second.rules"),
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn rules_dir_ignores_non_rules_files() {
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let rules_dir = tempdir.path().join(".loongclaw").join("rules");
+        let rules_dir = tempdir.path().join(".loong").join("rules");
         fs::create_dir_all(&rules_dir).expect("create rules dir");
         fs::write(
             rules_dir.join("01-first.rules"),

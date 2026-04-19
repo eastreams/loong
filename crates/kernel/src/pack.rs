@@ -1,2 +1,2 @@
-// Re-export pack types from loongclaw-contracts
-pub use loongclaw_contracts::VerticalPackManifest;
+// Re-export pack types from loong-contracts
+pub use loong_contracts::VerticalPackManifest;

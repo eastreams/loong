@@ -491,14 +491,14 @@ mod tests {
 
     fn gateway_owner_status_fixture() -> GatewayOwnerStatus {
         GatewayOwnerStatus {
-            runtime_dir: "/tmp/loongclaw-gateway-runtime".to_owned(),
+            runtime_dir: "/tmp/loong-gateway-runtime".to_owned(),
             phase: "running".to_owned(),
             running: true,
             stale: false,
             pid: Some(42),
             mode: super::super::state::GatewayOwnerMode::GatewayHeadless,
             version: "0.1.0".to_owned(),
-            config_path: "/tmp/loongclaw.toml".to_owned(),
+            config_path: "/tmp/loong.toml".to_owned(),
             attached_cli_session: None,
             started_at_ms: 100,
             last_heartbeat_at: 200,
@@ -509,7 +509,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: Some("127.0.0.1".to_owned()),
             port: Some(7777),
-            token_path: Some("/tmp/loongclaw-gateway-runtime/control-token".to_owned()),
+            token_path: Some("/tmp/loong-gateway-runtime/control-token".to_owned()),
         }
     }
 
@@ -519,7 +519,7 @@ mod tests {
             .expect("system clock before unix epoch")
             .as_nanos();
         let temp_dir = std::env::temp_dir();
-        temp_dir.join(format!("loongclaw-gateway-client-{label}-{suffix}"))
+        temp_dir.join(format!("loong-gateway-client-{label}-{suffix}"))
     }
 
     #[test]

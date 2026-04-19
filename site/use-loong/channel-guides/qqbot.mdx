@@ -1,0 +1,115 @@
+---
+title: QQ Bot
+description: Configure the QQ Bot plugin-backed bridge surface in Loong.
+---
+
+# QQ Bot
+
+This is a shipped plugin-backed bridge surface. Loong owns the surface id, config contract, and discovery UX, while the active QQ gateway or bridge owns the upstream runtime.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `qqbot` |
+| Config key | `qqbot` |
+| Implementation status | `plugin_backed` |
+| Transport | `qq_official_bot_gateway_or_plugin_bridge` |
+| Aliases | `qq`, `qq-bot`, `tencent-qq` |
+| Default send target kind | `conversation` |
+| Runtime owner | external plugin |
+
+## Minimal Config
+
+```toml
+[qqbot]
+enabled = true
+app_id_env = "QQBOT_APP_ID"
+client_secret_env = "QQBOT_CLIENT_SECRET"
+allowed_peer_ids = ["openid_alice"]
+```
+
+When several compatible managed bridges are installed, pin the one Loong should trust:
+
+```toml
+[qqbot]
+enabled = true
+managed_bridge_plugin_id = "qqbot-bridge-guided"
+app_id_env = "QQBOT_APP_ID"
+client_secret_env = "QQBOT_CLIENT_SECRET"
+allowed_peer_ids = ["openid_alice"]
+```
+
+## Smoke Test
+
+```bash
+loong channels
+loong channels --json
+loong doctor
+```
+
+What success looks like:
+
+- `QQ Bot [qqbot]` appears in the plugin-backed section
+- managed bridge discovery shows one compatible plugin or a concrete ambiguity/remediation detail
+- doctor keeps bridge-send / bridge-serve contract checks visible and actionable
+
+## Current Command Surface
+
+| Operation | Current path | Usage or status |
+| --- | --- | --- |
+| managed bridge contract check | `loong doctor` | current readiness and remediation surface |
+| inventory + discovery inspection | `loong channels` | current operator inventory surface |
+| native send | `qqbot-send` | planned native command; not implemented in Loong today |
+| native serve | `qqbot-serve` | planned native command; runtime stays in the external bridge today |
+
+## Required Fields For Bridge Send Contract
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `qqbot.enabled`<br/>`qqbot.accounts.<account>.enabled` | none | none |
+| qq bot app id | `qqbot.app_id`<br/>`qqbot.accounts.<account>.app_id` | `qqbot.app_id_env`<br/>`qqbot.accounts.<account>.app_id_env` | `QQBOT_APP_ID` |
+| qq bot client secret | `qqbot.client_secret`<br/>`qqbot.accounts.<account>.client_secret` | `qqbot.client_secret_env`<br/>`qqbot.accounts.<account>.client_secret_env` | `QQBOT_CLIENT_SECRET` |
+
+## Required Fields For Bridge Reply Contract
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `qqbot.enabled`<br/>`qqbot.accounts.<account>.enabled` | none | none |
+| qq bot app id | `qqbot.app_id`<br/>`qqbot.accounts.<account>.app_id` | `qqbot.app_id_env`<br/>`qqbot.accounts.<account>.app_id_env` | `QQBOT_APP_ID` |
+| qq bot client secret | `qqbot.client_secret`<br/>`qqbot.accounts.<account>.client_secret` | `qqbot.client_secret_env`<br/>`qqbot.accounts.<account>.client_secret_env` | `QQBOT_CLIENT_SECRET` |
+| allowed peer ids | `qqbot.allowed_peer_ids`<br/>`qqbot.accounts.<account>.allowed_peer_ids` | none | none |
+
+## Stable Target Templates
+
+| Target | Meaning |
+| --- | --- |
+| `qqbot:<account>:c2c:<openid>` | direct message openid |
+| `qqbot:<account>:group:<openid>` | group openid |
+| `qqbot:<account>:channel:<id>` | guild channel id |
+
+## Account Scope Note
+
+QQ Bot openids are scoped to the selected account. Keep account ids stable so route meaning does not drift when you rotate gateway credentials or bridge implementations.
+
+## Managed Bridge Discovery Notes
+
+- Compatible managed bridges can advertise required config keys and setup docs URLs that Loong then surfaces through `doctor`.
+- If discovery finds several compatible bridges, `managed_bridge_plugin_id` is the correct tie-breaker.
+- If bridge metadata is incomplete, Loong keeps the surface visible and reports the missing fields instead of flattening everything into one generic placeholder.
+
+## Gateway And Ownership
+
+This surface does **not** join `multi-channel-serve` or `gateway run` today. The official QQ gateway or compatible bridge remains the runtime owner.
+
+## Operator Notes
+
+- Keep `allowed_peer_ids` explicit and narrow.
+- Treat QQ Bot as a multi-account surface from the start if you expect separate direct, group, or guild identities.
+- Prefer one selected managed bridge per environment rather than leaving ambiguity unresolved.
+
+## Related Docs
+
+- Continue to [Weixin](/use-loong/channel-guides/weixin) for the WeChat bridge-first lane.
+- Continue to [OneBot](/use-loong/channel-guides/onebot) when the upstream bridge already speaks OneBot v11.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

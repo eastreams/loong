@@ -657,8 +657,8 @@ fn provider_plugin_compatibility_mode(
 fn provider_plugin_dialect(metadata: &BTreeMap<String, String>) -> Option<PluginContractDialect> {
     provider_metadata_optional_string(metadata, "plugin_dialect").and_then(|value| {
         match value.as_str() {
-            "loongclaw_package_manifest" => Some(PluginContractDialect::LoongClawPackageManifest),
-            "loongclaw_embedded_source" => Some(PluginContractDialect::LoongClawEmbeddedSource),
+            "loong_package_manifest" => Some(PluginContractDialect::LoongPackageManifest),
+            "loong_embedded_source" => Some(PluginContractDialect::LoongEmbeddedSource),
             "openclaw_modern_manifest" => Some(PluginContractDialect::OpenClawModernManifest),
             "openclaw_legacy_package" => Some(PluginContractDialect::OpenClawLegacyPackage),
             _ => None,
@@ -730,10 +730,10 @@ fn inferred_provider_source_kind(metadata: &BTreeMap<String, String>) -> PluginS
     provider_plugin_source_kind(metadata)
         .or_else(|| {
             provider_plugin_dialect(metadata).map(|dialect| match dialect {
-                PluginContractDialect::LoongClawPackageManifest
+                PluginContractDialect::LoongPackageManifest
                 | PluginContractDialect::OpenClawModernManifest
                 | PluginContractDialect::OpenClawLegacyPackage => PluginSourceKind::PackageManifest,
-                PluginContractDialect::LoongClawEmbeddedSource => PluginSourceKind::EmbeddedSource,
+                PluginContractDialect::LoongEmbeddedSource => PluginSourceKind::EmbeddedSource,
             })
         })
         .or_else(|| {
@@ -908,8 +908,8 @@ fn canonical_dialect_for_mode(
 ) -> PluginContractDialect {
     match compatibility_mode {
         PluginCompatibilityMode::Native => match source_kind {
-            PluginSourceKind::PackageManifest => PluginContractDialect::LoongClawPackageManifest,
-            PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+            PluginSourceKind::PackageManifest => PluginContractDialect::LoongPackageManifest,
+            PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongEmbeddedSource,
         },
         PluginCompatibilityMode::OpenClawModern => PluginContractDialect::OpenClawModernManifest,
         PluginCompatibilityMode::OpenClawLegacy => PluginContractDialect::OpenClawLegacyPackage,
@@ -1628,7 +1628,7 @@ pub async fn maybe_execute_bridge(
     runtime_policy: &BridgeRuntimePolicy,
 ) -> Value {
     if runtime_policy.execute_http_json && matches!(bridge_kind, PluginBridgeKind::HttpJson) {
-        return execute_http_json_bridge(execution, provider, channel, command);
+        return execute_http_json_bridge(execution, provider, channel, command).await;
     }
 
     if runtime_policy.execute_process_stdio && matches!(bridge_kind, PluginBridgeKind::ProcessStdio)

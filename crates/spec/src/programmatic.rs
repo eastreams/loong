@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use kernel::{Capability, ConnectorCommand, LoongClawKernel, StaticPolicyEngine};
+use kernel::{Capability, ConnectorCommand, LoongKernel, StaticPolicyEngine};
 use serde_json::{Value, json};
 use tokio::time::{Instant as TokioInstant, sleep};
 
@@ -94,7 +94,7 @@ fn should_reduce_programmatic_budget(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::indexing_slicing)] // serde_json::Value string-keyed IndexMut is infallible
 pub async fn execute_programmatic_tool_call(
-    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<StaticPolicyEngine>,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     caller: &str,
@@ -576,7 +576,7 @@ fn prepare_programmatic_batch_calls(
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_programmatic_batch_calls(
-    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<StaticPolicyEngine>,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     step_id: &str,
@@ -1127,7 +1127,7 @@ async fn apply_programmatic_rate_limit(
 
 #[allow(clippy::too_many_arguments)]
 async fn invoke_programmatic_connector_with_resilience(
-    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<StaticPolicyEngine>,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     connector_name: &str,
@@ -1505,7 +1505,7 @@ fn attach_programmatic_payload_provenance(
     };
 
     let mut meta = payload_map
-        .remove("_loongclaw")
+        .remove("_loong")
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
     meta.insert("caller".to_owned(), Value::String(caller.to_owned()));
@@ -1518,7 +1518,7 @@ fn attach_programmatic_payload_provenance(
     if let Some(call_id) = call_id {
         meta.insert("call_id".to_owned(), Value::String(call_id.to_owned()));
     }
-    payload_map.insert("_loongclaw".to_owned(), Value::Object(meta));
+    payload_map.insert("_loong".to_owned(), Value::Object(meta));
 
     Value::Object(payload_map)
 }

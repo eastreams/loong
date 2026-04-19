@@ -1,5 +1,5 @@
 use super::*;
-use loongclaw_daemon::kernel::PluginCompatibilityMode;
+use loong_daemon::kernel::PluginCompatibilityMode;
 
 #[tokio::test]
 async fn execute_spec_programmatic_tool_call_supports_templates_and_steps() {
@@ -44,7 +44,7 @@ async fn execute_spec_programmatic_tool_call_supports_templates_and_steps() {
                     step_id: "seed".to_owned(),
                     value: json!({
                         "channel":"ops-alerts",
-                        "message":"loongclaw-online"
+                        "message":"loong-online"
                     }),
                 },
                 ProgrammaticStep::JsonPointer {
@@ -77,15 +77,15 @@ async fn execute_spec_programmatic_tool_call_supports_templates_and_steps() {
     assert_eq!(report.outcome["connector_calls"], 1);
     assert_eq!(
         report.outcome["result"]["outcome"]["payload"]["payload"]["text"],
-        "loongclaw-online"
+        "loong-online"
     );
     assert_eq!(
-        report.outcome["result"]["outcome"]["payload"]["payload"]["_loongclaw"]["caller"],
+        report.outcome["result"]["outcome"]["payload"]["payload"]["_loong"]["caller"],
         "planner-alpha"
     );
     assert_eq!(
         report.outcome["step_outputs"]["msg"],
-        Value::String("loongclaw-online".to_owned())
+        Value::String("loong-online".to_owned())
     );
 }
 
@@ -173,13 +173,13 @@ async fn execute_spec_programmatic_tool_call_blocks_when_caller_not_allowlisted(
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-caller-acl-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-caller-acl-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("acl_plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "acl-guard",
 #   "provider_id": "acl-provider",
@@ -193,7 +193,7 @@ async fn execute_spec_programmatic_tool_call_blocks_when_caller_not_allowlisted(
 #     "allowed_callers":"planner-whitelisted"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write acl plugin");
@@ -362,7 +362,7 @@ async fn execute_spec_programmatic_tool_call_connector_batch_parallel_succeeds()
     assert_eq!(report.outcome["result"]["total_calls"], 2);
     assert_eq!(report.outcome["result"]["failed_calls"], 0);
     assert_eq!(
-        report.outcome["result"]["by_call"]["a"]["outcome"]["payload"]["payload"]["_loongclaw"]["call_id"],
+        report.outcome["result"]["by_call"]["a"]["outcome"]["payload"]["payload"]["_loong"]["call_id"],
         "a"
     );
     assert_eq!(
@@ -715,7 +715,7 @@ async fn execute_spec_programmatic_tool_call_retry_recovers_transient_failure() 
                 priority_class: default_programmatic_priority_class(),
                 payload: json!({
                     "channel":"ops-retry",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                         "request_id": request_id,
                         "failures_before_success": 1
                     }
@@ -964,7 +964,7 @@ async fn execute_spec_programmatic_tool_call_circuit_breaker_blocks_followup_bat
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-circuit-trip",
-                            "_loongclaw_test": {
+                            "_loong_test": {
                                 "request_id": request_id,
                                 "failures_before_success": 9
                             }
@@ -1141,7 +1141,7 @@ async fn execute_spec_programmatic_tool_call_retry_jitter_tracks_backoff_budget(
                 priority_class: default_programmatic_priority_class(),
                 payload: json!({
                     "channel":"ops-retry-jitter",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                         "request_id": request_id,
                         "failures_before_success": 2
                     }
@@ -1235,7 +1235,7 @@ async fn execute_spec_programmatic_tool_call_parallel_batch_caps_peak_inflight_b
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-a",
-                            "_loongclaw_test": {"delay_ms": 25}
+                            "_loong_test": {"delay_ms": 25}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -1247,7 +1247,7 @@ async fn execute_spec_programmatic_tool_call_parallel_batch_caps_peak_inflight_b
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-b",
-                            "_loongclaw_test": {"delay_ms": 25}
+                            "_loong_test": {"delay_ms": 25}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -1259,7 +1259,7 @@ async fn execute_spec_programmatic_tool_call_parallel_batch_caps_peak_inflight_b
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-c",
-                            "_loongclaw_test": {"delay_ms": 25}
+                            "_loong_test": {"delay_ms": 25}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -1271,7 +1271,7 @@ async fn execute_spec_programmatic_tool_call_parallel_batch_caps_peak_inflight_b
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-d",
-                            "_loongclaw_test": {"delay_ms": 25}
+                            "_loong_test": {"delay_ms": 25}
                         }),
                     },
                 ],
@@ -1494,7 +1494,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_reduces_on_failures
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-adaptive-trip",
-                            "_loongclaw_test": {
+                            "_loong_test": {
                                 "request_id": request_id,
                                 "failures_before_success": 9
                             }
@@ -1509,7 +1509,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_reduces_on_failures
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-adaptive-a",
-                            "_loongclaw_test": {"delay_ms": 30}
+                            "_loong_test": {"delay_ms": 30}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -1521,7 +1521,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_reduces_on_failures
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-adaptive-b",
-                            "_loongclaw_test": {"delay_ms": 30}
+                            "_loong_test": {"delay_ms": 30}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -1533,7 +1533,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_reduces_on_failures
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-adaptive-c",
-                            "_loongclaw_test": {"delay_ms": 30}
+                            "_loong_test": {"delay_ms": 30}
                         }),
                     },
                 ],
@@ -1623,7 +1623,7 @@ async fn execute_spec_programmatic_tool_call_default_adaptive_policy_skips_not_f
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-a",
-                            "_loongclaw_test":{"delay_ms":20}
+                            "_loong_test":{"delay_ms":20}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -1644,7 +1644,7 @@ async fn execute_spec_programmatic_tool_call_default_adaptive_policy_skips_not_f
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-b",
-                            "_loongclaw_test":{"delay_ms":20}
+                            "_loong_test":{"delay_ms":20}
                         }),
                     },
                 ],
@@ -1737,7 +1737,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_policy_can_reduce_on_any_e
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-a",
-                            "_loongclaw_test":{"delay_ms":20}
+                            "_loong_test":{"delay_ms":20}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -1758,7 +1758,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_policy_can_reduce_on_any_e
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-b",
-                            "_loongclaw_test":{"delay_ms":20}
+                            "_loong_test":{"delay_ms":20}
                         }),
                     },
                 ],
@@ -2096,7 +2096,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_respects_min_floor_
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-a",
-                            "_loongclaw_test": {"delay_ms": 20}
+                            "_loong_test": {"delay_ms": 20}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -2108,7 +2108,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_respects_min_floor_
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-b",
-                            "_loongclaw_test": {"delay_ms": 20}
+                            "_loong_test": {"delay_ms": 20}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -2120,7 +2120,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_respects_min_floor_
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-c",
-                            "_loongclaw_test": {"delay_ms": 20}
+                            "_loong_test": {"delay_ms": 20}
                         }),
                     },
                     ProgrammaticBatchCall {
@@ -2132,7 +2132,7 @@ async fn execute_spec_programmatic_tool_call_adaptive_budget_respects_min_floor_
                         priority_class: default_programmatic_priority_class(),
                         payload: json!({
                             "channel":"ops-ok-d",
-                            "_loongclaw_test": {"delay_ms": 20}
+                            "_loong_test": {"delay_ms": 20}
                         }),
                     },
                 ],

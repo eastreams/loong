@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use loongclaw_contracts::{SecretRef, SecretResolutionError, SecretResolver, SecretValue};
+use loong_contracts::{SecretRef, SecretResolutionError, SecretResolver, SecretValue};
 use wait_timeout::ChildExt;
 
 const DEFAULT_SECRET_EXEC_TIMEOUT_MS: u64 = 5_000;

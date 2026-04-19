@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use super::ChannelDoctorCheck;
 use super::ensure_default_env_binding;
@@ -12,7 +12,8 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     id: ID,
     label: "matrix",
     surface_label: "matrix channel",
-    runtime_kind: mvp::config::ChannelRuntimeKind::Service,
+    runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
+    operational_model: mvp::config::ChannelOperationalModel::GatewaySupervised,
     serve_subcommand: Some("matrix-serve"),
 };
 
@@ -45,7 +46,7 @@ impl EffectiveMatrixConfig {
 }
 
 pub(super) fn collect_preview(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
     source: &str,
 ) -> Option<ChannelPreview> {
@@ -95,13 +96,13 @@ pub(super) fn collect_preview(
 }
 
 pub(super) fn apply(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
 ) -> bool {
     merge_matrix_config(&mut target.matrix, &source.matrix)
 }
 
-pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelCredentialState {
+pub(super) fn readiness_state(config: &mvp::config::LoongConfig) -> ChannelCredentialState {
     if effective_matrix_config(config).access_token().is_some() {
         ChannelCredentialState::Ready
     } else {
@@ -110,7 +111,7 @@ pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelC
 }
 
 pub(super) fn apply_import_readiness(
-    target: &mut mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
     state: ChannelCredentialState,
 ) {
     if state.is_ready() {
@@ -119,7 +120,7 @@ pub(super) fn apply_import_readiness(
 }
 
 pub(super) fn collect_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<ChannelPreflightCheck> {
     let state = readiness_state(config);
     let effective = effective_matrix_config(config);
@@ -155,9 +156,7 @@ pub(super) fn collect_preflight_checks(
     ]
 }
 
-pub(super) fn collect_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<ChannelDoctorCheck> {
+pub(super) fn collect_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck> {
     let state = readiness_state(config);
     let effective = effective_matrix_config(config);
     let base_url_ready = effective.has_base_url();
@@ -192,7 +191,7 @@ pub(super) fn collect_doctor_checks(
     ]
 }
 
-pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConfig) -> Vec<String> {
+pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongConfig) -> Vec<String> {
     let mut fixes = Vec::new();
     let default = mvp::config::MatrixChannelConfig::default();
     ensure_default_env_binding(
@@ -281,7 +280,7 @@ fn merge_matrix_config(
     changed
 }
 
-fn effective_matrix_config(config: &mvp::config::LoongClawConfig) -> EffectiveMatrixConfig {
+fn effective_matrix_config(config: &mvp::config::LoongConfig) -> EffectiveMatrixConfig {
     if let Ok(resolved) = config.matrix.resolve_account(None) {
         let access_token = resolved.access_token();
         return EffectiveMatrixConfig {
@@ -386,13 +385,13 @@ mod tests {
 
     #[test]
     fn collect_doctor_checks_uses_default_account_settings() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.matrix.enabled = true;
         config.matrix.default_account = Some("ops".to_owned());
         config.matrix.accounts.insert(
             "ops".to_owned(),
             mvp::config::MatrixAccountConfig {
-                access_token: Some(loongclaw_contracts::SecretRef::Inline(
+                access_token: Some(loong_contracts::SecretRef::Inline(
                     "matrix-token".to_owned(),
                 )),
                 base_url: Some("https://matrix.example.org".to_owned()),

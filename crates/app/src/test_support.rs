@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind};
-use loongclaw_kernel::{
-    FixedClock, InMemoryAuditSink, LoongClawKernel, StaticPolicyEngine, VerticalPackManifest,
+use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
+use loong_kernel::{
+    FixedClock, InMemoryAuditSink, LoongKernel, StaticPolicyEngine, VerticalPackManifest,
 };
 
 use crate::context::KernelContext;
@@ -67,8 +67,8 @@ impl ScopedEnv {
         if self.originals.iter().any(|(saved, _)| *saved == key) {
             return;
         }
-        if default_loongclaw_home_env_override_key(key) {
-            crate::config::push_default_loongclaw_home_env_override_for_tests();
+        if default_loong_home_env_override_key(key) {
+            crate::config::push_default_loong_home_env_override_for_tests();
         }
         self.originals.push((key, std::env::var_os(key)));
     }
@@ -82,8 +82,8 @@ impl Drop for ScopedEnv {
                 Some(value) => crate::process_env::set_var(key, value),
                 None => crate::process_env::remove_var(key),
             }
-            if default_loongclaw_home_env_override_key(key) {
-                crate::config::pop_default_loongclaw_home_env_override_for_tests();
+            if default_loong_home_env_override_key(key) {
+                crate::config::pop_default_loong_home_env_override_for_tests();
             }
         }
 
@@ -97,11 +97,8 @@ impl Drop for ScopedEnv {
     }
 }
 
-fn default_loongclaw_home_env_override_key(key: &str) -> bool {
-    matches!(
-        key,
-        "HOME" | "USERPROFILE" | "LOONG_HOME" | "LOONGCLAW_HOME"
-    )
+fn default_loong_home_env_override_key(key: &str) -> bool {
+    matches!(key, "HOME" | "USERPROFILE" | "LOONG_HOME")
 }
 
 thread_local! {
@@ -119,20 +116,20 @@ fn set_scoped_env_depth(value: usize) {
 }
 
 #[cfg(test)]
-pub struct ScopedLoongClawHome {
+pub struct ScopedLoongHome {
     _temp_home: Option<tempfile::TempDir>,
     path: PathBuf,
 }
 
 #[cfg(test)]
-impl ScopedLoongClawHome {
+impl ScopedLoongHome {
     pub fn new(prefix: &str) -> Self {
         let temp_home = tempfile::Builder::new()
             .prefix(prefix)
             .tempdir()
-            .expect("create scoped loongclaw home");
+            .expect("create scoped loong home");
         let path = temp_home.path().to_path_buf();
-        crate::config::push_default_loongclaw_home_override_for_tests(path.clone());
+        crate::config::push_default_loong_home_override_for_tests(path.clone());
         crate::tools::reset_runtime_home_state_for_tests();
         Self {
             _temp_home: Some(temp_home),
@@ -141,7 +138,7 @@ impl ScopedLoongClawHome {
     }
 
     pub fn from_existing(path: PathBuf) -> Self {
-        crate::config::push_default_loongclaw_home_override_for_tests(path.clone());
+        crate::config::push_default_loong_home_override_for_tests(path.clone());
         crate::tools::reset_runtime_home_state_for_tests();
         Self {
             _temp_home: None,
@@ -159,10 +156,10 @@ impl ScopedLoongClawHome {
 }
 
 #[cfg(test)]
-impl Drop for ScopedLoongClawHome {
+impl Drop for ScopedLoongHome {
     fn drop(&mut self) {
         crate::tools::reset_runtime_home_state_for_tests();
-        crate::config::pop_default_loongclaw_home_override_for_tests();
+        crate::config::pop_default_loong_home_override_for_tests();
     }
 }
 
@@ -352,20 +349,20 @@ impl TurnTestHarness {
     ) -> Self {
         let id = HARNESS_COUNTER.fetch_add(1, Ordering::SeqCst);
         let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-integ-{}-{id}", std::process::id()));
+            std::env::temp_dir().join(format!("loong-integ-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
 
         // Merge the caller's overrides with the unique temp dir as file_root.
         let tool_config = ToolRuntimeConfig {
             file_root: Some(temp_dir.clone()),
-            config_path: Some(temp_dir.join("loongclaw.toml")),
+            config_path: Some(temp_dir.join("loong.toml")),
             ..tool_config_override
         };
 
         let audit = Arc::new(InMemoryAuditSink::default());
         let clock = Arc::new(FixedClock::new(1_700_000_000));
         let mut kernel =
-            LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+            LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
 
         let pack = VerticalPackManifest {
             pack_id: "test-pack".to_owned(),
@@ -483,8 +480,8 @@ mod tests {
 
     #[test]
     fn unique_temp_dir_uses_distinct_paths() {
-        let first = unique_temp_dir("loongclaw-test-support");
-        let second = unique_temp_dir("loongclaw-test-support");
+        let first = unique_temp_dir("loong-test-support");
+        let second = unique_temp_dir("loong-test-support");
 
         assert_ne!(first, second);
     }
@@ -492,7 +489,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn write_executable_script_atomically_preserves_existing_script_when_write_fails() {
-        let root = unique_temp_dir("loongclaw-test-support-script-write-failure");
+        let root = unique_temp_dir("loong-test-support-script-write-failure");
         std::fs::create_dir_all(&root).expect("create temp dir");
         let script_path = root.join("fixture-script");
 

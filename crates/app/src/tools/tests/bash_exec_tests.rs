@@ -3,7 +3,7 @@ use super::*;
 #[cfg(feature = "tool-shell")]
 #[test]
 fn runtime_tool_view_hides_bash_exec_when_runtime_is_unavailable() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-view-hidden");
+    let root = unique_tool_temp_dir("loong-bash-tool-view-hidden");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let config = test_tool_runtime_config(root);
@@ -15,7 +15,7 @@ fn runtime_tool_view_hides_bash_exec_when_runtime_is_unavailable() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn runtime_tool_view_includes_bash_exec_when_runtime_is_available() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-view-visible");
+    let root = unique_tool_temp_dir("loong-bash-tool-view-visible");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -28,7 +28,7 @@ fn runtime_tool_view_includes_bash_exec_when_runtime_is_available() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn tool_search_hides_bash_exec_when_runtime_is_unavailable() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-hidden");
+    let root = unique_tool_temp_dir("loong-bash-tool-search-hidden");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let config = test_tool_runtime_config(root);
@@ -51,7 +51,7 @@ fn tool_search_hides_bash_exec_when_runtime_is_unavailable() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn tool_search_hides_bash_exec_when_governance_rules_failed_to_load() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-broken-rules");
+    let root = unique_tool_temp_dir("loong-bash-tool-search-broken-rules");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -79,7 +79,7 @@ fn tool_search_hides_bash_exec_when_governance_rules_failed_to_load() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn tool_search_includes_bash_exec_when_runtime_is_available() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-visible");
+    let root = unique_tool_temp_dir("loong-bash-tool-search-visible");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -106,7 +106,7 @@ fn tool_search_includes_bash_exec_when_runtime_is_available() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn tool_search_exact_query_surfaces_bash_exec() {
-    let root = unique_tool_temp_dir("loongclaw-bash-tool-search-exact-query");
+    let root = unique_tool_temp_dir("loong-bash-tool-search-exact-query");
     std::fs::create_dir_all(&root).expect("create root dir");
 
     let mut config = test_tool_runtime_config(root);
@@ -272,7 +272,7 @@ fn bash_exec_runtime_policy_defaults_to_non_login_shell() {
 fn bash_exec_runs_command_string_via_bash_runtime() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-exec-command");
+    let root = unique_tool_temp_dir("loong-bash-exec-command");
     fs::create_dir_all(&root).expect("create fixture root");
     let log_path = root.join("bash-args.log");
     let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
@@ -312,7 +312,7 @@ fn bash_exec_runs_command_string_via_bash_runtime() {
 fn bash_exec_falls_back_to_file_root_when_current_dir_is_unavailable() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-exec-missing-cwd");
+    let root = unique_tool_temp_dir("loong-bash-exec-missing-cwd");
     let deleted_cwd = root.join("deleted-cwd");
     let fallback_root = root.join("fallback-root");
     fs::create_dir_all(&deleted_cwd).expect("create deleted cwd");
@@ -365,7 +365,7 @@ fn bash_exec_defaults_cwd_to_configured_file_root() {
     use std::fs;
     use std::path::Path;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-default-cwd");
+    let root = unique_tool_temp_dir("loong-bash-default-cwd");
     fs::create_dir_all(&root).expect("create root");
 
     let mut config = test_tool_runtime_config(root.clone());
@@ -401,7 +401,7 @@ fn bash_exec_defaults_cwd_to_configured_file_root() {
 fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-governance-allow");
+    let root = unique_tool_temp_dir("loong-bash-governance-allow");
     let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
@@ -431,11 +431,11 @@ fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
 
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
-fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_config_path() {
+fn bash_exec_uses_loong_home_rules_dir_even_when_runtime_is_built_without_config_path() {
     use std::fs;
 
-    let home = crate::test_support::ScopedLoongClawHome::new("loongclaw-bash-home-rules");
-    let workspace = unique_tool_temp_dir("loongclaw-bash-home-rules-workspace");
+    let home = crate::test_support::ScopedLoongHome::new("loong-bash-home-rules");
+    let workspace = unique_tool_temp_dir("loong-bash-home-rules-workspace");
     let rules_dir = home.path().join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
@@ -446,8 +446,8 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
     fs::create_dir_all(&workspace).expect("workspace");
     let _cwd = ScopedCurrentDir::new(&workspace);
 
-    let mut runtime = runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        &crate::config::LoongClawConfig::default(),
+    let mut runtime = runtime_config::ToolRuntimeConfig::from_loong_config(
+        &crate::config::LoongConfig::default(),
         None,
     );
     assert_eq!(runtime.bash_exec.governance.rules_dir, rules_dir);
@@ -488,7 +488,7 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
 fn bash_exec_denies_plain_command_when_prefix_rule_denies() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-governance-deny");
+    let root = unique_tool_temp_dir("loong-bash-governance-deny");
     let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
@@ -525,7 +525,7 @@ fn bash_exec_denies_plain_command_when_prefix_rule_denies() {
 fn bash_exec_denies_escaped_static_command_name_when_deny_rule_matches_under_default_allow() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-governance-escaped-deny");
+    let root = unique_tool_temp_dir("loong-bash-governance-escaped-deny");
     let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
@@ -563,7 +563,7 @@ fn bash_exec_denies_escaped_static_command_name_when_deny_rule_matches_under_def
 fn bash_exec_denies_or_list_when_rhs_branch_matches_deny_rule() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-governance-or-deny");
+    let root = unique_tool_temp_dir("loong-bash-governance-or-deny");
     let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
     fs::create_dir_all(&rules_dir).expect("rules dir");
     fs::write(
@@ -603,7 +603,7 @@ fn bash_exec_denies_or_list_when_rhs_branch_matches_deny_rule() {
 fn bash_exec_allows_parse_unreliable_command_when_shell_default_mode_is_allow() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-governance-default-allow");
+    let root = unique_tool_temp_dir("loong-bash-governance-default-allow");
     fs::create_dir_all(&root).expect("fixture root");
 
     let mut config = test_tool_runtime_config(root.clone());
@@ -648,7 +648,7 @@ fn bash_exec_honors_cwd() {
     use std::fs;
     use std::path::Path;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-exec-cwd");
+    let root = unique_tool_temp_dir("loong-bash-exec-cwd");
     let nested = root.join("nested");
     let requested_cwd = "nested";
     fs::create_dir_all(&nested).expect("create nested dir");
@@ -686,8 +686,8 @@ fn bash_exec_honors_cwd() {
 fn bash_exec_rejects_cwd_that_escapes_configured_file_root() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-bash-cwd-root");
-    let outside = unique_tool_temp_dir("loongclaw-bash-cwd-outside");
+    let root = unique_tool_temp_dir("loong-bash-cwd-root");
+    let outside = unique_tool_temp_dir("loong-bash-cwd-outside");
     fs::create_dir_all(&root).expect("create root");
     fs::create_dir_all(&outside).expect("create outside");
 
@@ -746,7 +746,7 @@ fn bash_exec_times_out_when_timeout_ms_is_small() {
 fn tool_invoke_dispatches_bash_exec_with_trusted_internal_context() {
     use std::fs;
 
-    let root = unique_tool_temp_dir("loongclaw-tool-invoke-bash-exec");
+    let root = unique_tool_temp_dir("loong-tool-invoke-bash-exec");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let mut config = test_tool_runtime_config(root.clone());
@@ -778,8 +778,8 @@ fn tool_invoke_dispatches_bash_exec_with_trusted_internal_context() {
                 "arguments": {
                     "command": "printf 'invoke-bash'"
                 },
-                "_loongclaw": {
-                    LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: {}
+                "_loong": {
+                    LOONG_INTERNAL_RUNTIME_NARROWING_KEY: {}
                 }
             }),
         },

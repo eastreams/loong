@@ -9,7 +9,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::CliResult;
 use crate::KernelContext;
 use crate::config::{
-    ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedWecomChannelConfig,
+    ChannelDefaultAccountSelectionSource, LoongConfig, ResolvedWecomChannelConfig,
 };
 
 use super::runtime::state::ChannelOperationRuntimeTracker;
@@ -78,7 +78,7 @@ impl WecomWebsocketClient {
         self.request_counter = self.request_counter.saturating_add(1);
         let timestamp_ms = current_time_ms();
         let counter = self.request_counter;
-        format!("loongclaw-{scope}-{timestamp_ms}-{counter}")
+        format!("loong-{scope}-{timestamp_ms}-{counter}")
     }
 
     async fn subscribe(&mut self, connection: &WecomConnectionConfig) -> CliResult<()> {
@@ -288,7 +288,7 @@ pub(super) async fn send_wecom_text(
 
 #[allow(clippy::print_stdout)]
 pub(super) async fn run_wecom_channel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved: &ResolvedWecomChannelConfig,
     resolved_path: &std::path::Path,
     selected_by_default: bool,
@@ -355,7 +355,7 @@ pub(super) async fn run_wecom_channel(
 }
 
 async fn run_wecom_serve_session(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved_path: &std::path::Path,
     resolved: &ResolvedWecomChannelConfig,
     connection: &WecomConnectionConfig,
@@ -953,44 +953,40 @@ mod tests {
     fn temp_wecom_test_dir(label: &str) -> PathBuf {
         let timestamp_ms = current_time_ms();
         let process_id = std::process::id();
-        let path = format!("loongclaw-wecom-{label}-{process_id}-{timestamp_ms}");
+        let path = format!("loong-wecom-{label}-{process_id}-{timestamp_ms}");
         std::env::temp_dir().join(path)
     }
 
-    fn build_wecom_test_config(provider_base_url: &str, websocket_url: &str) -> LoongClawConfig {
+    fn build_wecom_test_config(provider_base_url: &str, websocket_url: &str) -> LoongConfig {
         let temp_dir = temp_wecom_test_dir("runtime");
         std::fs::create_dir_all(&temp_dir).expect("create wecom temp dir");
 
-        let mut config = LoongClawConfig {
+        let mut config = LoongConfig {
             provider: ProviderConfig {
                 base_url: provider_base_url.to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "test-provider-key".to_owned(),
                 )),
                 model: "test-model".to_owned(),
                 ..ProviderConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         config.memory.sqlite_path = temp_dir.join("memory.sqlite3").display().to_string();
         config.wecom.enabled = true;
         config.wecom.account_id = Some("wecom_main".to_owned());
-        config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "bot_test".to_owned(),
-        ));
-        config.wecom.secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "secret_test".to_owned(),
-        ));
+        config.wecom.bot_id = Some(loong_contracts::SecretRef::Inline("bot_test".to_owned()));
+        config.wecom.secret = Some(loong_contracts::SecretRef::Inline("secret_test".to_owned()));
         config.wecom.websocket_url = Some(websocket_url.to_owned());
         config.wecom.ping_interval_s = 1;
         config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
         config
     }
 
-    fn write_wecom_test_config_file(config: &LoongClawConfig, label: &str) -> PathBuf {
+    fn write_wecom_test_config_file(config: &LoongConfig, label: &str) -> PathBuf {
         let config_dir = temp_wecom_test_dir(label);
         std::fs::create_dir_all(&config_dir).expect("create wecom config dir");
-        let config_path = config_dir.join("loongclaw.toml");
+        let config_path = config_dir.join("loong.toml");
         let encoded = crate::config::render(config).expect("render wecom test config");
         std::fs::write(&config_path, encoded).expect("write wecom test config");
         config_path
@@ -1381,7 +1377,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_wecom_send_subscribes_and_sends_markdown_message() {
-        let temp_home = unique_temp_dir("loongclaw-wecom-send-home");
+        let temp_home = unique_temp_dir("loong-wecom-send-home");
         let mut env = ScopedEnv::new();
         let (websocket_url, websocket_server) = spawn_mock_wecom_send_server().await;
         let mut config = build_wecom_test_config("http://127.0.0.1:9", websocket_url.as_str());
@@ -1421,7 +1417,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_wecom_text_rejects_active_serve_runtime_before_owner_conflict() {
-        let temp_home = unique_temp_dir("loongclaw-wecom-runtime-home");
+        let temp_home = unique_temp_dir("loong-wecom-runtime-home");
         let mut env = ScopedEnv::new();
         let now_ms = current_time_ms();
         let mut config = build_wecom_test_config("http://127.0.0.1:9", "ws://127.0.0.1:9");
@@ -1648,7 +1644,7 @@ mod tests {
         let release_server = Arc::new(Notify::new());
         let (websocket_url, websocket_server) =
             spawn_mock_wecom_reconnect_server(reply_seen.clone(), release_server.clone()).await;
-        let temp_home = unique_temp_dir("loongclaw-wecom-reconnect-home");
+        let temp_home = unique_temp_dir("loong-wecom-reconnect-home");
         let mut env = ScopedEnv::new();
         env.set("HOME", &temp_home);
         env.set("USERPROFILE", &temp_home);

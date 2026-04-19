@@ -1,5 +1,5 @@
 # cargo-deny configuration (v2 schema)
-# Derived from: loongclaw-research/11-code-quality/synthesis/loongclaw-code-quality-strategy-v2.md
+# Derived from: loong-research/11-code-quality/synthesis/loong-code-quality-strategy-v2.md
 
 [graph]
 targets = [

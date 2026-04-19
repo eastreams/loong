@@ -23,28 +23,45 @@ use kernel::{
     PluginActivationStatus, PluginScanner, PluginSetupReadinessContext, PluginTranslator,
     TaskIntent, ToolCoreOutcome, ToolCoreRequest, evaluate_plugin_setup_requirements,
 };
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub use loongclaw_app as mvp;
-pub use loongclaw_spec::spec_execution::*;
-pub use loongclaw_spec::spec_runtime::*;
-pub use loongclaw_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
+pub use loong_app as mvp;
+pub use loong_spec::spec_execution::*;
+pub use loong_spec::spec_runtime::*;
+pub use loong_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
 
+pub use self::channel_cli_specs::{
+    DINGTALK_SEND_CLI_SPEC, DISCORD_SEND_CLI_SPEC, EMAIL_SEND_CLI_SPEC, FEISHU_SEND_CLI_SPEC,
+    GOOGLE_CHAT_SEND_CLI_SPEC, IMESSAGE_SEND_CLI_SPEC, IRC_SEND_CLI_SPEC, LINE_SEND_CLI_SPEC,
+    MATRIX_SEND_CLI_SPEC, MATRIX_SERVE_CLI_SPEC, MATTERMOST_SEND_CLI_SPEC,
+    NEXTCLOUD_TALK_SEND_CLI_SPEC, NOSTR_SEND_CLI_SPEC, ONEBOT_SEND_CLI_SPEC, ONEBOT_SERVE_CLI_SPEC,
+    QQBOT_SEND_CLI_SPEC, QQBOT_SERVE_CLI_SPEC, SIGNAL_SEND_CLI_SPEC, SLACK_SEND_CLI_SPEC,
+    SYNOLOGY_CHAT_SEND_CLI_SPEC, TEAMS_SEND_CLI_SPEC, TELEGRAM_SEND_CLI_SPEC,
+    TELEGRAM_SERVE_CLI_SPEC, TWITCH_SEND_CLI_SPEC, WEBHOOK_SEND_CLI_SPEC, WECOM_SEND_CLI_SPEC,
+    WECOM_SERVE_CLI_SPEC, WEIXIN_SEND_CLI_SPEC, WEIXIN_SERVE_CLI_SPEC, WHATSAPP_SEND_CLI_SPEC,
+};
 pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
 pub use self::delegate_child_cli::run_detached_delegate_child_cli;
 pub use self::env_compat::make_env_compatible;
+pub use self::managed_plugin_bridge_runtime::{
+    default_onebot_send_target_kind, default_qqbot_send_target_kind,
+    default_weixin_send_target_kind, parse_onebot_send_target_kind, parse_qqbot_send_target_kind,
+    parse_weixin_send_target_kind, run_onebot_send_cli_impl, run_onebot_serve_cli_impl,
+    run_qqbot_send_cli_impl, run_qqbot_serve_cli_impl, run_weixin_send_cli_impl,
+    run_weixin_serve_cli_impl,
+};
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
     run_list_mcp_servers_cli, run_show_mcp_server_cli,
 };
-pub use loongclaw_bench::{
+pub use loong_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
 };
@@ -91,10 +108,12 @@ mod browser_companion_diagnostics;
 pub mod browser_preview;
 mod channel_access_policy_render;
 mod channel_bridge_render;
+mod channel_cli_specs;
 mod channel_resolution;
 #[cfg(test)]
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
+mod channel_serve_cli;
 mod cli_handoff;
 mod cli_json;
 mod command_kind;
@@ -107,9 +126,11 @@ pub mod doctor_security_cli;
 mod env_compat;
 mod external_skills_policy_probe;
 pub mod feishu_cli;
+mod feishu_onboarding;
 pub mod feishu_support;
 pub mod gateway;
 pub mod import_cli;
+mod managed_plugin_bridge_runtime;
 mod mcp_cli;
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 mod memory_context_benchmark;
@@ -136,8 +157,11 @@ pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
+mod runtime_snapshot_types;
 pub mod runtime_trajectory_cli;
 pub mod session_cli;
+mod session_prompt_frame_cli;
+mod session_runtime_truth_cli;
 pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
@@ -171,7 +195,7 @@ pub(crate) use channel_bridge_render::{
     render_line_safe_optional_text_value, render_line_safe_text_value, render_line_safe_text_values,
 };
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
-pub use loongclaw_spec::programmatic::{
+pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
@@ -181,6 +205,10 @@ pub(crate) use runtime_snapshot_render::{
     runtime_snapshot_external_skills_json, runtime_snapshot_memory_system_json,
     runtime_snapshot_provider_json, runtime_snapshot_runtime_plugins_json,
     runtime_snapshot_tool_runtime_json,
+};
+pub use runtime_snapshot_types::{
+    RuntimeSnapshotProviderProfileState, RuntimeSnapshotProviderState,
+    RuntimeSnapshotProviderTransportState,
 };
 pub use session_cli::{
     SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION, SessionSearchArtifactDocument,
@@ -210,12 +238,57 @@ pub use trajectory_cli::{
 )]
 #[doc(hidden)]
 pub mod test_support;
+pub use channel_serve_cli::{
+    FEISHU_SERVE_CLI_SPEC, LINE_SERVE_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC, WHATSAPP_SERVE_CLI_SPEC,
+};
 
-pub const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
+pub const PUBLIC_GITHUB_REPO: &str = "loong-ai/loong";
 pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
 
 pub fn active_cli_command_name() -> &'static str {
     mvp::config::active_cli_command_name()
+}
+
+pub(crate) fn render_operator_shell_surface(
+    title: &str,
+    subtitle: &str,
+    intro_lines: Vec<String>,
+    body_lines: Vec<String>,
+    footer_lines: Vec<String>,
+) -> String {
+    let width = mvp::presentation::detect_render_width();
+    let mut sections = Vec::new();
+    if !body_lines.is_empty() {
+        sections.push(mvp::tui_surface::TuiSectionSpec::Narrative {
+            title: None,
+            lines: body_lines,
+        });
+    }
+    let screen = mvp::tui_surface::TuiScreenSpec {
+        header_style: mvp::tui_surface::TuiHeaderStyle::Compact,
+        subtitle: Some(subtitle.to_owned()),
+        title: Some(title.to_owned()),
+        progress_line: None,
+        intro_lines,
+        sections,
+        choices: Vec::new(),
+        footer_lines,
+    };
+    mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, width, false).join("\n")
+}
+
+pub(crate) fn render_operator_shell_surface_from_body(
+    title: &str,
+    subtitle: &str,
+    body: String,
+) -> String {
+    render_operator_shell_surface(
+        title,
+        subtitle,
+        Vec::new(),
+        body.lines().map(str::to_owned).collect(),
+        Vec::new(),
+    )
 }
 
 fn render_welcome_long_about(command_name: &str) -> String {
@@ -344,7 +417,7 @@ pub struct ChannelSendCliSpec {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelServeCliSpec {
-    pub family: mvp::channel::ChannelCommandFamilyDescriptor,
+    pub family: mvp::channel::ChannelCatalogCommandFamilyDescriptor,
     pub run: for<'a> fn(ChannelServeCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
 }
 
@@ -413,7 +486,7 @@ pub enum Commands {
     AuditDemo,
     /// Generate a runnable JSON spec template for quick vertical customization
     InitSpec {
-        #[arg(long, default_value = "loongclaw.spec.json")]
+        #[arg(long, default_value = "loong.spec.json")]
         output: String,
         #[arg(long, value_enum, default_value_t = InitSpecPreset::Default)]
         preset: InitSpecPreset,
@@ -532,10 +605,10 @@ pub enum Commands {
     },
     #[command(
         about = "Guided onboarding for fast first-chat setup with preflight diagnostics",
-        long_about = "Guided onboarding for fast first-chat setup with preflight diagnostics.\n\nThis is the default path for most users. LoongClaw will detect reusable settings for provider, channels, or workspace guidance, suggest a starting point, and walk through quick review before first chat."
+        long_about = "Guided onboarding for fast first-chat setup with preflight diagnostics.\n\nThis is the default path for most users. Loong will detect reusable settings for provider, channels, or workspace guidance, suggest a starting point, and walk through quick review before first chat."
     )]
     Onboard {
-        /// Write the resulting config to a custom path instead of the default loongclaw config location
+        /// Write the resulting config to a custom path instead of the default loong config location
         #[arg(long)]
         output: Option<String>,
         /// Overwrite an existing target config path instead of stopping for manual review
@@ -595,7 +668,7 @@ pub enum Commands {
         long_about = "Power-user import flow for previewing or applying detected migration sources explicitly.\n\nUse this when you want exact CLI control over which source and domains are reused. If you want the guided path, use `loong onboard` instead. When the same source kind resolves to multiple detected configs, rerun with `--source-path <path>` to choose one exact source."
     )]
     Import {
-        /// Write the imported config to a custom path instead of the default loongclaw config location
+        /// Write the imported config to a custom path instead of the default loong config location
         #[arg(long)]
         output: Option<String>,
         /// Overwrite an existing target config path instead of stopping for manual review
@@ -637,7 +710,7 @@ pub enum Commands {
         /// Path to the legacy agent workspace or root to inspect
         #[arg(long)]
         input: Option<String>,
-        /// Target LoongClaw config path to preview, write, or roll back
+        /// Target Loong config path to preview, write, or roll back
         #[arg(long)]
         output: Option<String>,
         /// Hint the legacy claw-family source kind for single-source plan/apply modes
@@ -1138,6 +1211,84 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    /// Send one managed Weixin bridge message
+    WeixinSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_weixin_send_target_kind(),
+            value_parser = parse_weixin_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run one managed Weixin bridge reply loop
+    WeixinServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        once: bool,
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Send one managed QQBot bridge message
+    QqbotSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_qqbot_send_target_kind(),
+            value_parser = parse_qqbot_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run one managed QQBot bridge reply loop
+    QqbotServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        once: bool,
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Send one managed OneBot bridge message
+    OnebotSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_onebot_send_target_kind(),
+            value_parser = parse_onebot_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run one managed OneBot bridge reply loop
+    OnebotServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        once: bool,
+        #[arg(long)]
+        account: Option<String>,
+    },
     /// Run WhatsApp Cloud API webhook server and auto-reply via provider
     WhatsappServe {
         #[arg(long)]
@@ -1217,6 +1368,17 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Run LINE webhook callback server and auto-reply via provider
+    LineServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        bind: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+    },
     /// Send one WhatsApp business message
     WhatsappSend {
         #[arg(long)]
@@ -1267,6 +1429,17 @@ pub enum Commands {
         target_kind: mvp::channel::ChannelOutboundTargetKind,
         #[arg(long)]
         text: String,
+    },
+    /// Run a generic inbound webhook server and auto-reply via provider
+    WebhookServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        bind: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
     },
     /// Send one Google Chat incoming webhook message
     GoogleChatSend {
@@ -1592,7 +1765,6 @@ mod multi_channel_serve_tests {
 
 fn resolved_default_entry_config_path() -> PathBuf {
     std::env::var_os("LOONG_CONFIG_PATH")
-        .or_else(|| std::env::var_os("LOONGCLAW_CONFIG_PATH"))
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(mvp::config::default_config_path)
@@ -1616,46 +1788,12 @@ fn default_onboard_command() -> Commands {
     }
 }
 
-fn default_import_preview_command() -> Commands {
-    Commands::Import {
-        output: None,
-        force: false,
-        preview: true,
-        apply: false,
-        json: false,
-        from: None,
-        source_path: None,
-        provider: None,
-        include: Vec::new(),
-        exclude: Vec::new(),
-    }
-}
-
-fn detected_legacy_home_for_default_entry() -> Option<PathBuf> {
-    if std::env::var_os("LOONG_HOME")
-        .as_deref()
-        .is_some_and(|value| !value.is_empty())
-    {
-        return None;
-    }
-
-    let user_home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)?;
-
-    mvp::config::detect_legacy_home(user_home.as_path())
-}
-
 pub fn resolve_default_entry_command() -> Commands {
     if resolved_default_entry_config_path().is_file() {
-        return Commands::Welcome;
+        Commands::Welcome
+    } else {
+        default_onboard_command()
     }
-
-    if detected_legacy_home_for_default_entry().is_some() {
-        return default_import_preview_command();
-    }
-
-    default_onboard_command()
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {
@@ -1675,27 +1813,84 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
     }
 }
 
-fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongClawConfig) -> String {
+fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongConfig) -> String {
     let config_path_display = config_path.display().to_string();
     let next_actions = next_actions::collect_setup_next_actions(config, &config_path_display);
-    let mut quick_command_lines = Vec::new();
+    let primary_action = next_actions.first().cloned();
+    let secondary_actions = next_actions.iter().skip(1).cloned().collect::<Vec<_>>();
+    let render_width = mvp::presentation::detect_render_width();
+    let mut sections = Vec::new();
 
-    for action in next_actions {
-        let action_label = action.label;
-        let action_command = action.command;
-        let quick_command_line = format!("- {action_label}: {action_command}");
-        quick_command_lines.push(quick_command_line);
+    if let Some(primary_action) = primary_action {
+        sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
+            title: Some("start here".to_owned()),
+            inline_title_when_wide: false,
+            items: vec![mvp::tui_surface::TuiActionSpec {
+                label: primary_action.label,
+                command: primary_action.command,
+            }],
+        });
     }
 
-    quick_command_lines.push(format!("- Help: {} --help", CLI_COMMAND_NAME));
-    let quick_commands = quick_command_lines.join("\n");
+    if !secondary_actions.is_empty() {
+        sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
+            title: Some("also available".to_owned()),
+            inline_title_when_wide: false,
+            items: secondary_actions
+                .into_iter()
+                .map(|action| mvp::tui_surface::TuiActionSpec {
+                    label: action.label,
+                    command: action.command,
+                })
+                .collect(),
+        });
+    }
 
-    format!(
-        "Loong is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n{}",
-        env!("CARGO_PKG_VERSION"),
-        config_path_display,
-        quick_commands,
-    )
+    sections.push(mvp::tui_surface::TuiSectionSpec::KeyValues {
+        title: Some("saved setup".to_owned()),
+        items: vec![
+            mvp::tui_surface::TuiKeyValueSpec::Plain {
+                key: "config".to_owned(),
+                value: config_path_display,
+            },
+            mvp::tui_surface::TuiKeyValueSpec::Plain {
+                key: "provider".to_owned(),
+                value: crate::provider_presentation::active_provider_detail_label(config),
+            },
+            mvp::tui_surface::TuiKeyValueSpec::Plain {
+                key: "model".to_owned(),
+                value: config.provider.model.clone(),
+            },
+            mvp::tui_surface::TuiKeyValueSpec::Plain {
+                key: "memory profile".to_owned(),
+                value: config.memory.profile.as_str().to_owned(),
+            },
+        ],
+    });
+    sections.push(mvp::tui_surface::TuiSectionSpec::Callout {
+        tone: mvp::tui_surface::TuiCalloutTone::Info,
+        title: Some("operator flow".to_owned()),
+        lines: vec![
+            "Start with a first answer, then continue in chat for follow-up work.".to_owned(),
+            "Use doctor when setup or runtime health feels off instead of debugging the config by hand.".to_owned(),
+        ],
+    });
+
+    let screen = mvp::tui_surface::TuiScreenSpec {
+        header_style: mvp::tui_surface::TuiHeaderStyle::Compact,
+        subtitle: Some("configured install".to_owned()),
+        title: Some("welcome back".to_owned()),
+        progress_line: None,
+        intro_lines: vec!["Loong is configured and ready.".to_owned()],
+        sections,
+        choices: Vec::new(),
+        footer_lines: vec![format!(
+            "Use {} --help to browse the full operator surface.",
+            CLI_COMMAND_NAME
+        )],
+    };
+
+    mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, render_width, false).join("\n")
 }
 
 pub fn run_welcome_cli() -> CliResult<()> {
@@ -1738,13 +1933,12 @@ mod first_run_entry_tests {
         env.set("HOME", &home);
         env.remove("LOONG_HOME");
         env.remove("LOONG_CONFIG_PATH");
-        env.remove("LOONGCLAW_CONFIG_PATH");
         (env, home)
     }
 
     #[test]
     fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
-        let (_env, _home) = isolated_home("loongclaw-default-entry-missing");
+        let (_env, _home) = isolated_home("loong-default-entry-missing");
 
         assert!(
             matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
@@ -1753,31 +1947,12 @@ mod first_run_entry_tests {
     }
 
     #[test]
-    fn resolve_default_entry_command_routes_to_import_preview_when_legacy_home_exists() {
-        let (_env, home) = isolated_home("loongclaw-default-entry-legacy-home");
-        let legacy_home = home.join(".loongclaw");
-        fs::create_dir_all(&legacy_home).expect("create legacy home");
-
-        assert!(
-            matches!(
-                resolve_default_entry_command(),
-                Commands::Import {
-                    preview: true,
-                    apply: false,
-                    ..
-                }
-            ),
-            "legacy home should route to import preview"
-        );
-    }
-
-    #[test]
     fn resolve_default_entry_command_routes_to_welcome_when_default_config_exists() {
-        let (_env, _home) = isolated_home("loongclaw-default-entry-present");
+        let (_env, _home) = isolated_home("loong-default-entry-present");
         let config_path = mvp::config::default_config_path();
         mvp::config::write(
             Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             true,
         )
         .expect("write default config");
@@ -1785,27 +1960,6 @@ mod first_run_entry_tests {
         assert!(
             matches!(resolve_default_entry_command(), Commands::Welcome),
             "present config should route to welcome"
-        );
-    }
-
-    #[test]
-    fn resolve_default_entry_command_honors_loongclaw_config_path_override() {
-        let mut env = ScopedEnv::new();
-        let config_path = unique_temp_dir("loongclaw-default-entry-env").join("custom-config.toml");
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent).expect("create config parent");
-        }
-        mvp::config::write(
-            Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
-            true,
-        )
-        .expect("write explicit config");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_path);
-
-        assert!(
-            matches!(resolve_default_entry_command(), Commands::Welcome),
-            "env override config should route to welcome"
         );
     }
 
@@ -1818,7 +1972,7 @@ mod first_run_entry_tests {
         }
         mvp::config::write(
             Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             true,
         )
         .expect("write explicit config");
@@ -1826,16 +1980,16 @@ mod first_run_entry_tests {
 
         assert!(
             matches!(resolve_default_entry_command(), Commands::Welcome),
-            "new env override config should route to welcome"
+            "env override config should route to welcome"
         );
     }
 
     #[test]
     fn resolve_default_entry_command_routes_to_onboard_when_config_path_is_a_directory() {
         let mut env = ScopedEnv::new();
-        let config_dir = unique_temp_dir("loongclaw-default-entry-dir");
+        let config_dir = unique_temp_dir("loong-default-entry-dir");
         fs::create_dir_all(&config_dir).expect("create config directory");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
+        env.set("LOONG_CONFIG_PATH", &config_dir);
 
         assert!(
             matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
@@ -1865,8 +2019,8 @@ mod first_run_entry_tests {
     #[test]
     fn run_welcome_cli_rejects_missing_config_file() {
         let mut env = ScopedEnv::new();
-        let config_path = unique_temp_dir("loongclaw-welcome-missing").join("missing-config.toml");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_path);
+        let config_path = unique_temp_dir("loong-welcome-missing").join("missing-config.toml");
+        env.set("LOONG_CONFIG_PATH", &config_path);
 
         let error = run_welcome_cli().expect_err("missing config should fail welcome");
 
@@ -1883,9 +2037,9 @@ mod first_run_entry_tests {
     #[test]
     fn run_welcome_cli_rejects_directory_config_path() {
         let mut env = ScopedEnv::new();
-        let config_dir = unique_temp_dir("loongclaw-welcome-dir");
+        let config_dir = unique_temp_dir("loong-welcome-dir");
         fs::create_dir_all(&config_dir).expect("create config directory");
-        env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
+        env.set("LOONG_CONFIG_PATH", &config_dir);
 
         let error = run_welcome_cli().expect_err("directory config path should fail welcome");
 
@@ -1904,7 +2058,7 @@ mod first_run_entry_tests {
         }
         mvp::config::write(
             Some(config_path.to_str().expect("utf8 config path")),
-            &mvp::config::LoongClawConfig::default(),
+            &mvp::config::LoongConfig::default(),
             true,
         )
         .expect("write explicit config");
@@ -1918,23 +2072,31 @@ mod first_run_entry_tests {
 
     #[test]
     fn render_welcome_banner_includes_version_and_next_commands() {
-        let config = mvp::config::LoongClawConfig::default();
-        let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
+        let config = mvp::config::LoongConfig::default();
+        let rendered = render_welcome_banner(Path::new("/tmp/loong's config.toml"), &config);
 
         assert!(
             rendered.contains(env!("CARGO_PKG_VERSION")),
             "welcome banner should include the current version: {rendered}"
         );
         assert!(
-            rendered.contains("loong ask --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("welcome back"),
+            "welcome banner should promote a dedicated welcome title: {rendered}"
+        );
+        assert!(
+            rendered.contains("start here"),
+            "welcome banner should lead with a start-here handoff: {rendered}"
+        );
+        assert!(
+            rendered.contains("loong ask --config '/tmp/loong'\"'\"'s config.toml'"),
             "welcome banner should include a quoted ask command: {rendered}"
         );
         assert!(
-            rendered.contains("loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong chat --config '/tmp/loong'\"'\"'s config.toml'"),
             "welcome banner should include a quoted chat command: {rendered}"
         );
         assert!(
-            rendered.contains("loong personalize --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong personalize"),
             "welcome banner should include a quoted personalize command: {rendered}"
         );
         assert!(
@@ -1948,6 +2110,10 @@ mod first_run_entry_tests {
         assert!(
             rendered.contains("- working preferences:"),
             "welcome banner should preserve the shared next-action label for personalize: {rendered}"
+        );
+        assert!(
+            rendered.contains("saved setup"),
+            "welcome banner should summarize the saved runtime state after the handoff block: {rendered}"
         );
     }
 }
@@ -2332,7 +2498,7 @@ pub fn run_validate_config_cli(
         ValidateConfigOutput::ProblemJson => {
             let payload = if diagnostics.is_empty() {
                 json!({
-                    "type": "urn:loongclaw:problem:none",
+                    "type": "urn:loong:problem:none",
                     "title": "Configuration Valid",
                     "detail": "No configuration diagnostics were reported.",
                     "instance": resolved_path.display().to_string(),
@@ -2347,9 +2513,9 @@ pub fn run_validate_config_cli(
             } else {
                 json!({
                     "type": if diagnostics_summary.valid {
-                        "urn:loongclaw:problem:config.validation_warning"
+                        "urn:loong:problem:config.validation_warning"
                     } else {
-                        "urn:loongclaw:problem:config.validation_failed"
+                        "urn:loong:problem:config.validation_failed"
                     },
                     "title": if diagnostics_summary.valid {
                         "Configuration Warnings Reported"
@@ -2451,7 +2617,7 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
     Ok(())
 }
 
-pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
@@ -2461,7 +2627,10 @@ pub struct RuntimeSnapshotCliState {
     pub memory_system: mvp::memory::MemorySystemRuntimeSnapshot,
     pub acp: mvp::acp::AcpRuntimeSnapshot,
     pub enabled_channel_ids: Vec<String>,
+    pub enabled_runtime_backed_channel_ids: Vec<String>,
     pub enabled_service_channel_ids: Vec<String>,
+    pub enabled_plugin_backed_channel_ids: Vec<String>,
+    pub enabled_outbound_only_channel_ids: Vec<String>,
     pub channels: mvp::channel::ChannelInventory,
     pub tool_runtime: mvp::tools::runtime_config::ToolRuntimeConfig,
     pub visible_tool_names: Vec<String>,
@@ -2471,39 +2640,6 @@ pub struct RuntimeSnapshotCliState {
     pub runtime_plugins: RuntimeSnapshotRuntimePluginsState,
     pub external_skills: RuntimeSnapshotExternalSkillsState,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotProviderState {
-    pub active_profile_id: String,
-    pub active_label: String,
-    pub last_provider_id: Option<String>,
-    pub saved_profile_ids: Vec<String>,
-    pub profiles: Vec<RuntimeSnapshotProviderProfileState>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotProviderProfileState {
-    pub profile_id: String,
-    pub is_active: bool,
-    pub default_for_kind: bool,
-    pub descriptor: mvp::config::ProviderDescriptorDocument,
-    pub kind: mvp::config::ProviderKind,
-    pub model: String,
-    pub wire_api: mvp::config::ProviderWireApi,
-    pub base_url: String,
-    pub endpoint: String,
-    pub models_endpoint: String,
-    pub protocol_family: &'static str,
-    pub credential_resolved: bool,
-    pub auth_env: Option<String>,
-    pub reasoning_effort: Option<String>,
-    pub temperature: f64,
-    pub max_tokens: Option<u32>,
-    pub request_timeout_ms: u64,
-    pub retry_max_attempts: usize,
-    pub header_names: Vec<String>,
-    pub preferred_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2701,7 +2837,7 @@ pub(crate) fn collect_runtime_snapshot_cli_state_from_loaded_config(
 
 fn collect_runtime_snapshot_cli_state_from_parts(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> CliResult<RuntimeSnapshotCliState> {
     let config_display = resolved_path.display().to_string();
     let provider = collect_runtime_snapshot_provider_state(config);
@@ -2709,9 +2845,12 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(config)?;
     let acp = mvp::acp::collect_acp_runtime_snapshot(config)?;
     let enabled_channel_ids = config.enabled_channel_ids();
+    let enabled_runtime_backed_channel_ids = config.enabled_runtime_backed_channel_ids();
     let enabled_service_channel_ids = config.enabled_service_channel_ids();
+    let enabled_plugin_backed_channel_ids = config.enabled_plugin_backed_channel_ids();
+    let enabled_outbound_only_channel_ids = config.enabled_outbound_only_channel_ids();
     let channels = mvp::channel::channel_inventory(config);
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         Some(resolved_path),
     );
@@ -2735,7 +2874,10 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         memory_system,
         acp,
         enabled_channel_ids,
+        enabled_runtime_backed_channel_ids,
         enabled_service_channel_ids,
+        enabled_plugin_backed_channel_ids,
+        enabled_outbound_only_channel_ids,
         channels,
         tool_runtime: snapshot_tool_runtime,
         visible_tool_names: visible_tools,
@@ -2749,7 +2891,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
 }
 
 fn collect_runtime_snapshot_provider_state(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> RuntimeSnapshotProviderState {
     let active_profile_id = config
         .active_provider_id()
@@ -2780,11 +2922,20 @@ fn collect_runtime_snapshot_provider_state(
             .collect::<Vec<_>>()
     };
 
+    let transport_metrics = mvp::provider::provider_http_client_runtime_metrics_snapshot();
+    let transport_runtime = RuntimeSnapshotProviderTransportState {
+        http_client_cache_entries: transport_metrics.cache_entry_count,
+        http_client_cache_hits: transport_metrics.cache_hit_count,
+        http_client_cache_misses: transport_metrics.cache_miss_count,
+        built_http_clients: transport_metrics.built_client_count,
+    };
+
     RuntimeSnapshotProviderState {
         active_profile_id,
         active_label: provider_presentation::active_provider_detail_label(config),
         last_provider_id: config.last_provider_id().map(str::to_owned),
         saved_profile_ids,
+        transport_runtime,
         profiles,
     }
 }
@@ -2920,7 +3071,7 @@ fn collect_runtime_snapshot_external_skills_state(
 }
 
 pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> RuntimeSnapshotRuntimePluginsState {
     let readiness_evaluation = config
         .runtime_plugins
@@ -3172,7 +3323,7 @@ fn merge_plugin_scan_report(
 }
 
 fn runtime_plugin_setup_readiness_context(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> PluginSetupReadinessContext {
     let verified_env_vars = std::env::vars_os()
         .filter_map(|(key, value)| {
@@ -3345,7 +3496,7 @@ fn json_string_array_to_set(
 }
 
 fn build_runtime_snapshot_restore_spec(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     external_skills: &RuntimeSnapshotExternalSkillsState,
 ) -> RuntimeSnapshotRestoreSpec {
     let mut warnings = Vec::new();
@@ -3375,7 +3526,7 @@ fn build_runtime_snapshot_restore_spec(
 }
 
 fn runtime_snapshot_restore_provider_profiles(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> BTreeMap<String, mvp::config::ProviderProfileConfig> {
     if !config.providers.is_empty() {
         return config.providers.clone();
@@ -4112,12 +4263,12 @@ pub fn run_channels_cli(
 
     println!(
         "{}",
-        render_channel_surfaces_text(&resolved_path_display, &inventory)
+        render_channel_surfaces_shell_text(&resolved_path_display, &inventory)
     );
     Ok(())
 }
 
-pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
+pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 pub const CHANNELS_CLI_JSON_LEGACY_VIEWS: &[&str] = &["channels", "catalog_only_channels"];
 
 pub fn build_channels_cli_json_payload(
@@ -4131,124 +4282,233 @@ pub fn render_channel_surfaces_text(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
 ) -> String {
+    let lines = build_channel_surfaces_body_lines(config_path, inventory);
+    let mut rendered = mvp::presentation::render_compact_brand_header(
+        mvp::presentation::detect_render_width()
+            .max(96)
+            .saturating_sub(2),
+        &mvp::presentation::BuildVersionInfo::current(),
+        Some("operator channels"),
+    )
+    .into_iter()
+    .map(|line| line.text)
+    .collect::<Vec<_>>();
+    rendered.push(String::new());
+    rendered.push("channels".to_owned());
+    rendered.push(String::new());
+    rendered.extend(lines);
+    rendered.join("\n")
+}
+
+pub fn render_channel_surfaces_shell_text(
+    config_path: &str,
+    inventory: &mvp::channel::ChannelInventory,
+) -> String {
+    render_operator_shell_surface(
+        "channels",
+        "operator channels",
+        Vec::new(),
+        build_channel_surfaces_body_lines(config_path, inventory),
+        Vec::new(),
+    )
+}
+
+fn build_channel_surfaces_body_lines(
+    config_path: &str,
+    inventory: &mvp::channel::ChannelInventory,
+) -> Vec<String> {
     let mut lines = vec![format!("config={config_path}")];
-    let mut catalog_only_surfaces = Vec::new();
+    lines.push(render_channel_surface_summary_line(
+        &inventory.channel_surfaces,
+    ));
     let channel_access_policies = channel_access_policy_by_account(inventory);
 
-    for surface in &inventory.channel_surfaces {
-        if surface.catalog.implementation_status
-            == mvp::channel::ChannelCatalogImplementationStatus::Stub
-        {
-            catalog_only_surfaces.push(surface);
+    let grouped_surfaces = [
+        (
+            "runtime-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked,
+        ),
+        (
+            "config-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked,
+        ),
+        (
+            "plugin-backed channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::PluginBacked,
+        ),
+        (
+            "catalog-only channels:",
+            mvp::channel::ChannelCatalogImplementationStatus::Stub,
+        ),
+    ];
+
+    for (section_title, implementation_status) in grouped_surfaces {
+        let grouped = inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| surface.catalog.implementation_status == implementation_status)
+            .collect::<Vec<_>>();
+        if grouped.is_empty() {
             continue;
         }
 
-        push_channel_surface_header(&mut lines, surface);
-        lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
-        push_channel_surface_plugin_bridge_contract(&mut lines, surface);
-        push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
-        for snapshot in &surface.configured_accounts {
-            let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
-            lines.push(format!(
-                "  account configured_account={} configured_account_label={} default_account={} default_source={} compiled={} enabled={} api_base_url={}",
-                snapshot.configured_account_id,
-                snapshot.configured_account_label,
-                snapshot.is_default_account,
-                snapshot.default_account_source.as_str(),
-                snapshot.compiled,
-                snapshot.enabled,
-                api_base_url
-            ));
-            for note in &snapshot.notes {
-                lines.push(format!("    note: {note}"));
-            }
-            let access_policy_key = (
-                surface.catalog.id.to_owned(),
-                snapshot.configured_account_id.clone(),
-            );
-            if let Some(access_policy) = channel_access_policies.get(&access_policy_key) {
-                lines.push(render_channel_access_policy_line(access_policy));
-            }
-            for operation in &snapshot.operations {
-                let catalog_operation = surface.catalog.operation(operation.id);
-                let requirement_ids = catalog_operation
-                    .map(|catalog_operation| {
-                        render_channel_operation_requirement_ids(catalog_operation.requirements)
-                    })
-                    .unwrap_or_else(|| "-".to_owned());
-                lines.push(format!(
-                    "    op {} ({}) {}: {} target_kinds={} requirements={}",
-                    operation.id,
-                    operation.command,
-                    operation.health.as_str(),
-                    operation.detail,
-                    render_channel_target_kind_ids(
-                        catalog_operation
-                            .map(|catalog_operation| catalog_operation.supported_target_kinds)
-                            .unwrap_or(&[])
-                    ),
-                    requirement_ids,
-                ));
-                if let Some(runtime) = &operation.runtime {
-                    lines.push(format!(
-                        "      runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
-                        runtime
-                            .account_label
-                            .as_deref()
-                            .unwrap_or("-"),
-                        runtime
-                            .account_id
-                            .as_deref()
-                            .unwrap_or("-"),
-                        runtime.running,
-                        runtime.stale,
-                        runtime.busy,
-                        runtime.active_runs,
-                        runtime.instance_count,
-                        runtime.running_instances,
-                        runtime.stale_instances,
-                        runtime
-                            .last_run_activity_at
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned()),
-                        runtime
-                            .last_heartbeat_at
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned()),
-                        runtime
-                            .pid
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "-".to_owned())
-                    ));
-                }
-                for issue in &operation.issues {
-                    lines.push(format!("      issue: {issue}"));
-                }
-            }
+        lines.push(section_title.to_owned());
+        for surface in grouped {
+            push_channel_surface_block(&mut lines, surface, &channel_access_policies);
         }
+    }
+    lines
+}
+
+fn render_channel_surface_summary_line(surfaces: &[mvp::channel::ChannelSurface]) -> String {
+    let runtime_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only = surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
+
+    format!(
+        "summary total_surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
+        surfaces.len(),
+        runtime_backed,
+        config_backed,
+        plugin_backed,
+        catalog_only
+    )
+}
+
+fn push_channel_surface_block(
+    lines: &mut Vec<String>,
+    surface: &mvp::channel::ChannelSurface,
+    channel_access_policies: &std::collections::BTreeMap<
+        (String, String),
+        mvp::channel::ChannelConfiguredAccountAccessPolicy,
+    >,
+) {
+    push_channel_surface_header(lines, surface);
+    lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
+    push_channel_surface_plugin_bridge_contract(lines, surface);
+    push_channel_surface_managed_plugin_bridge_discovery(lines, surface);
+
+    if surface.catalog.implementation_status
+        == mvp::channel::ChannelCatalogImplementationStatus::Stub
+    {
+        for operation in &surface.catalog.operations {
+            lines.push(format!(
+                "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
+                operation.id,
+                operation.command,
+                operation.availability.as_str(),
+                operation.tracks_runtime,
+                render_channel_target_kind_ids(operation.supported_target_kinds),
+                render_channel_operation_requirement_ids(operation.requirements)
+            ));
+        }
+        return;
     }
 
-    if !catalog_only_surfaces.is_empty() {
-        lines.push("catalog-only channels:".to_owned());
-        for surface in catalog_only_surfaces {
-            push_channel_surface_header(&mut lines, surface);
-            lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
-            push_channel_surface_plugin_bridge_contract(&mut lines, surface);
-            push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
-            for operation in &surface.catalog.operations {
+    for snapshot in &surface.configured_accounts {
+        let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
+        lines.push(format!(
+            "  account configured_account={} configured_account_label={} default_account={} default_source={} compiled={} enabled={} api_base_url={}",
+            snapshot.configured_account_id,
+            snapshot.configured_account_label,
+            snapshot.is_default_account,
+            snapshot.default_account_source.as_str(),
+            snapshot.compiled,
+            snapshot.enabled,
+            api_base_url
+        ));
+        for note in &snapshot.notes {
+            lines.push(format!("    note: {note}"));
+        }
+        let access_policy_key = (
+            surface.catalog.id.to_owned(),
+            snapshot.configured_account_id.clone(),
+        );
+        if let Some(access_policy) = channel_access_policies.get(&access_policy_key) {
+            lines.push(render_channel_access_policy_line(access_policy));
+        }
+        for operation in &snapshot.operations {
+            let catalog_operation = surface.catalog.operation(operation.id);
+            let requirement_ids = catalog_operation
+                .map(|catalog_operation| {
+                    render_channel_operation_requirement_ids(catalog_operation.requirements)
+                })
+                .unwrap_or_else(|| "-".to_owned());
+            lines.push(format!(
+                "    op {} ({}) {}: {} target_kinds={} requirements={}",
+                operation.id,
+                operation.command,
+                operation.health.as_str(),
+                operation.detail,
+                render_channel_target_kind_ids(
+                    catalog_operation
+                        .map(|catalog_operation| catalog_operation.supported_target_kinds)
+                        .unwrap_or(&[])
+                ),
+                requirement_ids,
+            ));
+            if let Some(runtime) = &operation.runtime {
                 lines.push(format!(
-                    "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
-                    operation.id,
-                    operation.command,
-                    operation.availability.as_str(),
-                    operation.tracks_runtime,
-                    render_channel_target_kind_ids(operation.supported_target_kinds),
-                    render_channel_operation_requirement_ids(operation.requirements)
+                    "      runtime account={} account_id={} running={} stale={} busy={} active_runs={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} pid={}",
+                    runtime
+                        .account_label
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime
+                        .account_id
+                        .as_deref()
+                        .unwrap_or("-"),
+                    runtime.running,
+                    runtime.stale,
+                    runtime.busy,
+                    runtime.active_runs,
+                    runtime.instance_count,
+                    runtime.running_instances,
+                    runtime.stale_instances,
+                    runtime
+                        .last_run_activity_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .last_heartbeat_at
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned()),
+                    runtime
+                        .pid
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned())
                 ));
+            }
+            for issue in &operation.issues {
+                lines.push(format!("      issue: {issue}"));
             }
         }
     }
-    lines.join("\n")
 }
 
 pub fn render_channel_onboarding_line(
@@ -4586,136 +4846,6 @@ pub async fn wait_for_shutdown_signal() -> CliResult<()> {
     wait_for_shutdown_reason().await.map(|_| ())
 }
 
-pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_telegram_send_cli_impl,
-};
-
-pub const FEISHU_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_feishu_send_cli_impl,
-};
-
-pub const MATRIX_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_matrix_send_cli_impl,
-};
-
-pub const WECOM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_wecom_send_cli_impl,
-};
-
-pub const DISCORD_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_discord_send_cli_impl,
-};
-
-pub const DINGTALK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_dingtalk_send_cli_impl,
-};
-
-pub const SLACK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_slack_send_cli_impl,
-};
-
-pub const LINE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_line_send_cli_impl,
-};
-
-pub const WHATSAPP_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_whatsapp_send_cli_impl,
-};
-
-pub const EMAIL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_email_send_cli_impl,
-};
-
-pub const WEBHOOK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_webhook_send_cli_impl,
-};
-
-pub const GOOGLE_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_google_chat_send_cli_impl,
-};
-
-pub const TEAMS_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_teams_send_cli_impl,
-};
-
-pub const SIGNAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_signal_send_cli_impl,
-};
-
-pub const TWITCH_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_twitch_send_cli_impl,
-};
-
-pub const MATTERMOST_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_mattermost_send_cli_impl,
-};
-
-pub const NEXTCLOUD_TALK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_nextcloud_talk_send_cli_impl,
-};
-
-pub const SYNOLOGY_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_synology_chat_send_cli_impl,
-};
-
-pub const IRC_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_irc_send_cli_impl,
-};
-
-pub const IMESSAGE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_imessage_send_cli_impl,
-};
-
-pub const NOSTR_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_nostr_send_cli_impl,
-};
-
-pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_telegram_serve_cli_impl,
-};
-
-pub const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_feishu_serve_cli_impl,
-};
-
-pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_matrix_serve_cli_impl,
-};
-
-pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WECOM_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_wecom_serve_cli_impl,
-};
-
-pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_whatsapp_serve_cli_impl,
-};
-
 pub async fn run_channel_send_cli(
     spec: ChannelSendCliSpec,
     args: ChannelSendCliArgs<'_>,
@@ -4813,7 +4943,7 @@ pub fn run_wecom_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
 pub fn run_discord_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = args.target.unwrap_or_default();
+        let target = require_channel_send_target("discord-send", args.target)?;
         mvp::channel::run_discord_send(
             args.config_path,
             args.account,
@@ -5304,18 +5434,6 @@ pub fn parse_nostr_send_target_kind(
     parse_channel_send_target_kind(NOSTR_SEND_CLI_SPEC, raw)
 }
 
-pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    Box::pin(async move {
-        with_graceful_shutdown(mvp::channel::run_feishu_channel(
-            args.config_path,
-            args.account,
-            args.bind_override,
-            args.path_override,
-        ))
-        .await
-    })
-}
-
 pub fn run_matrix_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = (args.bind_override, args.path_override);
@@ -5338,19 +5456,6 @@ pub fn run_wecom_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliComm
         with_graceful_shutdown(mvp::channel::run_wecom_channel(
             args.config_path,
             args.account,
-        ))
-        .await
-    })
-}
-
-pub fn run_whatsapp_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    Box::pin(async move {
-        let _ = args.once;
-        with_graceful_shutdown(mvp::channel::run_whatsapp_channel(
-            args.config_path,
-            args.account,
-            args.bind_override,
-            args.path_override,
         ))
         .await
     })

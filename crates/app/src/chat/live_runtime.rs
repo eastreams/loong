@@ -67,6 +67,7 @@ pub(super) struct CliChatLiveSurfaceSnapshot {
     pub tool_call_count: usize,
     pub message_count: Option<usize>,
     pub estimated_tokens: Option<usize>,
+    pub first_token_latency_ms: Option<u64>,
     pub draft_preview: Option<String>,
     pub tools: Vec<CliChatLiveToolSnapshot>,
 }
@@ -112,6 +113,7 @@ impl CliChatLiveToolState {
 #[derive(Debug, Clone, Default)]
 pub(super) struct CliChatLiveSurfaceState {
     pub latest_phase_event: Option<ConversationTurnPhaseEvent>,
+    pub first_token_latency_ms: Option<u64>,
     pub draft_preview: String,
     pub tool_states: BTreeMap<String, CliChatLiveToolState>,
     pub tool_call_index_map: BTreeMap<usize, String>,
@@ -227,6 +229,9 @@ impl CliChatLiveSurfaceObserver {
             let mut should_render = false;
 
             if let Some(text_delta) = text_delta {
+                if state.first_token_latency_ms.is_none() {
+                    state.first_token_latency_ms = event.elapsed_ms;
+                }
                 let preview_char_limit = cli_chat_live_preview_char_limit(self.render_width);
                 append_cli_chat_live_buffer(
                     &mut state.draft_preview,
@@ -319,6 +324,7 @@ pub(super) fn cli_chat_live_phase_starts_provider_request(phase: ConversationTur
 }
 
 pub(super) fn reset_cli_chat_live_request_state(state: &mut CliChatLiveSurfaceState) {
+    state.first_token_latency_ms = None;
     state.draft_preview.clear();
     state.tool_states.clear();
     state.tool_call_index_map.clear();
@@ -676,6 +682,7 @@ pub(super) fn build_cli_chat_live_surface_snapshot(
         tool_call_count: phase_event.tool_call_count,
         message_count: phase_event.message_count,
         estimated_tokens: phase_event.estimated_tokens,
+        first_token_latency_ms: state.first_token_latency_ms,
         draft_preview,
         tools,
     })
@@ -865,6 +872,10 @@ fn build_cli_chat_live_surface_card_title(snapshot: &CliChatLiveSurfaceSnapshot)
         segments.push(format!("~{estimated_tokens} tok"));
     }
 
+    if let Some(first_token_latency_ms) = snapshot.first_token_latency_ms {
+        segments.push(format!("ttft {first_token_latency_ms}ms"));
+    }
+
     segments.join(" · ")
 }
 
@@ -904,6 +915,12 @@ fn cli_chat_live_surface_detail(snapshot: &CliChatLiveSurfaceSnapshot) -> String
         }
         ConversationTurnPhase::RequestingProvider => {
             let provider_round = snapshot.provider_round.unwrap_or(1);
+            if let Some(first_token_latency_ms) = snapshot.first_token_latency_ms {
+                return format!(
+                    "Provider round {provider_round} started streaming after {first_token_latency_ms} ms."
+                );
+            }
+
             format!("Requesting provider round {provider_round} and waiting for the reply.")
         }
         ConversationTurnPhase::RunningTools => {
@@ -918,6 +935,12 @@ fn cli_chat_live_surface_detail(snapshot: &CliChatLiveSurfaceSnapshot) -> String
         }
         ConversationTurnPhase::RequestingFollowupProvider => {
             let provider_round = snapshot.provider_round.unwrap_or(1);
+            if let Some(first_token_latency_ms) = snapshot.first_token_latency_ms {
+                return format!(
+                    "Follow-up provider round {provider_round} started streaming after {first_token_latency_ms} ms."
+                );
+            }
+
             format!("Sending tool results back for provider round {provider_round}.")
         }
         ConversationTurnPhase::FinalizingReply => {
@@ -1004,6 +1027,10 @@ fn cli_chat_live_model_detail(snapshot: &CliChatLiveSurfaceSnapshot) -> String {
         ConversationTurnPhase::RequestingProvider
         | ConversationTurnPhase::RequestingFollowupProvider => {
             let provider_round = snapshot.provider_round.unwrap_or(1);
+            if let Some(first_token_latency_ms) = snapshot.first_token_latency_ms {
+                return format!("first token in {first_token_latency_ms} ms");
+            }
+
             format!("provider round {provider_round} in progress")
         }
         ConversationTurnPhase::RunningTools
@@ -1164,6 +1191,13 @@ fn build_cli_chat_live_status_items(snapshot: &CliChatLiveSurfaceSnapshot) -> Ve
         items.push(TuiKeyValueSpec::Plain {
             key: "estimated tokens".to_owned(),
             value: estimated_tokens.to_string(),
+        });
+    }
+
+    if let Some(first_token_latency_ms) = snapshot.first_token_latency_ms {
+        items.push(TuiKeyValueSpec::Plain {
+            key: "first token".to_owned(),
+            value: format!("{first_token_latency_ms} ms"),
         });
     }
 
