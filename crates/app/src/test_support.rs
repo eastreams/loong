@@ -395,10 +395,8 @@ impl TurnTestHarness {
         #[cfg(feature = "memory-sqlite")]
         {
             use crate::memory::runtime_config::MemoryRuntimeConfig;
-            let memory_config = MemoryRuntimeConfig {
-                sqlite_path: Some(temp_dir.join("memory.sqlite3")),
-                ..MemoryRuntimeConfig::default()
-            };
+            let memory_config =
+                MemoryRuntimeConfig::for_sqlite_path(temp_dir.join("memory.sqlite3"));
             kernel.register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(
                 memory_config,
             ));
