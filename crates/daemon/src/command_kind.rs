@@ -5,6 +5,7 @@ impl Commands {
         match self {
             Self::Welcome => "welcome",
             Self::Demo => "demo",
+            Self::Update => "update",
             Self::RunTask { .. } => "run_task",
             Self::Turn { command } => match command {
                 crate::TurnCommands::Run { .. } => "turn_run",
@@ -114,6 +115,7 @@ mod tests {
     fn command_kind_for_logging_uses_stable_variant_names() {
         assert_eq!(Commands::Welcome.command_kind_for_logging(), "welcome");
         assert_eq!(Commands::AuditDemo.command_kind_for_logging(), "audit_demo");
+        assert_eq!(Commands::Update.command_kind_for_logging(), "update");
         assert_eq!(
             Commands::ValidateConfig {
                 config: None,

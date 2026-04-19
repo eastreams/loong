@@ -182,6 +182,7 @@ mod tlon_cli;
 mod tool_calling_readiness;
 pub mod trajectory_cli;
 mod turn_cli;
+pub mod update_cli;
 pub mod work_unit_cli;
 pub use self::acp_cli::{
     acp_backend_metadata_json, acp_binding_scope_json, acp_control_plane_json,
@@ -230,6 +231,7 @@ pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use turn_cli::{TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli};
+pub use update_cli::run_update_cli;
 #[rustfmt::skip]
 use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
 pub use trajectory_cli::{
@@ -471,6 +473,11 @@ pub enum Commands {
     Welcome,
     /// Run the original end-to-end bootstrap demo
     Demo,
+    #[command(
+        long_about = "Download and apply the latest stable GitHub release for the current Loong binary.\n\nThis command intentionally follows the latest stable release channel only. GitHub prereleases are excluded."
+    )]
+    /// Update this Loong install to the latest stable GitHub release
+    Update,
     #[command(hide = true)]
     /// Deprecated compatibility alias for the generic task runner
     RunTask {
