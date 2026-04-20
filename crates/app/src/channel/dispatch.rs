@@ -3315,7 +3315,6 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
-    feature = "channel-nextcloud-talk",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3326,6 +3325,39 @@ pub async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + 
     message: &ChannelInboundMessage,
     binding: ConversationRuntimeBinding<'_>,
     feedback_policy: ChannelTurnFeedbackPolicy,
+) -> CliResult<String> {
+    process_inbound_with_runtime_and_feedback_and_error_mode(
+        config,
+        runtime,
+        message,
+        binding,
+        feedback_policy,
+        ProviderErrorMode::Propagate,
+        None,
+    )
+    .await
+}
+
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
+    R: ConversationRuntime + ?Sized,
+>(
+    config: &LoongConfig,
+    runtime: &R,
+    message: &ChannelInboundMessage,
+    binding: ConversationRuntimeBinding<'_>,
+    feedback_policy: ChannelTurnFeedbackPolicy,
+    error_mode: ProviderErrorMode,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> CliResult<String> {
     let address = message.session.conversation_address();
     let acp_turn_hints = resolve_channel_acp_turn_hints(config, &message.session)?;
@@ -3341,12 +3373,13 @@ pub async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + 
             config,
             &address,
             &message.text,
-            ProviderErrorMode::Propagate,
+            error_mode,
             runtime,
             &acp_options,
             binding,
             ingress.as_ref(),
             observer,
+            retry_progress,
         )
         .await?;
     Ok(feedback_capture.render_reply(reply))
@@ -3369,16 +3402,80 @@ pub async fn process_inbound_with_provider(
     kernel_ctx: &KernelContext,
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<String> {
+    process_inbound_with_provider_and_error_mode_and_retry_progress(
+        config,
+        resolved_path,
+        message,
+        kernel_ctx,
+        feedback_policy,
+        ProviderErrorMode::Propagate,
+        None,
+    )
+    .await
+}
+
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub async fn process_inbound_with_provider_and_error_mode_and_retry_progress(
+    config: &LoongConfig,
+    resolved_path: Option<&std::path::Path>,
+    message: &ChannelInboundMessage,
+    kernel_ctx: &KernelContext,
+    feedback_policy: ChannelTurnFeedbackPolicy,
+    error_mode: ProviderErrorMode,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+) -> CliResult<String> {
+    process_inbound_with_provider_and_error_mode(
+        config,
+        resolved_path,
+        message,
+        kernel_ctx,
+        feedback_policy,
+        error_mode,
+        retry_progress,
+    )
+    .await
+}
+
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+pub async fn process_inbound_with_provider_and_error_mode(
+    config: &LoongConfig,
+    resolved_path: Option<&std::path::Path>,
+    message: &ChannelInboundMessage,
+    kernel_ctx: &KernelContext,
+    feedback_policy: ChannelTurnFeedbackPolicy,
+    error_mode: ProviderErrorMode,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+) -> CliResult<String> {
     let started_at = std::time::Instant::now();
     let result = match reload_channel_turn_config(config, resolved_path) {
         Ok(turn_config) => match DefaultConversationRuntime::from_config_or_env(&turn_config) {
             Ok(runtime) => {
-                Box::pin(process_inbound_with_runtime_and_feedback(
+                Box::pin(process_inbound_with_runtime_and_feedback_and_error_mode(
                     &turn_config,
                     &runtime,
                     message,
                     ConversationRuntimeBinding::kernel(kernel_ctx),
                     feedback_policy,
+                    error_mode,
+                    retry_progress,
                 ))
                 .await
             }

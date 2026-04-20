@@ -677,6 +677,7 @@ impl ProviderTurnContinuePhase {
         remaining_provider_rounds: usize,
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<&ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> ResolvedProviderTurn {
         resolve_provider_turn_reply(
             runtime,
@@ -691,6 +692,7 @@ impl ProviderTurnContinuePhase {
             binding,
             self.ingress.as_ref(),
             observer,
+            retry_progress,
         )
         .await
     }
@@ -1384,6 +1386,7 @@ impl ConversationTurnCoordinator {
             binding,
             ingress,
             observer,
+            None,
         )
         .await
     }
@@ -1756,6 +1759,7 @@ impl ConversationTurnCoordinator {
             binding,
             ingress,
             None,
+            None,
         )
         .await
     }
@@ -1773,6 +1777,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<String> {
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
             config,
@@ -1784,6 +1789,7 @@ impl ConversationTurnCoordinator {
             binding,
             ingress,
             observer,
+            retry_progress,
         )
         .await
         .map(|outcome| outcome.reply)
@@ -1802,6 +1808,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<ConversationTurnOutcome> {
         let turn_result: CliResult<(ConversationTurnOutcome, bool)> = async {
             let session_id = address.session_id.as_str();
@@ -1918,6 +1925,7 @@ impl ConversationTurnCoordinator {
                 &tool_view,
                 binding,
                 observer.as_ref(),
+                retry_progress.clone(),
             )
             .await;
             let resolved_turn = resolve_provider_turn(
@@ -1931,6 +1939,7 @@ impl ConversationTurnCoordinator {
                 binding,
                 ingress,
                 observer.as_ref(),
+                retry_progress,
             )
             .await;
 
@@ -2056,6 +2065,7 @@ impl ConversationTurnCoordinator {
             binding,
             None,
             observer,
+            None,
         )
         .await;
         let reply = apply_resolved_provider_turn(
@@ -2137,6 +2147,7 @@ impl ConversationTurnCoordinator {
             production_binding,
             ingress,
             observer,
+            None,
         )
         .await
     }
@@ -2709,6 +2720,7 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
     tool_view: &crate::tools::ToolView,
     binding: ConversationRuntimeBinding<'_>,
     observer: Option<&ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> CliResult<ProviderTurn> {
     if let Some(observer) = observer
         && provider_turn_observer_supports_streaming(config, Some(observer))
@@ -2716,14 +2728,29 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
         let request_started_at = std::time::Instant::now();
         let on_token = build_observer_streaming_token_callback(observer, request_started_at);
         return runtime
-            .request_turn_streaming(
-                config, session_id, turn_id, messages, tool_view, binding, on_token,
+            .request_turn_streaming_with_retry_progress(
+                config,
+                session_id,
+                turn_id,
+                messages,
+                tool_view,
+                binding,
+                on_token,
+                retry_progress,
             )
             .await;
     }
 
     runtime
-        .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+        .request_turn_with_retry_progress(
+            config,
+            session_id,
+            turn_id,
+            messages,
+            tool_view,
+            binding,
+            retry_progress,
+        )
         .await
 }
 
@@ -2738,6 +2765,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> ResolvedProviderTurn {
     let turn_loop_policy = ProviderTurnLoopPolicy::from_config(config);
     let mut turn_loop_state = ProviderTurnLoopState::default();
@@ -2787,6 +2815,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                         .max(1),
                     binding,
                     observer,
+                    retry_progress,
                 )
                 .await
         }
@@ -2916,6 +2945,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> ResolvedProviderTurn {
     enum ReplyLoopDecision {
         FinalizeDirect(String),
@@ -3138,6 +3168,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             &followup_tool_view,
                             binding,
                             observer,
+                            retry_progress.clone(),
                         )
                         .await,
                         ProviderErrorMode::Propagate,
@@ -3253,6 +3284,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         &follow_up_messages,
                         binding,
                         raw_reply.as_str(),
+                        retry_progress.clone(),
                     )
                     .await;
                     let checkpoint =
@@ -3289,6 +3321,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     &guard_messages,
                     binding,
                     raw_reply.as_str(),
+                    retry_progress.clone(),
                 )
                 .await;
                 let checkpoint =
@@ -6339,6 +6372,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
             )
             .await
             .expect("observer turn should succeed");
@@ -6402,6 +6436,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
             )
             .await
             .expect("observer turn should succeed");
@@ -6468,6 +6503,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
             )
             .await
             .expect("ACP inline reply should succeed");
@@ -8126,6 +8162,7 @@ mod tests {
                 ConversationRuntimeBinding::kernel(&kernel_ctx),
                 None,
                 Some(observer_handle),
+                None,
             )
             .await
             .expect("approval control turn should succeed");
@@ -8220,6 +8257,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 None,
+                None,
             )
             .await;
         assert!(
@@ -8278,6 +8316,7 @@ mod tests {
                 &runtime,
                 &acp_options,
                 ConversationRuntimeBinding::direct(),
+                None,
                 None,
                 None,
             )
