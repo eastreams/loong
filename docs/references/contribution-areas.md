@@ -60,7 +60,7 @@ community care all shape whether a project becomes genuinely useful and sustaina
 - If you already know what you want to work on, open or join the relevant Issue and link your plan.
 - If you want to take on a large feature or architecture change, start with an Issue or Discussion first so maintainers can help shape scope early.
 - If your strengths are docs, docs-site editing, QA, support, or community work, those are first-class contributions here, not second-tier work.
-- If you would rather start with a direct introduction, email [contact@loongclaw.ai](mailto:contact@loongclaw.ai). A short note is enough. You do not need a formal application.
+- If you would rather start with a direct introduction, email [contact@loong.ai](mailto:contact@loong.ai). A short note is enough. You do not need a formal application.
 - If you are unsure where to begin, open a Discussion or send that introduction email and we will help point you toward good starting areas.
 
 ## A Short Introduction That Helps

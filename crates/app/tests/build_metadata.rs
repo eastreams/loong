@@ -102,7 +102,7 @@ fn non_release_build_allows_missing_git_metadata_when_detection_is_unavailable()
 
 #[test]
 fn git_rerun_hint_path_resolves_repo_relative_git_paths_against_repo_root() {
-    let repo_root = std::env::temp_dir().join("loongclaw");
+    let repo_root = std::env::temp_dir().join("loong");
 
     assert_eq!(
         version_metadata::resolve_git_rerun_hint_path(&repo_root, PathBuf::from(".git/HEAD")),
@@ -112,7 +112,7 @@ fn git_rerun_hint_path_resolves_repo_relative_git_paths_against_repo_root() {
 
 #[test]
 fn git_rerun_hint_path_preserves_absolute_git_paths() {
-    let repo_root = std::env::temp_dir().join("loongclaw");
+    let repo_root = std::env::temp_dir().join("loong");
     let git_path = std::env::temp_dir()
         .join("git")
         .join("worktrees")

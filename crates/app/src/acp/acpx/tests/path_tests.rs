@@ -4,7 +4,7 @@ use super::*;
 #[cfg(unix)]
 async fn runtime_backend_executes_session_turn_and_controls_when_path_is_narrowed() {
     let _lock = lock_acpx_runtime_tests().await;
-    let temp_dir = unique_temp_dir("loongclaw-acpx-runtime-narrow-path");
+    let temp_dir = unique_temp_dir("loong-acpx-runtime-narrow-path");
     let log_path = temp_dir.join("calls.log");
     let script_path = write_fake_acpx_script(
         &temp_dir,
@@ -94,7 +94,7 @@ exit 0
 #[cfg(unix)]
 async fn runtime_backend_supports_local_abort_when_path_is_narrowed() {
     let _lock = lock_acpx_runtime_tests().await;
-    let temp_dir = unique_temp_dir("loongclaw-acpx-abort-narrow-path");
+    let temp_dir = unique_temp_dir("loong-acpx-abort-narrow-path");
     let log_path = temp_dir.join("calls.log");
     let script_path = write_fake_acpx_script(
         &temp_dir,
@@ -189,7 +189,7 @@ exit 0
 #[cfg(unix)]
 async fn ensure_session_falls_back_to_sessions_new_when_path_is_narrowed() {
     let _lock = lock_acpx_runtime_tests().await;
-    let temp_dir = unique_temp_dir("loongclaw-acpx-fallback-narrow-path");
+    let temp_dir = unique_temp_dir("loong-acpx-fallback-narrow-path");
     let log_path = temp_dir.join("calls.log");
     let script_path = write_fake_acpx_script(
         &temp_dir,

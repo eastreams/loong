@@ -4,7 +4,10 @@ use crate::{CliResult, config::ResolvedSignalChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_base_url,
+        validate_outbound_http_target,
+    },
 };
 
 pub(super) async fn run_signal_send(
@@ -32,7 +35,12 @@ pub(super) async fn run_signal_send(
         return Err("signal outbound target id is empty".to_owned());
     }
 
-    let request_url = format!("{}/v2/send", service_url.trim_end_matches('/'));
+    let validated_service_url =
+        validate_outbound_http_base_url("signal service_url", service_url.as_str(), policy)?;
+    let request_url = format!(
+        "{}/v2/send",
+        validated_service_url.as_str().trim_end_matches('/')
+    );
     let request_url =
         validate_outbound_http_target("signal service_url", request_url.as_str(), policy)?;
     let request_body = json!({

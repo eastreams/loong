@@ -12,7 +12,6 @@ primary reader-facing docs navigation.
 | --- | --- |
 | read public release history | the top-level `../vX.Y.Z*.md` notes, `../*-announcement.md`, `CHANGELOG.md`, and GitHub Releases |
 | prepare or review a release document | this file and `TEMPLATE.md` |
-| inspect monthly architecture drift maintenance artifacts | the `architecture-drift-YYYY-MM.md` reports in this directory |
 
 ## Read This File When
 
@@ -25,8 +24,6 @@ primary reader-facing docs navigation.
 
 - Released `../vX.Y.Z*.md` notes are public release material.
 - This file and `TEMPLATE.md` are maintainer support documents.
-- Monthly architecture drift reports are repository maintenance artifacts, not
-  part of the normal public release path.
 - Local `.docs/` traces and debug logs are never part of the public docs path.
 
 ## Canonical Release Artifacts
@@ -86,9 +83,7 @@ When local `.docs/` artifacts exist, they must exactly match the tracked release
 3. Use `scripts/bootstrap_release_local_artifacts.sh` to regenerate local
    `.docs/` release debug and trace artifacts from tracked release docs before
    strict local doc-governance checks.
-4. Use `scripts/generate_architecture_drift_report.sh` when the release needs a
-   monthly architecture drift artifact.
-5. Run the repository docs checks before shipping release-doc changes.
+4. Run the repository docs checks before shipping release-doc changes.
 
 Canonical public repository links in release docs and issue templates must point to:
 
@@ -100,4 +95,4 @@ This is enforced by `scripts/check-docs.sh`.
 
 - Local development default: release debug/trace artifacts under `.docs/` are warned but not blocking.
 - CI/release default: strict mode is enabled automatically (`CI=true` / `GITHUB_ACTIONS=true`), and missing `.docs/` artifacts fail the check.
-- Manual override: set `LOONGCLAW_RELEASE_DOCS_STRICT=1` for strict mode or `LOONGCLAW_RELEASE_DOCS_STRICT=0` for warn-only mode.
+- Manual override: set `LOONG_RELEASE_DOCS_STRICT=1` for strict mode or `LOONG_RELEASE_DOCS_STRICT=0` for warn-only mode.

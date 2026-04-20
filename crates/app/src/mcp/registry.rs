@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use crate::CliResult;
-use crate::config::{AcpxBackendConfig, AcpxMcpServerConfig, LoongClawConfig};
+use crate::config::{AcpxBackendConfig, AcpxMcpServerConfig, LoongConfig};
 
 use super::config::{McpServerConfig, McpServerTransportConfig};
 use super::types::{
@@ -25,7 +25,7 @@ pub struct McpRegistry {
 }
 
 impl McpRegistry {
-    pub fn from_config(config: &LoongClawConfig) -> CliResult<Self> {
+    pub fn from_config(config: &LoongConfig) -> CliResult<Self> {
         let mut registry = Self::default();
 
         for (raw_name, server) in &config.mcp.servers {
@@ -238,7 +238,7 @@ impl McpRegistry {
     }
 }
 
-pub fn collect_mcp_runtime_snapshot(config: &LoongClawConfig) -> CliResult<McpRuntimeSnapshot> {
+pub fn collect_mcp_runtime_snapshot(config: &LoongConfig) -> CliResult<McpRuntimeSnapshot> {
     let registry = McpRegistry::from_config(config)?;
     let snapshot = registry.snapshot();
     Ok(snapshot)
@@ -964,7 +964,7 @@ mod tests {
     fn collect_mcp_runtime_snapshot_includes_config_servers_and_bootstrap_selection() {
         let expected_command = existing_test_command();
         let expected_cwd = std::env::temp_dir().display().to_string();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("Docs".to_owned(), configured_stdio_server())]),
             },
@@ -975,7 +975,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1016,7 +1016,7 @@ mod tests {
     #[test]
     fn collect_mcp_runtime_snapshot_includes_acpx_profile_servers() {
         let expected_command = existing_test_command();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backends: crate::config::AcpBackendProfilesConfig {
                     acpx: Some(crate::config::AcpxBackendConfig {
@@ -1039,7 +1039,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1063,7 +1063,7 @@ mod tests {
     #[test]
     fn collect_mcp_runtime_snapshot_redacts_acpx_profile_servers() {
         let expected_command = existing_test_command();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backends: crate::config::AcpBackendProfilesConfig {
                     acpx: Some(crate::config::AcpxBackendConfig {
@@ -1088,7 +1088,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1116,7 +1116,7 @@ mod tests {
 
     #[test]
     fn collect_mcp_runtime_snapshot_reports_missing_bootstrap_names() {
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 dispatch: crate::config::AcpDispatchConfig {
                     bootstrap_mcp_servers: vec!["missing".to_owned()],
@@ -1124,7 +1124,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1138,7 +1138,7 @@ mod tests {
 
     #[test]
     fn registry_merges_same_server_across_config_and_acpx_profile() {
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("filesystem".to_owned(), configured_stdio_server())]),
             },
@@ -1162,7 +1162,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1178,7 +1178,7 @@ mod tests {
 
     #[test]
     fn registry_keeps_config_transport_authoritative_for_same_name_conflicts() {
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([(
                     "shared".to_owned(),
@@ -1214,7 +1214,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let registry = McpRegistry::from_config(&config).expect("registry");
@@ -1239,11 +1239,11 @@ mod tests {
     #[test]
     fn registry_resolves_injectable_stdio_launch_specs_from_shared_mcp_config() {
         let expected_command = existing_test_command();
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("Docs".to_owned(), configured_stdio_server())]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let registry = McpRegistry::from_config(&config).expect("registry");
@@ -1272,11 +1272,11 @@ mod tests {
             enabled: false,
             ..configured_stdio_server()
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), disabled_server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let registry = McpRegistry::from_config(&config).expect("registry");
@@ -1293,7 +1293,7 @@ mod tests {
 
     #[test]
     fn registry_rejects_non_stdio_servers_for_acpx_injection() {
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([(
                     "remote".to_owned(),
@@ -1313,7 +1313,7 @@ mod tests {
                     },
                 )]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let registry = McpRegistry::from_config(&config).expect("registry");
@@ -1330,13 +1330,13 @@ mod tests {
 
     #[test]
     fn collect_mcp_runtime_snapshot_marks_stdio_server_failed_when_command_missing() {
-        let missing_command = missing_test_command_path("loongclaw-mcp-missing-command");
+        let missing_command = missing_test_command_path("loong-mcp-missing-command");
         let server = configured_stdio_server_with_command(missing_command.clone());
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1364,7 +1364,7 @@ mod tests {
         let mut scoped_env = ScopedEnv::new();
         scoped_env.set("PATH", OsString::from(""));
 
-        let command_dir = unique_temp_dir("loongclaw-mcp-command-path-override");
+        let command_dir = unique_temp_dir("loong-mcp-command-path-override");
         std::fs::create_dir_all(&command_dir).expect("create command directory");
 
         let source_executable = std::env::current_exe().expect("current executable path");
@@ -1394,11 +1394,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1412,7 +1412,7 @@ mod tests {
     #[test]
     fn collect_mcp_runtime_snapshot_marks_relative_stdio_command_pending_when_absolute_cwd_contains_command()
      {
-        let cwd = unique_temp_dir("loongclaw-mcp-relative-command-cwd");
+        let cwd = unique_temp_dir("loong-mcp-relative-command-cwd");
         std::fs::create_dir_all(&cwd).expect("create command cwd");
         let command_path = cwd.join("fake-mcp");
         std::fs::write(&command_path, "#!/bin/sh\n").expect("write fake command");
@@ -1431,11 +1431,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1449,7 +1449,7 @@ mod tests {
     #[test]
     fn collect_mcp_runtime_snapshot_marks_stdio_server_failed_when_absolute_cwd_missing() {
         let command = existing_test_command();
-        let missing_cwd = unique_temp_dir("loongclaw-mcp-missing-cwd").join("missing-cwd");
+        let missing_cwd = unique_temp_dir("loong-mcp-missing-cwd").join("missing-cwd");
         let server = McpServerConfig {
             transport: McpServerTransportConfig::Stdio {
                 command,
@@ -1464,11 +1464,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1496,7 +1496,7 @@ mod tests {
     fn collect_mcp_runtime_snapshot_prefers_stdio_cwd_error_for_relative_command_when_absolute_cwd_missing()
      {
         let missing_cwd =
-            unique_temp_dir("loongclaw-mcp-relative-command-missing-cwd").join("missing-cwd");
+            unique_temp_dir("loong-mcp-relative-command-missing-cwd").join("missing-cwd");
         let server = McpServerConfig {
             transport: McpServerTransportConfig::Stdio {
                 command: "./fake-mcp".to_owned(),
@@ -1511,11 +1511,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1540,7 +1540,7 @@ mod tests {
 
     #[test]
     fn collect_mcp_runtime_snapshot_marks_stdio_server_failed_when_absolute_cwd_is_not_directory() {
-        let cwd_root = unique_temp_dir("loongclaw-mcp-cwd-not-directory");
+        let cwd_root = unique_temp_dir("loong-mcp-cwd-not-directory");
         std::fs::create_dir_all(&cwd_root).expect("create cwd root");
         let cwd_file = cwd_root.join("not-a-directory");
         std::fs::write(&cwd_file, "not a directory").expect("write cwd file");
@@ -1559,11 +1559,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1603,11 +1603,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("remote".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1630,12 +1630,12 @@ mod tests {
     fn collect_mcp_runtime_snapshot_marks_streamable_http_server_needs_auth_when_bearer_env_missing()
      {
         let mut scoped_env = ScopedEnv::new();
-        scoped_env.remove("LOONGCLAW_TEST_MCP_TOKEN_MISSING");
+        scoped_env.remove("LOONG_TEST_MCP_TOKEN_MISSING");
 
         let server = McpServerConfig {
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://mcp.example.com".to_owned(),
-                bearer_token_env_var: Some("LOONGCLAW_TEST_MCP_TOKEN_MISSING".to_owned()),
+                bearer_token_env_var: Some("LOONG_TEST_MCP_TOKEN_MISSING".to_owned()),
                 http_headers: BTreeMap::new(),
                 env_http_headers: BTreeMap::new(),
             },
@@ -1646,11 +1646,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("remote".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1665,7 +1665,7 @@ mod tests {
         assert_eq!(server.status.auth, McpAuthStatus::NotLoggedIn);
         assert_eq!(
             last_error,
-            "streamable_http_bearer_token_env_missing: LOONGCLAW_TEST_MCP_TOKEN_MISSING"
+            "streamable_http_bearer_token_env_missing: LOONG_TEST_MCP_TOKEN_MISSING"
         );
     }
 
@@ -1673,12 +1673,12 @@ mod tests {
     fn collect_mcp_runtime_snapshot_marks_streamable_http_server_needs_auth_when_bearer_env_blank()
     {
         let mut scoped_env = ScopedEnv::new();
-        scoped_env.set("LOONGCLAW_TEST_MCP_TOKEN_BLANK", OsString::from("   "));
+        scoped_env.set("LOONG_TEST_MCP_TOKEN_BLANK", OsString::from("   "));
 
         let server = McpServerConfig {
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://mcp.example.com".to_owned(),
-                bearer_token_env_var: Some("LOONGCLAW_TEST_MCP_TOKEN_BLANK".to_owned()),
+                bearer_token_env_var: Some("LOONG_TEST_MCP_TOKEN_BLANK".to_owned()),
                 http_headers: BTreeMap::new(),
                 env_http_headers: BTreeMap::new(),
             },
@@ -1689,11 +1689,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("remote".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1708,7 +1708,7 @@ mod tests {
         assert_eq!(server.status.auth, McpAuthStatus::NotLoggedIn);
         assert_eq!(
             last_error,
-            "streamable_http_bearer_token_env_missing: LOONGCLAW_TEST_MCP_TOKEN_BLANK"
+            "streamable_http_bearer_token_env_missing: LOONG_TEST_MCP_TOKEN_BLANK"
         );
     }
 
@@ -1716,12 +1716,12 @@ mod tests {
     fn collect_mcp_runtime_snapshot_marks_streamable_http_server_ready_when_bearer_env_present() {
         let mut scoped_env = ScopedEnv::new();
         let token_value = OsString::from("test-token");
-        scoped_env.set("LOONGCLAW_TEST_MCP_TOKEN_PRESENT", token_value);
+        scoped_env.set("LOONG_TEST_MCP_TOKEN_PRESENT", token_value);
 
         let server = McpServerConfig {
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://mcp.example.com".to_owned(),
-                bearer_token_env_var: Some("LOONGCLAW_TEST_MCP_TOKEN_PRESENT".to_owned()),
+                bearer_token_env_var: Some("LOONG_TEST_MCP_TOKEN_PRESENT".to_owned()),
                 http_headers: BTreeMap::new(),
                 env_http_headers: BTreeMap::new(),
             },
@@ -1732,11 +1732,11 @@ mod tests {
             enabled_tools: Vec::new(),
             disabled_tools: Vec::new(),
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("remote".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1749,8 +1749,8 @@ mod tests {
 
     #[test]
     fn collect_mcp_runtime_snapshot_marks_acpx_profile_server_failed_when_command_missing() {
-        let missing_command = missing_test_command_path("loongclaw-acpx-mcp-missing-command");
-        let config = LoongClawConfig {
+        let missing_command = missing_test_command_path("loong-acpx-mcp-missing-command");
+        let config = LoongConfig {
             acp: AcpConfig {
                 backends: crate::config::AcpBackendProfilesConfig {
                     acpx: Some(crate::config::AcpxBackendConfig {
@@ -1767,7 +1767,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
@@ -1788,13 +1788,13 @@ mod tests {
 
     #[test]
     fn registry_rejects_failed_stdio_servers_for_acpx_injection() {
-        let missing_command = missing_test_command_path("loongclaw-mcp-injection-missing-command");
+        let missing_command = missing_test_command_path("loong-mcp-injection-missing-command");
         let server = configured_stdio_server_with_command(missing_command);
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             mcp: McpConfig {
                 servers: BTreeMap::from([("docs".to_owned(), server)]),
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let registry = McpRegistry::from_config(&config).expect("registry");

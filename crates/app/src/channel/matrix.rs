@@ -72,7 +72,7 @@ impl MatrixSyncCursorTracker {
 
 impl MatrixAdapter {
     pub(super) fn new(config: &ResolvedMatrixChannelConfig, access_token: String) -> Self {
-        let cursor_home = config::default_loongclaw_home();
+        let cursor_home = config::default_loong_home();
         let cursor_path =
             matrix_sync_cursor_path_for_account(cursor_home.as_path(), config.account.id.as_str());
         let current_cursor =
@@ -468,14 +468,14 @@ fn is_matrix_replacement_event(content: &Value) -> bool {
         == Some("m.replace")
 }
 
-fn matrix_sync_cursor_path_for_account(loongclaw_home: &Path, account_id: &str) -> PathBuf {
-    loongclaw_home
+fn matrix_sync_cursor_path_for_account(loong_home: &Path, account_id: &str) -> PathBuf {
+    loong_home
         .join("matrix-sync-cursors")
         .join(format!("{}.cursor", account_id.trim()))
 }
 
-fn load_cursor_for_account(loongclaw_home: &Path, account_id: &str) -> Option<String> {
-    let account_path = matrix_sync_cursor_path_for_account(loongclaw_home, account_id);
+fn load_cursor_for_account(loong_home: &Path, account_id: &str) -> Option<String> {
+    let account_path = matrix_sync_cursor_path_for_account(loong_home, account_id);
     load_cursor(&account_path)
 }
 
@@ -502,7 +502,7 @@ fn next_matrix_transaction_id() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_nanos())
         .unwrap_or(0);
-    format!("loongclaw-{now_ns}")
+    format!("loong-{now_ns}")
 }
 
 #[cfg(test)]
@@ -569,7 +569,7 @@ mod tests {
     }
 
     fn matrix_test_config(base_url: &str) -> ResolvedMatrixChannelConfig {
-        let config: crate::config::LoongClawConfig = serde_json::from_value(json!({
+        let config: crate::config::LoongConfig = serde_json::from_value(json!({
             "matrix": {
                 "enabled": true,
                 "account_id": "Ops Bot",
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn matrix_sync_cursor_is_not_persisted_until_batch_completion() {
         let unique = format!(
-            "loongclaw-matrix-sync-cursor-{}",
+            "loong-matrix-sync-cursor-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -1087,7 +1087,7 @@ mod tests {
 
     #[test]
     fn matrix_sync_cursor_path_is_account_scoped() {
-        let home = std::env::temp_dir().join("loongclaw-matrix-account-cursor");
+        let home = std::env::temp_dir().join("loong-matrix-account-cursor");
         let path = matrix_sync_cursor_path_for_account(home.as_path(), "ops-bot");
 
         assert!(path.ends_with("matrix-sync-cursors/ops-bot.cursor"));
@@ -1145,7 +1145,7 @@ mod tests {
         let (base_url, handle) = spawn_mock_matrix_server(router).await;
 
         let config = matrix_test_config(base_url.as_str());
-        let cursor_home = config::default_loongclaw_home();
+        let cursor_home = config::default_loong_home();
         let cursor_path =
             matrix_sync_cursor_path_for_account(cursor_home.as_path(), config.account.id.as_str());
         std::fs::remove_file(&cursor_path).ok();

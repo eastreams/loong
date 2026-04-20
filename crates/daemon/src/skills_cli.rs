@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use kernel::{ToolCoreOutcome, ToolCoreRequest};
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -176,7 +176,7 @@ struct SkillFollowUpGuidance {
 
 fn execute_non_policy_skills_command(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     command: SkillsCommands,
 ) -> CliResult<ToolCoreOutcome> {
     match command {
@@ -259,13 +259,10 @@ fn execute_non_policy_skills_command(
 }
 
 fn tool_runtime_config_for_skills_command(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     resolved_path: &Path,
 ) -> mvp::tools::runtime_config::ToolRuntimeConfig {
-    mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        config,
-        Some(resolved_path),
-    )
+    mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, Some(resolved_path))
 }
 
 fn normalize_skills_discovery_query(
@@ -547,7 +544,7 @@ fn build_skills_tool_request(command: SkillsCommands) -> CliResult<ToolCoreReque
 
 fn execute_fetch_command(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     url: &str,
     save_as: Option<&str>,
     max_bytes: Option<usize>,
@@ -569,7 +566,7 @@ fn execute_fetch_command(
         }
     }
 
-    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         Some(resolved_path),
     );
@@ -693,7 +690,7 @@ fn build_install_request(
 
 fn execute_policy_command(
     resolved_path: &Path,
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     command: SkillsPolicyCommands,
 ) -> CliResult<ToolCoreOutcome> {
     match command {
@@ -814,21 +811,18 @@ fn require_policy_update_approval(approved: bool) -> CliResult<()> {
     )
 }
 
-fn persist_config_update(
-    resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
-) -> CliResult<()> {
+fn persist_config_update(resolved_path: &Path, config: &mvp::config::LoongConfig) -> CliResult<()> {
     let path = resolved_path.to_string_lossy();
     mvp::config::write(Some(path.as_ref()), config, true).map(|_| ())
 }
 
 fn execute_install_bundled_skill_command(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     skill_id: &str,
     replace: bool,
 ) -> CliResult<ToolCoreOutcome> {
-    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         Some(resolved_path),
     );
@@ -844,7 +838,7 @@ fn execute_install_bundled_skill_command(
 
 fn execute_install_bundled_target_command(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     skill_or_pack_id: &str,
     replace: bool,
 ) -> CliResult<ToolCoreOutcome> {
@@ -859,11 +853,11 @@ fn execute_install_bundled_target_command(
 
 fn execute_install_bundled_pack_command(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     pack: &mvp::tools::BundledSkillPack,
     replace: bool,
 ) -> CliResult<ToolCoreOutcome> {
-    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         Some(resolved_path),
     );
@@ -928,10 +922,10 @@ fn execute_install_bundled_pack_command(
 
 fn execute_bundled_pack_inspect_command(
     resolved_path: &Path,
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     pack: &mvp::tools::BundledSkillPack,
 ) -> CliResult<ToolCoreOutcome> {
-    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         Some(resolved_path),
     );
@@ -996,7 +990,7 @@ fn serialize_bundled_skill_pack(pack: &mvp::tools::BundledSkillPack) -> Value {
 
 fn execute_enable_browser_preview_command(
     resolved_path: &Path,
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     replace: bool,
 ) -> CliResult<ToolCoreOutcome> {
     let mut updated_config = config.clone();
@@ -1096,7 +1090,7 @@ fn execute_enable_browser_preview_command(
     Ok(outcome)
 }
 
-fn persistent_policy_payload(config: &mvp::config::LoongClawConfig) -> Value {
+fn persistent_policy_payload(config: &mvp::config::LoongConfig) -> Value {
     json!({
         "enabled": config.external_skills.enabled,
         "require_download_approval": config.external_skills.require_download_approval,
@@ -1832,7 +1826,20 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
         }
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_skills_surface_text(tool_name, lines))
+}
+
+fn render_skills_surface_text(tool_name: &str, lines: Vec<String>) -> String {
+    let mut body_lines = vec![format!("tool={tool_name}")];
+    body_lines.push(String::new());
+    body_lines.extend(lines);
+    crate::render_operator_shell_surface(
+        "skills",
+        "operator skills",
+        Vec::new(),
+        body_lines,
+        Vec::new(),
+    )
 }
 
 fn render_string_list(value: Option<&Value>) -> String {

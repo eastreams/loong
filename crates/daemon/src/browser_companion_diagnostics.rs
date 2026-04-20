@@ -2,7 +2,7 @@ use std::io::ErrorKind;
 use std::process::{Output, Stdio};
 use std::time::Duration;
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -110,7 +110,7 @@ impl BrowserCompanionDiagnostics {
             format!("managed browser companion runtime is ready ({observed_version})")
         } else {
             format!(
-                "install looks healthy ({observed_version}), but the runtime gate is still closed (`LOONGCLAW_BROWSER_COMPANION_READY` is false)"
+                "install looks healthy ({observed_version}), but the runtime gate is still closed (`LOONG_BROWSER_COMPANION_READY` is false)"
             )
         })
     }
@@ -155,11 +155,10 @@ enum BrowserCompanionProbeError {
 }
 
 pub(crate) async fn collect_browser_companion_diagnostics(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Option<BrowserCompanionDiagnostics> {
-    let runtime =
-        mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None)
-            .browser_companion;
+    let runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None)
+        .browser_companion;
     if !runtime.enabled {
         return None;
     }
@@ -257,7 +256,7 @@ async fn probe_browser_companion_version(
 
     #[cfg(test)]
     if let Some(version) = command.strip_prefix(TEST_BROWSER_COMPANION_VERSION_PREFIX) {
-        return Ok(format!("loongclaw-browser-companion {version}"));
+        return Ok(format!("loong-browser-companion {version}"));
     }
 
     for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
@@ -419,7 +418,7 @@ mod tests {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
         let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-browser-companion-diagnostics-{label}-{}-{seed}",
+            "loong-browser-companion-diagnostics-{label}-{}-{seed}",
             std::process::id()
         ));
         std::fs::create_dir_all(&temp_dir).expect("create browser companion diagnostics temp dir");
@@ -439,7 +438,7 @@ mod tests {
     #[cfg(unix)]
     impl BrowserCompanionEnvGuard {
         fn runtime_gate_closed() -> Self {
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
+            let key = "LOONG_BROWSER_COMPANION_READY";
             let mut env = crate::test_support::ScopedEnv::new();
             env.remove(key.to_owned());
             Self { _env: env }
@@ -471,7 +470,7 @@ mod tests {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
         let (command, actual_observed_version, partial_version) = rustc_version_probe();
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(command);
         config.tools.browser_companion.expected_version = Some(partial_version.clone());
@@ -502,10 +501,10 @@ mod tests {
         let script_path = temp_dir.join("browser-companion");
         write_browser_companion_script(
             &script_path,
-            "#!/bin/sh\nsleep 4\necho 'loongclaw-browser-companion 11.5.0'\n",
+            "#!/bin/sh\nsleep 4\necho 'loong-browser-companion 11.5.0'\n",
         );
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(script_path.display().to_string());
         config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
@@ -523,7 +522,7 @@ mod tests {
                     ref observed_version,
                     ..
                 } if expected_version == "1.5.0"
-                    && observed_version == "loongclaw-browser-companion 11.5.0"
+                    && observed_version == "loong-browser-companion 11.5.0"
             ),
             "slow version probes should still surface mismatches before timing out: {diagnostics:#?}"
         );
@@ -537,12 +536,12 @@ mod tests {
         let script_path = temp_dir.join("browser-companion");
         let state_path = temp_dir.join("probe-state");
         let script_body = format!(
-            "#!/bin/sh\nstate_path='{}'\nif [ ! -f \"$state_path\" ]; then\n  touch \"$state_path\"\n  /bin/sleep 6\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
+            "#!/bin/sh\nstate_path='{}'\nif [ ! -f \"$state_path\" ]; then\n  touch \"$state_path\"\n  /bin/sleep 6\nfi\necho 'loong-browser-companion 1.5.0'\n",
             state_path.display()
         );
         write_browser_companion_script(&script_path, script_body.as_str());
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(script_path.display().to_string());
         config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
@@ -559,7 +558,7 @@ mod tests {
         );
         assert_eq!(
             diagnostics.observed_version.as_deref(),
-            Some("loongclaw-browser-companion 1.5.0")
+            Some("loong-browser-companion 1.5.0")
         );
     }
 
@@ -572,13 +571,13 @@ mod tests {
         let first_timeout_path = temp_dir.join("probe-timeout-1");
         let second_timeout_path = temp_dir.join("probe-timeout-2");
         let script_body = format!(
-            "#!/bin/sh\nfirst_timeout_path='{}'\nsecond_timeout_path='{}'\nif [ ! -f \"$first_timeout_path\" ]; then\n  touch \"$first_timeout_path\"\n  /bin/sleep 6\nfi\nif [ ! -f \"$second_timeout_path\" ]; then\n  touch \"$second_timeout_path\"\n  /bin/sleep 6\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
+            "#!/bin/sh\nfirst_timeout_path='{}'\nsecond_timeout_path='{}'\nif [ ! -f \"$first_timeout_path\" ]; then\n  touch \"$first_timeout_path\"\n  /bin/sleep 6\nfi\nif [ ! -f \"$second_timeout_path\" ]; then\n  touch \"$second_timeout_path\"\n  /bin/sleep 6\nfi\necho 'loong-browser-companion 1.5.0'\n",
             first_timeout_path.display(),
             second_timeout_path.display()
         );
         write_browser_companion_script(&script_path, script_body.as_str());
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(script_path.display().to_string());
         config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
@@ -595,7 +594,7 @@ mod tests {
         );
         assert_eq!(
             diagnostics.observed_version.as_deref(),
-            Some("loongclaw-browser-companion 1.5.0")
+            Some("loong-browser-companion 1.5.0")
         );
     }
 
@@ -607,10 +606,10 @@ mod tests {
         let script_path = temp_dir.join("browser-companion");
         write_browser_companion_script(
             &script_path,
-            "#!/bin/sh\n/bin/sleep 2\necho 'loongclaw-browser-companion 1.5.0'\n",
+            "#!/bin/sh\n/bin/sleep 2\necho 'loong-browser-companion 1.5.0'\n",
         );
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(script_path.display().to_string());
         config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
@@ -635,7 +634,7 @@ mod tests {
     #[test]
     fn observed_version_matches_expected_accepts_exact_tokens() {
         assert!(observed_version_matches_expected(
-            "loongclaw-browser-companion 1.5.0",
+            "loong-browser-companion 1.5.0",
             "1.5.0"
         ));
     }
@@ -665,7 +664,7 @@ mod tests {
     #[test]
     fn observed_version_matches_expected_rejects_suffix_variants() {
         assert!(!observed_version_matches_expected(
-            "loongclaw-browser-companion 1.5.0-beta",
+            "loong-browser-companion 1.5.0-beta",
             "1.5.0"
         ));
     }
@@ -673,7 +672,7 @@ mod tests {
     #[test]
     fn observed_version_matches_expected_rejects_partial_numeric_matches() {
         assert!(!observed_version_matches_expected(
-            "loongclaw-browser-companion 11.5.0",
+            "loong-browser-companion 11.5.0",
             "1.5.0"
         ));
     }

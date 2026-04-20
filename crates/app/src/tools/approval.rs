@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 #[cfg(feature = "memory-sqlite")]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,7 +9,6 @@ use super::payload::{optional_payload_limit, optional_payload_string, required_p
 use crate::config::ToolConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::config::{SessionVisibility, ToolConsentMode};
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::OperatorApprovalRuntime;
 #[cfg(feature = "memory-sqlite")]
@@ -18,6 +17,7 @@ use crate::session::repository::{
     NewApprovalGrantRecord, NewSessionToolConsentRecord, SessionRepository,
     TransitionApprovalRequestIfCurrentRequest,
 };
+use crate::session::store::SessionStoreConfig;
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,7 +346,7 @@ struct ApprovalRequestView {
 pub fn execute_approval_tool_with_policies(
     request: ToolCoreRequest,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     #[cfg(not(feature = "memory-sqlite"))]
@@ -389,7 +389,7 @@ pub fn execute_approval_tool_with_policies(
 pub async fn execute_approval_tool_with_runtime_support(
     request: ToolCoreRequest,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     runtime: Option<&(dyn ApprovalResolutionRuntime + '_)>,
 ) -> Result<ToolCoreOutcome, String> {
@@ -434,7 +434,7 @@ pub async fn execute_approval_tool_with_runtime_support(
 fn execute_approval_requests_list(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
@@ -512,7 +512,7 @@ fn execute_approval_requests_list(
 fn execute_approval_request_status(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let approval_request_id =
@@ -542,7 +542,7 @@ fn execute_approval_request_status(
 async fn execute_approval_request_resolve(
     payload: Value,
     current_session_id: &str,
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     tool_config: &ToolConfig,
     runtime: &(dyn ApprovalResolutionRuntime + '_),
 ) -> Result<ToolCoreOutcome, String> {
@@ -571,7 +571,7 @@ async fn execute_approval_request_resolve(
 
 #[cfg(feature = "memory-sqlite")]
 async fn resolve_approval_request_with_runtime(
-    config: &MemoryRuntimeConfig,
+    config: &SessionStoreConfig,
     runtime: &(dyn ApprovalResolutionRuntime + '_),
     request: ApprovalResolutionRequest,
 ) -> Result<ApprovalResolutionOutcome, String> {
@@ -1053,6 +1053,7 @@ fn approval_attention_summary_json(requests: &[ApprovalRequestView]) -> Value {
     let mut reasons = std::collections::BTreeMap::<String, usize>::new();
     let mut actions = std::collections::BTreeMap::<String, usize>::new();
     let mut tools = std::collections::BTreeMap::<String, usize>::new();
+    let mut visible_tools = std::collections::BTreeMap::<String, usize>::new();
     let mut sessions = std::collections::BTreeMap::<String, usize>::new();
 
     for request in requests {
@@ -1064,6 +1065,9 @@ fn approval_attention_summary_json(requests: &[ApprovalRequestView]) -> Value {
         }
         if request.attention.needs_attention() {
             *tools.entry(request.record.tool_name.clone()).or_default() += 1;
+            let visible_tool_name =
+                approval_request_visible_tool_name(request.record.tool_name.as_str());
+            *visible_tools.entry(visible_tool_name).or_default() += 1;
             *sessions
                 .entry(request.record.session_id.clone())
                 .or_default() += 1;
@@ -1107,6 +1111,7 @@ fn approval_attention_summary_json(requests: &[ApprovalRequestView]) -> Value {
         "hotspots": {
             "by_reason": sorted_counts(reasons, "reason"),
             "by_action": sorted_counts(actions, "action"),
+            "by_visible_tool": sorted_counts(visible_tools, "visible_tool_name"),
             "by_tool": sorted_counts(tools, "tool_name"),
             "by_session": sorted_counts(sessions, "session_id"),
         },
@@ -1114,14 +1119,40 @@ fn approval_attention_summary_json(requests: &[ApprovalRequestView]) -> Value {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn approval_request_visible_tool_name(tool_name: &str) -> String {
+    crate::tools::user_visible_tool_name(tool_name)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_request_summary_json(record: &ApprovalRequestRecord) -> Value {
+    let visible_tool_name = approval_request_visible_tool_name(record.tool_name.as_str());
+    let raw_request = record
+        .request_payload_json
+        .as_object()
+        .and_then(|payload| payload.get("args_json"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let request =
+        crate::tools::summarize_tool_request_for_display(record.tool_name.as_str(), raw_request);
+
+    json!({
+        "tool": visible_tool_name,
+        "request": request,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn approval_request_summary_json(view: &ApprovalRequestView) -> Value {
     let record = &view.record;
     let snapshot = &record.governance_snapshot_json;
+    let visible_tool_name = approval_request_visible_tool_name(record.tool_name.as_str());
+    let request_summary = approval_request_request_summary_json(record);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
         "turn_id": record.turn_id,
         "tool_call_id": record.tool_call_id,
+        "visible_tool_name": visible_tool_name,
         "tool_name": record.tool_name,
         "approval_key": record.approval_key,
         "status": record.status.as_str(),
@@ -1131,6 +1162,7 @@ fn approval_request_summary_json(view: &ApprovalRequestView) -> Value {
         "resolved_by_session_id": record.resolved_by_session_id,
         "executed_at": record.executed_at,
         "last_error": record.last_error,
+        "request_summary": request_summary,
         "reason": record
             .governance_snapshot_json
             .get("reason")
@@ -1155,11 +1187,14 @@ fn approval_request_detail_json(
     record: &ApprovalRequestRecord,
     attention: &DerivedAttentionView,
 ) -> Value {
+    let visible_tool_name = approval_request_visible_tool_name(record.tool_name.as_str());
+    let request_summary = approval_request_request_summary_json(record);
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
         "turn_id": record.turn_id,
         "tool_call_id": record.tool_call_id,
+        "visible_tool_name": visible_tool_name,
         "tool_name": record.tool_name,
         "approval_key": record.approval_key,
         "status": record.status.as_str(),
@@ -1169,6 +1204,7 @@ fn approval_request_detail_json(
         "resolved_by_session_id": record.resolved_by_session_id,
         "executed_at": record.executed_at,
         "last_error": record.last_error,
+        "request_summary": request_summary,
         "request_payload": record.request_payload_json,
         "governance_snapshot": record.governance_snapshot_json,
         "execution_integrity": attention.execution_integrity_json(),
@@ -1339,8 +1375,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use loongclaw_contracts::ToolCoreOutcome;
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreOutcome;
+    use loong_contracts::ToolCoreRequest;
     #[cfg(feature = "memory-sqlite")]
     use rusqlite::{Connection, params};
     use serde_json::Value;
@@ -1348,24 +1384,24 @@ mod tests {
 
     use super::*;
     use crate::config::ToolConfig;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{
         ApprovalDecision, ApprovalRequestStatus, NewApprovalGrantRecord, NewApprovalRequestRecord,
         NewSessionRecord, SessionKind, SessionRepository, SessionState,
         TransitionApprovalRequestIfCurrentRequest,
     };
+    use crate::session::store::SessionStoreConfig;
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-approval-tools-{test_name}-{}",
+            "loong-approval-tools-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -1471,7 +1507,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     fn age_runtime_grant(
-        config: &MemoryRuntimeConfig,
+        config: &SessionStoreConfig,
         scope_session_id: &str,
         approval_key: &str,
         updated_at: i64,
@@ -1492,7 +1528,7 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn delete_session_row(config: &MemoryRuntimeConfig, session_id: &str) {
+    fn delete_session_row(config: &SessionStoreConfig, session_id: &str) {
         let db_path = config
             .sqlite_path
             .as_ref()
@@ -1647,6 +1683,16 @@ mod tests {
         assert!(request_ids.contains(&"apr-root-visible"));
         assert!(request_ids.contains(&"apr-child-visible"));
         assert!(!request_ids.contains(&"apr-hidden"));
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.get("visible_tool_name").is_some())
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.get("request_summary").is_some())
+        );
         assert_eq!(
             requests[0]["attention"]["signals"][0]["source"],
             "execution"
@@ -1690,12 +1736,18 @@ mod tests {
         let request = &outcome.payload["approval_request"];
         assert_eq!(request["approval_request_id"], "apr-child-visible");
         assert_eq!(request["session_id"], "child-session");
+        assert_eq!(request["visible_tool_name"], "delegate_async");
         assert_eq!(request["tool_name"], "delegate_async");
         assert_eq!(request["approval_key"], "tool:delegate_async");
         assert_eq!(request["status"], "pending");
         assert_eq!(
             request["governance_snapshot"]["rule_id"],
             "governed_tool_requires_approval"
+        );
+        assert_eq!(request["request_summary"]["tool"], "delegate_async");
+        assert_eq!(
+            request["request_summary"]["request"]["task"],
+            "run-apr-child-visible"
         );
         assert_eq!(request["request_payload"]["tool_name"], "delegate_async");
         assert_eq!(
@@ -1705,6 +1757,60 @@ mod tests {
         assert_eq!(request["execution_integrity"]["state"], "pending_decision");
         assert_eq!(request["grant_review"]["state"], "not_applicable");
         assert_eq!(request["attention"]["sources"], json!(["execution"]));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_status_surfaces_visible_direct_tool_name_and_sanitized_request_summary() {
+        let config = isolated_memory_config("approval-query-status-visible-direct-tool");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id: "apr-shell-visible".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-apr-shell-visible".to_owned(),
+            tool_call_id: "call-apr-shell-visible".to_owned(),
+            tool_name: "shell.exec".to_owned(),
+            approval_key: "tool:shell.exec".to_owned(),
+            request_payload_json: json!({
+                "session_id": "root-session",
+                "tool_name": "shell.exec",
+                "args_json": {
+                    "command": "git status",
+                    "timeout_ms": 3000
+                },
+            }),
+            governance_snapshot_json: json!({
+                "reason": "approval required for shell.exec",
+                "rule_id": "rule-shell-visible",
+            }),
+        })
+        .expect("seed shell approval request");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_request_status".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-shell-visible",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_request_status outcome");
+
+        let request = &outcome.payload["approval_request"];
+        assert_eq!(request["visible_tool_name"], "exec");
+        assert_eq!(request["tool_name"], "shell.exec");
+        assert_eq!(request["request_summary"]["tool"], "exec");
+        assert_eq!(request["request_summary"]["request"]["command"], "git");
+        assert_eq!(request["request_summary"]["request"]["timeout_ms"], 3000);
+        assert_eq!(request["request_summary"]["request"]["args_redacted"], 1);
+        assert_eq!(
+            request["request_payload"]["args_json"]["command"],
+            "git status"
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1874,6 +1980,12 @@ mod tests {
         assert_eq!(
             outcome.payload["attention_summary"]["source_breakdown"]["execution_only"],
             1
+        );
+        assert!(
+            outcome.payload["attention_summary"]["hotspots"]["by_visible_tool"]
+                .as_array()
+                .is_some(),
+            "attention summary should expose visible-tool hotspot counts"
         );
         assert_eq!(
             outcome.payload["attention_summary"]["source_breakdown"]["grant_only"],
@@ -2063,6 +2175,11 @@ mod tests {
         assert_eq!(request["policy_source"], "autonomy_policy");
         assert_eq!(request["autonomy_profile"], "guided_acquisition");
         assert_eq!(request["capability_action_class"], "capability_install");
+        assert_eq!(request["visible_tool_name"], "external_skills.install");
+        assert_eq!(
+            request["request_summary"]["tool"],
+            "external_skills.install"
+        );
         assert_eq!(request["decision_kind"], "approval_required");
         assert_eq!(
             request["rule_id"],

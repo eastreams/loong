@@ -16,10 +16,10 @@ use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::stream::{self, Stream};
 use kernel::{
-    Capability, CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongClawKernel, PlaneTier,
+    Capability, CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, PlaneTier,
     StaticPolicyEngine, VerticalPackManifest,
 };
-use loongclaw_protocol::{
+use loong_protocol::{
     CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneAcpBindingScope, ControlPlaneAcpRoutingOrigin,
     ControlPlaneAcpSessionListResponse, ControlPlaneAcpSessionMetadata, ControlPlaneAcpSessionMode,
     ControlPlaneAcpSessionReadResponse, ControlPlaneAcpSessionState, ControlPlaneAcpSessionStatus,
@@ -33,8 +33,11 @@ use loongclaw_protocol::{
     ControlPlaneRecentEventsResponse, ControlPlaneScope, ControlPlaneSessionEvent,
     ControlPlaneSessionKind, ControlPlaneSessionListResponse, ControlPlaneSessionObservation,
     ControlPlaneSessionReadResponse, ControlPlaneSessionState, ControlPlaneSessionSummary,
-    ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
-    ControlPlaneStateVersion, ControlPlaneTurnEventEnvelope, ControlPlaneTurnResultResponse,
+    ControlPlaneSessionTerminalOutcome, ControlPlaneSessionWorkflow,
+    ControlPlaneSessionWorkflowBinding, ControlPlaneSessionWorkflowBindingWorktree,
+    ControlPlaneSessionWorkflowContinuity, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
+    ControlPlaneStateVersion, ControlPlaneTaskListResponse, ControlPlaneTaskReadResponse,
+    ControlPlaneTaskSummary, ControlPlaneTurnEventEnvelope, ControlPlaneTurnResultResponse,
     ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest, ControlPlaneTurnSubmitResponse,
     ControlPlaneTurnSummary, ProtocolRouter,
 };
@@ -49,7 +52,7 @@ use axum::http::Request;
 #[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey};
 #[cfg(test)]
-use loongclaw_protocol::{ControlPlaneClientIdentity, ControlPlaneRole};
+use loong_protocol::{ControlPlaneClientIdentity, ControlPlaneRole};
 #[cfg(test)]
 use tower::ServiceExt;
 
@@ -91,7 +94,7 @@ fn default_loopback_exposure_policy() -> ControlPlaneExposurePolicy {
 }
 
 struct ControlPlaneKernelAuthority {
-    kernel: LoongClawKernel<StaticPolicyEngine>,
+    kernel: LoongKernel<StaticPolicyEngine>,
     _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
@@ -141,6 +144,19 @@ struct SessionReadQuery {
     tail_after_id: Option<i64>,
     #[serde(default)]
     tail_page_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskListQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    include_archived: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskReadQuery {
+    task_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,7 +232,7 @@ struct ControlPlaneTurnStreamState {
 /// to materialize `AgentRuntime` turns on demand.
 struct ControlPlaneTurnRuntime {
     resolved_path: std::path::PathBuf,
-    config: mvp::config::LoongClawConfig,
+    config: mvp::config::LoongConfig,
     acp_manager: Arc<mvp::acp::AcpSessionManager>,
     registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
 }
@@ -230,7 +246,7 @@ struct ControlPlaneTurnEventForwarder {
 impl ControlPlaneKernelAuthority {
     fn new() -> Result<Self, String> {
         let kernel_with_audit =
-            LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+            LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
         let mut kernel = kernel_with_audit.0;
         let audit = kernel_with_audit.1;
         let pack = control_plane_pack();
@@ -344,7 +360,7 @@ fn resolve_control_plane_bind_addr(
 
 fn build_control_plane_exposure_policy(
     bind_addr: SocketAddr,
-    config: Option<&mvp::config::LoongClawConfig>,
+    config: Option<&mvp::config::LoongConfig>,
 ) -> Result<ControlPlaneExposurePolicy, String> {
     let is_loopback = bind_addr.ip().is_loopback();
     if is_loopback {
@@ -477,21 +493,79 @@ fn map_session_state(state: mvp::session::repository::SessionState) -> ControlPl
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn map_session_workflow_continuity(
+    continuity: mvp::control_plane::ControlPlaneSessionWorkflowContinuityView,
+) -> ControlPlaneSessionWorkflowContinuity {
+    ControlPlaneSessionWorkflowContinuity {
+        present: continuity.present,
+        resolved_identity_present: continuity.resolved_identity_present,
+        session_profile_projection_present: continuity.session_profile_projection_present,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_workflow(
+    workflow: mvp::control_plane::ControlPlaneSessionWorkflowView,
+) -> ControlPlaneSessionWorkflow {
+    let runtime_self_continuity = workflow
+        .runtime_self_continuity
+        .map(map_session_workflow_continuity);
+    let binding = workflow.binding.map(map_session_workflow_binding);
+
+    ControlPlaneSessionWorkflow {
+        workflow_id: workflow.workflow_id,
+        task: workflow.task,
+        phase: workflow.phase,
+        operation_kind: workflow.operation_kind,
+        operation_scope: workflow.operation_scope,
+        task_session_id: workflow.task_session_id,
+        lineage_root_session_id: workflow.lineage_root_session_id,
+        lineage_depth: workflow.lineage_depth,
+        runtime_self_continuity,
+        binding,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_workflow_binding(
+    binding: mvp::control_plane::ControlPlaneSessionWorkflowBindingView,
+) -> ControlPlaneSessionWorkflowBinding {
+    let worktree = binding
+        .worktree
+        .map(|worktree| ControlPlaneSessionWorkflowBindingWorktree {
+            worktree_id: worktree.worktree_id,
+            workspace_root: worktree.workspace_root,
+        });
+
+    ControlPlaneSessionWorkflowBinding {
+        session_id: binding.session_id,
+        task_id: binding.task_id,
+        mode: binding.mode,
+        execution_surface: binding.execution_surface,
+        worktree,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn map_session_summary(
-    summary: mvp::session::repository::SessionSummaryRecord,
+    summary: mvp::control_plane::ControlPlaneSessionSummaryView,
 ) -> ControlPlaneSessionSummary {
+    let session = summary.session;
+    let workflow = map_session_workflow(summary.workflow);
+
     ControlPlaneSessionSummary {
-        session_id: summary.session_id,
-        kind: map_session_kind(summary.kind),
-        parent_session_id: summary.parent_session_id,
-        label: summary.label,
-        state: map_session_state(summary.state),
-        created_at: summary.created_at,
-        updated_at: summary.updated_at,
-        archived_at: summary.archived_at,
-        turn_count: summary.turn_count,
-        last_turn_at: summary.last_turn_at,
-        last_error: summary.last_error,
+        session_id: session.session_id,
+        kind: map_session_kind(session.kind),
+        parent_session_id: session.parent_session_id,
+        label: session.label,
+        state: map_session_state(session.state),
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        archived_at: session.archived_at,
+        turn_count: session.turn_count,
+        last_turn_at: session.last_turn_at,
+        last_error: session.last_error,
+        workflow,
     }
 }
 
@@ -523,7 +597,7 @@ fn map_session_terminal_outcome(
 
 #[cfg(feature = "memory-sqlite")]
 fn map_session_observation(
-    observation: mvp::session::repository::SessionObservationRecord,
+    observation: mvp::control_plane::ControlPlaneSessionObservationView,
 ) -> ControlPlaneSessionObservation {
     ControlPlaneSessionObservation {
         session: map_session_summary(observation.session),
@@ -540,6 +614,46 @@ fn map_session_observation(
             .into_iter()
             .map(map_session_event)
             .collect::<Vec<_>>(),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_task_summary(
+    task: mvp::control_plane::ControlPlaneTaskSummaryView,
+) -> ControlPlaneTaskSummary {
+    let workflow = map_session_workflow(task.workflow);
+    let session_state = task.session_state;
+    let delegate_phase = task.delegate_phase;
+    let delegate_mode = task.delegate_mode;
+    let timeout_seconds = task.timeout_seconds;
+    let approval_request_count = task.approval_request_count;
+    let approval_attention_count = task.approval_attention_count;
+    let requested_tool_ids = task.requested_tool_ids;
+    let visible_requested_tool_ids = task.visible_requested_tool_ids;
+    let effective_tool_ids = task.effective_tool_ids;
+    let visible_effective_tool_ids = task.visible_effective_tool_ids;
+    let effective_runtime_narrowing = task.effective_runtime_narrowing;
+    let label = task.label;
+    let last_error = task.last_error;
+
+    ControlPlaneTaskSummary {
+        task_id: task.task_id,
+        session_id: task.session_id,
+        scope_session_id: task.scope_session_id,
+        label,
+        session_state,
+        delegate_phase,
+        delegate_mode,
+        timeout_seconds,
+        workflow,
+        approval_request_count,
+        approval_attention_count,
+        requested_tool_ids,
+        visible_requested_tool_ids,
+        effective_tool_ids,
+        visible_effective_tool_ids,
+        effective_runtime_narrowing,
+        last_error,
     }
 }
 
@@ -601,12 +715,29 @@ fn map_approval_summary(
         .get("rule_id")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned);
+    let visible_tool_name = Some(mvp::tools::user_visible_tool_name(
+        approval.tool_name.as_str(),
+    ));
+    let raw_request = approval
+        .request_payload_json
+        .as_object()
+        .and_then(|payload| payload.get("args_json"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let summarized_request =
+        mvp::tools::summarize_tool_request_for_display(approval.tool_name.as_str(), raw_request);
+    let request_summary = Some(serde_json::json!({
+        "tool": visible_tool_name.clone().unwrap_or_else(|| approval.tool_name.clone()),
+        "request": summarized_request,
+    }));
     ControlPlaneApprovalSummary {
         approval_request_id: approval.approval_request_id,
         session_id: approval.session_id,
         turn_id: approval.turn_id,
         tool_call_id: approval.tool_call_id,
         tool_name: approval.tool_name,
+        visible_tool_name,
+        request_summary,
         approval_key: approval.approval_key,
         status: map_approval_status(approval.status),
         decision: approval.decision.map(map_approval_decision),
@@ -749,8 +880,8 @@ fn map_pairing_request(
         client_id: request.client_id,
         public_key: request.public_key,
         role: match request.role.as_str() {
-            "operator" => loongclaw_protocol::ControlPlaneRole::Operator,
-            _ => loongclaw_protocol::ControlPlaneRole::Node,
+            "operator" => loong_protocol::ControlPlaneRole::Operator,
+            _ => loong_protocol::ControlPlaneRole::Node,
         },
         requested_scopes: request
             .requested_scopes
@@ -936,7 +1067,7 @@ impl ControlPlaneTurnRuntime {
     /// ACP manager that should back all HTTP-triggered turns for that process.
     fn new(
         resolved_path: std::path::PathBuf,
-        config: mvp::config::LoongClawConfig,
+        config: mvp::config::LoongConfig,
     ) -> Result<Self, String> {
         let acp_manager = mvp::acp::shared_acp_session_manager(&config)?;
         Ok(Self::with_manager(resolved_path, config, acp_manager))
@@ -946,7 +1077,7 @@ impl ControlPlaneTurnRuntime {
     /// while still allocating a fresh turn registry for this runtime shell.
     fn with_manager(
         resolved_path: std::path::PathBuf,
-        config: mvp::config::LoongClawConfig,
+        config: mvp::config::LoongConfig,
         acp_manager: Arc<mvp::acp::AcpSessionManager>,
     ) -> Self {
         Self {
@@ -1182,7 +1313,7 @@ fn extract_connection_token(headers: &HeaderMap) -> Option<String> {
         .map(ToOwned::to_owned)
         .or_else(|| {
             headers
-                .get("x-loongclaw-control-token")
+                .get("x-loong-control-token")
                 .and_then(|value| value.to_str().ok())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -1227,7 +1358,7 @@ fn connection_scoped_capabilities(
 }
 
 fn required_capabilities_for_route(
-    resolved: &loongclaw_protocol::ResolvedRoute,
+    resolved: &loong_protocol::ResolvedRoute,
 ) -> Result<std::collections::BTreeSet<Capability>, String> {
     let mut capabilities = std::collections::BTreeSet::new();
     if let Some(required_capability) = resolved.policy.required_capability.as_deref() {
@@ -1333,7 +1464,7 @@ fn current_time_ms() -> u64 {
 
 fn control_plane_device_signature_message(
     request: &ControlPlaneConnectRequest,
-    device: &loongclaw_protocol::ControlPlaneDeviceIdentity,
+    device: &loong_protocol::ControlPlaneDeviceIdentity,
 ) -> Vec<u8> {
     let scopes = request
         .scopes
@@ -1342,7 +1473,7 @@ fn control_plane_device_signature_message(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "loongclaw-control-plane-connect-v1\nnonce={}\ndevice_id={}\nclient_id={}\nrole={}\nscopes={}\nsigned_at_ms={}",
+        "loong-control-plane-connect-v1\nnonce={}\ndevice_id={}\nclient_id={}\nrole={}\nscopes={}\nsigned_at_ms={}",
         device.nonce,
         device.device_id,
         request.client.id,
@@ -1869,6 +2000,99 @@ async fn session_read(
     }
 }
 
+async fn task_list(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<TaskListQuery>,
+) -> Response {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (state, query);
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "task/list requires daemon memory-sqlite support",
+        )
+    }
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Err(response) = authorize_control_plane_request(&state, "task/list", &headers) {
+            return *response;
+        }
+        let Some(repository_view) = state.repository_view.as_ref() else {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "task/list requires control-plane-serve --config <path>",
+            );
+        };
+        let limit = query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_LIST_LIMIT);
+        match repository_view.list_background_tasks(query.include_archived, limit) {
+            Ok(view) => {
+                let tasks = view
+                    .tasks
+                    .into_iter()
+                    .map(map_task_summary)
+                    .collect::<Vec<_>>();
+                let response = ControlPlaneTaskListResponse {
+                    current_session_id: view.current_session_id,
+                    matched_count: view.matched_count,
+                    returned_count: view.returned_count,
+                    tasks,
+                };
+                Json(response).into_response()
+            }
+            Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        }
+    }
+}
+
+async fn task_read(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<TaskReadQuery>,
+) -> Response {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (state, query);
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "task/read requires daemon memory-sqlite support",
+        )
+    }
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Err(response) = authorize_control_plane_request(&state, "task/read", &headers) {
+            return *response;
+        }
+        let Some(repository_view) = state.repository_view.as_ref() else {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "task/read requires control-plane-serve --config <path>",
+            );
+        };
+        match repository_view.read_background_task(&query.task_id) {
+            Ok(Some(task_view)) => {
+                let task = map_task_summary(task_view);
+                let response = ControlPlaneTaskReadResponse {
+                    current_session_id: repository_view.current_session_id().to_owned(),
+                    task,
+                };
+                Json(response).into_response()
+            }
+            Ok(None) => error_response(
+                StatusCode::NOT_FOUND,
+                format!("background task `{}` not found", query.task_id.trim()),
+            ),
+            Err(error) if error == "control_plane_session_id_missing" => {
+                error_response(StatusCode::BAD_REQUEST, error)
+            }
+            Err(error) if error.starts_with("visibility_denied:") => {
+                error_response(StatusCode::NOT_FOUND, error)
+            }
+            Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        }
+    }
+}
+
 async fn approval_list(
     headers: HeaderMap,
     State(state): State<ControlPlaneHttpState>,
@@ -2199,7 +2423,7 @@ async fn turn_submit(
             }
             Err(error) => {
                 tracing::warn!(
-                    target: "loongclaw.control-plane",
+                    target: "loong.control-plane",
                     turn_id = %spawned_turn_id,
                     session_id = %session_id,
                     error = %crate::observability::summarize_error(error.as_str()),
@@ -2344,6 +2568,8 @@ fn build_control_plane_router_with_runtime(
         .route("/control/events", get(control_events))
         .route("/session/list", get(session_list))
         .route("/session/read", get(session_read))
+        .route("/task/list", get(task_list))
+        .route("/task/read", get(task_read))
         .route("/turn/submit", post(turn_submit))
         .route("/turn/result", get(turn_result))
         .route("/turn/stream", get(turn_stream))
@@ -2402,6 +2628,8 @@ fn build_control_plane_router_without_repository(
         .route("/control/events", get(control_events))
         .route("/session/list", get(session_list))
         .route("/session/read", get(session_read))
+        .route("/task/list", get(task_list))
+        .route("/task/read", get(task_read))
         .route("/turn/submit", post(turn_submit))
         .route("/turn/result", get(turn_result))
         .route("/turn/stream", get(turn_stream))
@@ -2473,12 +2701,16 @@ pub async fn run_control_plane_serve_cli(
                 );
             let session_id = current_session_id.unwrap_or("default");
             println!(
-                "loongclaw control plane session view rooted at `{session_id}` from {}",
+                "loong control plane session view rooted at `{session_id}` from {}",
                 resolved_path.display()
             );
             (
                 Some(Arc::new(
-                    mvp::control_plane::ControlPlaneRepositoryView::new(memory_config, session_id),
+                    mvp::control_plane::ControlPlaneRepositoryView::new(
+                        memory_config,
+                        config.tools.clone(),
+                        session_id,
+                    ),
                 )),
                 Some(Arc::new(mvp::control_plane::ControlPlaneAcpView::new(
                     config.clone(),
@@ -2522,7 +2754,7 @@ pub async fn run_control_plane_serve_cli(
         .local_addr()
         .map_err(|error| format!("read control-plane local address failed: {error}"))?;
 
-    println!("loongclaw control plane listening on http://{local_addr}");
+    println!("loong control plane listening on http://{local_addr}");
     axum::serve(listener, router)
         .await
         .map_err(|error| format!("control-plane listener failed: {error}"))
@@ -2532,7 +2764,7 @@ pub async fn run_control_plane_serve_cli(
 mod tests {
     use super::*;
     use futures_util::StreamExt;
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
 
     fn build_control_plane_router(manager: Arc<mvp::control_plane::ControlPlaneManager>) -> Router {
         super::build_control_plane_router(manager).expect("router")
@@ -2614,7 +2846,7 @@ mod tests {
 
         fn ensure_session<'life0, 'life1, 'life2, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             request: &'life2 mvp::acp::AcpSessionBootstrap,
         ) -> std::pin::Pin<
             Box<
@@ -2644,7 +2876,7 @@ mod tests {
 
         fn run_turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
             request: &'life3 mvp::acp::AcpTurnRequest,
         ) -> std::pin::Pin<
@@ -2674,7 +2906,7 @@ mod tests {
 
         fn run_turn_with_sink<'life0, 'life1, 'life2, 'life3, 'life5, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
             request: &'life3 mvp::acp::AcpTurnRequest,
             _abort: Option<mvp::acp::AcpAbortSignal>,
@@ -2722,7 +2954,7 @@ mod tests {
 
         fn cancel<'life0, 'life1, 'life2, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
         where
@@ -2736,7 +2968,7 @@ mod tests {
 
         fn close<'life0, 'life1, 'life2, 'async_trait>(
             &'life0 self,
-            _config: &'life1 mvp::config::LoongClawConfig,
+            _config: &'life1 mvp::config::LoongConfig,
             _session: &'life2 mvp::acp::AcpSessionHandle,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
         where
@@ -2749,8 +2981,8 @@ mod tests {
         }
     }
 
-    fn turn_runtime_test_config(backend_id: &str) -> mvp::config::LoongClawConfig {
-        let mut config = mvp::config::LoongClawConfig::default();
+    fn turn_runtime_test_config(backend_id: &str) -> mvp::config::LoongConfig {
+        let mut config = mvp::config::LoongConfig::default();
         config.acp.enabled = true;
         config.acp.backend = Some(backend_id.to_owned());
         config.audit.mode = mvp::config::AuditMode::InMemory;
@@ -2772,7 +3004,7 @@ mod tests {
         .expect("register control-plane turn backend");
         let config = turn_runtime_test_config(backend_id);
         let temp_root = std::env::temp_dir().join(format!(
-            "loongclaw-control-plane-turn-runtime-{}-{}",
+            "loong-control-plane-turn-runtime-{}-{}",
             backend_id,
             current_time_ms()
         ));
@@ -2792,8 +3024,8 @@ mod tests {
         ))
     }
 
-    fn remote_control_plane_config(shared_token: &str) -> mvp::config::LoongClawConfig {
-        let mut config = mvp::config::LoongClawConfig::default();
+    fn remote_control_plane_config(shared_token: &str) -> mvp::config::LoongConfig {
+        let mut config = mvp::config::LoongConfig::default();
         config.control_plane.allow_remote = true;
         config.control_plane.shared_token = Some(SecretRef::Inline(shared_token.to_owned()));
         config
@@ -2835,7 +3067,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
@@ -2902,9 +3134,9 @@ mod tests {
         role: ControlPlaneRole,
         scopes: std::collections::BTreeSet<ControlPlaneScope>,
         challenge: &ControlPlaneChallengeResponse,
-    ) -> loongclaw_protocol::ControlPlaneDeviceIdentity {
+    ) -> loong_protocol::ControlPlaneDeviceIdentity {
         let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
-        let device_template = loongclaw_protocol::ControlPlaneDeviceIdentity {
+        let device_template = loong_protocol::ControlPlaneDeviceIdentity {
             device_id: "device-1".to_owned(),
             public_key: String::new(),
             signature: String::new(),
@@ -2919,7 +3151,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role,
             scopes,
@@ -2931,7 +3163,7 @@ mod tests {
         };
         let message = control_plane_device_signature_message(&request, &device_template);
         let signature = signing_key.sign(&message);
-        loongclaw_protocol::ControlPlaneDeviceIdentity {
+        loong_protocol::ControlPlaneDeviceIdentity {
             device_id: "device-1".to_owned(),
             public_key: base64::engine::general_purpose::STANDARD
                 .encode(signing_key.verifying_key().to_bytes()),
@@ -2948,7 +3180,7 @@ mod tests {
         static NEXT_ISOLATED_MEMORY_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
         let nonce = NEXT_ISOLATED_MEMORY_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-control-plane-server-{test_name}-{}-{nonce}",
+            "loong-control-plane-server-{test_name}-{}-{nonce}",
             std::process::id(),
         ));
         let _ = std::fs::create_dir_all(&base);
@@ -2989,7 +3221,21 @@ mod tests {
             event_kind: "delegate_started".to_owned(),
             actor_session_id: Some("root-session".to_owned()),
             payload_json: serde_json::json!({
-                "status": "started",
+                "task": "research control plane parity",
+                "label": "Child",
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 3,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 90,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "workspace_root": "/tmp/loong/control-plane/child-session",
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
             }),
         })
         .expect("append child event");
@@ -3009,6 +3255,12 @@ mod tests {
             }),
         })
         .expect("create visible approval");
+        repo.upsert_session_tool_policy(mvp::session::repository::NewSessionToolPolicyRecord {
+            session_id: "child-session".to_owned(),
+            requested_tool_ids: vec!["file.read".to_owned()],
+            runtime_narrowing: mvp::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        })
+        .expect("create visible tool policy");
         repo.create_session(mvp::session::repository::NewSessionRecord {
             session_id: "hidden-root".to_owned(),
             kind: mvp::session::repository::SessionKind::Root,
@@ -3036,6 +3288,7 @@ mod tests {
 
         Arc::new(mvp::control_plane::ControlPlaneRepositoryView::new(
             config,
+            mvp::config::ToolConfig::default(),
             "root-session",
         ))
     }
@@ -3116,7 +3369,7 @@ mod tests {
         })
         .expect("create hidden approval");
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let sqlite_path = memory_config
             .sqlite_path
             .as_ref()
@@ -3184,6 +3437,7 @@ mod tests {
         (
             Arc::new(mvp::control_plane::ControlPlaneRepositoryView::new(
                 memory_config,
+                mvp::config::ToolConfig::default(),
                 "root-session",
             )),
             Arc::new(mvp::control_plane::ControlPlaneAcpView::new(
@@ -3209,7 +3463,7 @@ mod tests {
 
     #[test]
     fn non_loopback_exposure_requires_explicit_remote_opt_in() {
-        let config = mvp::config::LoongClawConfig::default();
+        let config = mvp::config::LoongConfig::default();
         let error = build_control_plane_exposure_policy(non_loopback_bind_addr(), Some(&config))
             .expect_err("remote bind should require explicit opt-in");
         assert!(error.contains("control_plane.allow_remote=true"));
@@ -3217,7 +3471,7 @@ mod tests {
 
     #[test]
     fn non_loopback_exposure_requires_shared_token() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.control_plane.allow_remote = true;
         let error = build_control_plane_exposure_policy(non_loopback_bind_addr(), Some(&config))
             .expect_err("remote bind should require shared token");
@@ -3295,7 +3549,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
@@ -3350,7 +3604,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
@@ -3399,14 +3653,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: Some("wrong-token".to_owned()),
                 device_token: None,
                 bootstrap_token: None,
@@ -3450,14 +3704,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: Some("bootstrap-token".to_owned()),
                 device_token: None,
                 bootstrap_token: None,
@@ -3501,7 +3755,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: std::collections::BTreeSet::from([
@@ -3512,7 +3766,7 @@ mod tests {
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: Some("bootstrap-token".to_owned()),
                 device_token: None,
                 bootstrap_token: None,
@@ -3620,7 +3874,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
@@ -3675,7 +3929,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
@@ -3740,7 +3994,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: scopes.clone(),
@@ -3822,14 +4076,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: None,
                 device_token: Some(device_token),
                 bootstrap_token: None,
@@ -3876,7 +4130,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: initial_scopes.clone(),
@@ -3960,14 +4214,14 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes: upgraded_scopes,
             caps: std::collections::BTreeSet::new(),
             commands: std::collections::BTreeSet::new(),
             permissions: std::collections::BTreeMap::new(),
-            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+            auth: Some(loong_protocol::ControlPlaneAuthClaims {
                 token: None,
                 device_token: Some(device_token),
                 bootstrap_token: None,
@@ -4024,7 +4278,7 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 mode: "operator_ui".to_owned(),
                 platform: "macos".to_owned(),
-                display_name: Some("LoongClaw CLI".to_owned()),
+                display_name: Some("Loong CLI".to_owned()),
             },
             role: ControlPlaneRole::Operator,
             scopes,
@@ -4365,11 +4619,25 @@ mod tests {
                 .iter()
                 .any(|session| session.session_id == "root-session")
         );
-        assert!(
-            sessions
-                .sessions
-                .iter()
-                .any(|session| session.session_id == "child-session")
+        let child = sessions
+            .sessions
+            .iter()
+            .find(|session| session.session_id == "child-session")
+            .expect("child session");
+        assert_eq!(child.workflow.workflow_id, "root-session");
+        assert_eq!(
+            child.workflow.task.as_deref(),
+            Some("research control plane parity")
+        );
+        assert_eq!(child.workflow.phase.as_deref(), Some("execute"));
+        assert_eq!(
+            child
+                .workflow
+                .binding
+                .as_ref()
+                .expect("workflow binding")
+                .mode,
+            "advisory_only"
         );
         assert!(
             !sessions
@@ -4409,11 +4677,174 @@ mod tests {
             serde_json::from_slice(&body).expect("session read json");
         assert_eq!(session.current_session_id, "root-session");
         assert_eq!(session.observation.session.session_id, "child-session");
+        assert_eq!(
+            session.observation.session.workflow.workflow_id,
+            "root-session"
+        );
+        assert_eq!(
+            session.observation.session.workflow.task.as_deref(),
+            Some("research control plane parity")
+        );
+        assert_eq!(
+            session.observation.session.workflow.phase.as_deref(),
+            Some("execute")
+        );
+        assert_eq!(
+            session
+                .observation
+                .session
+                .workflow
+                .binding
+                .as_ref()
+                .expect("workflow binding")
+                .execution_surface,
+            "delegate.async"
+        );
         assert_eq!(session.observation.recent_events.len(), 1);
         assert_eq!(
             session.observation.recent_events[0].event_kind,
             "delegate_started"
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn task_list_returns_visible_background_tasks() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router_with_views(
+            manager,
+            Some(seeded_repository_view("task-list")),
+            None,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request("GET", "/task/list?limit=10", &token))
+            .await
+            .expect("task list response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let tasks: ControlPlaneTaskListResponse =
+            serde_json::from_slice(&body).expect("task list json");
+        assert_eq!(tasks.current_session_id, "root-session");
+        assert_eq!(tasks.matched_count, 1);
+        assert_eq!(tasks.returned_count, 1);
+        let task = tasks.tasks.first().expect("task summary");
+        assert_eq!(task.task_id, "child-session");
+        assert_eq!(task.workflow.workflow_id, "root-session");
+        assert_eq!(
+            task.workflow.task.as_deref(),
+            Some("research control plane parity")
+        );
+        assert_eq!(task.workflow.phase.as_deref(), Some("execute"));
+        assert_eq!(
+            task.workflow
+                .binding
+                .as_ref()
+                .expect("workflow binding")
+                .task_id,
+            "child-session"
+        );
+        assert_eq!(task.delegate_mode.as_deref(), Some("async"));
+        assert_eq!(task.requested_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(task.visible_requested_tool_ids, vec!["read".to_owned()]);
+        assert_eq!(task.effective_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(task.visible_effective_tool_ids, vec!["read".to_owned()]);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn task_read_returns_visible_background_task_detail() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router_with_views(
+            manager,
+            Some(seeded_repository_view("task-read")),
+            None,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/task/read?task_id=child-session",
+                &token,
+            ))
+            .await
+            .expect("task read response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let task: ControlPlaneTaskReadResponse =
+            serde_json::from_slice(&body).expect("task read json");
+        assert_eq!(task.current_session_id, "root-session");
+        assert_eq!(task.task.task_id, "child-session");
+        assert_eq!(task.task.workflow.workflow_id, "root-session");
+        assert_eq!(
+            task.task
+                .workflow
+                .binding
+                .as_ref()
+                .expect("workflow binding")
+                .worktree
+                .as_ref()
+                .expect("worktree binding")
+                .worktree_id,
+            "child-session"
+        );
+        assert_eq!(task.task.delegate_phase.as_deref(), Some("running"));
+        assert_eq!(task.task.approval_request_count, 1);
+        assert_eq!(task.task.requested_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(
+            task.task.visible_requested_tool_ids,
+            vec!["read".to_owned()]
+        );
+        assert_eq!(task.task.effective_tool_ids, vec!["file.read".to_owned()]);
+        assert_eq!(
+            task.task.visible_effective_tool_ids,
+            vec!["read".to_owned()]
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn task_routes_reject_insufficient_scope() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router_with_views(
+            manager,
+            Some(seeded_repository_view("task-scope")),
+            None,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorPairing]),
+        )
+        .await;
+
+        let list_response = router
+            .clone()
+            .oneshot(bearer_request("GET", "/task/list?limit=10", &token))
+            .await
+            .expect("task list response");
+        assert_eq!(list_response.status(), StatusCode::FORBIDDEN);
+
+        let read_response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/task/read?task_id=child-session",
+                &token,
+            ))
+            .await
+            .expect("task read response");
+        assert_eq!(read_response.status(), StatusCode::FORBIDDEN);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -4455,6 +4886,17 @@ mod tests {
         assert_eq!(
             approvals.approvals[0].reason.as_deref(),
             Some("governed_tool_requires_approval")
+        );
+        assert_eq!(
+            approvals.approvals[0].visible_tool_name.as_deref(),
+            Some("delegate")
+        );
+        assert_eq!(
+            approvals.approvals[0].request_summary.as_ref(),
+            Some(&serde_json::json!({
+                "tool": "delegate",
+                "request": {}
+            }))
         );
     }
 

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{CliResult, config::LoongClawConfig};
+use crate::{CliResult, config::LoongConfig};
 
 use super::auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
 use super::http_client_runtime::build_http_client;
@@ -31,7 +31,7 @@ pub(super) struct ProviderRequestSession {
 }
 
 pub(super) async fn prepare_provider_request_session(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> CliResult<ProviderRequestSession> {
     validate_provider_configuration(config)?;
     validate_provider_feature_gate(config)?;
@@ -88,7 +88,7 @@ pub(super) async fn prepare_provider_request_session(
                         );
                     }
                     tracing::debug!(
-                        target: "loongclaw.provider",
+                        target: "loong.provider",
                         provider_id = %config.provider.kind.profile().id,
                         auth_profile_id = %profile.id,
                         auto_model_mode,
@@ -107,7 +107,7 @@ pub(super) async fn prepare_provider_request_session(
             });
 
             tracing::warn!(
-                target: "loongclaw.provider",
+                target: "loong.provider",
                 provider_id = %config.provider.kind.profile().id,
                 auth_profile_count = auth_profiles.len(),
                 auto_model_mode,
@@ -140,7 +140,7 @@ pub(super) async fn prepare_provider_request_session(
         auth_context,
     };
     tracing::debug!(
-        target: "loongclaw.provider",
+        target: "loong.provider",
         provider_id = %config.provider.kind.profile().id,
         auth_profile_count = session.auth_profiles.len(),
         model_candidate_count = session.model_candidates.len(),

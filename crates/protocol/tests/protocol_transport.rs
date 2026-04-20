@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use loongclaw_protocol::test_support::*;
-use loongclaw_protocol::*;
+use loong_protocol::test_support::*;
+use loong_protocol::*;
 use tokio::io::{AsyncWriteExt, duplex, split};
 use tokio::time::{sleep, timeout};
 
@@ -43,6 +43,14 @@ fn route_parser_covers_standard_methods() {
     assert_eq!(
         ProtocolRoute::from_method("control/events"),
         ProtocolRoute::ControlEvents
+    );
+    assert_eq!(
+        ProtocolRoute::from_method("task/list"),
+        ProtocolRoute::TaskList
+    );
+    assert_eq!(
+        ProtocolRoute::from_method("task/read"),
+        ProtocolRoute::TaskRead
     );
     assert_eq!(
         ProtocolRoute::from_method("custom/x"),
@@ -242,6 +250,39 @@ fn presence_read_requires_authenticated_control_read_capability() {
         )
         .expect("authenticated control.read should authorize");
     assert_eq!(decision, RouteAuthorizationDecision::Allow);
+}
+
+#[test]
+fn task_routes_require_authenticated_control_read_capability() {
+    let router = ProtocolRouter::default();
+
+    for method in ["task/list", "task/read"] {
+        let resolved = router
+            .resolve(method)
+            .unwrap_or_else(|error| panic!("{method} should resolve: {error}"));
+        assert!(!resolved.policy.allow_anonymous);
+        assert_eq!(
+            resolved.policy.required_capability.as_deref(),
+            Some("control_read")
+        );
+
+        let missing_capability_error = router
+            .authorize(
+                &resolved,
+                &RouteAuthorizationRequest {
+                    authenticated: true,
+                    capabilities: BTreeSet::from(["control.pairing".to_owned()]),
+                },
+            )
+            .expect_err("task routes should reject non-read capabilities");
+        assert!(matches!(
+            missing_capability_error,
+            RouteAuthorizationError::MissingCapability {
+                method: missing_method,
+                required_capability
+            } if missing_method == method && required_capability == "control_read"
+        ));
+    }
 }
 
 #[test]
@@ -453,7 +494,7 @@ fn control_plane_connect_request_roundtrips_through_json() {
             version: "1.0.0".to_owned(),
             mode: "operator_ui".to_owned(),
             platform: "macos".to_owned(),
-            display_name: Some("LoongClaw CLI".to_owned()),
+            display_name: Some("Loong CLI".to_owned()),
         },
         role: ControlPlaneRole::Operator,
         scopes: BTreeSet::from([
@@ -651,6 +692,31 @@ fn control_plane_session_read_response_roundtrips_through_json() {
                 turn_count: 3,
                 last_turn_at: Some(20),
                 last_error: None,
+                workflow: ControlPlaneSessionWorkflow {
+                    workflow_id: "root-session".to_owned(),
+                    task: Some("research control plane parity".to_owned()),
+                    phase: Some("execute".to_owned()),
+                    operation_kind: Some("task".to_owned()),
+                    operation_scope: Some("task".to_owned()),
+                    task_session_id: Some("child-session".to_owned()),
+                    lineage_root_session_id: Some("root-session".to_owned()),
+                    lineage_depth: Some(1),
+                    runtime_self_continuity: Some(ControlPlaneSessionWorkflowContinuity {
+                        present: true,
+                        resolved_identity_present: true,
+                        session_profile_projection_present: false,
+                    }),
+                    binding: Some(ControlPlaneSessionWorkflowBinding {
+                        session_id: "child-session".to_owned(),
+                        task_id: "child-session".to_owned(),
+                        mode: "advisory_only".to_owned(),
+                        execution_surface: "delegate.async".to_owned(),
+                        worktree: Some(ControlPlaneSessionWorkflowBindingWorktree {
+                            worktree_id: "child-session".to_owned(),
+                            workspace_root: "/tmp/loong/control-plane/child-session".to_owned(),
+                        }),
+                    }),
+                },
             },
             terminal_outcome: Some(ControlPlaneSessionTerminalOutcome {
                 session_id: "child-session".to_owned(),
@@ -680,6 +746,160 @@ fn control_plane_session_read_response_roundtrips_through_json() {
 }
 
 #[test]
+fn control_plane_session_read_accepts_legacy_payload_without_workflow() {
+    let legacy_payload = serde_json::json!({
+        "current_session_id": "root-session",
+        "observation": {
+            "session": {
+                "session_id": "child-session",
+                "kind": "delegate_child",
+                "parent_session_id": "root-session",
+                "label": "Child",
+                "state": "running",
+                "created_at": 10,
+                "updated_at": 20,
+                "turn_count": 3,
+                "last_turn_at": 20,
+                "last_error": null
+            },
+            "terminal_outcome": null,
+            "recent_events": [],
+            "tail_events": []
+        }
+    });
+
+    let decoded: ControlPlaneSessionReadResponse = serde_json::from_value(legacy_payload)
+        .expect("legacy session read payload should deserialize");
+    assert!(decoded.observation.session.workflow.workflow_id.is_empty());
+    assert_eq!(decoded.observation.session.workflow.task, None);
+    assert_eq!(decoded.observation.session.workflow.phase, None);
+}
+
+#[test]
+fn control_plane_session_list_accepts_legacy_payload_without_workflow() {
+    let legacy_payload = serde_json::json!({
+        "current_session_id": "root-session",
+        "matched_count": 1,
+        "returned_count": 1,
+        "sessions": [{
+            "session_id": "child-session",
+            "kind": "delegate_child",
+            "parent_session_id": "root-session",
+            "label": "Child",
+            "state": "running",
+            "created_at": 10,
+            "updated_at": 20,
+            "turn_count": 3,
+            "last_turn_at": 20,
+            "last_error": null
+        }]
+    });
+
+    let decoded: ControlPlaneSessionListResponse = serde_json::from_value(legacy_payload)
+        .expect("legacy session list payload should deserialize");
+    assert_eq!(decoded.sessions.len(), 1);
+    assert!(decoded.sessions[0].workflow.workflow_id.is_empty());
+    assert_eq!(decoded.sessions[0].workflow.binding, None);
+}
+
+#[test]
+fn control_plane_task_read_response_roundtrips_through_json() {
+    let response = ControlPlaneTaskReadResponse {
+        current_session_id: "root-session".to_owned(),
+        task: ControlPlaneTaskSummary {
+            task_id: "child-session".to_owned(),
+            session_id: "child-session".to_owned(),
+            scope_session_id: "root-session".to_owned(),
+            label: Some("Child".to_owned()),
+            session_state: "running".to_owned(),
+            delegate_phase: Some("running".to_owned()),
+            delegate_mode: Some("async".to_owned()),
+            timeout_seconds: Some(90),
+            workflow: ControlPlaneSessionWorkflow {
+                workflow_id: "root-session".to_owned(),
+                task: Some("research control plane parity".to_owned()),
+                phase: Some("execute".to_owned()),
+                operation_kind: Some("task".to_owned()),
+                operation_scope: Some("task".to_owned()),
+                task_session_id: Some("child-session".to_owned()),
+                lineage_root_session_id: Some("root-session".to_owned()),
+                lineage_depth: Some(1),
+                runtime_self_continuity: Some(ControlPlaneSessionWorkflowContinuity {
+                    present: true,
+                    resolved_identity_present: true,
+                    session_profile_projection_present: false,
+                }),
+                binding: Some(ControlPlaneSessionWorkflowBinding {
+                    session_id: "child-session".to_owned(),
+                    task_id: "child-session".to_owned(),
+                    mode: "advisory_only".to_owned(),
+                    execution_surface: "delegate.async".to_owned(),
+                    worktree: Some(ControlPlaneSessionWorkflowBindingWorktree {
+                        worktree_id: "child-session".to_owned(),
+                        workspace_root: "/tmp/loong/control-plane/child-session".to_owned(),
+                    }),
+                }),
+            },
+            approval_request_count: 1,
+            approval_attention_count: 1,
+            requested_tool_ids: vec!["file.read".to_owned()],
+            visible_requested_tool_ids: vec!["read".to_owned()],
+            effective_tool_ids: vec!["file.read".to_owned()],
+            visible_effective_tool_ids: vec!["read".to_owned()],
+            effective_runtime_narrowing: serde_json::json!({}),
+            last_error: None,
+        },
+    };
+    let encoded = serde_json::to_string(&response).expect("task read response should serialize");
+    let decoded: ControlPlaneTaskReadResponse =
+        serde_json::from_str(&encoded).expect("task read response should deserialize");
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn control_plane_task_list_response_roundtrips_through_json() {
+    let response = ControlPlaneTaskListResponse {
+        current_session_id: "root-session".to_owned(),
+        matched_count: 1,
+        returned_count: 1,
+        tasks: vec![ControlPlaneTaskSummary {
+            task_id: "child-session".to_owned(),
+            session_id: "child-session".to_owned(),
+            scope_session_id: "root-session".to_owned(),
+            label: Some("Child".to_owned()),
+            session_state: "running".to_owned(),
+            delegate_phase: Some("running".to_owned()),
+            delegate_mode: Some("async".to_owned()),
+            timeout_seconds: Some(90),
+            workflow: ControlPlaneSessionWorkflow {
+                workflow_id: "root-session".to_owned(),
+                task: Some("research control plane parity".to_owned()),
+                phase: Some("execute".to_owned()),
+                operation_kind: Some("task".to_owned()),
+                operation_scope: Some("task".to_owned()),
+                task_session_id: Some("child-session".to_owned()),
+                lineage_root_session_id: Some("root-session".to_owned()),
+                lineage_depth: Some(1),
+                runtime_self_continuity: None,
+                binding: None,
+            },
+            approval_request_count: 1,
+            approval_attention_count: 1,
+            requested_tool_ids: vec!["file.read".to_owned()],
+            visible_requested_tool_ids: vec!["read".to_owned()],
+            effective_tool_ids: vec!["file.read".to_owned()],
+            visible_effective_tool_ids: vec!["read".to_owned()],
+            effective_runtime_narrowing: serde_json::json!({}),
+            last_error: None,
+        }],
+    };
+    let encoded = serde_json::to_string(&response).expect("task list response should serialize");
+    let decoded: ControlPlaneTaskListResponse =
+        serde_json::from_str(&encoded).expect("task list response should deserialize");
+    assert_eq!(decoded, response);
+}
+
+#[test]
 fn control_plane_approval_list_response_roundtrips_through_json() {
     let response = ControlPlaneApprovalListResponse {
         current_session_id: "root-session".to_owned(),
@@ -691,6 +911,13 @@ fn control_plane_approval_list_response_roundtrips_through_json() {
             turn_id: "turn-1".to_owned(),
             tool_call_id: "call-1".to_owned(),
             tool_name: "delegate".to_owned(),
+            visible_tool_name: Some("delegate".to_owned()),
+            request_summary: Some(serde_json::json!({
+                "tool": "delegate",
+                "request": {
+                    "task": "review runtime output"
+                }
+            })),
             approval_key: "tool:delegate".to_owned(),
             status: ControlPlaneApprovalRequestStatus::Pending,
             decision: Some(ControlPlaneApprovalDecision::ApproveOnce),

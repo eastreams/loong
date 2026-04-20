@@ -11,48 +11,48 @@ homepage.workspace = true
 readme = "../../README.md"
 
 [lib]
-name = "loongclaw_daemon"
+name = "loong_daemon"
 path = "src/lib.rs"
 
 [features]
 default = ["mvp"]
-mvp = ["loongclaw-app/default", "memory-sqlite"]
+mvp = ["loong-app/default", "memory-sqlite"]
 test-support = []
-channel-cli = ["loongclaw-app/channel-cli"]
-channel-telegram = ["loongclaw-app/channel-telegram"]
-channel-feishu = ["loongclaw-app/channel-feishu"]
-channel-matrix = ["loongclaw-app/channel-matrix"]
-channel-wecom = ["loongclaw-app/channel-wecom"]
-channel-discord = ["loongclaw-app/channel-discord"]
-channel-dingtalk = ["loongclaw-app/channel-dingtalk"]
-channel-slack = ["loongclaw-app/channel-slack"]
-channel-webhook = ["loongclaw-app/channel-webhook"]
-channel-google-chat = ["loongclaw-app/channel-google-chat"]
-channel-line = ["loongclaw-app/channel-line"]
-channel-signal = ["loongclaw-app/channel-signal"]
-channel-twitch = ["loongclaw-app/channel-twitch"]
-channel-teams = ["loongclaw-app/channel-teams"]
-channel-tlon = ["loongclaw-app/channel-tlon"]
-channel-whatsapp = ["loongclaw-app/channel-whatsapp"]
-channel-email = ["loongclaw-app/channel-email"]
-channel-mattermost = ["loongclaw-app/channel-mattermost"]
-channel-nextcloud-talk = ["loongclaw-app/channel-nextcloud-talk"]
-channel-synology-chat = ["loongclaw-app/channel-synology-chat"]
-channel-irc = ["loongclaw-app/channel-irc"]
-channel-imessage = ["loongclaw-app/channel-imessage"]
-channel-nostr = ["loongclaw-app/channel-nostr"]
-provider-openai = ["loongclaw-app/provider-openai"]
-provider-anthropic = ["loongclaw-app/provider-anthropic"]
-provider-bedrock = ["loongclaw-app/provider-bedrock"]
-provider-volcengine = ["loongclaw-app/provider-volcengine"]
-config-toml = ["loongclaw-app/config-toml"]
-memory-sqlite = ["loongclaw-app/memory-sqlite"]
-tool-shell = ["loongclaw-app/tool-shell"]
-tool-file = ["loongclaw-app/tool-file"]
-tool-http = ["loongclaw-app/tool-http"]
-tool-webfetch = ["loongclaw-app/tool-webfetch"]
-tool-websearch = ["loongclaw-app/tool-websearch"]
-tool-browser = ["loongclaw-app/tool-browser"]
+channel-cli = ["loong-app/channel-cli"]
+channel-telegram = ["loong-app/channel-telegram"]
+channel-feishu = ["loong-app/channel-feishu"]
+channel-matrix = ["loong-app/channel-matrix"]
+channel-wecom = ["loong-app/channel-wecom"]
+channel-discord = ["loong-app/channel-discord"]
+channel-dingtalk = ["loong-app/channel-dingtalk"]
+channel-slack = ["loong-app/channel-slack"]
+channel-webhook = ["loong-app/channel-webhook"]
+channel-google-chat = ["loong-app/channel-google-chat"]
+channel-line = ["loong-app/channel-line"]
+channel-signal = ["loong-app/channel-signal"]
+channel-twitch = ["loong-app/channel-twitch"]
+channel-teams = ["loong-app/channel-teams"]
+channel-tlon = ["loong-app/channel-tlon"]
+channel-whatsapp = ["loong-app/channel-whatsapp"]
+channel-email = ["loong-app/channel-email"]
+channel-mattermost = ["loong-app/channel-mattermost"]
+channel-nextcloud-talk = ["loong-app/channel-nextcloud-talk"]
+channel-synology-chat = ["loong-app/channel-synology-chat"]
+channel-irc = ["loong-app/channel-irc"]
+channel-imessage = ["loong-app/channel-imessage"]
+channel-nostr = ["loong-app/channel-nostr"]
+provider-openai = ["loong-app/provider-openai"]
+provider-anthropic = ["loong-app/provider-anthropic"]
+provider-bedrock = ["loong-app/provider-bedrock"]
+provider-volcengine = ["loong-app/provider-volcengine"]
+config-toml = ["loong-app/config-toml"]
+memory-sqlite = ["loong-app/memory-sqlite"]
+tool-shell = ["loong-app/tool-shell"]
+tool-file = ["loong-app/tool-file"]
+tool-http = ["loong-app/tool-http"]
+tool-webfetch = ["loong-app/tool-webfetch"]
+tool-websearch = ["loong-app/tool-websearch"]
+tool-browser = ["loong-app/tool-browser"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -62,46 +62,46 @@ libc = "0.2"
 async-trait.workspace = true
 axum = { workspace = true, features = ["query"] }
 clap.workspace = true
-clap_complete = "4.6"
+clap_complete = "4.5"
 dialoguer.workspace = true
-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
-loongclaw-bench = { package = "loong-bench", version = "0.1.0-alpha.3", path = "../bench" }
-loongclaw-app = { package = "loong-app", version = "0.1.0-alpha.3", path = "../app", default-features = false }
-loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-protocol = { package = "loong-protocol", version = "0.1.0-alpha.3", path = "../protocol" }
-loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec" }
+kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
+loong-bench = { package = "loong-bench", version = "0.1.2-alpha.1", path = "../bench" }
+loong-app = { package = "loong-app", version = "0.1.2-alpha.1", path = "../app", default-features = false }
+loong-bridge-runtime = { version = "0.1.2-alpha.1", path = "../bridge-runtime" }
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+loong-protocol = { package = "loong-protocol", version = "0.1.2-alpha.1", path = "../protocol" }
+loong-spec = { package = "loong-spec", version = "0.1.2-alpha.1", path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
 futures-util.workspace = true
+base64.workspace = true
+rand.workspace = true
 hex.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
+tokio-stream = { version = "0.1", features = ["sync"] }
 time.workspace = true
 toml.workspace = true
 chrono.workspace = true
-base64.workspace = true
-rand.workspace = true
 sha2.workspace = true
 semver.workspace = true
 ed25519-dalek.workspace = true
 dunce = "1"
-tokio-stream = { version = "0.1", features = ["sync"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wait-timeout = "0.2"
 
-[[bin]]
-name = "loong"
-path = "src/main.rs"
-
 [dev-dependencies]
-loongclaw-spec = { package = "loong-spec", version = "0.1.0-alpha.3", path = "../spec", features = ["test-hooks"] }
-async-trait.workspace = true
-sha2.workspace = true
+tempfile = "3"
+loong-spec = { package = "loong-spec", version = "0.1.2-alpha.1", path = "../spec", features = ["test-hooks"] }
 syn = { version = "2", features = ["full", "visit"] }
 tower = { version = "0.5", features = ["util"] }
 wat = "1"
+
+[[bin]]
+name = "loong"
+path = "src/main.rs"
 
 [lints]
 workspace = true

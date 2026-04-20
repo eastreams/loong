@@ -1,10 +1,11 @@
-use super::super::config::LoongClawConfig;
+use super::super::config::LoongConfig;
 use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_input_contract::{
     render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
+    repair_guidance_visible_tool_name,
 };
 use super::tool_result_compaction::compact_tool_search_payload_summary_str;
 use super::turn_engine::{
@@ -15,6 +16,7 @@ use super::turn_engine::{
 use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
@@ -25,7 +27,7 @@ pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the 
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
-pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. Otherwise, provide the best possible answer with the currently available evidence.";
+pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
@@ -244,6 +246,10 @@ impl ToolResultLine {
         self.envelope.tool.as_str()
     }
 
+    pub fn set_tool_name(&mut self, tool_name: impl Into<String>) {
+        self.envelope.tool = tool_name.into();
+    }
+
     pub fn payload_truncated(&self) -> bool {
         self.envelope.payload_truncated
     }
@@ -299,9 +305,7 @@ impl ToolDrivenFollowupPayload {
 }
 
 pub fn turn_failure_supports_discovery_recovery(failure: &TurnFailure) -> bool {
-    let is_tool_not_found = failure.code == "tool_not_found";
-    let has_recovery_hint = failure.supports_discovery_recovery;
-    is_tool_not_found && has_recovery_hint
+    failure.supports_discovery_recovery
 }
 
 pub fn tool_driven_followup_payload(
@@ -403,61 +407,30 @@ fn first_failed_provider_lane_tool_call_id(trace: &ToolBatchExecutionTrace) -> O
     Some(tool_call_id)
 }
 fn tool_followup_request_entry(intent: &ToolIntent) -> Value {
-    let tool_name = effective_followup_tool_name(intent);
+    let canonical_tool_name = effective_followup_tool_name(intent);
+    let visible_tool_name = effective_followup_visible_tool_name(intent);
     let request = effective_followup_request(intent);
-    let request = sanitize_followup_request_summary(tool_name.as_str(), request);
+    let request = sanitize_followup_request_summary(canonical_tool_name.as_str(), request);
     serde_json::json!({
-        "tool": tool_name,
+        "tool": visible_tool_name,
         "request": request,
     })
 }
 
 fn sanitize_followup_request_summary(tool_name: &str, request: Value) -> Value {
-    if tool_name != crate::tools::SHELL_EXEC_TOOL_NAME {
-        return request;
-    }
-
-    sanitize_shell_followup_request_summary(request)
-}
-
-fn sanitize_shell_followup_request_summary(request: Value) -> Value {
-    let Value::Object(request_object) = request else {
-        return request;
-    };
-
-    let command = request_object
-        .get("command")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let timeout_ms = request_object.get("timeout_ms").cloned();
-    let args_redacted = request_object
-        .get("args")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .filter(|count| *count > 0);
-
-    let mut sanitized_request = serde_json::Map::new();
-
-    if let Some(command) = command {
-        sanitized_request.insert("command".to_owned(), Value::String(command));
-    }
-
-    if let Some(timeout_ms) = timeout_ms {
-        sanitized_request.insert("timeout_ms".to_owned(), timeout_ms);
-    }
-
-    if let Some(args_redacted) = args_redacted {
-        let args_redacted = serde_json::Number::from(args_redacted);
-        sanitized_request.insert("args_redacted".to_owned(), Value::Number(args_redacted));
-    }
-
-    Value::Object(sanitized_request)
+    crate::tools::summarize_tool_request_for_display(tool_name, request)
 }
 
 pub(crate) fn effective_followup_tool_name(intent: &ToolIntent) -> String {
     let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
     if canonical_tool_name != "tool.invoke" {
         return canonical_tool_name.to_owned();
+    }
+
+    if let Some((tool_name, _arguments)) =
+        crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+    {
+        return tool_name.to_owned();
     }
 
     intent
@@ -469,6 +442,11 @@ pub(crate) fn effective_followup_tool_name(intent: &ToolIntent) -> String {
         .to_owned()
 }
 
+pub(crate) fn effective_followup_visible_tool_name(intent: &ToolIntent) -> String {
+    let canonical_tool_name = effective_followup_tool_name(intent);
+    crate::tools::user_visible_tool_name(canonical_tool_name.as_str())
+}
+
 pub(crate) fn effective_followup_request(intent: &ToolIntent) -> Value {
     let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
     if canonical_tool_name != "tool.invoke" {
@@ -478,19 +456,45 @@ pub(crate) fn effective_followup_request(intent: &ToolIntent) -> Value {
         );
     }
 
-    let invoked_tool_name = intent
-        .args_json
-        .get("tool_id")
-        .and_then(Value::as_str)
-        .map(crate::tools::canonical_tool_name)
-        .unwrap_or(canonical_tool_name);
-    let request_payload = intent
-        .args_json
-        .get("arguments")
-        .cloned()
-        .unwrap_or_else(|| intent.args_json.clone());
+    let raw_tool_id = intent.args_json.get("tool_id").and_then(Value::as_str);
+    let resolved_invoke = crate::tools::invoked_discoverable_tool_request(&intent.args_json);
+    let (invoked_tool_name, request_payload) = match resolved_invoke {
+        Some((tool_name, arguments)) => {
+            let request_payload =
+                strip_grouped_hidden_operation_from_request(raw_tool_id, arguments.clone());
+            (tool_name, request_payload)
+        }
+        None => {
+            let invoked_tool_name = raw_tool_id
+                .map(crate::tools::canonical_tool_name)
+                .unwrap_or(canonical_tool_name);
+            let request_payload = intent
+                .args_json
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| intent.args_json.clone());
+            (invoked_tool_name, request_payload)
+        }
+    };
 
     crate::tools::normalize_shell_payload_for_request(invoked_tool_name, request_payload)
+}
+
+fn strip_grouped_hidden_operation_from_request(raw_tool_id: Option<&str>, request: Value) -> Value {
+    let Some(raw_tool_id) = raw_tool_id.map(crate::tools::canonical_tool_name) else {
+        return request;
+    };
+    let is_grouped_hidden_surface = crate::tools::is_tool_surface_id(raw_tool_id)
+        && !crate::tools::is_provider_exposed_tool_name(raw_tool_id);
+    if !is_grouped_hidden_surface {
+        return request;
+    }
+
+    let Value::Object(mut request_object) = request else {
+        return request;
+    };
+    request_object.remove("operation");
+    Value::Object(request_object)
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenReplyBaseDecision {
@@ -712,7 +716,7 @@ impl ApprovalPromptView {
             ApprovalPromptLocale::En => self
                 .tool_name
                 .as_ref()
-                .map(|tool_name| format!("LoongClaw wants to call {tool_name}"))
+                .map(|tool_name| format!("loong wants to call {tool_name}"))
                 .or_else(|| Some("Tool call needs confirmation".to_owned())),
         }
     }
@@ -843,6 +847,7 @@ pub struct ExternalSkillInvokeContext {
     pub skill_id: String,
     pub display_name: String,
     pub instructions: String,
+    pub skill_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1114,7 +1119,10 @@ fn approval_prompt_view_from_requirement(
     ApprovalPromptView {
         marker,
         preface: trimmed_non_empty(assistant_preface),
-        tool_name: requirement.tool_name.clone(),
+        tool_name: requirement
+            .tool_name
+            .as_deref()
+            .map(crate::tools::user_visible_tool_name),
         request_id: requirement.approval_request_id.clone(),
         rule_id: trimmed_non_empty(requirement.rule_id.as_str()),
         reason: trimmed_non_empty(requirement.reason.as_str()),
@@ -1520,37 +1528,46 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
     let Some(mut tool_result_line) = ToolResultLine::parse(line) else {
         return line.to_owned();
     };
-    let tool = tool_result_line.tool_name();
+    let canonical_tool_name = crate::tools::canonical_tool_name(tool_result_line.tool_name());
+    let visible_tool_name = crate::tools::user_visible_tool_name(canonical_tool_name);
     let payload_truncated = tool_result_line.payload_truncated();
     let payload_summary = tool_result_line.payload_summary_str();
-    if payload_summary.is_empty() {
+
+    let reduction = if payload_summary.is_empty() {
+        None
+    } else {
+        match canonical_tool_name {
+            "file.read" => {
+                let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+                    return line.to_owned();
+                };
+                reduce_file_read_payload_summary(&payload_json).map(|summary| (summary, true))
+            }
+            "shell.exec" => {
+                let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+                    return line.to_owned();
+                };
+                reduce_shell_payload_summary(&mut payload_json).map(|summary| (summary, true))
+            }
+            _ if !payload_truncated => compact_tool_search_payload_summary_str(payload_summary)
+                .map(|summary| (summary, false)),
+            _ => None,
+        }
+    };
+
+    if reduction.is_none() && visible_tool_name == canonical_tool_name {
         return line.to_owned();
     }
-    let reduction = match tool {
-        "file.read" => {
-            let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
-                return line.to_owned();
-            };
-            reduce_file_read_payload_summary(&payload_json).map(|summary| (summary, true))
+
+    tool_result_line.set_tool_name(visible_tool_name);
+
+    if let Some((reduced_summary, mark_truncated)) = reduction {
+        if mark_truncated {
+            tool_result_line.set_payload_truncated(true);
         }
-        "shell.exec" => {
-            let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
-                return line.to_owned();
-            };
-            reduce_shell_payload_summary(&mut payload_json).map(|summary| (summary, true))
-        }
-        _ if !payload_truncated => {
-            compact_tool_search_payload_summary_str(payload_summary).map(|summary| (summary, false))
-        }
-        _ => None,
-    };
-    let Some((reduced_summary, mark_truncated)) = reduction else {
-        return line.to_owned();
-    };
-    if mark_truncated {
-        tool_result_line.set_payload_truncated(true);
+        tool_result_line.replace_payload_summary_str(reduced_summary);
     }
-    tool_result_line.replace_payload_summary_str(reduced_summary);
+
     tool_result_line.render().unwrap_or_else(|| line.to_owned())
 }
 
@@ -1903,7 +1920,8 @@ fn render_tool_failure_repair_guidance(
 ) -> Option<String> {
     let tool_request_summary = tool_request_summary?;
     let request_summary_json = serde_json::from_str::<Value>(tool_request_summary).ok()?;
-    let tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
+    let summary_tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
+    let repair_tool_name = repair_guidance_tool_name(summary_tool_name, tool_failure_reason);
     let request_summary_request = request_summary_json.get("request");
     let reason_mentions_repairable_shape = tool_failure_reason.contains("tool input needs repair")
         || tool_failure_reason.contains("payload must be an object")
@@ -1914,7 +1932,7 @@ fn render_tool_failure_repair_guidance(
     }
 
     let shell_guidance = render_shell_failure_repair_guidance(
-        tool_name,
+        repair_tool_name.as_str(),
         request_summary_request,
         tool_failure_reason,
     );
@@ -1924,13 +1942,31 @@ fn render_tool_failure_repair_guidance(
     }
 
     let guidance_from_request =
-        render_tool_input_repair_guidance(tool_name, request_summary_request);
+        render_tool_input_repair_guidance(repair_tool_name.as_str(), request_summary_request);
 
     if guidance_from_request.is_some() {
         return guidance_from_request;
     }
 
-    render_tool_input_repair_guidance_from_reason(tool_name, tool_failure_reason)
+    render_tool_input_repair_guidance_from_reason(repair_tool_name.as_str(), tool_failure_reason)
+}
+
+fn repair_guidance_tool_name(summary_tool_name: &str, tool_failure_reason: &str) -> String {
+    let trimmed_reason = tool_failure_reason.trim();
+    let stripped_reason = trimmed_reason
+        .strip_prefix("tool_preflight_denied: tool input needs repair: ")
+        .or_else(|| trimmed_reason.strip_prefix("tool input needs repair: "))
+        .unwrap_or(trimmed_reason);
+
+    if let Some((tool_name, _)) = stripped_reason.split_once(" payload.") {
+        return tool_name.to_owned();
+    }
+
+    if let Some(tool_name) = stripped_reason.strip_suffix(" payload must be an object") {
+        return tool_name.to_owned();
+    }
+
+    crate::tools::canonical_tool_name(summary_tool_name).to_owned()
 }
 
 fn render_shell_failure_repair_guidance(
@@ -1938,7 +1974,7 @@ fn render_shell_failure_repair_guidance(
     request_summary_request: Option<&Value>,
     tool_failure_reason: &str,
 ) -> Option<String> {
-    if tool_name != "shell.exec" {
+    if crate::tools::user_visible_tool_name(tool_name) != "exec" {
         return None;
     }
 
@@ -1955,8 +1991,9 @@ fn render_shell_failure_repair_guidance(
     }
 
     let bare_command = suggested_shell_command_name(command);
+    let visible_tool_name = repair_guidance_visible_tool_name(tool_name);
     let guidance = format!(
-        "Repair guidance for shell.exec:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{bare_command}`."
+        "Repair guidance for {visible_tool_name}:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{bare_command}`."
     );
     Some(guidance)
 }
@@ -2037,7 +2074,7 @@ where
 
 pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     messages: &[Value],
     binding: ConversationRuntimeBinding<'_>,
     raw_reply: &str,
@@ -2132,10 +2169,17 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
         .filter(|value| !value.is_empty())
         .unwrap_or(skill_id.as_str())
         .to_owned();
+    let skill_root = payload_json
+        .get("skill_root")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
     Some(ExternalSkillInvokeContext {
         skill_id,
         display_name,
         instructions,
+        skill_root,
     })
 }
 
@@ -2483,12 +2527,12 @@ mod tests {
     #[test]
     fn turn_failure_supports_discovery_recovery_requires_structured_metadata() {
         let recovery_failure = TurnFailure::policy_denied_with_discovery_recovery(
-            "tool_not_found",
-            "tool_not_found: requested tool is not available If you need a non-core capability, call tool.search with a short natural-language description of the task.",
+            "invalid_tool_lease",
+            "tool.invoke needs a fresh lease from the current tool.search result. If you need a non-core capability, call tool.search with a short natural-language description of the task.",
         );
         let plain_failure = TurnFailure::policy_denied(
-            "tool_not_found",
-            "tool_not_found: requested tool is not available",
+            "invalid_tool_lease",
+            "tool execution failed: invalid_tool_lease: expired lease",
         );
 
         assert!(turn_failure_supports_discovery_recovery(&recovery_failure));
@@ -2946,7 +2990,7 @@ mod tests {
             reason: "payload.command contains path separators".to_owned(),
         };
         let tool_request_summary =
-            r#"{"tool":"shell.exec","request":{"command":"C:\\Windows\\System32\\RM.EXE"}}"#;
+            r#"{"tool":"exec","request":{"command":"C:\\Windows\\System32\\RM.EXE"}}"#;
         let tail = build_tool_driven_followup_tail(
             "preface",
             &payload,
@@ -2972,7 +3016,7 @@ mod tests {
             .and_then(|message| message.get("content"))
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
-        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("Repair guidance for exec"));
         assert!(user_prompt.contains("retry with `rm.exe`"));
     }
 
@@ -3006,6 +3050,14 @@ mod tests {
         assert!(user_prompt.contains(DISCOVERY_RECOVERY_FOLLOWUP_PROMPT));
         assert!(user_prompt.contains("Recovery reason:\nbounded-recovery"));
         assert!(!user_prompt.contains("tool_not_found"));
+        assert!(
+            user_prompt.contains("tool.invoke"),
+            "discovery recovery prompt should explain the invoke step: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("lease"),
+            "discovery recovery prompt should mention the lease requirement: {user_prompt}"
+        );
         assert!(user_prompt.contains("Loop warning:\nwarning"));
     }
 
@@ -3060,7 +3112,7 @@ mod tests {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
         };
-        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"ls -la"}}"#;
+        let tool_request_summary = r#"{"tool":"exec","request":{"command":"ls -la"}}"#;
         let tail = build_tool_driven_followup_tail(
             "preface",
             &payload,
@@ -3076,7 +3128,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
 
-        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("Repair guidance for exec"));
         assert!(user_prompt.contains("The failed request used `ls -la`; retry with `ls`"));
     }
 
@@ -3085,7 +3137,7 @@ mod tests {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
         };
-        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"\"ls -la\" "}}"#;
+        let tool_request_summary = r#"{"tool":"exec","request":{"command":"\"ls -la\" "}}"#;
         let tail = build_tool_driven_followup_tail(
             "preface",
             &payload,
@@ -3101,7 +3153,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
 
-        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("Repair guidance for exec"));
         assert!(user_prompt.contains("The failed request used `\"ls -la\" `; retry with `ls`"));
     }
 
@@ -3112,7 +3164,7 @@ mod tests {
                 "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
                     .to_owned(),
         };
-        let tool_request_summary = r#"{"tool":"file.read","request":{}}"#;
+        let tool_request_summary = r#"{"tool":"read","request":{}}"#;
         let tail = build_tool_driven_followup_tail(
             "preface",
             &payload,
@@ -3128,9 +3180,11 @@ mod tests {
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
 
-        assert!(user_prompt.contains("Repair guidance for file.read"));
+        assert!(user_prompt.contains("Repair guidance for read"));
         assert!(user_prompt.contains("Add required field `payload.path` as a string."));
-        assert!(user_prompt.contains("Expected payload shape: path:string,max_bytes?:integer."));
+        assert!(user_prompt.contains(
+            "Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer."
+        ));
     }
 
     #[test]
@@ -3139,7 +3193,7 @@ mod tests {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
                 .to_owned(),
         };
-        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"echo"}}"#;
+        let tool_request_summary = r#"{"tool":"exec","request":{"command":"echo"}}"#;
         let tail = build_tool_driven_followup_tail(
             "preface",
             &payload,
@@ -3155,7 +3209,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
 
-        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("Repair guidance for exec"));
         assert!(user_prompt.contains("Set `payload.args` to an array value."));
         assert!(user_prompt.contains(
             "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
@@ -3300,6 +3354,24 @@ mod tests {
             "stdout": format!("prefix {}", "x".repeat(512)),
             "stderr": "",
             "trace_id": "trace-123",
+            "details": {
+                "truncated": true,
+                "handoff": {
+                    "tool": "read",
+                    "recommended_stream": "stdout",
+                    "recommended_recipe": "last_page",
+                    "recommended_payload": {"path": "/repo/.loongclaw/tool-output/stdout.log", "offset": 801, "limit": 200},
+                    "recipes": {
+                        "stdout": {
+                            "recommended_recipe": "last_page",
+                            "first_page": {"path": "/repo/.loongclaw/tool-output/stdout.log", "offset": 1, "limit": 200},
+                            "last_page": {"path": "/repo/.loongclaw/tool-output/stdout.log", "offset": 801, "limit": 200},
+                            "head": {"path": "/repo/.loongclaw/tool-output/stdout.log", "offset": 1, "limit": 200},
+                            "tail": {"path": "/repo/.loongclaw/tool-output/stdout.log", "offset": 801, "limit": 200}
+                        }
+                    }
+                }
+            }
         });
         let line = format!(
             "[ok] {}",
@@ -3327,6 +3399,7 @@ mod tests {
         )
         .expect("shell payload summary should stay valid json");
 
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(summary["adapter"], "core-tools");
         assert_eq!(summary["tool_name"], "shell.exec");
         assert_eq!(summary["trace_id"], "trace-123");
@@ -3334,6 +3407,27 @@ mod tests {
         assert_eq!(summary["exit_code"], 0);
         assert!(summary.get("stdout_preview").is_some());
         assert_eq!(summary["stdout_truncated"], true);
+        assert_eq!(summary["details"]["handoff"]["tool"], json!("read"));
+        assert_eq!(
+            summary["details"]["handoff"]["recommended_stream"],
+            json!("stdout")
+        );
+        assert_eq!(
+            summary["details"]["handoff"]["recommended_recipe"],
+            json!("last_page")
+        );
+        assert_eq!(
+            summary["details"]["handoff"]["recipes"]["stdout"]["recommended_recipe"],
+            json!("last_page")
+        );
+        assert_eq!(
+            summary["details"]["handoff"]["recipes"]["stdout"]["last_page"]["offset"],
+            json!(801)
+        );
+        assert_eq!(
+            summary["details"]["handoff"]["recommended_payload"]["offset"],
+            json!(801)
+        );
     }
 
     #[test]
@@ -3651,7 +3745,7 @@ mod tests {
 
     #[test]
     fn reduce_followup_payload_for_model_borrows_unmodified_tool_results() {
-        let tool_result = r#"[ok] {"status":"ok","tool":"shell.exec","tool_call_id":"call-shell","payload_summary":"{\"stdout\":\"hello\"}","payload_chars":32,"payload_truncated":false}"#;
+        let tool_result = r#"[ok] {"status":"ok","tool":"tool.search","tool_call_id":"call-search","payload_summary":"{\"query\":\"status\"}","payload_chars":32,"payload_truncated":true}"#;
 
         let reduced = reduce_followup_payload_for_model("tool_result", tool_result);
 
@@ -3693,10 +3787,42 @@ mod tests {
             .expect("multi-intent request summary should be an array");
 
         assert_eq!(request_entries.len(), 2);
-        assert_eq!(request_entries[0]["tool"], "file.read");
-        assert_eq!(request_entries[1]["tool"], "shell.exec");
+        assert_eq!(request_entries[0]["tool"], "read");
+        assert_eq!(request_entries[1]["tool"], "exec");
         assert_eq!(request_entries[1]["request"]["command"], "ls");
         assert_eq!(request_entries[1]["request"]["args_redacted"], 1);
+    }
+
+    #[test]
+    fn summarize_single_tool_followup_request_resolves_grouped_hidden_invoke_to_precise_operation()
+    {
+        let intent = ToolIntent {
+            tool_name: "tool.invoke".to_owned(),
+            args_json: json!({
+                "tool_id": "agent",
+                "lease": "lease-agent",
+                "arguments": {
+                    "operation": "delegate-background",
+                    "task": "summarize the repo"
+                }
+            }),
+            source: "provider_tool_call".to_owned(),
+            session_id: "session-a".to_owned(),
+            turn_id: "turn-a".to_owned(),
+            tool_call_id: "call-agent".to_owned(),
+        };
+
+        let request_summary = summarize_single_tool_followup_request(&intent)
+            .expect("grouped hidden invoke should retain a request summary");
+        let request_summary_json: Value =
+            serde_json::from_str(&request_summary).expect("request summary should be valid json");
+
+        assert_eq!(request_summary_json["tool"], "delegate_async");
+        assert_eq!(
+            request_summary_json["request"]["task"],
+            "summarize the repo"
+        );
+        assert!(request_summary_json["request"].get("operation").is_none());
     }
 
     #[test]

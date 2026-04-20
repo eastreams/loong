@@ -6,7 +6,7 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -153,6 +153,7 @@ const FEISHU_TOOL_ALIAS_PAIRS: &[(&str, &str)] = &[
     ("feishu_card_update", "feishu.card.update"),
     ("feishu_calendar_list", "feishu.calendar.list"),
     ("feishu_calendar_freebusy", "feishu.calendar.freebusy"),
+    ("feishu_calendar_primary_get", "feishu.calendar.primary.get"),
 ];
 
 #[cfg(all(test, not(feature = "tool-file")))]
@@ -217,6 +218,7 @@ const FEISHU_TOOL_ALIAS_PAIRS: &[(&str, &str)] = &[
     ("feishu_card_update", "feishu.card.update"),
     ("feishu_calendar_list", "feishu.calendar.list"),
     ("feishu_calendar_freebusy", "feishu.calendar.freebusy"),
+    ("feishu_calendar_primary_get", "feishu.calendar.primary.get"),
 ];
 
 #[derive(Debug, Clone)]
@@ -553,7 +555,7 @@ impl FeishuInternalCallbackPayload {
 struct FeishuWhoamiPayload {
     account_id: Option<String>,
     open_id: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -567,7 +569,7 @@ struct FeishuDocCreatePayload {
     content: Option<String>,
     content_path: Option<String>,
     content_type: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -580,7 +582,7 @@ struct FeishuDocAppendPayload {
     content: Option<String>,
     content_path: Option<String>,
     content_type: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -591,7 +593,7 @@ struct FeishuDocReadPayload {
     selector: GrantSelectorPayload,
     url: String,
     lang: Option<u8>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -607,7 +609,7 @@ struct FeishuMessagesHistoryPayload {
     sort_type: Option<String>,
     page_size: Option<usize>,
     page_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -617,7 +619,7 @@ struct FeishuMessagesGetPayload {
     #[serde(flatten)]
     selector: GrantSelectorPayload,
     message_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -638,7 +640,7 @@ struct FeishuMessagesSearchPayload {
     chat_type: Option<String>,
     start_time: Option<String>,
     end_time: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -652,7 +654,7 @@ struct FeishuMessagesResourceGetPayload {
     #[serde(rename = "type")]
     resource_type: String,
     save_as: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -672,7 +674,7 @@ struct FeishuMessagesSendPayload {
     file_path: Option<String>,
     file_type: Option<String>,
     uuid: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -692,7 +694,7 @@ struct FeishuMessagesReplyPayload {
     file_type: Option<String>,
     reply_in_thread: Option<bool>,
     uuid: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -705,7 +707,7 @@ struct FeishuCardUpdatePayload {
     markdown: Option<String>,
     shared: bool,
     open_ids: Option<Vec<String>>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -766,6 +768,16 @@ struct FeishuCalendarListPayload {
     page_size: Option<usize>,
     page_token: Option<String>,
     sync_token: Option<String>,
+    #[serde(default, rename = "_loong", alias = "_loong")]
+    internal: LoongInternalToolPayload,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FeishuCalendarPrimaryGetPayload {
+    #[serde(flatten)]
+    selector: GrantSelectorPayload,
+    user_id_type: Option<String>,
     #[serde(default, rename = "_loong", alias = "_loongclaw")]
     internal: LoongInternalToolPayload,
 }
@@ -778,7 +790,7 @@ struct FeishuBitableListPayload {
     app_token: String,
     page_token: Option<String>,
     page_size: Option<usize>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -789,7 +801,7 @@ struct FeishuBitableAppCreatePayload {
     selector: GrantSelectorPayload,
     name: String,
     folder_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -799,7 +811,7 @@ struct FeishuBitableAppGetPayload {
     #[serde(flatten)]
     selector: GrantSelectorPayload,
     app_token: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -811,7 +823,7 @@ struct FeishuBitableAppListPayload {
     folder_token: Option<String>,
     page_token: Option<String>,
     page_size: Option<usize>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -823,7 +835,7 @@ struct FeishuBitableAppPatchPayload {
     app_token: String,
     name: Option<String>,
     is_advanced: Option<bool>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -835,7 +847,7 @@ struct FeishuBitableAppCopyPayload {
     app_token: String,
     name: String,
     folder_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -847,7 +859,7 @@ struct FeishuBitableRecordCreatePayload {
     app_token: String,
     table_id: String,
     fields: Value,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -860,7 +872,7 @@ struct FeishuBitableRecordUpdatePayload {
     table_id: String,
     record_id: String,
     fields: Value,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -872,7 +884,7 @@ struct FeishuBitableRecordDeletePayload {
     app_token: String,
     table_id: String,
     record_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -884,7 +896,7 @@ struct FeishuBitableRecordBatchCreatePayload {
     app_token: String,
     table_id: String,
     records: Vec<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -896,7 +908,7 @@ struct FeishuBitableRecordBatchUpdatePayload {
     app_token: String,
     table_id: String,
     records: Vec<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -908,7 +920,7 @@ struct FeishuBitableRecordBatchDeletePayload {
     app_token: String,
     table_id: String,
     records: Vec<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -923,7 +935,7 @@ struct FeishuBitableFieldCreatePayload {
     #[serde(rename = "type")]
     field_type: i64,
     property: Option<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -937,7 +949,7 @@ struct FeishuBitableFieldListPayload {
     view_id: Option<String>,
     page_size: Option<usize>,
     page_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -953,7 +965,7 @@ struct FeishuBitableFieldUpdatePayload {
     #[serde(rename = "type")]
     field_type: i64,
     property: Option<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -965,7 +977,7 @@ struct FeishuBitableFieldDeletePayload {
     app_token: String,
     table_id: String,
     field_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -978,7 +990,7 @@ struct FeishuBitableViewCreatePayload {
     table_id: String,
     view_name: String,
     view_type: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -990,7 +1002,7 @@ struct FeishuBitableViewGetPayload {
     app_token: String,
     table_id: String,
     view_id: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1003,7 +1015,7 @@ struct FeishuBitableViewListPayload {
     table_id: String,
     page_size: Option<usize>,
     page_token: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1016,7 +1028,7 @@ struct FeishuBitableViewPatchPayload {
     table_id: String,
     view_id: String,
     view_name: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1029,7 +1041,7 @@ struct FeishuBitableTableCreatePayload {
     name: String,
     default_view_name: Option<String>,
     fields: Option<Vec<Value>>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1041,7 +1053,7 @@ struct FeishuBitableTablePatchPayload {
     app_token: String,
     table_id: String,
     name: String,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1052,7 +1064,7 @@ struct FeishuBitableTableBatchCreatePayload {
     selector: GrantSelectorPayload,
     app_token: String,
     tables: Vec<Value>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1070,7 +1082,7 @@ struct FeishuBitableRecordSearchPayload {
     sort: Option<Value>,
     field_names: Option<Vec<String>>,
     automatic_fields: Option<bool>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1087,7 +1099,7 @@ struct FeishuCalendarFreebusyPayload {
     include_external_calendar: Option<bool>,
     only_busy: Option<bool>,
     need_rsvp_status: Option<bool>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 
@@ -1172,6 +1184,9 @@ pub(super) fn canonical_feishu_tool_name(raw: &str) -> Option<&'static str> {
         "feishu.card.update" | "feishu_card_update" => Some("feishu.card.update"),
         "feishu.calendar.list" | "feishu_calendar_list" => Some("feishu.calendar.list"),
         "feishu.calendar.freebusy" | "feishu_calendar_freebusy" => Some("feishu.calendar.freebusy"),
+        "feishu.calendar.primary.get" | "feishu_calendar_primary_get" => {
+            Some("feishu.calendar.primary.get")
+        }
         _ => None,
     }
 }
@@ -1366,10 +1381,15 @@ pub(super) fn feishu_tool_registry_entries() -> Vec<super::ToolRegistryEntry> {
     );
     push_feishu_registry_entry(
         &mut entries,
+        "feishu.calendar.primary.get",
+        "Fetch the Feishu primary calendar entry for the selected account grant",
+    );
+    push_feishu_registry_entry(
+        &mut entries,
         "feishu.whoami",
         "Inspect the active Feishu grant principal and profile",
     );
-    entries.sort_by_key(|entry| entry.name);
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
     entries
 }
 
@@ -1873,6 +1893,30 @@ pub(super) fn feishu_provider_tool_definitions() -> Vec<Value> {
                 }
             },
             "required": ["app_token", "table_id"],
+            "additionalProperties": false
+        }),
+    );
+    push_feishu_provider_tool_definition(
+        &mut tools,
+        "feishu_calendar_primary_get",
+        "Fetch the Feishu primary calendar entry for the selected account grant.",
+        json!({
+            "type": "object",
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Optional Feishu configured account id to route through."
+                },
+                "open_id": {
+                    "type": "string",
+                    "description": "Optional explicit Feishu user open_id grant selector."
+                },
+                "user_id_type": {
+                    "type": "string",
+                    "description": "Optional Feishu user id type for the response. Defaults to `open_id`."
+                }
+            },
+            "required": [],
             "additionalProperties": false
         }),
     );
@@ -2731,6 +2775,9 @@ pub(super) fn execute_feishu_tool_with_config(
         "feishu.calendar.list" => execute_feishu_calendar_list_tool_with_config(request, config),
         "feishu.calendar.freebusy" => {
             execute_feishu_calendar_freebusy_tool_with_config(request, config)
+        }
+        "feishu.calendar.primary.get" => {
+            execute_feishu_calendar_primary_get_tool_with_config(request, config)
         }
         other => Err(format!("tool_not_found: unknown feishu tool `{other}`")),
     }
@@ -4863,7 +4910,14 @@ fn execute_feishu_calendar_list_tool_with_config(
             let calendars = calendar::get_primary_calendars(
                 &context.client,
                 &grant.access_token,
-                payload.user_id_type.as_deref().or(Some("open_id")),
+                &calendar::FeishuPrimaryCalendarQuery {
+                    user_id_type: Some(
+                        payload
+                            .user_id_type
+                            .clone()
+                            .unwrap_or_else(|| "open_id".to_owned()),
+                    ),
+                },
             )
             .await?;
             return Ok(ok_outcome(
@@ -4898,6 +4952,53 @@ fn execute_feishu_calendar_list_tool_with_config(
                 "primary": false,
                 "page": page,
             }),
+        ))
+    })
+}
+
+fn execute_feishu_calendar_primary_get_tool_with_config(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let payload = parse_payload::<FeishuCalendarPrimaryGetPayload>(
+        "feishu.calendar.primary.get",
+        request.payload,
+    )?;
+    let context = load_feishu_tool_context(
+        config,
+        requested_account_id(payload.selector.account_id.as_deref(), &payload.internal),
+    )?;
+    let grant = require_selected_grant(&context, payload.selector.open_id.as_deref())?;
+    let tool_name = request.tool_name;
+
+    run_feishu_future(async move {
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
+        ensure_required_scopes(&grant, &["calendar:calendar:readonly"], tool_name.as_str())?;
+        let calendars = calendar::get_primary_calendars(
+            &context.client,
+            &grant.access_token,
+            &calendar::FeishuPrimaryCalendarQuery {
+                user_id_type: Some(
+                    payload
+                        .user_id_type
+                        .clone()
+                        .unwrap_or_else(|| "open_id".to_owned()),
+                ),
+            },
+        )
+        .await?;
+
+        Ok(ok_outcome(
+            tool_name.as_str(),
+            context.configured_account_label.as_str(),
+            context.account_id.as_str(),
+            &grant.principal,
+            json!({ "calendars": calendars }),
         ))
     })
 }
@@ -5698,7 +5799,11 @@ fn push_feishu_registry_entry(
     name: &'static str,
     description: &'static str,
 ) {
-    entries.push(super::ToolRegistryEntry { name, description });
+    let entry = super::ToolRegistryEntry {
+        name: name.to_owned(),
+        description: description.to_owned(),
+    };
+    entries.push(entry);
 }
 
 fn push_feishu_provider_tool_definition(
@@ -5834,4 +5939,43 @@ where
 
 fn trimmed_opt(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn feishu_calendar_primary_get_payload_accepts_selector_and_user_id_type() {
+        let payload: FeishuCalendarPrimaryGetPayload = serde_json::from_value(json!({
+            "account_id": "acct-001",
+            "open_id": "ou_abc",
+            "user_id_type": "union_id"
+        }))
+        .expect("primary get payload parses");
+        assert_eq!(payload.selector.account_id.as_deref(), Some("acct-001"));
+        assert_eq!(payload.selector.open_id.as_deref(), Some("ou_abc"));
+        assert_eq!(payload.user_id_type.as_deref(), Some("union_id"));
+    }
+
+    #[test]
+    fn feishu_calendar_primary_get_payload_defaults_to_empty() {
+        let payload: FeishuCalendarPrimaryGetPayload =
+            serde_json::from_value(json!({})).expect("empty primary get payload parses");
+        assert!(payload.selector.account_id.is_none());
+        assert!(payload.selector.open_id.is_none());
+        assert!(payload.user_id_type.is_none());
+    }
+
+    #[test]
+    fn feishu_calendar_primary_get_payload_rejects_unknown_fields() {
+        let err = serde_json::from_value::<FeishuCalendarPrimaryGetPayload>(json!({
+            "unexpected_field": true
+        }))
+        .expect_err("unknown fields must be rejected");
+        assert!(
+            err.to_string().contains("unexpected_field"),
+            "error should mention the unknown field, got: {err}"
+        );
+    }
 }

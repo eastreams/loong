@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::time::Duration;
 
 use crate::CliResult;
-use crate::config::{AcpxMcpServerConfig, LoongClawConfig};
+use crate::config::{AcpxMcpServerConfig, LoongConfig};
 #[cfg(test)]
 use crate::process_launch::retry_executable_file_busy_async;
 #[cfg(test)]
@@ -111,7 +111,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
 
     async fn ensure_session(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         request: &AcpSessionBootstrap,
     ) -> CliResult<AcpSessionHandle> {
         let profile = resolve_profile(config)?;
@@ -209,7 +209,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
 
     async fn run_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session: &AcpSessionHandle,
         request: &AcpTurnRequest,
     ) -> CliResult<AcpTurnResult> {
@@ -219,7 +219,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
 
     async fn run_turn_with_sink(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session: &AcpSessionHandle,
         request: &AcpTurnRequest,
         abort: Option<AcpAbortSignal>,
@@ -257,7 +257,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         .await
     }
 
-    async fn cancel(&self, config: &LoongClawConfig, session: &AcpSessionHandle) -> CliResult<()> {
+    async fn cancel(&self, config: &LoongConfig, session: &AcpSessionHandle) -> CliResult<()> {
         let profile = resolve_profile(config)?;
         let state = resolve_handle_state(&profile, session)?;
         let args = build_verb_args(
@@ -286,7 +286,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         Ok(())
     }
 
-    async fn close(&self, config: &LoongClawConfig, session: &AcpSessionHandle) -> CliResult<()> {
+    async fn close(&self, config: &LoongConfig, session: &AcpSessionHandle) -> CliResult<()> {
         let profile = resolve_profile(config)?;
         let state = resolve_handle_state(&profile, session)?;
         let args = build_verb_args(
@@ -317,7 +317,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
 
     async fn get_status(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session: &AcpSessionHandle,
     ) -> CliResult<Option<AcpSessionStatus>> {
         let profile = resolve_profile(config)?;
@@ -381,7 +381,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
 
     async fn set_mode(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session: &AcpSessionHandle,
         mode: AcpSessionMode,
     ) -> CliResult<()> {
@@ -416,7 +416,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
 
     async fn set_config_option(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session: &AcpSessionHandle,
         patch: &AcpConfigPatch,
     ) -> CliResult<()> {
@@ -454,7 +454,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         Ok(())
     }
 
-    async fn doctor(&self, config: &LoongClawConfig) -> CliResult<Option<AcpDoctorReport>> {
+    async fn doctor(&self, config: &LoongConfig) -> CliResult<Option<AcpDoctorReport>> {
         let raw_profile = config.acp.acpx_profile().cloned().unwrap_or_default();
         let command = raw_profile
             .command()
@@ -754,7 +754,7 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongClawConfig};
+    use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongConfig};
     use crate::test_support::ScopedEnv;
 
     const ACPX_RUNTIME_TEST_TIMEOUT_SECONDS: f64 = 45.0;
@@ -879,7 +879,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn write_executable_script_atomically_preserves_existing_script_when_write_fails() {
-        let temp_dir = unique_temp_dir("loongclaw-acpx-script-atomic");
+        let temp_dir = unique_temp_dir("loong-acpx-script-atomic");
         let script_path = temp_dir.join("fake-acpx");
 
         write_executable_script_atomically(&script_path, "#!/bin/sh\necho old\n")
@@ -1001,10 +1001,10 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn fake_acpx_config(script_path: &Path, cwd: &Path) -> LoongClawConfig {
+    fn fake_acpx_config(script_path: &Path, cwd: &Path) -> LoongConfig {
         let startup_timeout_ms = ACPX_FAKE_RUNTIME_STARTUP_TIMEOUT_MS;
 
-        LoongClawConfig {
+        LoongConfig {
             acp: AcpConfig {
                 startup_timeout_ms: Some(startup_timeout_ms),
                 allow_mcp_server_injection: false,
@@ -1022,14 +1022,14 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         }
     }
 
     #[test]
     #[cfg(unix)]
     fn fake_acpx_config_uses_explicit_process_test_startup_timeout() {
-        let temp_dir = unique_temp_dir("loongclaw-acpx-config-timeout");
+        let temp_dir = unique_temp_dir("loong-acpx-config-timeout");
         let script_path = temp_dir.join("fake-acpx");
 
         let config = fake_acpx_config(&script_path, &temp_dir);
@@ -1041,7 +1041,7 @@ mod tests {
     #[tokio::test]
     async fn doctor_reports_missing_command() {
         let backend = AcpxCliProbeBackend;
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backends: AcpBackendProfilesConfig {
                     acpx: Some(AcpxBackendConfig {
@@ -1052,7 +1052,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let report = backend
@@ -1080,7 +1080,7 @@ mod tests {
 
     #[test]
     fn derive_agent_id_prefers_session_key_prefix() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.acp.default_agent = Some("codex".to_owned());
         config.acp.allowed_agents = vec!["codex".to_owned(), "claude".to_owned()];
         let metadata = BTreeMap::from([("acp_agent".to_owned(), "claude".to_owned())]);
@@ -1092,7 +1092,7 @@ mod tests {
 
     #[test]
     fn derive_agent_id_uses_configured_default_when_session_has_no_agent_prefix() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.acp.default_agent = Some("gemini".to_owned());
         config.acp.allowed_agents = vec!["codex".to_owned(), "gemini".to_owned()];
 
@@ -1103,7 +1103,7 @@ mod tests {
 
     #[test]
     fn derive_agent_id_rejects_mismatched_metadata_agent() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.acp.default_agent = Some("codex".to_owned());
         config.acp.allowed_agents = vec!["codex".to_owned(), "claude".to_owned()];
         let metadata = BTreeMap::from([("acp_agent".to_owned(), "codex".to_owned())]);
@@ -1117,13 +1117,13 @@ mod tests {
     #[cfg(unix)]
     async fn doctor_accepts_fake_version_command() {
         let _env = crate::test_support::ScopedEnv::new();
-        let temp_dir = unique_temp_dir("loongclaw-acpx-probe");
+        let temp_dir = unique_temp_dir("loong-acpx-probe");
         let script_path = temp_dir.join("fake-acpx");
         write_executable_script_atomically(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
             .expect("write fake acpx script");
 
         let backend = AcpxCliProbeBackend;
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backends: AcpBackendProfilesConfig {
                     acpx: Some(AcpxBackendConfig {
@@ -1142,7 +1142,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let mut last_report = None;
@@ -1189,7 +1189,7 @@ mod tests {
     #[cfg(unix)]
     async fn doctor_accepts_path_discovered_fake_version_command() {
         let _guard = lock_acpx_runtime_tests().await;
-        let temp_dir = unique_temp_dir("loongclaw-acpx-probe-path");
+        let temp_dir = unique_temp_dir("loong-acpx-probe-path");
         let bin_dir = temp_dir.join("bin");
         let script_path = bin_dir.join("fake-acpx");
         std::fs::create_dir_all(&bin_dir).expect("create bin dir");
@@ -1205,7 +1205,7 @@ mod tests {
         env.set("PATH", joined_path);
 
         let backend = AcpxCliProbeBackend;
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             acp: AcpConfig {
                 backends: AcpBackendProfilesConfig {
                     acpx: Some(AcpxBackendConfig {
@@ -1217,7 +1217,7 @@ mod tests {
                 },
                 ..AcpConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let report = backend
@@ -1240,7 +1240,7 @@ mod tests {
     async fn runtime_backend_uses_agent_proxy_when_mcp_servers_requested() {
         let _lock = lock_acpx_runtime_tests().await;
         let _env = crate::test_support::ScopedEnv::new();
-        let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-proxy");
+        let temp_dir = unique_temp_dir("loong-acpx-mcp-proxy");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
             &temp_dir,
@@ -1366,7 +1366,7 @@ exit 0
     #[tokio::test]
     #[cfg(unix)]
     async fn ensure_session_rejects_unknown_requested_mcp_server_names() {
-        let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-unknown");
+        let temp_dir = unique_temp_dir("loong-acpx-mcp-unknown");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
             &temp_dir,
@@ -1418,7 +1418,7 @@ exit 0
     async fn runtime_backend_executes_session_turn_and_controls() {
         let _lock = lock_acpx_runtime_tests().await;
         let _env = crate::test_support::ScopedEnv::new();
-        let temp_dir = unique_temp_dir("loongclaw-acpx-runtime");
+        let temp_dir = unique_temp_dir("loong-acpx-runtime");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
             &temp_dir,
@@ -1606,7 +1606,7 @@ exit 0
     async fn runtime_backend_supports_local_abort_for_running_prompt() {
         let _lock = lock_acpx_runtime_tests().await;
         let _env = crate::test_support::ScopedEnv::new();
-        let temp_dir = unique_temp_dir("loongclaw-acpx-abort");
+        let temp_dir = unique_temp_dir("loong-acpx-abort");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
             &temp_dir,
@@ -1710,7 +1710,7 @@ exit 0
     async fn ensure_session_falls_back_to_sessions_new_when_ensure_has_no_identifiers() {
         let _lock = lock_acpx_runtime_tests().await;
         let _env = crate::test_support::ScopedEnv::new();
-        let temp_dir = unique_temp_dir("loongclaw-acpx-fallback");
+        let temp_dir = unique_temp_dir("loong-acpx-fallback");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
             &temp_dir,

@@ -7,16 +7,15 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use futures_util::stream::{self, StreamExt};
-use loongclaw_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+use loong_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::{
-    GovernedToolApprovalMode, LoongClawConfig, SessionVisibility, ToolConfig, ToolConsentMode,
+    GovernedToolApprovalMode, LoongConfig, SessionVisibility, ToolConfig, ToolConsentMode,
 };
 use crate::context::KernelContext;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
 #[cfg(feature = "memory-sqlite")]
@@ -27,6 +26,7 @@ use crate::operator::session_graph::OperatorSessionGraph;
 use crate::session::repository::{
     NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };
+use crate::session::store::{self, SessionStoreConfig};
 use crate::tools::runtime_events::{
     ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
@@ -43,14 +43,14 @@ use super::autonomy_policy::{
     AUTONOMY_POLICY_SOURCE, AutonomyTurnBudgetState, PolicyDecision, PolicyDecisionInput,
     evaluate_policy, render_reason,
 };
-use super::runtime::{DefaultConversationRuntime, SessionContext};
+use super::runtime::{SessionContext, load_default_conversation_runtime};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_result_compaction::compact_tool_search_payload_summary;
 use super::turn_observer::{ConversationTurnObserverHandle, ConversationTurnRuntimeEvent};
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
 use super::tool_input_contract::detect_repairable_tool_request_issue;
-use super::turn_shared::effective_followup_tool_name;
+use super::turn_shared::effective_followup_visible_tool_name;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderTurn {
@@ -568,13 +568,13 @@ impl ToolExecutionPreflight {
 
 #[derive(Clone)]
 pub struct DefaultAppToolDispatcher {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     tool_config: ToolConfig,
-    app_config: Option<Arc<LoongClawConfig>>,
+    app_config: Option<Arc<LoongConfig>>,
 }
 
 impl DefaultAppToolDispatcher {
-    pub fn new(memory_config: MemoryRuntimeConfig, tool_config: ToolConfig) -> Self {
+    pub fn new(memory_config: SessionStoreConfig, tool_config: ToolConfig) -> Self {
         Self {
             memory_config,
             tool_config,
@@ -582,7 +582,7 @@ impl DefaultAppToolDispatcher {
         }
     }
 
-    pub fn with_config(memory_config: MemoryRuntimeConfig, app_config: LoongClawConfig) -> Self {
+    pub fn with_config(memory_config: SessionStoreConfig, app_config: LoongConfig) -> Self {
         Self {
             memory_config,
             tool_config: app_config.tools.clone(),
@@ -592,7 +592,7 @@ impl DefaultAppToolDispatcher {
 
     pub fn runtime() -> Self {
         Self::new(
-            crate::memory::runtime_config::get_memory_runtime_config().clone(),
+            store::current_session_store_config().clone(),
             ToolConfig::default(),
         )
     }
@@ -1223,8 +1223,9 @@ impl DefaultAppToolDispatcher {
 
         let approval_request_id =
             governed_approval_request_id(session_context, descriptor.name, intent);
+        let visible_tool_name = crate::tools::model_visible_tool_name(descriptor.name);
         let reason = format!(
-            "operator approval required before running shell command `{normalized_command}` via `shell.exec`"
+            "operator approval required before running shell command `{normalized_command}` via `{visible_tool_name}`"
         );
         let rule_id = crate::tools::shell_policy_ext::SHELL_EXEC_APPROVAL_RULE_ID;
         let request_payload_json = Self::approval_request_payload_json(
@@ -1322,6 +1323,17 @@ fn tool_is_session_consent_exempt(tool_name: &str) -> bool {
         tool_name,
         "approval_request_resolve" | "approval_request_status" | "approval_requests_list"
     )
+}
+
+fn tool_intent_skips_provider_exposed_gate(
+    intent: &ToolIntent,
+    descriptor: &crate::tools::ToolDescriptor,
+) -> bool {
+    if descriptor.name == "tool.invoke" {
+        return true;
+    }
+
+    intent.source == "approval_control" && tool_is_session_consent_exempt(descriptor.name)
 }
 
 fn tool_is_auto_eligible(
@@ -1716,7 +1728,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 .app_config
                 .as_ref()
                 .ok_or_else(|| "session_continue_not_configured".to_owned())?;
-            let runtime = DefaultConversationRuntime::from_config_or_env(app_config.as_ref())?;
+            let runtime = load_default_conversation_runtime(app_config.as_ref())?;
             return crate::tools::continue_session_with_runtime(
                 request.payload,
                 &session_context.session_id,
@@ -1849,10 +1861,20 @@ fn augment_tool_payload_for_kernel(
     );
     let payload_after_runtime_narrowing = augmented_runtime_narrowing.payload;
     let runtime_narrowing_trusted = augmented_runtime_narrowing.trusted_internal_context;
-    let augmented_workspace_root = inject_workspace_root_context_trusted(
+    let augmented_active_skill_workspace_root = inject_active_skill_workspace_root_context_trusted(
+        canonical_tool_name,
+        &invoked_tool_name,
         payload_after_runtime_narrowing,
         session_context,
         runtime_narrowing_trusted,
+    );
+    let payload_after_active_skill_workspace_root = augmented_active_skill_workspace_root.payload;
+    let active_skill_workspace_root_trusted =
+        augmented_active_skill_workspace_root.trusted_internal_context;
+    let augmented_workspace_root = inject_workspace_root_context_trusted(
+        payload_after_active_skill_workspace_root,
+        session_context,
+        active_skill_workspace_root_trusted,
     );
     let mut payload = augmented_workspace_root.payload;
     let trusted_internal_context = augmented_workspace_root.trusted_internal_context;
@@ -1890,6 +1912,102 @@ fn augment_tool_payload_for_kernel(
     }
 }
 
+fn inject_active_skill_workspace_root_context_trusted(
+    canonical_tool_name: &str,
+    invoked_tool_name: &Option<String>,
+    payload: serde_json::Value,
+    session_context: &SessionContext,
+    preserve_existing_internal_context: bool,
+) -> AugmentedToolPayload {
+    let Some(workspace_root) = active_skill_workspace_root_for_tool_payload(
+        canonical_tool_name,
+        invoked_tool_name,
+        &payload,
+        session_context,
+    ) else {
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context: preserve_existing_internal_context,
+        };
+    };
+
+    inject_workspace_root_path_context_trusted(
+        payload,
+        &workspace_root,
+        preserve_existing_internal_context,
+    )
+}
+
+fn active_skill_workspace_root_for_tool_payload(
+    canonical_tool_name: &str,
+    invoked_tool_name: &Option<String>,
+    payload: &serde_json::Value,
+    session_context: &SessionContext,
+) -> Option<std::path::PathBuf> {
+    if session_context.active_external_skill_roots.is_empty() {
+        return None;
+    }
+
+    let target_tool_name = invoked_tool_name.as_deref().unwrap_or(canonical_tool_name);
+    if !matches!(
+        target_tool_name,
+        "file.read" | "glob.search" | "content.search"
+    ) {
+        return None;
+    }
+
+    let requested_path = if canonical_tool_name == "tool.invoke" {
+        requested_file_tool_path("tool.invoke", payload)?
+    } else {
+        requested_file_tool_path(target_tool_name, payload)?
+    };
+    if !requested_path.is_absolute() {
+        return None;
+    }
+
+    let normalized_requested_path = if requested_path.exists() {
+        std::fs::canonicalize(&requested_path).unwrap_or(requested_path)
+    } else {
+        requested_path
+    };
+
+    session_context
+        .active_external_skill_roots
+        .iter()
+        .find(|root| normalized_requested_path.starts_with(root))
+        .cloned()
+}
+
+fn requested_file_tool_path(
+    tool_name: &str,
+    payload: &serde_json::Value,
+) -> Option<std::path::PathBuf> {
+    let payload_object = payload.as_object()?;
+    match tool_name {
+        "file.read" => payload_object
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from),
+        "glob.search" | "content.search" => payload_object
+            .get("root")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from),
+        "tool.invoke" => {
+            let inner_tool_name = payload_object
+                .get("tool_id")
+                .and_then(serde_json::Value::as_str)
+                .map(crate::tools::canonical_tool_name)?;
+            let arguments = payload_object.get("arguments")?;
+            requested_file_tool_path(inner_tool_name, arguments)
+        }
+        _ => None,
+    }
+}
+
 fn inject_tool_search_visibility_context_trusted(
     canonical_tool_name: &str,
     payload: serde_json::Value,
@@ -1916,7 +2034,7 @@ fn inject_tool_search_visibility_context_trusted(
         serde_json::Map::new()
     };
     let mut tool_search_context = internal
-        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY)
+        .remove(crate::tools::LOONG_INTERNAL_TOOL_SEARCH_KEY)
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
     let visible_tool_ids = session_context
@@ -1925,11 +2043,11 @@ fn inject_tool_search_visibility_context_trusted(
         .map(|tool_name| serde_json::Value::String(tool_name.to_owned()))
         .collect::<Vec<_>>();
     tool_search_context.insert(
-        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY.to_owned(),
         serde_json::Value::Array(visible_tool_ids),
     );
     internal.insert(
-        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_TOOL_SEARCH_KEY.to_owned(),
         serde_json::Value::Object(tool_search_context),
     );
     object.insert(
@@ -1973,7 +2091,7 @@ fn inject_runtime_narrowing_context_trusted(
         serde_json::Map::new()
     };
     internal.insert(
-        crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_RUNTIME_NARROWING_KEY.to_owned(),
         serde_json::to_value(runtime_narrowing)
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
     );
@@ -1999,6 +2117,18 @@ fn inject_workspace_root_context_trusted(
         };
     };
 
+    inject_workspace_root_path_context_trusted(
+        payload,
+        workspace_root.as_path(),
+        preserve_existing_internal_context,
+    )
+}
+
+fn inject_workspace_root_path_context_trusted(
+    payload: serde_json::Value,
+    workspace_root: &std::path::Path,
+    preserve_existing_internal_context: bool,
+) -> AugmentedToolPayload {
     let serde_json::Value::Object(mut object) = payload else {
         return AugmentedToolPayload {
             payload,
@@ -2010,9 +2140,21 @@ fn inject_workspace_root_context_trusted(
     } else {
         serde_json::Map::new()
     };
+    if preserve_existing_internal_context
+        && internal.contains_key(crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY)
+    {
+        object.insert(
+            crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            serde_json::Value::Object(internal),
+        );
+        return AugmentedToolPayload {
+            payload: serde_json::Value::Object(object),
+            trusted_internal_context: true,
+        };
+    }
     let workspace_root_string = workspace_root.display().to_string();
     internal.insert(
-        crate::tools::LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY.to_owned(),
+        crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY.to_owned(),
         serde_json::Value::String(workspace_root_string),
     );
     object.insert(
@@ -2210,24 +2352,26 @@ fn payload_looks_like_external_skill_context(payload: &serde_json::Value) -> boo
 
 pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
     let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
-    if canonical_tool_name != "tool.invoke" {
-        return canonical_tool_name.to_owned();
-    }
-    intent
-        .args_json
-        .get("tool_id")
-        .and_then(serde_json::Value::as_str)
-        .map(crate::tools::canonical_tool_name)
-        .and_then(|tool_name| {
-            crate::tools::resolve_tool_execution(tool_name).map(|resolved| resolved.canonical_name)
-        })
-        .filter(|tool_name| !crate::tools::is_provider_exposed_tool_name(tool_name))
-        .unwrap_or(canonical_tool_name)
-        .to_owned()
+    let effective_canonical_tool_name = if canonical_tool_name != "tool.invoke" {
+        canonical_tool_name
+    } else if let Some((tool_name, _arguments)) =
+        crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+    {
+        tool_name
+    } else {
+        intent
+            .args_json
+            .get("tool_id")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::tools::canonical_tool_name)
+            .unwrap_or(canonical_tool_name)
+    };
+
+    crate::tools::user_visible_tool_name(effective_canonical_tool_name)
 }
 
 fn effective_denied_tool_name(intent: &ToolIntent) -> String {
-    effective_followup_tool_name(intent)
+    effective_followup_visible_tool_name(intent)
 }
 
 fn build_tool_decision_trace_record(
@@ -2398,17 +2542,8 @@ fn effective_visible_tool_name(
         return descriptor.name.to_owned();
     }
 
-    intent
-        .args_json
-        .get("tool_id")
-        .and_then(serde_json::Value::as_str)
-        .map(crate::tools::canonical_tool_name)
-        .and_then(|tool_name| {
-            tool_catalog()
-                .descriptor(tool_name)
-                .filter(|target| !target.is_provider_core())
-                .map(|target| target.name.to_owned())
-        })
+    crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+        .map(|(tool_name, _arguments)| tool_name.to_owned())
         .unwrap_or_else(|| descriptor.name.to_owned())
 }
 
@@ -2421,7 +2556,7 @@ fn provider_tool_denial_should_conceal_name(
         return false;
     }
 
-    if !descriptor.is_provider_core() {
+    if !descriptor.is_provider_exposed() {
         return true;
     }
 
@@ -2437,7 +2572,26 @@ fn concealed_provider_tool_denial() -> TurnFailure {
 }
 
 fn tool_search_recovery_hint() -> &'static str {
-    " If you need a non-core capability, call tool.search with a short natural-language description of the task."
+    " If you need a non-core capability, call tool.search with a short natural-language description of the task. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; use tool.invoke with the fresh lease and put the requested operation inside payload.arguments."
+}
+
+fn tool_invoke_recovery_failure(reason: &str) -> Option<TurnFailure> {
+    let (code, message) = if reason.starts_with("invalid_tool_lease:") {
+        (
+            "invalid_tool_lease",
+            "tool.invoke needs a fresh lease from the current tool.search result.",
+        )
+    } else {
+        return None;
+    };
+
+    let mut recovery_reason = message.to_owned();
+    recovery_reason.push_str(tool_search_recovery_hint());
+
+    Some(TurnFailure::policy_denied_with_discovery_recovery(
+        code,
+        recovery_reason,
+    ))
 }
 
 fn provider_tool_denial_reason(reason: &str, source: &str) -> String {
@@ -2456,13 +2610,18 @@ fn tool_intent_is_visible(
     intent: &ToolIntent,
     descriptor: &crate::tools::ToolDescriptor,
 ) -> bool {
-    if descriptor.is_provider_core() {
+    if descriptor.is_provider_exposed() {
         if descriptor.name != "tool.invoke" {
             return true;
         }
         let effective_name = effective_visible_tool_name(intent, descriptor);
         return effective_name == descriptor.name
             || session_context.tool_view.contains(effective_name.as_str());
+    }
+
+    let provider_origin = intent.source.starts_with("provider_");
+    if provider_origin {
+        return false;
     }
 
     session_context.tool_view.contains(descriptor.name)
@@ -2473,9 +2632,18 @@ async fn execute_tool_intent_via_kernel(
     kernel_ctx: &KernelContext,
     trusted_internal_context: bool,
 ) -> Result<ToolCoreOutcome, TurnFailure> {
+    let requested_tool_name =
+        crate::tools::canonical_tool_name(request.tool_name.as_str()).to_owned();
     crate::tools::execute_kernel_tool_request(kernel_ctx, request, trusted_internal_context)
         .await
         .map_err(|error| {
+            if requested_tool_name == "tool.invoke"
+                && let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
+                && let Some(recovery_failure) = tool_invoke_recovery_failure(reason)
+            {
+                return recovery_failure;
+            }
+
             let reason = render_kernel_error_reason(&error);
             match classify_kernel_error(&error) {
                 KernelFailureClass::PolicyDenied => {
@@ -2782,6 +2950,7 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
             tool_name: resolved_tool.canonical_name.to_owned(),
             payload: augmented_payload.payload,
         };
+        let request = prepare_conversation_kernel_tool_request(request, self.binding, intent);
         let normalized_intent = ToolIntent {
             tool_name: resolved_tool.canonical_name.to_owned(),
             args_json: normalized_payload,
@@ -3536,6 +3705,29 @@ fn resolve_effective_tool_metadata(
     })
 }
 
+fn prepare_conversation_kernel_tool_request(
+    request: ToolCoreRequest,
+    binding: ConversationRuntimeBinding<'_>,
+    _intent: &ToolIntent,
+) -> ToolCoreRequest {
+    let Some(kernel_ctx) = binding.kernel_context() else {
+        return request;
+    };
+
+    let canonical_tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
+    if canonical_tool_name != "tool.search" {
+        return request;
+    }
+
+    crate::tools::prepare_kernel_tool_request(
+        request,
+        &kernel_ctx.token.allowed_capabilities,
+        None,
+        None,
+        None,
+    )
+}
+
 impl TurnEngine {
     pub fn new(max_tool_steps: usize) -> Self {
         Self::with_parallel_tool_execution(
@@ -3671,8 +3863,10 @@ impl TurnEngine {
                 // For all other provider-sourced intents, verify they are provider-exposed
                 // (this gate catches non-bridge paths where a discoverable tool name
                 // arrives without being rewritten to tool.invoke).
-                if descriptor.name == "tool.invoke" {
+                if tool_intent_skips_provider_exposed_gate(intent, descriptor) {
                     // Lease validation happens in resolve_tool_invoke_request during execution.
+                    // Internal approval-control turns also bypass provider exposure checks for
+                    // the approval tools they synthesize.
                 } else if !crate::tools::is_provider_exposed_tool_name(&intent.tool_name) {
                     let reason = format!("tool_not_provider_exposed: {}", intent.tool_name);
                     return Err(TurnFailure::policy_denied(
@@ -3969,17 +4163,17 @@ mod tests {
         SessionRepository, SessionState,
     };
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-turn-engine-approval-{test_name}-{}",
+            "loong-turn-engine-approval-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -4030,6 +4224,97 @@ mod tests {
             failure.reason
         );
         assert!(failure.supports_discovery_recovery);
+        assert!(
+            failure.reason.contains("tool.invoke"),
+            "concealed denial should advertise tool.invoke recovery: {}",
+            failure.reason
+        );
+        assert!(
+            failure.reason.contains("lease"),
+            "concealed denial should mention the lease requirement: {}",
+            failure.reason
+        );
+    }
+
+    #[test]
+    fn validate_turn_in_context_conceals_direct_hidden_skills_surface_and_advertises_lease_flow() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "skills".to_owned(),
+                args_json: json!({
+                    "operation": "list"
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-provider-direct-skills".to_owned(),
+                turn_id: "turn-provider-direct-skills".to_owned(),
+                tool_call_id: "call-provider-direct-skills".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "session-provider-direct-skills",
+            crate::tools::ToolView::from_tool_names(std::iter::empty::<&str>()),
+        );
+
+        let failure = TurnEngine::new(4)
+            .validate_turn_in_context(&turn, &session_context)
+            .expect_err("provider direct hidden skills surface should be concealed");
+
+        assert_eq!(failure.code, "tool_not_found");
+        assert!(
+            failure
+                .reason
+                .contains("tool_not_found: requested tool is not available")
+        );
+        assert!(
+            failure.reason.contains("tool.search"),
+            "concealed denial should advertise discovery recovery: {}",
+            failure.reason
+        );
+        assert!(
+            failure.reason.contains("tool.invoke"),
+            "concealed denial should explain the grouped-surface invoke flow: {}",
+            failure.reason
+        );
+        assert!(
+            failure.reason.contains("skills"),
+            "concealed denial should mention grouped hidden surfaces: {}",
+            failure.reason
+        );
+        assert!(failure.supports_discovery_recovery);
+    }
+
+    #[test]
+    fn validate_turn_in_context_allows_internal_approval_control_resolve_tool() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "approval_request_resolve".to_owned(),
+                args_json: json!({
+                    "approval_request_id": "apr-allow-1",
+                    "decision": "approve_once"
+                }),
+                source: "approval_control".to_owned(),
+                session_id: "session-approval-control".to_owned(),
+                turn_id: "turn-approval-control".to_owned(),
+                tool_call_id: "call-approval-control".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+        let tool_view = crate::tools::ToolView::from_tool_names([
+            "approval_request_resolve",
+            "approval_request_status",
+            "approval_requests_list",
+        ]);
+        let session_context =
+            SessionContext::root_with_tool_view("session-approval-control", tool_view);
+
+        let validation = TurnEngine::new(4)
+            .validate_turn_in_context(&turn, &session_context)
+            .expect("approval-control resolve should stay executable");
+
+        assert_eq!(validation, TurnValidation::ToolExecutionRequired);
     }
 
     #[test]
@@ -4080,6 +4365,132 @@ mod tests {
                 "command": "echo",
                 "args": ["hello"],
             })
+        );
+    }
+
+    #[test]
+    fn prepare_tool_intent_injects_capability_filter_prep_for_tool_search() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let intent = ToolIntent {
+            tool_name: "tool.search".to_owned(),
+            args_json: json!({
+                "query": "read note.md",
+                "limit": 3,
+            }),
+            source: "provider_tool_call".to_owned(),
+            session_id: "session-tool-search-prep".to_owned(),
+            turn_id: "turn-tool-search-prep".to_owned(),
+            tool_call_id: "call-tool-search-prep".to_owned(),
+        };
+        let session_context =
+            SessionContext::root_with_tool_view("session-tool-search-prep", runtime_tool_view());
+        let engine = TurnEngine::new(4);
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let prepared_intent = runtime.block_on(async {
+            let autonomy_budget_state = AutonomyTurnBudgetState::default();
+            engine
+                .prepare_tool_intent(
+                    &intent,
+                    0,
+                    &session_context,
+                    &DefaultAppToolDispatcher::runtime(),
+                    ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                    &autonomy_budget_state,
+                    None,
+                )
+                .await
+                .expect("tool.search request should prepare successfully")
+        });
+
+        let expected_capabilities = serde_json::to_value(
+            harness
+                .kernel_ctx
+                .token
+                .allowed_capabilities
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+        .expect("serialize granted capabilities");
+
+        assert_eq!(prepared_intent.request.tool_name, "tool.search");
+        assert_eq!(
+            prepared_intent.request.payload[crate::tools::TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD],
+            expected_capabilities
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TOKEN_ID_FIELD)
+                .is_none()
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_SESSION_ID_FIELD)
+                .is_none()
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TURN_ID_FIELD)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn prepare_tool_intent_injects_kernel_request_prep_for_tool_invoke() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call(
+            "shell.exec",
+            json!({
+                "command": "echo",
+                "args": ["hello"],
+            }),
+        );
+        let intent = ToolIntent {
+            tool_name,
+            args_json,
+            source: "provider_tool_call".to_owned(),
+            session_id: "session-tool-invoke-prep".to_owned(),
+            turn_id: "turn-tool-invoke-prep".to_owned(),
+            tool_call_id: "call-tool-invoke-prep".to_owned(),
+        };
+        let session_context =
+            SessionContext::root_with_tool_view("session-tool-invoke-prep", runtime_tool_view());
+        let engine = TurnEngine::new(4);
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let prepared_intent = runtime.block_on(async {
+            let autonomy_budget_state = AutonomyTurnBudgetState::default();
+            engine
+                .prepare_tool_intent(
+                    &intent,
+                    0,
+                    &session_context,
+                    &DefaultAppToolDispatcher::runtime(),
+                    ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                    &autonomy_budget_state,
+                    None,
+                )
+                .await
+                .expect("tool.invoke request should prepare successfully")
+        });
+
+        assert_eq!(prepared_intent.request.tool_name, "shell.exec");
+        assert_eq!(
+            prepared_intent.decision.tool_name, "shell.exec",
+            "shell.exec should still rebind to the inner tool for execution metadata"
+        );
+        assert_eq!(
+            prepared_intent.intent.tool_name, "shell.exec",
+            "tool.invoke shell requests should continue using inner tool intent metadata"
         );
     }
 
@@ -4150,6 +4561,75 @@ mod tests {
         assert_eq!(
             prepared_intent.scheduling_class,
             crate::tools::ToolSchedulingClass::ParallelSafe
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn prepare_tool_intent_keeps_followup_tool_invoke_wrapper_unbound_to_current_turn() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call(
+            "file.read",
+            json!({
+                "path": "README.md",
+            }),
+        );
+        let intent = ToolIntent {
+            tool_name,
+            args_json,
+            source: "provider_tool_call".to_owned(),
+            session_id: "session-tool-invoke-wrapper-prep".to_owned(),
+            turn_id: "turn-tool-invoke-wrapper-prep".to_owned(),
+            tool_call_id: "call-tool-invoke-wrapper-prep".to_owned(),
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "session-tool-invoke-wrapper-prep",
+            runtime_tool_view(),
+        );
+        let engine = TurnEngine::new(4);
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let prepared_intent = runtime.block_on(async {
+            let autonomy_budget_state = AutonomyTurnBudgetState::default();
+            engine
+                .prepare_tool_intent(
+                    &intent,
+                    0,
+                    &session_context,
+                    &DefaultAppToolDispatcher::runtime(),
+                    ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                    &autonomy_budget_state,
+                    None,
+                )
+                .await
+                .expect("tool.invoke file.read request should prepare successfully")
+        });
+
+        assert_eq!(prepared_intent.request.tool_name, "tool.invoke");
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TOKEN_ID_FIELD)
+                .is_none(),
+            "conversation follow-up invoke wrapper should not be rebound to the current turn"
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_SESSION_ID_FIELD)
+                .is_none(),
+            "conversation follow-up invoke wrapper should not be rebound to the current turn"
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TURN_ID_FIELD)
+                .is_none(),
+            "conversation follow-up invoke wrapper should not be rebound to the current turn"
         );
     }
 
@@ -5187,6 +5667,7 @@ mod tests {
 
         let mut tool_config = ToolConfig::default();
         tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
@@ -5210,10 +5691,7 @@ mod tests {
         let approval_request_id = match result {
             TurnResult::NeedsApproval(requirement) => {
                 assert_eq!(requirement.tool_name.as_deref(), Some("shell.exec"));
-                assert_eq!(
-                    requirement.approval_key.as_deref(),
-                    Some("tool:shell.exec:cargo")
-                );
+                assert_eq!(requirement.approval_key.as_deref(), Some("tool:shell.exec"));
                 requirement
                     .approval_request_id
                     .expect("approval request id should be present")
@@ -5236,7 +5714,7 @@ mod tests {
         assert_eq!(stored.tool_name, "shell.exec");
         assert_eq!(stored.turn_id, "turn-shell-discovered");
         assert_eq!(stored.tool_call_id, "call-shell-discovered");
-        assert_eq!(stored.approval_key, "tool:shell.exec:cargo");
+        assert_eq!(stored.approval_key, "tool:shell.exec");
         assert_eq!(stored.request_payload_json["tool_name"], "shell.exec");
         assert_eq!(stored.request_payload_json["execution_kind"], "core");
         assert_eq!(
@@ -5263,6 +5741,7 @@ mod tests {
 
         let mut tool_config = ToolConfig::default();
         tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
 
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
@@ -5620,7 +6099,7 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let root = unique_browser_companion_temp_dir("loongclaw-turn-engine-browser-companion");
+        let root = unique_browser_companion_temp_dir("loong-turn-engine-browser-companion");
         fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -5636,7 +6115,7 @@ mod tests {
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
 
         let start = crate::tools::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "browser.companion.session.start".to_owned(),
                 payload: json!({
                     "url": "https://example.com",
@@ -5652,7 +6131,7 @@ mod tests {
             .to_owned();
 
         let mut env = crate::test_support::ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
 
         let mut tool_config = ToolConfig::default();
         tool_config.browser_companion.enabled = true;
@@ -5689,8 +6168,8 @@ mod tests {
             }
         };
         assert!(
-            reply.contains("\"tool\":\"browser.companion.click\""),
-            "reply should include the executed companion tool: {reply}"
+            reply.contains("\"tool\":\"browser\""),
+            "reply should include the executed browser surface output: {reply}"
         );
         assert!(
             reply.contains("\"status\":\"ok\""),
@@ -5721,8 +6200,7 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let root =
-            unique_browser_companion_temp_dir("loongclaw-turn-engine-browser-companion-runtime");
+        let root = unique_browser_companion_temp_dir("loong-turn-engine-browser-companion-runtime");
         fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -5738,7 +6216,7 @@ mod tests {
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
 
         let start = crate::tools::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "browser.companion.session.start".to_owned(),
                 payload: json!({
                     "url": "https://example.com",
@@ -5754,7 +6232,7 @@ mod tests {
             .to_owned();
 
         let mut env = crate::test_support::ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
+        env.set("LOONG_BROWSER_COMPANION_READY", "false");
 
         let mut tool_config = ToolConfig::default();
         tool_config.browser_companion.enabled = true;
@@ -5791,8 +6269,8 @@ mod tests {
             }
         };
         assert!(
-            reply.contains("\"tool\":\"browser.companion.click\""),
-            "reply should include the executed companion tool: {reply}"
+            reply.contains("\"tool\":\"browser\""),
+            "reply should include the executed browser surface output: {reply}"
         );
         assert!(
             reply.contains("\"status\":\"ok\""),
@@ -5823,9 +6301,8 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let root = unique_browser_companion_temp_dir(
-            "loongclaw-turn-engine-browser-companion-runtime-policy",
-        );
+        let root =
+            unique_browser_companion_temp_dir("loong-turn-engine-browser-companion-runtime-policy");
         fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
         let script_path = write_browser_companion_script(
@@ -5841,7 +6318,7 @@ mod tests {
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
 
         let start = crate::tools::execute_tool_core_with_config(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "browser.companion.session.start".to_owned(),
                 payload: json!({
                     "url": "https://example.com",
@@ -5857,10 +6334,10 @@ mod tests {
             .to_owned();
 
         let mut env = crate::test_support::ScopedEnv::new();
-        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
-        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "false");
         env.set(
-            "LOONGCLAW_BROWSER_COMPANION_COMMAND",
+            "LOONG_BROWSER_COMPANION_COMMAND",
             script_path.display().to_string(),
         );
 
@@ -5895,8 +6372,8 @@ mod tests {
             }
         };
         assert!(
-            reply.contains("\"tool\":\"browser.companion.click\""),
-            "reply should include the executed companion tool: {reply}"
+            reply.contains("\"tool\":\"browser\""),
+            "reply should include the executed browser surface output: {reply}"
         );
         assert!(
             reply.contains("\"status\":\"ok\""),
@@ -6194,7 +6671,7 @@ mod tests {
 
         let record = build_success_tool_outcome_trace_record(&intent, &outcome);
 
-        assert_eq!(record.outcome.tool_name, "file.read");
+        assert_eq!(record.outcome.tool_name, "read");
         assert_eq!(record.outcome.status, "ok");
         assert_eq!(record.turn_id, "turn-bounded-payload");
         assert_eq!(record.tool_call_id, "call-bounded-payload");
@@ -6266,14 +6743,48 @@ mod tests {
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY]
-                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
+                [crate::tools::LOONG_INTERNAL_TOOL_SEARCH_KEY]
+                [crate::tools::LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
             json!(["file.read", "tool.invoke", "tool.search"])
         );
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
-                [crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["browser"]["max_sessions"],
+                [crate::tools::LOONG_INTERNAL_RUNTIME_NARROWING_KEY]["browser"]["max_sessions"],
             1
+        );
+    }
+
+    #[test]
+    fn augment_tool_payload_uses_active_skill_root_for_absolute_file_read_targets() {
+        let workspace_root =
+            crate::test_support::unique_temp_dir("turn-engine-active-skill-workspace");
+        let skill_root = workspace_root.join(".agents/skills/demo-skill");
+        std::fs::create_dir_all(skill_root.join("references")).expect("create skill root");
+        let reference_path = skill_root.join("references/guide.md");
+        std::fs::write(&reference_path, "# Guide\n").expect("write guide");
+        let canonical_skill_root =
+            std::fs::canonicalize(&skill_root).expect("canonical skill root");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.invoke"]),
+        )
+        .with_workspace_root(workspace_root)
+        .with_active_external_skill_roots(vec![skill_root]);
+        let payload = json!({
+            "tool_id": "file.read",
+            "lease": "lease-file-read",
+            "arguments": {
+                "path": reference_path.display().to_string()
+            },
+        });
+
+        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+
+        assert_eq!(
+            augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
+            json!(canonical_skill_root.display().to_string())
         );
     }
 }

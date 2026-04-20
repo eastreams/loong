@@ -82,7 +82,7 @@
                   "payload": {
                     "channel": "ops-rate-1",
                     "text": "rate-benchmark",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 8
                     }
                   }
@@ -98,7 +98,7 @@
                   "payload": {
                     "channel": "ops-rate-2",
                     "text": "rate-benchmark",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 8
                     }
                   }
@@ -114,7 +114,7 @@
                   "payload": {
                     "channel": "ops-rate-3",
                     "text": "rate-benchmark",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 8
                     }
                   }
@@ -130,7 +130,7 @@
                   "payload": {
                     "channel": "ops-rate-4",
                     "text": "rate-benchmark",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 8
                     }
                   }
@@ -146,7 +146,7 @@
                   "payload": {
                     "channel": "ops-rate-5",
                     "text": "rate-benchmark",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 8
                     }
                   }
@@ -162,7 +162,7 @@
                   "payload": {
                     "channel": "ops-rate-6",
                     "text": "rate-benchmark",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 8
                     }
                   }
@@ -257,7 +257,7 @@
                   "payload": {
                     "channel": "ops-adaptive-fail",
                     "text": "adaptive-failure",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "request_id": "adaptive-suite-fail",
                       "failures_before_success": 8,
                       "delay_ms": 8
@@ -275,7 +275,7 @@
                   "payload": {
                     "channel": "ops-adaptive-1",
                     "text": "adaptive-recover",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 12
                     }
                   }
@@ -291,7 +291,7 @@
                   "payload": {
                     "channel": "ops-adaptive-2",
                     "text": "adaptive-recover",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 12
                     }
                   }
@@ -307,7 +307,7 @@
                   "payload": {
                     "channel": "ops-adaptive-3",
                     "text": "adaptive-recover",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 12
                     }
                   }
@@ -323,7 +323,7 @@
                   "payload": {
                     "channel": "ops-adaptive-4",
                     "text": "adaptive-recover",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 12
                     }
                   }
@@ -339,7 +339,7 @@
                   "payload": {
                     "channel": "ops-adaptive-5",
                     "text": "adaptive-recover",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "delay_ms": 12
                     }
                   }
@@ -437,7 +437,7 @@
                   "payload": {
                     "channel": "ops-circuit-fail",
                     "text": "trip-circuit",
-                    "_loongclaw_test": {
+                    "_loong_test": {
                       "request_id": "circuit-open-suite",
                       "failures_before_success": 8,
                       "delay_ms": 5

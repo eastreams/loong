@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 use serde::Serialize;
 
 const RECOMMENDED_SOURCE_SELECTORS: &[&str] =
     &["recommended", "recommended_plan", "composed", "plan"];
 const CURRENT_SOURCE_SELECTORS: &[&str] = &["current", "current_setup"];
-const EXISTING_SOURCE_SELECTORS: &[&str] = &["existing", "existing_config", "loongclaw"];
+const EXISTING_SOURCE_SELECTORS: &[&str] = &["existing", "existing_config", "loong"];
 const CODEX_SOURCE_SELECTORS: &[&str] = &["codex"];
 const ENVIRONMENT_SOURCE_SELECTORS: &[&str] = &["env", "environment"];
 const EXPLICIT_PATH_SOURCE_SELECTORS: &[&str] = &["path"];
@@ -20,7 +20,7 @@ const WORKSPACE_GUIDANCE_DOMAIN_SELECTORS: &[&str] = &["workspace_guidance", "gu
 
 const IMPORT_CLI_SOURCE_SELECTORS: [ImportSourceKind; 4] = [
     ImportSourceKind::RecommendedPlan,
-    ImportSourceKind::ExistingLoongClawConfig,
+    ImportSourceKind::ExistingLoongConfig,
     ImportSourceKind::CodexConfig,
     ImportSourceKind::Environment,
 ];
@@ -71,7 +71,7 @@ struct PreviewDecisionDescriptor {
 pub enum ImportSourceKind {
     RecommendedPlan,
     CurrentSetup,
-    ExistingLoongClawConfig,
+    ExistingLoongConfig,
     CodexConfig,
     Environment,
     #[allow(dead_code)]
@@ -133,14 +133,14 @@ impl ImportSourceKind {
                 selectors: CURRENT_SOURCE_SELECTORS,
                 direct_starting_point_rank: 0,
                 default_domain_decision: None,
-                direct_starting_point_reason: Some("keep your current LoongClaw setup"),
+                direct_starting_point_reason: Some("keep your current Loong setup"),
             },
-            ImportSourceKind::ExistingLoongClawConfig => ImportSourceDescriptor {
+            ImportSourceKind::ExistingLoongConfig => ImportSourceDescriptor {
                 primary_selector: "existing",
                 selectors: EXISTING_SOURCE_SELECTORS,
                 direct_starting_point_rank: 0,
                 default_domain_decision: Some(PreviewDecision::KeepCurrent),
-                direct_starting_point_reason: Some("keep your current LoongClaw setup"),
+                direct_starting_point_reason: Some("keep your current Loong setup"),
             },
             ImportSourceKind::CodexConfig => ImportSourceDescriptor {
                 primary_selector: "codex",
@@ -441,7 +441,7 @@ pub struct ImportSurface {
 pub struct ImportCandidate {
     pub source_kind: ImportSourceKind,
     pub source: String,
-    pub config: mvp::config::LoongClawConfig,
+    pub config: mvp::config::LoongConfig,
     pub surfaces: Vec<ImportSurface>,
     pub domains: Vec<DomainPreview>,
     pub channel_candidates: Vec<ChannelCandidate>,

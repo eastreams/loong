@@ -1,21 +1,27 @@
 #[cfg(feature = "tool-shell")]
-use serde_json::Value;
+use loong_contracts::ToolCoreOutcome;
 #[cfg(feature = "tool-shell")]
-use std::ffi::OsStr;
+use serde_json::{Value, json};
+#[cfg(feature = "tool-shell")]
+use std::ffi::{OsStr, OsString};
 #[cfg(feature = "tool-shell")]
 use std::future::Future;
 #[cfg(feature = "tool-shell")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "tool-shell")]
-use std::process::{Output, Stdio};
+use std::process::{ExitStatus, Stdio};
 #[cfg(feature = "tool-shell")]
 use std::sync::Arc;
 #[cfg(feature = "tool-shell")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "tool-shell")]
 use std::thread;
 #[cfg(feature = "tool-shell")]
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(feature = "tool-shell")]
-use tokio::io::AsyncReadExt;
+use tokio::fs::File;
+#[cfg(feature = "tool-shell")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "tool-shell")]
 use tokio::process::Command;
 
@@ -31,11 +37,53 @@ pub(super) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 #[cfg(feature = "tool-shell")]
 pub(super) const MAX_TIMEOUT_MS: u64 = 600_000;
 #[cfg(feature = "tool-shell")]
-const OUTPUT_CAP_BYTES: usize = 1_048_576;
+pub(super) const OUTPUT_CAP_BYTES: usize = 1_048_576;
 #[cfg(feature = "tool-shell")]
 const SPAWN_RETRY_ATTEMPTS: usize = 5;
 #[cfg(feature = "tool-shell")]
 const SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
+#[cfg(feature = "tool-shell")]
+const FULL_OUTPUT_HANDOFF_DESCRIPTION: &str =
+    "Use read with one of the structured recipes below to inspect saved full exec output.";
+#[cfg(feature = "tool-shell")]
+const PROCESS_OUTPUT_HANDOFF_PAGE_LIMIT_LINES: usize = 200;
+#[cfg(feature = "tool-shell")]
+static NEXT_PROCESS_OUTPUT_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "tool-shell")]
+#[derive(Debug)]
+pub(super) struct ProcessOutputCapture {
+    pub preview: Vec<u8>,
+    pub total_bytes: usize,
+    pub total_lines: usize,
+    pub output_lines: usize,
+    pub truncated: bool,
+    pub full_output_path: Option<PathBuf>,
+    pub full_output_unavailable_reason: Option<String>,
+}
+
+#[cfg(feature = "tool-shell")]
+impl ProcessOutputCapture {
+    pub(super) fn preview_text(&self) -> String {
+        String::from_utf8_lossy(&self.preview).trim().to_owned()
+    }
+}
+
+#[cfg(feature = "tool-shell")]
+#[derive(Debug)]
+pub(super) struct ProcessExecOutcome {
+    pub status: ExitStatus,
+    pub stdout: ProcessOutputCapture,
+    pub stderr: ProcessOutputCapture,
+    pub duration_ms: u64,
+}
+
+#[cfg(feature = "tool-shell")]
+impl ProcessExecOutcome {
+    pub(super) fn is_truncated(&self) -> bool {
+        self.stdout.truncated || self.stderr.truncated
+    }
+}
 
 #[cfg(feature = "tool-shell")]
 pub(super) fn resolve_process_cwd_with_config(
@@ -170,20 +218,79 @@ where
 }
 
 #[cfg(feature = "tool-shell")]
+fn stream_label(stream: ToolRuntimeStream) -> &'static str {
+    match stream {
+        ToolRuntimeStream::Stdout => "stdout",
+        ToolRuntimeStream::Stderr => "stderr",
+    }
+}
+
+#[cfg(feature = "tool-shell")]
+fn create_process_output_temp_file(
+    stream_name: &str,
+    accessible_output_root: Option<&Path>,
+) -> Result<(PathBuf, File), String> {
+    let output_dir = accessible_output_root
+        .map(|root| root.join(".loongclaw/tool-output"))
+        .unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(output_dir.as_path()).map_err(|error| {
+        let display_path = output_dir.display();
+        format!("failed to prepare exec output directory `{display_path}`: {error}")
+    })?;
+
+    let timestamp_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let process_id = std::process::id();
+
+    for attempt in 0..8_u8 {
+        let sequence = NEXT_PROCESS_OUTPUT_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = output_dir.join(format!(
+            "loongclaw-process-output-{stream_name}-{process_id}-{timestamp_nanos:x}-{sequence:x}-{attempt}.log"
+        ));
+        let file_result = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path.as_path());
+        let std_file = match file_result {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                let display_path = path.display();
+                return Err(format!(
+                    "failed to create full {stream_name} output file `{display_path}`: {error}"
+                ));
+            }
+        };
+        return Ok((path, File::from_std(std_file)));
+    }
+
+    Err(format!(
+        "failed to allocate a unique temp file for full {stream_name} output"
+    ))
+}
+
+#[cfg(feature = "tool-shell")]
 async fn read_capped_with_runtime_events<R>(
     mut reader: R,
     cap: usize,
     stream_name: &str,
     stream: ToolRuntimeStream,
     runtime_event_sink: Option<Arc<dyn ToolRuntimeEventSink>>,
-) -> Result<Vec<u8>, String>
+    accessible_output_root: Option<PathBuf>,
+) -> Result<ProcessOutputCapture, String>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut output = Vec::new();
+    let mut preview = Vec::new();
     let mut buffer = [0_u8; 8_192];
     let mut total_bytes = 0_usize;
     let mut newline_count = 0_usize;
+    let mut temp_file_path = Option::<PathBuf>::None;
+    let mut temp_file = Option::<File>::None;
+    let mut full_output_unavailable_reason = Option::<String>::None;
+    let mut last_total_byte_was_newline = true;
 
     loop {
         let read = reader
@@ -194,22 +301,68 @@ where
             break;
         }
 
-        total_bytes = total_bytes.saturating_add(read);
         let chunk_bytes = buffer.get(..read).unwrap_or(buffer.as_slice());
+        total_bytes = total_bytes.saturating_add(read);
         let chunk_newlines = chunk_bytes.iter().filter(|byte| **byte == b'\n').count();
         newline_count = newline_count.saturating_add(chunk_newlines);
         let last_byte_was_newline = chunk_bytes.last().copied() == Some(b'\n');
+        last_total_byte_was_newline = last_byte_was_newline;
 
-        let remaining = cap.saturating_sub(output.len());
+        let stream_is_truncated = total_bytes > cap;
+        if stream_is_truncated && temp_file.is_none() && full_output_unavailable_reason.is_none() {
+            match create_process_output_temp_file(stream_name, accessible_output_root.as_deref()) {
+                Ok((path, mut file)) => {
+                    let backfill_result = if preview.is_empty() {
+                        Ok(())
+                    } else {
+                        file.write_all(preview.as_slice()).await
+                    };
+                    match backfill_result {
+                        Ok(()) => {
+                            temp_file_path = Some(path);
+                            temp_file = Some(file);
+                        }
+                        Err(error) => {
+                            let display_path = path.display();
+                            full_output_unavailable_reason = Some(format!(
+                                "failed to backfill full {stream_name} output file `{display_path}`: {error}"
+                            ));
+                            let _ = tokio::fs::remove_file(path).await;
+                        }
+                    }
+                }
+                Err(error) => {
+                    full_output_unavailable_reason = Some(error);
+                }
+            }
+        }
+
+        let remaining = cap.saturating_sub(preview.len());
         if remaining > 0 {
             let to_copy = remaining.min(read);
             let retained_chunk = chunk_bytes.get(..to_copy).unwrap_or(chunk_bytes);
-            output.extend(retained_chunk.iter().copied());
+            preview.extend(retained_chunk.iter().copied());
+        }
+
+        if let Some(file) = temp_file.as_mut() {
+            let write_result = file.write_all(chunk_bytes).await;
+            if let Err(error) = write_result {
+                let display_path = temp_file_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| format!("(unknown {stream_name} temp file)"));
+                full_output_unavailable_reason = Some(format!(
+                    "failed to persist full {stream_name} output to `{display_path}`: {error}"
+                ));
+                if let Some(path) = temp_file_path.take() {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+                temp_file = None;
+            }
         }
 
         let has_partial_final_line = total_bytes > 0 && !last_byte_was_newline;
         let total_lines = newline_count + usize::from(has_partial_final_line);
-        let truncated = total_bytes > cap;
 
         if let Some(sink) = runtime_event_sink.as_ref() {
             let chunk_text = String::from_utf8_lossy(chunk_bytes).into_owned();
@@ -218,13 +371,355 @@ where
                 chunk: chunk_text,
                 total_bytes,
                 total_lines,
-                truncated,
+                truncated: stream_is_truncated,
             });
             sink.emit(event);
         }
     }
 
-    Ok(output)
+    if let Some(mut file) = temp_file {
+        let flush_result = file.flush().await;
+        if let Err(error) = flush_result {
+            let display_path = temp_file_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| format!("(unknown {stream_name} temp file)"));
+            full_output_unavailable_reason = Some(format!(
+                "failed to flush full {stream_name} output file `{display_path}`: {error}"
+            ));
+            if let Some(path) = temp_file_path.take() {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+        }
+    }
+
+    let last_preview_byte_was_newline = preview.last().copied() == Some(b'\n');
+    let preview_newline_count = preview.iter().filter(|byte| **byte == b'\n').count();
+    let preview_has_partial_final_line = !preview.is_empty() && !last_preview_byte_was_newline;
+    let preview_total_lines = preview_newline_count + usize::from(preview_has_partial_final_line);
+    let total_lines = if total_bytes == 0 {
+        0
+    } else {
+        newline_count + usize::from(!last_total_byte_was_newline)
+    };
+
+    Ok(ProcessOutputCapture {
+        preview,
+        total_bytes,
+        total_lines,
+        output_lines: preview_total_lines,
+        truncated: total_bytes > cap,
+        full_output_path: temp_file_path,
+        full_output_unavailable_reason,
+    })
+}
+
+#[cfg(feature = "tool-shell")]
+fn process_output_capture_details_value(capture: &ProcessOutputCapture) -> Value {
+    json!({
+        "truncated": capture.truncated,
+        "truncated_by": if capture.truncated { Value::String("bytes".to_owned()) } else { Value::Null },
+        "total_bytes": capture.total_bytes,
+        "total_lines": capture.total_lines,
+        "output_bytes": capture.preview.len(),
+        "output_lines": capture.output_lines,
+        "max_bytes": OUTPUT_CAP_BYTES,
+        "full_output_path": capture
+            .full_output_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        "full_output_unavailable_reason": capture.full_output_unavailable_reason.as_deref(),
+    })
+}
+
+#[cfg(feature = "tool-shell")]
+fn process_output_read_payload(
+    path: &Path,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    max_bytes: Option<usize>,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("path".to_owned(), Value::String(path.display().to_string()));
+    if let Some(offset) = offset {
+        payload.insert("offset".to_owned(), json!(offset));
+    }
+    if let Some(limit) = limit {
+        payload.insert("limit".to_owned(), json!(limit));
+    }
+    if let Some(max_bytes) = max_bytes {
+        payload.insert("max_bytes".to_owned(), json!(max_bytes));
+    }
+    Value::Object(payload)
+}
+
+#[cfg(feature = "tool-shell")]
+struct ProcessOutputHandoffRecipes {
+    recipe_value: Value,
+    recommended_recipe: &'static str,
+    recommended_reason: &'static str,
+    recommended_payload: Value,
+}
+
+#[cfg(feature = "tool-shell")]
+fn process_output_recommended_recipe(
+    capture: &ProcessOutputCapture,
+) -> (&'static str, &'static str) {
+    if capture.total_lines <= 1 {
+        return (
+            "wider_bytes",
+            "the saved output is effectively one long line, so a wider byte window is the best next read",
+        );
+    }
+    if capture.total_lines > PROCESS_OUTPUT_HANDOFF_PAGE_LIMIT_LINES {
+        return (
+            "last_page",
+            "long command output is usually most useful from the tail first",
+        );
+    }
+    (
+        "first_page",
+        "shorter multi-line output usually fits in the first page",
+    )
+}
+
+#[cfg(feature = "tool-shell")]
+fn process_output_handoff_recipe_value(
+    capture: &ProcessOutputCapture,
+) -> Option<ProcessOutputHandoffRecipes> {
+    let path = capture.full_output_path.as_ref()?;
+    let first_page_payload = process_output_read_payload(
+        path,
+        Some(1),
+        Some(PROCESS_OUTPUT_HANDOFF_PAGE_LIMIT_LINES),
+        None,
+    );
+    let last_page_offset = capture
+        .total_lines
+        .saturating_sub(PROCESS_OUTPUT_HANDOFF_PAGE_LIMIT_LINES.saturating_sub(1))
+        .max(1);
+    let last_page_payload = process_output_read_payload(
+        path,
+        Some(last_page_offset),
+        Some(PROCESS_OUTPUT_HANDOFF_PAGE_LIMIT_LINES),
+        None,
+    );
+    let wider_bytes_payload =
+        process_output_read_payload(path, None, None, Some(8 * OUTPUT_CAP_BYTES));
+    let (recommended_recipe, recommended_reason) = process_output_recommended_recipe(capture);
+    let recommended_payload = match recommended_recipe {
+        "wider_bytes" => wider_bytes_payload.clone(),
+        "last_page" => last_page_payload.clone(),
+        _ => first_page_payload.clone(),
+    };
+    let head_payload = first_page_payload.clone();
+    let tail_payload = last_page_payload.clone();
+    let recipe_value = json!({
+        "path": path.display().to_string(),
+        "recommended_recipe": recommended_recipe,
+        "recommended_reason": recommended_reason,
+        "first_page": first_page_payload,
+        "last_page": last_page_payload,
+        "wider_bytes": wider_bytes_payload,
+        // Compatibility aliases while the higher-level prompt/debug surfaces migrate.
+        "head": head_payload,
+        "tail": tail_payload,
+    });
+
+    Some(ProcessOutputHandoffRecipes {
+        recipe_value,
+        recommended_recipe,
+        recommended_reason,
+        recommended_payload,
+    })
+}
+
+#[cfg(feature = "tool-shell")]
+fn process_exec_preferred_handoff_stream(
+    outcome: &ProcessExecOutcome,
+    stdout_recipes: Option<&ProcessOutputHandoffRecipes>,
+    stderr_recipes: Option<&ProcessOutputHandoffRecipes>,
+) -> Option<&'static str> {
+    if !outcome.status.success() && stderr_recipes.is_some() && outcome.stderr.total_bytes > 0 {
+        return Some("stderr");
+    }
+    if stdout_recipes.is_some() && outcome.stdout.total_bytes > 0 {
+        return Some("stdout");
+    }
+    if stderr_recipes.is_some() && outcome.stderr.total_bytes > 0 {
+        return Some("stderr");
+    }
+    if stdout_recipes.is_some() {
+        return Some("stdout");
+    }
+    if stderr_recipes.is_some() {
+        return Some("stderr");
+    }
+    None
+}
+
+#[cfg(feature = "tool-shell")]
+fn process_output_handoff_value(outcome: &ProcessExecOutcome) -> Option<Value> {
+    let stdout_recipes = process_output_handoff_recipe_value(&outcome.stdout);
+    let stderr_recipes = process_output_handoff_recipe_value(&outcome.stderr);
+    let mut recipes = serde_json::Map::new();
+
+    if let Some(stdout_recipes) = stdout_recipes.as_ref() {
+        recipes.insert("stdout".to_owned(), stdout_recipes.recipe_value.clone());
+    }
+    if let Some(stderr_recipes) = stderr_recipes.as_ref() {
+        recipes.insert("stderr".to_owned(), stderr_recipes.recipe_value.clone());
+    }
+
+    if recipes.is_empty() {
+        return None;
+    }
+
+    let preferred_stream = process_exec_preferred_handoff_stream(
+        outcome,
+        stdout_recipes.as_ref(),
+        stderr_recipes.as_ref(),
+    );
+    let (recommended_recipe, recommended_reason, recommended_payload) = match preferred_stream {
+        Some("stderr") => match stderr_recipes.as_ref() {
+            Some(recipes) => (
+                Some(recipes.recommended_recipe),
+                Some(recipes.recommended_reason),
+                Some(recipes.recommended_payload.clone()),
+            ),
+            None => (None, None, None),
+        },
+        Some("stdout") => match stdout_recipes.as_ref() {
+            Some(recipes) => (
+                Some(recipes.recommended_recipe),
+                Some(recipes.recommended_reason),
+                Some(recipes.recommended_payload.clone()),
+            ),
+            None => (None, None, None),
+        },
+        _ => (None, None, None),
+    };
+
+    Some(json!({
+        "tool": "read",
+        "description": FULL_OUTPUT_HANDOFF_DESCRIPTION,
+        "default_limit": PROCESS_OUTPUT_HANDOFF_PAGE_LIMIT_LINES,
+        "supports_offset": true,
+        "supports_limit": true,
+        "supports_max_bytes": true,
+        "recommended_stream": preferred_stream,
+        "recommended_recipe": recommended_recipe,
+        "recommended_reason": recommended_reason,
+        "recommended_payload": recommended_payload,
+        "recipes": recipes,
+    }))
+}
+
+#[cfg(feature = "tool-shell")]
+fn process_exec_details_value(outcome: &ProcessExecOutcome) -> Value {
+    let mut details = serde_json::Map::new();
+    details.insert("duration_ms".to_owned(), json!(outcome.duration_ms));
+    details.insert("truncated".to_owned(), Value::Bool(outcome.is_truncated()));
+    details.insert(
+        "stdout".to_owned(),
+        process_output_capture_details_value(&outcome.stdout),
+    );
+    details.insert(
+        "stderr".to_owned(),
+        process_output_capture_details_value(&outcome.stderr),
+    );
+
+    if let Some(handoff) = process_output_handoff_value(outcome) {
+        details.insert("handoff".to_owned(), handoff);
+    }
+
+    Value::Object(details)
+}
+
+#[cfg(feature = "tool-shell")]
+pub(super) fn build_process_tool_outcome(
+    tool_name: &str,
+    command: &str,
+    args: Option<&[String]>,
+    cwd: &Path,
+    outcome: ProcessExecOutcome,
+) -> ToolCoreOutcome {
+    let mut payload = serde_json::Map::new();
+    payload.insert("adapter".to_owned(), Value::String("core-tools".to_owned()));
+    payload.insert("tool_name".to_owned(), Value::String(tool_name.to_owned()));
+    payload.insert("command".to_owned(), Value::String(command.to_owned()));
+    if let Some(args) = args {
+        payload.insert("args".to_owned(), json!(args));
+    }
+    payload.insert("cwd".to_owned(), Value::String(cwd.display().to_string()));
+    payload.insert("exit_code".to_owned(), json!(outcome.status.code()));
+    payload.insert(
+        "stdout".to_owned(),
+        Value::String(outcome.stdout.preview_text()),
+    );
+    payload.insert(
+        "stderr".to_owned(),
+        Value::String(outcome.stderr.preview_text()),
+    );
+    payload.insert("details".to_owned(), process_exec_details_value(&outcome));
+
+    ToolCoreOutcome {
+        status: if outcome.status.success() {
+            "ok".to_owned()
+        } else {
+            "failed".to_owned()
+        },
+        payload: Value::Object(payload),
+    }
+}
+
+#[cfg(feature = "tool-shell")]
+fn resolve_process_program(program: &OsStr, cwd: &Path) -> PathBuf {
+    let candidate = PathBuf::from(program);
+    if candidate.components().count() > 1 {
+        return candidate;
+    }
+
+    if let Ok(resolved) = which::which(candidate.as_path()) {
+        return resolved;
+    }
+
+    let stable_search_path = stable_command_search_path();
+    which::which_in(candidate.as_path(), Some(stable_search_path), cwd).unwrap_or(candidate)
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+fn stable_command_search_path() -> OsString {
+    let env_path = std::env::var_os("PATH");
+    let fallback = env_path
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OsString::from("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"));
+    let output = std::process::Command::new("/usr/bin/getconf")
+        .arg("PATH")
+        .output();
+    let Ok(output) = output else {
+        return fallback;
+    };
+    if !output.status.success() {
+        return fallback;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return fallback;
+    }
+
+    OsString::from(trimmed)
+}
+
+#[cfg(all(feature = "tool-shell", windows))]
+fn stable_command_search_path() -> OsString {
+    std::env::var_os("PATH")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            OsString::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd")
+        })
 }
 
 #[cfg(feature = "tool-shell")]
@@ -235,14 +730,16 @@ pub(super) async fn run_process_with_timeout_with_sink<P, S>(
     timeout_ms: u64,
     error_prefix: &str,
     runtime_event_sink: Option<Arc<dyn ToolRuntimeEventSink>>,
-) -> Result<Output, String>
+    accessible_output_root: Option<&Path>,
+) -> Result<ProcessExecOutcome, String>
 where
     P: AsRef<OsStr>,
     S: AsRef<OsStr>,
 {
     let started_at = Instant::now();
-    let mut command = Command::new(program);
-    let sanitized_env = loongclaw_contracts::sanitized_child_process_env();
+    let sanitized_env = loong_contracts::sanitized_child_process_env();
+    let resolved_program = resolve_process_program(program.as_ref(), cwd);
+    let mut command = Command::new(&resolved_program);
 
     command.env_clear();
     command.envs(sanitized_env);
@@ -272,25 +769,32 @@ where
         .ok_or_else(|| format!("{error_prefix} stderr pipe missing"))?;
 
     let metrics_runtime_event_sink = runtime_event_sink.clone();
+    let accessible_output_root = accessible_output_root.map(Path::to_path_buf);
     let stdout_runtime_event_sink = runtime_event_sink.clone();
+    let stdout_stream_name = stream_label(ToolRuntimeStream::Stdout);
+    let stdout_output_root = accessible_output_root.clone();
     let stdout_task = tokio::spawn(async move {
         read_capped_with_runtime_events(
             stdout,
             OUTPUT_CAP_BYTES,
-            "stdout",
+            stdout_stream_name,
             ToolRuntimeStream::Stdout,
             stdout_runtime_event_sink,
+            stdout_output_root,
         )
         .await
     });
     let stderr_runtime_event_sink = runtime_event_sink;
+    let stderr_stream_name = stream_label(ToolRuntimeStream::Stderr);
+    let stderr_output_root = accessible_output_root;
     let stderr_task = tokio::spawn(async move {
         read_capped_with_runtime_events(
             stderr,
             OUTPUT_CAP_BYTES,
-            "stderr",
+            stderr_stream_name,
             ToolRuntimeStream::Stderr,
             stderr_runtime_event_sink,
+            stderr_output_root,
         )
         .await
     });
@@ -309,10 +813,13 @@ where
                 })?
                 .map_err(|error| format!("{error_prefix} {error}"))?;
 
-            Ok(Output {
+            let duration_ms = started_at.elapsed().as_millis();
+            let duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
+            Ok(ProcessExecOutcome {
                 status,
                 stdout,
                 stderr,
+                duration_ms,
             })
         }
         Ok(Err(error)) => {
@@ -336,7 +843,10 @@ where
     if let Some(sink) = metrics_runtime_event_sink.as_ref() {
         let duration_ms = started_at.elapsed().as_millis();
         let duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
-        let exit_code = result.as_ref().ok().and_then(|output| output.status.code());
+        let exit_code = result
+            .as_ref()
+            .ok()
+            .and_then(|outcome| outcome.status.code());
         let metrics = ToolCommandMetrics {
             exit_code,
             duration_ms,
@@ -356,6 +866,9 @@ mod tests {
     use crate::process_launch::{
         retry_executable_file_busy_async, should_retry_executable_file_busy,
     };
+
+    #[cfg(unix)]
+    use crate::test_support::ScopedEnv;
 
     #[test]
     fn should_retry_spawn_error_matches_executable_file_busy() {
@@ -390,5 +903,18 @@ mod tests {
 
         assert_eq!(result, "spawned");
         assert_eq!(total_attempts, 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_process_program_falls_back_to_stable_search_path() {
+        let mut env = ScopedEnv::new();
+        env.remove("PATH");
+        let cwd = std::env::current_dir().expect("current dir");
+
+        let resolved = super::resolve_process_program(std::ffi::OsStr::new("sh"), &cwd);
+
+        assert!(resolved.is_absolute(), "resolved path: {resolved:?}");
+        assert!(resolved.exists(), "resolved path: {resolved:?}");
     }
 }

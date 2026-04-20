@@ -23,7 +23,6 @@ concurrency:
 
 env:
   BIN_NAME: loong
-  LEGACY_BIN_NAME: loongclaw
   ANDROID_NDK_VERSION: "27.3.13750724"
   ANDROID_NDK_REVISION: "r27d"
   ANDROID_NDK_LINUX_SHA256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9"
@@ -46,7 +45,7 @@ jobs:
 
       - name: Classify changed files
         id: classify
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/workflow_change_router.mjs`;
@@ -85,11 +84,8 @@ jobs:
           bash -n scripts/publish_crates_io.sh
           bash -n scripts/architecture_budget_lib.sh
           bash -n scripts/check_architecture_boundaries.sh
-          bash -n scripts/check_architecture_drift_freshness.sh
-          bash -n scripts/generate_architecture_drift_report.sh
+          bash -n scripts/check_public_repo_hygiene.sh
           bash -n scripts/test_architecture_budget_scripts.sh
-          bash -n scripts/test_check_architecture_drift_freshness.sh
-          bash -n scripts/test_generate_architecture_drift_report.sh
           bash -n scripts/test_check_glibc_floor.sh
           bash -n scripts/test_install_sh.sh
           bash -n scripts/test_publish_crates_io.sh
@@ -114,23 +110,19 @@ jobs:
         run: |
           python3 scripts/sync_github_labels.py --check
           bash scripts/test_architecture_budget_scripts.sh
-          bash scripts/test_check_architecture_drift_freshness.sh
-          bash scripts/test_generate_architecture_drift_report.sh
           bash scripts/test_check_glibc_floor.sh
           bash scripts/test_install_sh.sh
           bash scripts/test_publish_crates_io.sh
           bash scripts/test_release_artifact_lib.sh
           bash scripts/test_release_workflow_hardening.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
+          bash scripts/check_public_repo_hygiene.sh
           bash scripts/test_ci_workflow_change_routing.sh
           bash scripts/test_promotion_guard_workflows.sh
           bash scripts/test_workflow_change_router.sh
           bash scripts/test_scan_workflow_hardening.sh
           bash scripts/test_sync_github_labels.sh
           bash scripts/test_stress_daemon_tests.sh
-
-      - name: Fresh architecture drift report
-        run: bash scripts/check_architecture_drift_freshness.sh docs/releases/support/architecture-drift-$(date -u +%Y-%m).md
 
       - name: Bootstrap local release artifacts
         run: scripts/bootstrap_release_local_artifacts.sh
@@ -162,7 +154,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: ${{ env.MINTLIFY_NODE_VERSION }}
 
@@ -336,7 +328,7 @@ jobs:
           export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
           export AR_aarch64_linux_android="${toolchain}/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
-          cargo build --release --locked -p loong --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target aarch64-linux-android
+          cargo build --release --locked -p loong --bin "${BIN_NAME}" --target aarch64-linux-android
 
   docs-build:
     needs: changes

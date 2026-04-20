@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use loongclaw_contracts::{
+use loong_contracts::{
     WorkRuntimeHealthSnapshot, WorkUnitEventRecord, WorkUnitKind, WorkUnitLeaseRecord,
     WorkUnitPriority, WorkUnitRecord, WorkUnitRetryPolicy, WorkUnitSnapshot, WorkUnitSourceRef,
     WorkUnitStatus,
@@ -10,8 +10,7 @@ use rand::random;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 
-use crate::memory;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::session::store::{self, SessionStoreConfig};
 
 const WORK_UNIT_CREATED_EVENT_KIND: &str = "work_unit_created";
 const WORK_UNIT_LEASED_EVENT_KIND: &str = "work_unit_leased";
@@ -193,8 +192,8 @@ struct RawWorkUnitRecord {
 }
 
 impl WorkUnitRepository {
-    pub fn new(config: &MemoryRuntimeConfig) -> Result<Self, String> {
-        let db_path = memory::ensure_memory_db_ready(config.sqlite_path.clone(), config)?;
+    pub fn new(config: &SessionStoreConfig) -> Result<Self, String> {
+        let db_path = store::ensure_session_store_ready(config.sqlite_path.clone(), config)?;
         let repository = Self { db_path };
         repository.ensure_schema()?;
         Ok(repository)
@@ -2300,7 +2299,7 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
+    use crate::session::store::SessionStoreConfig;
 
     use super::{
         AcquireWorkUnitLeaseRequest, AddWorkUnitDependencyRequest, AppendWorkUnitNoteRequest,
@@ -2311,29 +2310,29 @@ mod tests {
         WORK_UNIT_UPDATED_EVENT_KIND, WorkUnitCompletionDisposition, WorkUnitHeartbeatRequest,
         WorkUnitListQuery, WorkUnitRepository,
     };
-    use loongclaw_contracts::{
+    use loong_contracts::{
         WorkSourceKind, WorkUnitKind, WorkUnitPriority, WorkUnitRetryPolicy, WorkUnitSourceRef,
         WorkUnitStatus,
     };
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-work-unit-repository-{test_name}-{}",
+            "loong-work-unit-repository-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
     fn sample_source_ref() -> WorkUnitSourceRef {
         WorkUnitSourceRef {
             source_kind: WorkSourceKind::Discord,
-            project_id: Some("loongclaw-ai/server".to_owned()),
+            project_id: Some("loong-ai/server".to_owned()),
             channel_id: Some("feature".to_owned()),
             thread_id: Some("thread-42".to_owned()),
             message_id: Some("msg-7".to_owned()),

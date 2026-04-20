@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-use loongclaw_kernel::{
+use loong_kernel::{
     PluginDescriptor, PluginIR, PluginManifest, PluginScanReport, PluginScanner,
     PluginTranslationReport, PluginTranslator,
 };
@@ -138,6 +138,8 @@ pub struct ChannelDiscoveredPluginBridge {
     pub transport_family: Option<String>,
     pub target_contract: Option<String>,
     pub account_scope: Option<String>,
+    pub runtime_contract: Option<String>,
+    pub runtime_operations: Vec<String>,
     pub status: ChannelDiscoveredPluginBridgeStatus,
     pub issues: Vec<String>,
     pub missing_fields: Vec<String>,
@@ -210,7 +212,7 @@ pub(super) fn plugin_bridge_contract_from_descriptor(
 }
 
 pub(super) fn channel_surface_plugin_bridge_discovery_by_id(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     channel_catalog: &[ChannelCatalogEntry],
 ) -> BTreeMap<&'static str, ChannelPluginBridgeDiscovery> {
     let plugin_backed_channel_ids = plugin_backed_channel_ids(channel_catalog);
@@ -331,7 +333,7 @@ fn plugin_backed_channel_ids(channel_catalog: &[ChannelCatalogEntry]) -> Vec<&'s
 }
 
 fn build_not_configured_discovery_by_id(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     plugin_backed_channel_ids: &[&'static str],
 ) -> BTreeMap<&'static str, ChannelPluginBridgeDiscovery> {
     let mut discovery_by_id = BTreeMap::new();
@@ -360,7 +362,7 @@ fn build_not_configured_discovery_by_id(
 }
 
 fn build_scan_failed_discovery_by_id(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     plugin_backed_channel_ids: &[&'static str],
     managed_install_root: String,
     scan_issue: String,
@@ -391,7 +393,7 @@ fn build_scan_failed_discovery_by_id(
 }
 
 fn build_matches_discovery_by_id(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     plugin_backed_channel_ids: &[&'static str],
     managed_install_root: String,
     grouped_matches: BTreeMap<&'static str, Vec<ChannelDiscoveredPluginBridge>>,
@@ -497,10 +499,7 @@ fn discovery_ambiguity_status(
     Some(ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins)
 }
 
-fn configured_managed_bridge_plugin_id(
-    config: &LoongClawConfig,
-    channel_id: &str,
-) -> Option<String> {
+fn configured_managed_bridge_plugin_id(config: &LoongConfig, channel_id: &str) -> Option<String> {
     let configured_plugin_id = match channel_id {
         "weixin" => config.weixin.managed_bridge_plugin_id.as_deref(),
         "qqbot" => config.qqbot.managed_bridge_plugin_id.as_deref(),
@@ -761,10 +760,15 @@ fn discovered_plugin_match_from_descriptor(
     let transport_family = channel_bridge_transport_family(channel_bridge);
     let target_contract = channel_bridge_target_contract(channel_bridge);
     let account_scope = channel_bridge_account_scope(channel_bridge);
+    let runtime_contract = channel_bridge_runtime_contract(channel_bridge);
+    let runtime_operations = channel_bridge_runtime_operations(channel_bridge);
     let missing_fields = channel_bridge_missing_fields(channel_bridge);
     let setup_details = plugin_bridge_setup_details(&descriptor.manifest);
     let manifest_status = validation.status;
     let status = discovered_plugin_bridge_status_from_validation(manifest_status, channel_bridge);
+    let mut issues = validation.issues;
+    let runtime_metadata_issues = channel_bridge_runtime_metadata_issues(channel_bridge);
+    issues.extend(runtime_metadata_issues);
 
     ChannelDiscoveredPluginBridge {
         plugin_id: descriptor.manifest.plugin_id.clone(),
@@ -776,8 +780,10 @@ fn discovered_plugin_match_from_descriptor(
         transport_family,
         target_contract,
         account_scope,
+        runtime_contract,
+        runtime_operations,
         status,
-        issues: validation.issues,
+        issues,
         missing_fields,
         required_env_vars: setup_details.required_env_vars,
         recommended_env_vars: setup_details.recommended_env_vars,
@@ -822,7 +828,7 @@ fn plugin_bridge_setup_details(manifest: &PluginManifest) -> PluginBridgeSetupDe
 
 fn discovered_plugin_bridge_status_from_validation(
     manifest_status: ChannelPluginBridgeManifestStatus,
-    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
 ) -> ChannelDiscoveredPluginBridgeStatus {
     match manifest_status {
         ChannelPluginBridgeManifestStatus::Compatible => {
@@ -830,8 +836,12 @@ fn discovered_plugin_bridge_status_from_validation(
                 Some(channel_bridge) => channel_bridge.readiness.ready,
                 None => true,
             };
+            let runtime_is_ready = match channel_bridge {
+                Some(channel_bridge) => managed_bridge_runtime_is_ready(channel_bridge),
+                None => true,
+            };
 
-            if contract_is_ready {
+            if contract_is_ready && runtime_is_ready {
                 return ChannelDiscoveredPluginBridgeStatus::CompatibleReady;
             }
 
@@ -847,17 +857,34 @@ fn discovered_plugin_bridge_status_from_validation(
     }
 }
 
+fn managed_bridge_runtime_is_ready(
+    channel_bridge: &loong_kernel::PluginChannelBridgeContract,
+) -> bool {
+    let runtime_contract = channel_bridge.runtime_contract.as_deref();
+    let runtime_contract = runtime_contract.map(str::trim);
+    let runtime_contract = runtime_contract.filter(|value| !value.is_empty());
+    let runtime_contract_is_ready = runtime_contract.is_some();
+    if !runtime_contract_is_ready {
+        return false;
+    }
+
+    channel_bridge
+        .runtime_operations
+        .iter()
+        .any(|operation| !operation.trim().is_empty())
+}
+
 fn plugin_ir_channel_bridge(
     plugin_ir: &PluginIR,
-) -> Option<&loongclaw_kernel::PluginChannelBridgeContract> {
+) -> Option<&loong_kernel::PluginChannelBridgeContract> {
     plugin_ir.channel_bridge.as_ref()
 }
 
-fn plugin_ir_bridge_kind(plugin_ir: &PluginIR) -> loongclaw_kernel::PluginBridgeKind {
+fn plugin_ir_bridge_kind(plugin_ir: &PluginIR) -> loong_kernel::PluginBridgeKind {
     plugin_ir.runtime.bridge_kind
 }
 
-fn plugin_bridge_kind_label(bridge_kind: loongclaw_kernel::PluginBridgeKind) -> String {
+fn plugin_bridge_kind_label(bridge_kind: loong_kernel::PluginBridgeKind) -> String {
     bridge_kind.as_str().to_owned()
 }
 
@@ -866,7 +893,7 @@ fn plugin_ir_adapter_family(plugin_ir: &PluginIR) -> String {
 }
 
 fn channel_bridge_transport_family(
-    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
 ) -> Option<String> {
     let channel_bridge = channel_bridge?;
 
@@ -874,7 +901,7 @@ fn channel_bridge_transport_family(
 }
 
 fn channel_bridge_target_contract(
-    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
 ) -> Option<String> {
     let channel_bridge = channel_bridge?;
 
@@ -882,15 +909,43 @@ fn channel_bridge_target_contract(
 }
 
 fn channel_bridge_account_scope(
-    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
 ) -> Option<String> {
     let channel_bridge = channel_bridge?;
 
     channel_bridge.account_scope.clone()
 }
 
+fn channel_bridge_runtime_contract(
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
+) -> Option<String> {
+    let channel_bridge = channel_bridge?;
+
+    channel_bridge.runtime_contract.clone()
+}
+
+fn channel_bridge_runtime_operations(
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
+) -> Vec<String> {
+    let Some(channel_bridge) = channel_bridge else {
+        return Vec::new();
+    };
+
+    channel_bridge.runtime_operations.clone()
+}
+
+fn channel_bridge_runtime_metadata_issues(
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
+) -> Vec<String> {
+    let Some(channel_bridge) = channel_bridge else {
+        return Vec::new();
+    };
+
+    channel_bridge.runtime_metadata_issues.clone()
+}
+
 fn channel_bridge_missing_fields(
-    channel_bridge: Option<&loongclaw_kernel::PluginChannelBridgeContract>,
+    channel_bridge: Option<&loong_kernel::PluginChannelBridgeContract>,
 ) -> Vec<String> {
     let Some(channel_bridge) = channel_bridge else {
         return Vec::new();
@@ -910,9 +965,7 @@ fn normalized_manifest_channel_id(raw: Option<&str>) -> Option<String> {
     Some(trimmed.to_ascii_lowercase())
 }
 
-fn normalized_manifest_setup_surface(
-    manifest: &loongclaw_kernel::PluginManifest,
-) -> Option<String> {
+fn normalized_manifest_setup_surface(manifest: &loong_kernel::PluginManifest) -> Option<String> {
     let setup = manifest.setup.as_ref()?;
     let surface = setup.surface.as_deref()?;
     let trimmed = surface.trim();

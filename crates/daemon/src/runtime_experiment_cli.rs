@@ -3,7 +3,7 @@ use crate::{
     sha2::{self, Digest},
 };
 use clap::{Args, Subcommand, ValueEnum};
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -226,7 +226,10 @@ pub struct RuntimeExperimentSnapshotDelta {
     pub acp_selected: RuntimeExperimentScalarCompare,
     pub acp_policy: RuntimeExperimentScalarCompare,
     pub enabled_channel_ids: RuntimeExperimentSetCompare,
+    pub enabled_runtime_backed_channel_ids: RuntimeExperimentSetCompare,
     pub enabled_service_channel_ids: RuntimeExperimentSetCompare,
+    pub enabled_plugin_backed_channel_ids: RuntimeExperimentSetCompare,
+    pub enabled_outbound_only_channel_ids: RuntimeExperimentSetCompare,
     pub visible_tool_names: RuntimeExperimentSetCompare,
     pub capability_snapshot_sha256: RuntimeExperimentScalarCompare,
     pub external_skill_ids: RuntimeExperimentSetCompare,
@@ -286,8 +289,17 @@ impl RuntimeExperimentSnapshotDelta {
         if self.enabled_channel_ids.changed() {
             surfaces.push("enabled_channel_ids".to_owned());
         }
+        if self.enabled_runtime_backed_channel_ids.changed() {
+            surfaces.push("enabled_runtime_backed_channel_ids".to_owned());
+        }
         if self.enabled_service_channel_ids.changed() {
             surfaces.push("enabled_service_channel_ids".to_owned());
+        }
+        if self.enabled_plugin_backed_channel_ids.changed() {
+            surfaces.push("enabled_plugin_backed_channel_ids".to_owned());
+        }
+        if self.enabled_outbound_only_channel_ids.changed() {
+            surfaces.push("enabled_outbound_only_channel_ids".to_owned());
         }
         if self.visible_tool_names.changed() {
             surfaces.push("visible_tool_names".to_owned());
@@ -917,9 +929,21 @@ fn build_runtime_experiment_snapshot_delta(
         snapshot_enabled_channel_ids(baseline),
         snapshot_enabled_channel_ids(result),
     );
+    let enabled_runtime_backed_channel_ids = compare_string_sets(
+        snapshot_enabled_runtime_backed_channel_ids(baseline),
+        snapshot_enabled_runtime_backed_channel_ids(result),
+    );
     let enabled_service_channel_ids = compare_string_sets(
         snapshot_enabled_service_channel_ids(baseline),
         snapshot_enabled_service_channel_ids(result),
+    );
+    let enabled_plugin_backed_channel_ids = compare_string_sets(
+        snapshot_enabled_plugin_backed_channel_ids(baseline),
+        snapshot_enabled_plugin_backed_channel_ids(result),
+    );
+    let enabled_outbound_only_channel_ids = compare_string_sets(
+        snapshot_enabled_outbound_only_channel_ids(baseline),
+        snapshot_enabled_outbound_only_channel_ids(result),
     );
     let visible_tool_names = compare_string_sets(
         snapshot_visible_tool_names(baseline),
@@ -942,7 +966,10 @@ fn build_runtime_experiment_snapshot_delta(
         + usize::from(acp_selected.changed())
         + usize::from(acp_policy.changed())
         + usize::from(enabled_channel_ids.changed())
+        + usize::from(enabled_runtime_backed_channel_ids.changed())
         + usize::from(enabled_service_channel_ids.changed())
+        + usize::from(enabled_plugin_backed_channel_ids.changed())
+        + usize::from(enabled_outbound_only_channel_ids.changed())
         + usize::from(visible_tool_names.changed())
         + usize::from(capability_snapshot_sha256.changed())
         + usize::from(external_skill_ids.changed());
@@ -958,7 +985,10 @@ fn build_runtime_experiment_snapshot_delta(
         acp_selected,
         acp_policy,
         enabled_channel_ids,
+        enabled_runtime_backed_channel_ids,
         enabled_service_channel_ids,
+        enabled_plugin_backed_channel_ids,
+        enabled_outbound_only_channel_ids,
         visible_tool_names,
         capability_snapshot_sha256,
         external_skill_ids,
@@ -1109,6 +1139,24 @@ fn snapshot_enabled_service_channel_ids(snapshot: &RuntimeSnapshotArtifactDocume
     json_string_array_path(&snapshot.channels, &["enabled_service_channel_ids"])
 }
 
+fn snapshot_enabled_runtime_backed_channel_ids(
+    snapshot: &RuntimeSnapshotArtifactDocument,
+) -> Vec<String> {
+    json_string_array_path(&snapshot.channels, &["enabled_runtime_backed_channel_ids"])
+}
+
+fn snapshot_enabled_plugin_backed_channel_ids(
+    snapshot: &RuntimeSnapshotArtifactDocument,
+) -> Vec<String> {
+    json_string_array_path(&snapshot.channels, &["enabled_plugin_backed_channel_ids"])
+}
+
+fn snapshot_enabled_outbound_only_channel_ids(
+    snapshot: &RuntimeSnapshotArtifactDocument,
+) -> Vec<String> {
+    json_string_array_path(&snapshot.channels, &["enabled_outbound_only_channel_ids"])
+}
+
 fn snapshot_visible_tool_names(snapshot: &RuntimeSnapshotArtifactDocument) -> Vec<String> {
     json_string_array_path(&snapshot.tools, &["visible_tool_names"])
 }
@@ -1223,7 +1271,7 @@ fn persist_runtime_experiment_artifact(
 }
 
 pub fn render_runtime_experiment_text(artifact: &RuntimeExperimentArtifactDocument) -> String {
-    [
+    let body = [
         format!("run_id={}", artifact.run_id),
         format!("experiment_id={}", artifact.experiment_id),
         format!(
@@ -1264,7 +1312,8 @@ pub fn render_runtime_experiment_text(artifact: &RuntimeExperimentArtifactDocume
             render_string_values(&artifact.mutation.tags)
         ),
     ]
-    .join("\n")
+    .join("\n");
+    wrap_runtime_experiment_surface("experiment run", body)
 }
 
 pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareReport) -> String {
@@ -1355,8 +1404,23 @@ pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareR
         );
         push_set_compare_lines(
             &mut lines,
+            "enabled_runtime_backed_channel_ids",
+            &snapshot_delta.enabled_runtime_backed_channel_ids,
+        );
+        push_set_compare_lines(
+            &mut lines,
             "enabled_service_channel_ids",
             &snapshot_delta.enabled_service_channel_ids,
+        );
+        push_set_compare_lines(
+            &mut lines,
+            "enabled_plugin_backed_channel_ids",
+            &snapshot_delta.enabled_plugin_backed_channel_ids,
+        );
+        push_set_compare_lines(
+            &mut lines,
+            "enabled_outbound_only_channel_ids",
+            &snapshot_delta.enabled_outbound_only_channel_ids,
         );
         push_set_compare_lines(
             &mut lines,
@@ -1378,17 +1442,22 @@ pub fn render_runtime_experiment_compare_text(report: &RuntimeExperimentCompareR
         }
     }
 
-    lines.join("\n")
+    wrap_runtime_experiment_surface("experiment compare", lines.join("\n"))
 }
 
 fn render_runtime_experiment_restore_text(execution: &RuntimeExperimentRestoreExecution) -> String {
-    [
+    let body = [
         format!("run_id={}", execution.run_id),
         format!("experiment_id={}", execution.experiment_id),
         format!("stage={}", execution.stage.as_str()),
         crate::runtime_restore_cli::render_runtime_restore_text(&execution.restore),
     ]
-    .join("\n")
+    .join("\n");
+    wrap_runtime_experiment_surface("experiment restore", body)
+}
+
+fn wrap_runtime_experiment_surface(title: &str, body: String) -> String {
+    crate::render_operator_shell_surface_from_body(title, "runtime experiment", body)
 }
 
 fn render_evaluation_summary(evaluation: Option<&RuntimeExperimentEvaluation>) -> String {

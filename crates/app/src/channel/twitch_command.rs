@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::CliResult;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 use crate::config::{self, ResolvedTwitchChannelConfig};
 
 use super::ChannelOutboundTargetKind;
@@ -21,7 +21,7 @@ fn load_twitch_command_context(
 
 fn build_twitch_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedTwitchChannelConfig>> {
     let resolved = config.twitch.resolve_account(account_id)?;

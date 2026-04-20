@@ -18,7 +18,7 @@ fn unique_temp_path(label: &str) -> PathBuf {
     let process_id = std::process::id();
     let temp_dir = std::env::temp_dir();
     temp_dir.join(format!(
-        "loongclaw-latest-selector-{label}-{process_id}-{nanos}-{counter}"
+        "loong-latest-selector-{label}-{process_id}-{nanos}-{counter}"
     ))
 }
 
@@ -49,12 +49,12 @@ impl LatestSelectorCliFixture {
         let lock = lock_daemon_test_environment();
         let root = unique_temp_path(label);
         let home_dir = root.join("home");
-        let config_path = root.join("loongclaw.toml");
+        let config_path = root.join("loong.toml");
         let sqlite_path = root.join("memory.sqlite3");
         std::fs::create_dir_all(&home_dir).expect("create latest selector fixture home");
         cleanup_sqlite_artifacts(&sqlite_path);
 
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
             &config.memory,
@@ -83,9 +83,9 @@ impl LatestSelectorCliFixture {
 
     pub(super) fn write_config_with(
         &self,
-        configure: impl FnOnce(&mut mvp::config::LoongClawConfig),
-    ) -> mvp::config::LoongClawConfig {
-        let mut config = mvp::config::LoongClawConfig::default();
+        configure: impl FnOnce(&mut mvp::config::LoongConfig),
+    ) -> mvp::config::LoongConfig {
+        let mut config = mvp::config::LoongConfig::default();
         config.memory.sqlite_path = self.sqlite_path.display().to_string();
         config.memory.sliding_window = 8;
         config.audit.mode = mvp::config::AuditMode::InMemory;
@@ -174,7 +174,7 @@ impl LatestSelectorCliFixture {
         command
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
-            .env_remove("LOONGCLAW_CONFIG_PATH")
+            .env_remove("LOONG_CONFIG_PATH")
             .env_remove("USERPROFILE")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

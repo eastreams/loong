@@ -4,9 +4,9 @@ pub(super) const DEFAULT_WASM_MODULE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 pub(super) const MIN_WASM_MODULE_CACHE_MAX_BYTES: usize = 64 * 1024;
 pub(super) const MAX_WASM_MODULE_CACHE_MAX_BYTES: usize = 512 * 1024 * 1024;
 
-const ENV_WASM_CACHE_CAPACITY: &str = "LOONGCLAW_WASM_CACHE_CAPACITY";
-const ENV_WASM_CACHE_MAX_BYTES: &str = "LOONGCLAW_WASM_CACHE_MAX_BYTES";
-const ENV_WASM_SIGNALS_BASED_TRAPS: &str = "LOONGCLAW_WASM_SIGNALS_BASED_TRAPS";
+const ENV_WASM_CACHE_CAPACITY: &str = "LOONG_WASM_CACHE_CAPACITY";
+const ENV_WASM_CACHE_MAX_BYTES: &str = "LOONG_WASM_CACHE_MAX_BYTES";
+const ENV_WASM_SIGNALS_BASED_TRAPS: &str = "LOONG_WASM_SIGNALS_BASED_TRAPS";
 
 pub(super) fn parse_wasm_module_cache_capacity(raw: Option<&str>) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())

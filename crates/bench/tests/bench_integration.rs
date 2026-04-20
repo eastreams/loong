@@ -1,15 +1,15 @@
 use kernel::{Capability, ExecutionRoute, HarnessKind, VerticalPackManifest};
-use loongclaw_bench::test_support::*;
-use loongclaw_spec::spec_requires_native_tool_executor;
+use loong_bench::test_support::*;
+use loong_spec::spec_requires_native_tool_executor;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
-fn native_config_import_spec(tool_name: &str, suffix: &str) -> loongclaw_spec::RunnerSpec {
+fn native_config_import_spec(tool_name: &str, suffix: &str) -> loong_spec::RunnerSpec {
     let pack_id = format!("bench-spec-native-config-import-{suffix}");
     let agent_id = format!("bench-agent-native-config-import-{suffix}");
 
-    loongclaw_spec::RunnerSpec {
+    loong_spec::RunnerSpec {
         pack: VerticalPackManifest {
             pack_id,
             domain: "ops".to_owned(),
@@ -33,7 +33,7 @@ fn native_config_import_spec(tool_name: &str, suffix: &str) -> loongclaw_spec::R
         auto_provision: None,
         hotfixes: Vec::new(),
         plugin_setup_readiness: None,
-        operation: loongclaw_spec::OperationSpec::ToolCore {
+        operation: loong_spec::OperationSpec::ToolCore {
             tool_name: tool_name.to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
             payload: json!({"mode": "plan"}),
@@ -44,7 +44,7 @@ fn native_config_import_spec(tool_name: &str, suffix: &str) -> loongclaw_spec::R
 
 fn native_config_import_scenario(
     scenario_name: String,
-    spec: &loongclaw_spec::RunnerSpec,
+    spec: &loong_spec::RunnerSpec,
     allow_blocked: bool,
 ) -> ProgrammaticPressureScenario {
     ProgrammaticPressureScenario {
@@ -61,7 +61,7 @@ fn native_config_import_scenario(
 #[test]
 fn benchmark_copy_helper_preserves_contents() {
     let tmp = std::env::temp_dir().join(format!(
-        "loongclaw-benchmark-copy-helper-{}",
+        "loong-benchmark-copy-helper-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&tmp);
@@ -158,7 +158,7 @@ async fn run_spec_pressure_once_errors_when_executor_declines_native_request() {
 
 #[test]
 fn spec_requires_native_tool_executor_detects_claw_migration_extension() {
-    let spec = loongclaw_spec::RunnerSpec {
+    let spec = loong_spec::RunnerSpec {
         pack: VerticalPackManifest {
             pack_id: "bench-spec-claw-migration-extension".to_owned(),
             domain: "ops".to_owned(),
@@ -182,7 +182,7 @@ fn spec_requires_native_tool_executor_detects_claw_migration_extension() {
         auto_provision: None,
         hotfixes: Vec::new(),
         plugin_setup_readiness: None,
-        operation: loongclaw_spec::OperationSpec::ToolExtension {
+        operation: loong_spec::OperationSpec::ToolExtension {
             extension_action: "plan".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
             payload: json!({"input_path": "/tmp/demo"}),

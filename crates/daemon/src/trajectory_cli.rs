@@ -182,7 +182,7 @@ pub fn format_trajectory_export_text(
         .map(str::to_owned)
         .unwrap_or_else(|| "(stdout)".to_owned());
 
-    [
+    let body = [
         format!("schema.version={}", artifact.schema.version),
         format!("config={resolved_config_path}"),
         format!("session_id={}", artifact.session.session_id),
@@ -191,8 +191,8 @@ pub fn format_trajectory_export_text(
         format!("events={}", artifact.events.len()),
         format!("output={output_label}"),
     ]
-    .join("\n")
-        + "\n"
+    .join("\n");
+    wrap_trajectory_surface("trajectory export", format!("{body}\n"))
 }
 
 pub fn run_trajectory_inspect_cli(artifact_path: &str, as_json: bool) -> CliResult<()> {
@@ -268,7 +268,7 @@ pub fn format_trajectory_inspect_text(
         .map(|event| event.event_kind.as_str())
         .unwrap_or("-");
 
-    [
+    let body = [
         format!("schema.version={}", artifact.schema.version),
         format!("artifact={artifact_path}"),
         format!("session_id={}", artifact.session.session_id),
@@ -279,6 +279,10 @@ pub fn format_trajectory_inspect_text(
         format!("last_turn_role={last_turn_role}"),
         format!("latest_event_kind={latest_event_kind}"),
     ]
-    .join("\n")
-        + "\n"
+    .join("\n");
+    wrap_trajectory_surface("trajectory inspect", format!("{body}\n"))
+}
+
+fn wrap_trajectory_surface(title: &str, body: String) -> String {
+    crate::render_operator_shell_surface_from_body(title, "trajectory tools", body) + "\n"
 }

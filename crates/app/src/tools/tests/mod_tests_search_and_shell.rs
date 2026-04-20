@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn tool_search_hides_filesystem_tools_without_filesystem_capabilities() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-cap-filter-{}",
+        "loong-tool-search-cap-filter-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -39,7 +39,7 @@ fn tool_search_hides_filesystem_tools_without_filesystem_capabilities() {
 #[test]
 fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-shell-filter-{}",
+        "loong-tool-search-shell-filter-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -62,13 +62,10 @@ fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
     let results = outcome.payload["results"].as_array().expect("results");
     let shell_entry = results
         .iter()
-        .find(|entry| entry["tool_id"] == "shell.exec")
-        .expect("shell.exec should remain discoverable");
-    let lease = shell_entry["lease"]
-        .as_str()
-        .expect("shell.exec should include a lease");
+        .find(|entry| entry["tool_id"] == "exec")
+        .expect("direct exec should remain discoverable");
 
-    assert!(!lease.is_empty(), "lease should not be empty");
+    assert!(shell_entry.get("lease").is_none());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -93,11 +90,69 @@ fn shell_exec_rejects_path_qualified_commands() {
     }
 }
 
+#[cfg(all(feature = "tool-shell", unix))]
+const SHELL_EMPTY_PATH_PROBE_ENV: &str = "LOONG_SHELL_EMPTY_PATH_PROBE";
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn shell_exec_succeeds_when_path_is_empty_but_stable_search_path_can_find_command() {
+    let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .arg("--exact")
+        .arg("tools::tests::search_and_shell::shell_exec_empty_path_probe")
+        .arg("--nocapture")
+        .env(SHELL_EMPTY_PATH_PROBE_ENV, "1")
+        .output()
+        .expect("spawn shell empty PATH probe");
+
+    assert!(
+        output.status.success(),
+        "shell empty PATH probe failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn shell_exec_empty_path_probe() {
+    if std::env::var_os(SHELL_EMPTY_PATH_PROBE_ENV).is_none() {
+        return;
+    }
+
+    let root = unique_tool_temp_dir("loong-shell-empty-path-fallback");
+    std::fs::create_dir_all(&root).expect("create root");
+
+    let mut env = ScopedEnv::new();
+    env.set("PATH", "");
+
+    let config = test_tool_runtime_config(root.clone());
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "echo",
+                "args": ["shell-path-fallback"]
+            }),
+        },
+        &config,
+    )
+    .expect("shell.exec should succeed even when PATH is empty");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(
+        outcome.payload["stdout"].as_str(),
+        Some("shell-path-fallback")
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_rejects_cwd_outside_file_root() {
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-root");
-    let outside_root = unique_tool_temp_dir("loongclaw-shell-cwd-outside");
+    let root = unique_tool_temp_dir("loong-shell-cwd-root");
+    let outside_root = unique_tool_temp_dir("loong-shell-cwd-outside");
     std::fs::create_dir_all(&root).expect("create root");
     std::fs::create_dir_all(&outside_root).expect("create outside root");
 
@@ -127,7 +182,7 @@ fn shell_exec_rejects_cwd_outside_file_root() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_rejects_cwd_that_is_not_directory() {
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-file");
+    let root = unique_tool_temp_dir("loong-shell-cwd-file");
     std::fs::create_dir_all(&root).expect("create root");
     let file_path = root.join("note.txt");
     std::fs::write(&file_path, "hello").expect("write file");
@@ -158,8 +213,8 @@ fn shell_exec_rejects_cwd_that_is_not_directory() {
 fn shell_exec_rejects_cwd_symlink_outside_file_root() {
     use std::os::unix::fs::symlink;
 
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-symlink-root");
-    let outside_root = unique_tool_temp_dir("loongclaw-shell-cwd-symlink-outside");
+    let root = unique_tool_temp_dir("loong-shell-cwd-symlink-root");
+    let outside_root = unique_tool_temp_dir("loong-shell-cwd-symlink-outside");
     std::fs::create_dir_all(&root).expect("create root");
     std::fs::create_dir_all(&outside_root).expect("create outside root");
 
@@ -191,7 +246,7 @@ fn shell_exec_rejects_cwd_symlink_outside_file_root() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_rejects_missing_cwd_directory() {
-    let root = unique_tool_temp_dir("loongclaw-shell-cwd-missing");
+    let root = unique_tool_temp_dir("loong-shell-cwd-missing");
     std::fs::create_dir_all(&root).expect("create root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -333,7 +388,7 @@ async fn framework_timeout_supports_async_core_tool_calls() {
         }),
     };
 
-    let result = loongclaw_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
+    let result = loong_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
 
     assert!(
         result.is_ok(),
@@ -445,7 +500,7 @@ fn shell_exec_rejects_non_lowercase_command_names_before_execution() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    let root = unique_tool_temp_dir("loongclaw-shell-mixed-case");
+    let root = unique_tool_temp_dir("loong-shell-mixed-case");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let script = root.join("MiXeDCmd");
@@ -526,7 +581,7 @@ fn shell_exec_times_out_when_timeout_ms_is_small() {
 #[test]
 fn shell_exec_timeout_returns_without_waiting_for_descendant_pipe_holders() {
     let mut config = test_tool_runtime_config(std::env::temp_dir());
-    let args = vec!["-c", "sleep 5 & wait"];
+    let args = vec!["-c", "/bin/sleep 5 & wait"];
     let started_at = std::time::Instant::now();
 
     config.shell_allow.insert("sh".to_owned());
@@ -593,6 +648,7 @@ fn shell_exec_succeeds_when_fast_command_receives_timeout_ms() {
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
 fn shell_exec_truncates_large_stdout_without_failing_command() {
+    use std::fs;
     use std::process::Command;
 
     const SHELL_STDOUT_TRUNCATION_LIMIT: usize = 1_048_576;
@@ -607,7 +663,12 @@ fn shell_exec_truncates_large_stdout_without_failing_command() {
         return;
     }
 
-    let mut config = test_tool_runtime_config(std::env::temp_dir());
+    let root = std::env::temp_dir().join(format!(
+        "loongclaw-shell-large-output-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create large output root");
+    let mut config = test_tool_runtime_config(root.clone());
     config.shell_allow.insert("perl".to_owned());
 
     let outcome = execute_tool_core_with_config(
@@ -631,15 +692,157 @@ fn shell_exec_truncates_large_stdout_without_failing_command() {
         .expect("stdout should be present");
     assert_eq!(stdout.len(), SHELL_STDOUT_TRUNCATION_LIMIT);
     assert!(stdout.bytes().all(|byte| byte == b'a'));
+
+    let details = outcome.payload["details"]
+        .as_object()
+        .expect("details object");
+    assert_eq!(details.get("truncated"), Some(&json!(true)));
+    assert_eq!(details["handoff"]["tool"], json!("read"));
+    assert_eq!(details["handoff"]["supports_offset"], json!(true));
+    assert_eq!(details["handoff"]["supports_limit"], json!(true));
+    assert_eq!(details["handoff"]["supports_max_bytes"], json!(true));
+    let stdout_details = details["stdout"].as_object().expect("stdout details");
+    assert_eq!(stdout_details.get("truncated"), Some(&json!(true)));
+    assert_eq!(stdout_details.get("truncated_by"), Some(&json!("bytes")));
+    assert_eq!(
+        stdout_details.get("output_bytes"),
+        Some(&json!(SHELL_STDOUT_TRUNCATION_LIMIT))
+    );
+    assert_eq!(
+        stdout_details.get("max_bytes"),
+        Some(&json!(SHELL_STDOUT_TRUNCATION_LIMIT))
+    );
+    assert_eq!(stdout_details.get("total_bytes"), Some(&json!(2_000_000)));
+    assert_eq!(stdout_details.get("total_lines"), Some(&json!(1)));
+    let full_output_path = stdout_details["full_output_path"]
+        .as_str()
+        .expect("stdout full output path");
+    assert!(
+        std::path::Path::new(full_output_path).starts_with(root.as_path()),
+        "expected saved output inside read-accessible file root, path={full_output_path} root={}",
+        root.display()
+    );
+
+    let stdout_recipes = details["handoff"]["recipes"]["stdout"]
+        .as_object()
+        .expect("stdout handoff recipes");
+    assert_eq!(details["handoff"]["recommended_stream"], json!("stdout"));
+    assert_eq!(
+        details["handoff"]["recommended_recipe"],
+        json!("wider_bytes")
+    );
+    assert_eq!(
+        details["handoff"]["recommended_payload"]["path"],
+        json!(full_output_path)
+    );
+    assert_eq!(
+        details["handoff"]["recommended_payload"]["max_bytes"],
+        json!(8 * SHELL_STDOUT_TRUNCATION_LIMIT)
+    );
+    assert_eq!(
+        stdout_recipes.get("recommended_recipe"),
+        Some(&json!("wider_bytes"))
+    );
+    assert_eq!(stdout_recipes["path"], json!(full_output_path));
+    assert_eq!(
+        stdout_recipes["first_page"]["path"],
+        json!(full_output_path)
+    );
+    assert_eq!(stdout_recipes["first_page"]["offset"], json!(1));
+    assert_eq!(stdout_recipes["first_page"]["limit"], json!(200));
+    assert_eq!(stdout_recipes["last_page"]["path"], json!(full_output_path));
+    assert_eq!(stdout_recipes["last_page"]["offset"], json!(1));
+    assert_eq!(stdout_recipes["last_page"]["limit"], json!(200));
+    assert_eq!(stdout_recipes["head"], stdout_recipes["first_page"]);
+    assert_eq!(stdout_recipes["tail"], stdout_recipes["last_page"]);
+    assert_eq!(
+        stdout_recipes["wider_bytes"]["path"],
+        json!(full_output_path)
+    );
+    assert_eq!(
+        stdout_recipes["wider_bytes"]["max_bytes"],
+        json!(8 * SHELL_STDOUT_TRUNCATION_LIMIT)
+    );
+
+    let saved_output = fs::read_to_string(full_output_path).expect("read saved stdout");
+    assert_eq!(saved_output.len(), 2_000_000);
+    assert!(saved_output.bytes().all(|byte| byte == b'a'));
+    fs::remove_file(full_output_path).ok();
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn shell_exec_failed_large_stderr_prefers_stderr_handoff_recipe() {
+    use std::fs;
+    use std::process::Command;
+
+    let perl_available = Command::new("perl")
+        .arg("-v")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !perl_available {
+        eprintln!("skipping large stderr shell test because perl is unavailable");
+        return;
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "loongclaw-shell-large-stderr-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create large stderr root");
+    let mut config = test_tool_runtime_config(root.clone());
+    config.shell_allow.insert("perl".to_owned());
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "perl",
+                "args": ["-e", "print STDERR chr(98) x 2000000; exit 9"],
+                "timeout_ms": 5_000,
+            }),
+        },
+        &config,
+    )
+    .expect("large-stderr command should still complete with a failed outcome");
+
+    assert_eq!(outcome.status, "failed");
+    assert_eq!(outcome.payload["exit_code"].as_i64(), Some(9));
+    let details = outcome.payload["details"]
+        .as_object()
+        .expect("details object");
+    assert_eq!(details["handoff"]["recommended_stream"], json!("stderr"));
+    assert_eq!(
+        details["handoff"]["recommended_recipe"],
+        json!("wider_bytes")
+    );
+    let stderr_full_output_path = details["stderr"]["full_output_path"]
+        .as_str()
+        .expect("stderr full output path");
+    assert_eq!(
+        details["handoff"]["recommended_payload"]["path"],
+        json!(stderr_full_output_path)
+    );
+    assert_eq!(
+        details["handoff"]["recipes"]["stderr"]["recommended_reason"],
+        json!(
+            "the saved output is effectively one long line, so a wider byte window is the best next read"
+        )
+    );
+
+    let saved_output = fs::read_to_string(stderr_full_output_path).expect("read saved stderr");
+    assert_eq!(saved_output.len(), 2_000_000);
+    assert!(saved_output.bytes().all(|byte| byte == b'b'));
+    fs::remove_file(stderr_full_output_path).ok();
+    std::fs::remove_dir_all(root).ok();
 }
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn tool_search_result_includes_compact_argument_hints() {
-    let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-hints-{}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("loong-tool-search-hints-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -654,9 +857,9 @@ fn tool_search_result_includes_compact_argument_hints() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(results.iter().any(|entry| {
-        entry["tool_id"] == "shell.exec"
-            && entry["argument_hint"].as_str()
-                == Some("command:string,args?:string[],timeout_ms?:integer,cwd?:string")
+        let is_exec = entry["tool_id"] == "exec";
+        let argument_hint = entry["argument_hint"].as_str().unwrap_or_default();
+        is_exec && argument_hint.contains("command?:string")
     }));
 
     std::fs::remove_dir_all(&root).ok();
@@ -665,7 +868,7 @@ fn tool_search_result_includes_compact_argument_hints() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh");
+    let root = unique_tool_temp_dir("loong-tool-search-exact-refresh");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -684,8 +887,14 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
     let first = results.first().expect("one result should be returned");
 
     assert_eq!(outcome.payload["returned"], 1);
-    assert_eq!(first["tool_id"], "file.read");
-    assert!(first["lease"].as_str().is_some());
+    assert_eq!(first["tool_id"], "read");
+    assert_eq!(first["surface_id"], "read");
+    assert!(
+        first["usage_guidance"]
+            .as_str()
+            .is_some_and(|value| value.contains("normal repo inspection"))
+    );
+    assert!(first.get("lease").is_none());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -694,7 +903,7 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
 #[test]
 fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_with_fallback_results()
  {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh-fallback");
+    let root = unique_tool_temp_dir("loong-tool-search-exact-refresh-fallback");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -704,7 +913,7 @@ fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_w
             payload: json!({
                 "exact_tool_id": "file_read",
                 "query": "run shell command",
-                "_loongclaw": {
+                "_loong": {
                     "tool_search": {
                         "visible_tool_ids": ["tool.search", "tool.invoke", "shell.exec"],
                     }
@@ -719,7 +928,7 @@ fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_w
     let diagnostics = &outcome.payload["diagnostics"];
 
     assert!(!results.is_empty());
-    assert_eq!(results[0]["tool_id"], "shell.exec");
+    assert_eq!(results[0]["tool_id"], "exec");
     assert_eq!(outcome.payload["exact_tool_id"], "file_read");
     assert_eq!(diagnostics["reason"], "exact_tool_id_not_visible");
     assert_eq!(diagnostics["requested_tool_id"], "file_read");

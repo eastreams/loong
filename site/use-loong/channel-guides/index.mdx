@@ -1,11 +1,11 @@
 ---
 title: Channel Guides
-description: One setup page per shipped Loong channel surface.
+description: One setup page per actionable Loong channel surface.
 ---
 
 # Channel Guides
 
-Loong currently ships 22 public channel surfaces: 5 runtime-backed surfaces and 17 config-backed outbound surfaces. This hub keeps the full matrix visible while the higher-level chooser pages stay compact.
+Loong currently exposes 28 cataloged channel surfaces. Of those, 25 are already actionable public surfaces: 5 gateway-supervised runtime surfaces, 2 standalone native-serve surfaces, 15 config-backed outbound surfaces, and 3 plugin-backed bridge surfaces. The remaining 3 surfaces stay catalog-only planned entries. This hub keeps the full matrix visible while the higher-level chooser pages stay compact.
 
 Use [Channels](/use-loong/channels) when you still need the conceptual model first. Use this hub when you already know the surface and want the exact config, command, and support boundary for that one channel. Keep [Channel Recipes](/use-loong/channel-recipes) for representative rollout patterns rather than the full channel inventory.
 
@@ -19,11 +19,13 @@ Use this short list when you want a practical starting point before scanning the
 | the lightest reply-loop bot | [Telegram](/use-loong/channel-guides/telegram) | it remains the smallest runtime-backed setup path |
 | a Cloud API plus webhook runtime | [WhatsApp](/use-loong/channel-guides/whatsapp) | send and serve are both shipped on the same surface |
 | the official enterprise AIBot lane | [WeCom](/use-loong/channel-guides/wecom) | the public docs keep the long-connection contract explicit |
-| one-way governed delivery | [Webhook](/use-loong/channel-guides/webhook) or [Email](/use-loong/channel-guides/email) | outbound-only delivery stays visible without being marketed as a reply-loop runtime |
+| a WeChat / QQ bridge-first lane | [Weixin](/use-loong/channel-guides/weixin), [QQ Bot](/use-loong/channel-guides/qqbot), or [OneBot](/use-loong/channel-guides/onebot) | plugin-backed bridge surfaces stay visible and actionable instead of being flattened into placeholders |
+| one operator-owned inbound webhook edge or one-way governed delivery | [Webhook](/use-loong/channel-guides/webhook) or [Email](/use-loong/channel-guides/email) | Webhook now covers the standalone native-serve lane, while Email remains a clean outbound-only example |
 
-## Runtime-Backed Surfaces
+## Gateway-Supervised Runtime Surfaces
 
-These are the shipped send plus serve lanes.
+These are the shipped send plus serve lanes that can currently join `gateway run`
+or `multi-channel-serve`.
 
 | Surface | Transport | Send | Serve |
 | --- | --- | --- | --- |
@@ -33,6 +35,26 @@ These are the shipped send plus serve lanes.
 | [WhatsApp](/use-loong/channel-guides/whatsapp) | whatsapp_cloud_api | `whatsapp-send` | `whatsapp-serve` |
 | [WeCom](/use-loong/channel-guides/wecom) | wecom_aibot_long_connection | `wecom-send` | `wecom-serve` |
 
+## Standalone Native-Serve Surfaces
+
+These surfaces ship send plus serve today, but their built-in runtime still
+stays on the direct `*-serve` command instead of gateway supervision.
+
+| Surface | Transport | Send | Serve | Runtime owner |
+| --- | --- | --- | --- | --- |
+| [LINE](/use-loong/channel-guides/line) | line_messaging_api | `line-send` | `line-serve` | standalone native serve |
+| [Webhook](/use-loong/channel-guides/webhook) | generic_webhook | `webhook-send` | `webhook-serve` | standalone native serve |
+
+## Plugin-Backed Bridge Surfaces
+
+These surfaces are already real Loong channel contracts, but the active runtime is owned by an external bridge or managed plugin rather than a built-in `*-serve` loop.
+
+| Surface | Transport | Current operator path | Runtime owner |
+| --- | --- | --- | --- |
+| [Weixin](/use-loong/channel-guides/weixin) | wechat_clawbot_ilink_bridge | configure bridge contract + run `loong doctor` / `loong channels` | external plugin |
+| [QQ Bot](/use-loong/channel-guides/qqbot) | qq_official_bot_gateway_or_plugin_bridge | configure bridge contract + run `loong doctor` / `loong channels` | external plugin |
+| [OneBot](/use-loong/channel-guides/onebot) | onebot_v11_bridge | configure bridge contract + run `loong doctor` / `loong channels` | external plugin |
+
 ## Config-Backed Outbound Surfaces
 
 These surfaces ship direct sends today and keep serve in the catalog without overclaiming a reply-loop runtime.
@@ -41,10 +63,8 @@ These surfaces ship direct sends today and keep serve in the catalog without ove
 | --- | --- | --- | --- |
 | [Discord](/use-loong/channel-guides/discord) | discord_http_api | `discord-send` | outbound-only |
 | [Slack](/use-loong/channel-guides/slack) | slack_web_api | `slack-send` | outbound-only |
-| [LINE](/use-loong/channel-guides/line) | line_messaging_api | `line-send` | outbound-only |
 | [DingTalk](/use-loong/channel-guides/dingtalk) | dingtalk_custom_robot_webhook | `dingtalk-send` | outbound-only |
 | [Email](/use-loong/channel-guides/email) | smtp_imap | `email-send` | outbound-only |
-| [Webhook](/use-loong/channel-guides/webhook) | generic_webhook | `webhook-send` | outbound-only |
 | [Google Chat](/use-loong/channel-guides/google-chat) | google_chat_incoming_webhook | `google-chat-send` | outbound-only |
 | [Signal](/use-loong/channel-guides/signal) | signal_cli_rest_api | `signal-send` | outbound-only |
 | [Twitch](/use-loong/channel-guides/twitch) | twitch_chat_api | `twitch-send` | outbound-only |
@@ -57,9 +77,20 @@ These surfaces ship direct sends today and keep serve in the catalog without ove
 | [Nostr](/use-loong/channel-guides/nostr) | nostr_relays | `nostr-send` | outbound-only |
 | [Tlon](/use-loong/channel-guides/tlon) | tlon_urbit_ship_api | `tlon-send` | outbound-only |
 
+## Catalog-Only Planned Surfaces
+
+These surfaces stay visible in the internal registry, but they are not yet public setup lanes and should not be marketed as shipped runtimes.
+
+| Surface | Registry role |
+| --- | --- |
+| Zalo | planned official-account surface |
+| Zalo Personal | planned personal bridge surface |
+| WebChat | planned embedded web inbox surface |
+
 ## Reading Rule
 
-- Start with [Channels](/use-loong/channels) when you still need to choose between runtime-backed and outbound-only delivery.
+- Start with [Channels](/use-loong/channels) when you still need to choose between gateway-supervised, standalone native-serve, plugin-backed, and outbound-only delivery.
 - Use an individual guide page when the surface is already decided and you need the exact config and smoke-test path.
+- Plugin-backed guides are the right next stop when the transport is real but Loong intentionally leaves upstream login and listener ownership to an external bridge.
 - Keep [Channel Recipes](/use-loong/channel-recipes) for representative rollout paths instead of the full surface inventory.
-- Keep [Gateway And Supervision](/use-loong/gateway-and-supervision) open whenever the chosen surface is runtime-backed and needs long-lived ownership.
+- Keep [Gateway And Supervision](/use-loong/gateway-and-supervision) open whenever the chosen surface is gateway-supervised and needs long-lived ownership.

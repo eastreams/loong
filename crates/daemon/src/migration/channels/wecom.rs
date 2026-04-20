@@ -1,4 +1,4 @@
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use super::ChannelDoctorCheck;
 use super::ensure_default_env_binding;
@@ -12,7 +12,8 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     id: ID,
     label: "wecom",
     surface_label: "wecom channel",
-    runtime_kind: mvp::config::ChannelRuntimeKind::Service,
+    runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
+    operational_model: mvp::config::ChannelOperationalModel::GatewaySupervised,
     serve_subcommand: Some("wecom-serve"),
 };
 
@@ -28,7 +29,7 @@ struct EffectiveWecomConfig {
 }
 
 pub(super) fn collect_preview(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     readiness: &ChannelImportReadiness,
     source: &str,
 ) -> Option<ChannelPreview> {
@@ -82,13 +83,13 @@ pub(super) fn collect_preview(
 }
 
 pub(super) fn apply(
-    target: &mut mvp::config::LoongClawConfig,
-    source: &mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
+    source: &mvp::config::LoongConfig,
 ) -> bool {
     merge_wecom_config(&mut target.wecom, &source.wecom)
 }
 
-pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelCredentialState {
+pub(super) fn readiness_state(config: &mvp::config::LoongConfig) -> ChannelCredentialState {
     let effective = effective_wecom_config(config);
     let has_bot_id = effective.bot_id.is_some();
     let has_secret = effective.secret.is_some();
@@ -101,7 +102,7 @@ pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelC
 }
 
 pub(super) fn apply_import_readiness(
-    target: &mut mvp::config::LoongClawConfig,
+    target: &mut mvp::config::LoongConfig,
     state: ChannelCredentialState,
 ) {
     if state.is_ready() {
@@ -110,7 +111,7 @@ pub(super) fn apply_import_readiness(
 }
 
 pub(super) fn collect_preflight_checks(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> Vec<ChannelPreflightCheck> {
     let credential_state = readiness_state(config);
     let (transport_level, transport_detail) = long_connection_check(config, false);
@@ -137,9 +138,7 @@ pub(super) fn collect_preflight_checks(
     ]
 }
 
-pub(super) fn collect_doctor_checks(
-    config: &mvp::config::LoongClawConfig,
-) -> Vec<ChannelDoctorCheck> {
+pub(super) fn collect_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<ChannelDoctorCheck> {
     let credential_state = readiness_state(config);
     let (transport_level, transport_detail) = long_connection_check(config, true);
 
@@ -165,7 +164,7 @@ pub(super) fn collect_doctor_checks(
     ]
 }
 
-pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConfig) -> Vec<String> {
+pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongConfig) -> Vec<String> {
     let mut fixes = Vec::new();
     let default = mvp::config::WecomChannelConfig::default();
 
@@ -275,7 +274,7 @@ fn merge_wecom_config(
     changed
 }
 
-fn effective_wecom_config(config: &mvp::config::LoongClawConfig) -> EffectiveWecomConfig {
+fn effective_wecom_config(config: &mvp::config::LoongConfig) -> EffectiveWecomConfig {
     if let Ok(resolved) = config.wecom.resolve_account(None) {
         let bot_id = resolved.bot_id();
         let secret = resolved.secret();
@@ -386,7 +385,7 @@ fn descriptor() -> &'static mvp::config::ChannelDescriptor {
 }
 
 fn long_connection_check(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     fail_on_error: bool,
 ) -> (ChannelCheckLevel, String) {
     let effective = effective_wecom_config(config);
@@ -444,16 +443,14 @@ mod tests {
 
     #[test]
     fn collect_doctor_checks_uses_default_account_settings() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.wecom.enabled = true;
         config.wecom.default_account = Some("ops".to_owned());
         config.wecom.accounts.insert(
             "ops".to_owned(),
             mvp::config::WecomAccountConfig {
-                bot_id: Some(loongclaw_contracts::SecretRef::Inline(
-                    "wecom-bot".to_owned(),
-                )),
-                secret: Some(loongclaw_contracts::SecretRef::Inline(
+                bot_id: Some(loong_contracts::SecretRef::Inline("wecom-bot".to_owned())),
+                secret: Some(loong_contracts::SecretRef::Inline(
                     "wecom-secret".to_owned(),
                 )),
                 allowed_conversation_ids: Some(vec!["group_ops".to_owned()]),

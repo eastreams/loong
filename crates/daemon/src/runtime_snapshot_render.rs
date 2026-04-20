@@ -28,6 +28,16 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
                     .map(String::as_str)
             )
         ),
+        format!(
+            "provider transport cache_entries={} cache_hits={} cache_misses={} built_clients={}",
+            snapshot
+                .provider
+                .transport_runtime
+                .http_client_cache_entries,
+            snapshot.provider.transport_runtime.http_client_cache_hits,
+            snapshot.provider.transport_runtime.http_client_cache_misses,
+            snapshot.provider.transport_runtime.built_http_clients
+        ),
     ];
 
     for profile in &snapshot.provider.profiles {
@@ -135,17 +145,75 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
             .unwrap_or("-")
     ));
     crate::mcp_cli::append_mcp_runtime_snapshot_lines(&mut lines, &snapshot.acp.mcp);
+    let runtime_backed_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let config_backed_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        })
+        .count();
+    let plugin_backed_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
+        .count();
+    let catalog_only_surface_count = snapshot
+        .channels
+        .channel_surfaces
+        .iter()
+        .filter(|surface| {
+            surface.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+        })
+        .count();
     lines.push(format!(
-        "channels enabled={} service_enabled={} configured_accounts={} surfaces={}",
+        "channels enabled={} runtime_backed_enabled={} service_enabled={} plugin_backed_enabled={} outbound_only_enabled={} configured_accounts={} surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
         render_string_list(snapshot.enabled_channel_ids.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .enabled_runtime_backed_channel_ids
+                .iter()
+                .map(String::as_str)
+        ),
         render_string_list(
             snapshot
                 .enabled_service_channel_ids
                 .iter()
                 .map(String::as_str)
         ),
+        render_string_list(
+            snapshot
+                .enabled_plugin_backed_channel_ids
+                .iter()
+                .map(String::as_str)
+        ),
+        render_string_list(
+            snapshot
+                .enabled_outbound_only_channel_ids
+                .iter()
+                .map(String::as_str)
+        ),
         snapshot.channels.channels.len(),
-        snapshot.channels.channel_surfaces.len()
+        snapshot.channels.channel_surfaces.len(),
+        runtime_backed_surface_count,
+        config_backed_surface_count,
+        plugin_backed_surface_count,
+        catalog_only_surface_count
     ));
     for surface in &snapshot.channels.channel_surfaces {
         lines.push(format!(
@@ -208,11 +276,51 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         render_string_list(snapshot.tool_runtime.web_fetch.allowed_domains.iter().map(String::as_str)),
         render_string_list(snapshot.tool_runtime.web_fetch.blocked_domains.iter().map(String::as_str))
     ));
+    let web_access_summary = crate::runtime_web_access_summary(&snapshot.tool_runtime);
     lines.push(format!(
-        "tools visible_count={} capability_snapshot_sha256={} visible_names={}",
+        "tool_runtime web_search enabled={} default_provider={} credential_ready={} separation_note=\"{}\"",
+        snapshot.tool_runtime.web_search.enabled,
+        snapshot.tool_runtime.web_search.default_provider,
+        web_access_summary.query_search_credential_ready,
+        web_access_summary.separation_note
+    ));
+    lines.push(format!(
+        "tool_runtime web_access ordinary_network_enabled={} query_search_enabled={} query_search_default_provider={} query_search_credential_ready={} separation_note=\"{}\"",
+        web_access_summary.ordinary_network_access_enabled,
+        web_access_summary.query_search_enabled,
+        web_access_summary.query_search_default_provider,
+        web_access_summary.query_search_credential_ready,
+        web_access_summary.separation_note
+    ));
+    lines.push(format!(
+        "tools visible_count={} hidden_count={} capability_snapshot_sha256={} visible_names={} visible_direct_names={}",
         snapshot.visible_tool_names.len(),
+        snapshot.discoverable_tool_summary.hidden_tool_count,
         snapshot.capability_snapshot_sha256,
-        render_string_list(snapshot.visible_tool_names.iter().map(String::as_str))
+        render_string_list(snapshot.visible_tool_names.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .discoverable_tool_summary
+                .visible_direct_tools
+                .iter()
+                .map(String::as_str)
+        )
+    ));
+    lines.push(format!(
+        "tools hidden_tags={} hidden_surfaces={}",
+        render_string_list(
+            snapshot
+                .discoverable_tool_summary
+                .hidden_tags
+                .iter()
+                .map(String::as_str)
+        ),
+        render_tool_surface_summary(
+            snapshot
+                .discoverable_tool_summary
+                .hidden_surfaces
+                .as_slice()
+        )
     ));
     lines.extend(render_runtime_plugins_lines(&snapshot.runtime_plugins));
     lines.push(format!(
@@ -258,14 +366,32 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         }
     }
 
-    lines
+    let body_lines = lines
         .into_iter()
         .chain([
             "capability_snapshot:".to_owned(),
             snapshot.capability_snapshot.clone(),
         ])
+        .collect::<Vec<_>>();
+    crate::render_operator_shell_surface(
+        "runtime snapshot",
+        "operator runtime snapshot",
+        Vec::new(),
+        body_lines,
+        Vec::new(),
+    )
+}
+
+fn render_tool_surface_summary(surfaces: &[crate::mvp::tools::ToolSurfaceState]) -> String {
+    if surfaces.is_empty() {
+        return "-".to_owned();
+    }
+
+    surfaces
+        .iter()
+        .map(|surface| format!("{}:{}", surface.surface_id, surface.tool_count()))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join(",")
 }
 
 fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -> Vec<String> {
@@ -361,6 +487,12 @@ pub(crate) fn runtime_snapshot_provider_json(snapshot: &RuntimeSnapshotProviderS
         "active_label": snapshot.active_label,
         "last_provider_id": snapshot.last_provider_id,
         "saved_profile_ids": snapshot.saved_profile_ids,
+        "transport_runtime": {
+            "http_client_cache_entries": snapshot.transport_runtime.http_client_cache_entries,
+            "http_client_cache_hits": snapshot.transport_runtime.http_client_cache_hits,
+            "http_client_cache_misses": snapshot.transport_runtime.http_client_cache_misses,
+            "built_http_clients": snapshot.transport_runtime.built_http_clients,
+        },
         "profiles": snapshot
             .profiles
             .iter()
@@ -461,6 +593,7 @@ pub(crate) fn runtime_snapshot_acp_json(snapshot: &mvp::acp::AcpRuntimeSnapshot)
 pub(crate) fn runtime_snapshot_tool_runtime_json(
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
 ) -> Value {
+    let web_access_summary = crate::runtime_web_access_summary(runtime);
     json!({
         "file_root": runtime
             .file_root
@@ -496,6 +629,19 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
             "timeout_seconds": runtime.web_fetch.timeout_seconds,
             "max_bytes": runtime.web_fetch.max_bytes,
             "max_redirects": runtime.web_fetch.max_redirects,
+        },
+        "web_search": {
+            "enabled": runtime.web_search.enabled,
+            "default_provider": runtime.web_search.default_provider,
+            "credential_ready": web_access_summary.query_search_credential_ready,
+            "separation_note": web_access_summary.separation_note,
+        },
+        "web_access": {
+            "ordinary_network_access_enabled": web_access_summary.ordinary_network_access_enabled,
+            "query_search_enabled": web_access_summary.query_search_enabled,
+            "query_search_default_provider": web_access_summary.query_search_default_provider,
+            "query_search_credential_ready": web_access_summary.query_search_credential_ready,
+            "separation_note": web_access_summary.separation_note,
         },
     })
 }

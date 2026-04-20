@@ -18,6 +18,18 @@ pub(crate) fn push_channel_surface_plugin_bridge_contract(
         lines.push(stable_targets_line);
     }
 
+    let supported_operations = if plugin_bridge_contract.supported_operations.is_empty() {
+        "-".to_owned()
+    } else {
+        plugin_bridge_contract.supported_operations.join(",")
+    };
+    lines.push(format!(
+        "  plugin_bridge_contract required_setup_surface={} runtime_owner={} supported_operations={}",
+        plugin_bridge_contract.required_setup_surface,
+        plugin_bridge_contract.runtime_owner,
+        render_line_safe_text_value(&supported_operations),
+    ));
+
     let account_scope_note = plugin_bridge_contract.account_scope_note;
     let Some(account_scope_note) = account_scope_note else {
         return;
@@ -123,6 +135,9 @@ fn render_channel_surface_discovered_plugin_line(
     let transport_family = render_line_safe_optional_text_value(plugin.transport_family.as_deref());
     let target_contract = render_line_safe_optional_text_value(plugin.target_contract.as_deref());
     let account_scope = render_line_safe_optional_text_value(plugin.account_scope.as_deref());
+    let runtime_contract = render_line_safe_optional_text_value(plugin.runtime_contract.as_deref());
+    let runtime_operations =
+        render_line_safe_text_values(plugin.runtime_operations.iter().map(String::as_str), ",");
     let source_path = render_line_safe_text_value(&plugin.source_path);
     let package_root = render_line_safe_text_value(&plugin.package_root);
     let package_manifest_path =
@@ -143,7 +158,7 @@ fn render_channel_surface_discovered_plugin_line(
         render_line_safe_optional_text_value(plugin.setup_remediation.as_deref());
 
     format!(
-        "    managed_plugin id={} status={} bridge_kind={} adapter_family={} transport_family={} target_contract={} account_scope={} source_path={} package_root={} package_manifest_path={} missing_fields={} issues={} required_env_vars={} recommended_env_vars={} required_config_keys={} default_env_var={} setup_docs_urls={} setup_remediation={}",
+        "    managed_plugin id={} status={} bridge_kind={} adapter_family={} transport_family={} target_contract={} account_scope={} runtime_contract={} runtime_operations={} source_path={} package_root={} package_manifest_path={} missing_fields={} issues={} required_env_vars={} recommended_env_vars={} required_config_keys={} default_env_var={} setup_docs_urls={} setup_remediation={}",
         plugin_id,
         plugin.status.as_str(),
         bridge_kind,
@@ -151,6 +166,8 @@ fn render_channel_surface_discovered_plugin_line(
         transport_family,
         target_contract,
         account_scope,
+        runtime_contract,
+        runtime_operations,
         source_path,
         package_root,
         package_manifest_path,

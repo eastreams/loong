@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 use serde_json::{Value, json};
 
 use super::runtime_binding::ProviderRuntimeBinding;
@@ -326,37 +326,59 @@ fn render_deferred_tool_text_workflow_section_if_needed(config: &LoongConfig) ->
 }
 
 fn render_deferred_tool_text_workflow_section() -> String {
+    let direct_call_example_lines = [
+        "{",
+        "  \"name\": \"read\",",
+        "  \"arguments\": {",
+        "    \"path\": \"README.md\"",
+        "  }",
+        "}",
+    ];
+    let direct_call_example = direct_call_example_lines.join("\n");
+
     let discovery_call_example_lines = [
         "{",
         "  \"name\": \"tool_search\",",
         "  \"arguments\": {",
-        "    \"query\": \"<natural-language capability description>\",",
+        "    \"query\": \"approval session status\",",
         "    \"limit\": 5",
         "  }",
         "}",
     ];
     let discovery_call_example = discovery_call_example_lines.join("\n");
+
     let invoke_call_example_lines = [
         "{",
         "  \"name\": \"tool_invoke\",",
         "  \"arguments\": {",
-        "    \"tool_id\": \"<tool_id from tool_search>\",",
+        "    \"tool_id\": \"agent\",",
         "    \"lease\": \"<lease from tool_search>\",",
         "    \"arguments\": {",
-        "      \"...\": \"...\"",
+        "      \"operation\": \"session-status\",",
+        "      \"session_id\": \"<session id>\"",
         "    }",
         "  }",
         "}",
     ];
     let invoke_call_example = invoke_call_example_lines.join("\n");
+
     let lines = [
-        "## Deferred Tool Text Workflow".to_owned(),
+        "## Tool Access".to_owned(),
         "Structured provider tool schemas are disabled for this profile.".to_owned(),
+        "Use the smallest tool that fits: `read`, `write`, `exec`, `web`, `browser`, or `memory`. These direct tools are the normal path.".to_owned(),
+        "For `web`, distinguish search-provider mode from ordinary network mode: `web { query }` uses web-search providers, while `web { url }` or low-level request fields are still normal network access.".to_owned(),
+        "Use `tool_search` only when the task needs a hidden surface such as `agent`, `skills`, or `channel`, and keep the query short and capability-focused.".to_owned(),
+        "Use `tool_invoke` only with a fresh lease returned by `tool_search`; do not route normal direct-tool work through leases.".to_owned(),
+        "Grouped hidden surfaces such as `agent`, `skills`, and `channel` are not direct tool calls. If `tool_search` returns one of them, pass it back through `tool_invoke` with the returned lease instead of emitting that grouped name directly.".to_owned(),
+        "When you need a tool, emit the raw JSON call instead of only describing the missing capability.".to_owned(),
+        "Direct tool example:".to_owned(),
+        direct_call_example,
         "In raw JSON tool calls, use the provider tool names `tool_search` and `tool_invoke`.".to_owned(),
-        "When you need a tool, emit a raw JSON tool call instead of only describing the missing capability.".to_owned(),
-        "Discovery example:".to_owned(),
+        "tool_invoke leases are short-lived; after any invalid_tool_lease response, refresh with tool_search before retrying.".to_owned(),
+        "If you already know the tool id, refresh directly with exact_tool_id to fetch a fresh lease card.".to_owned(),
+        "Hidden-tool discovery example:".to_owned(),
         discovery_call_example,
-        "Invocation example:".to_owned(),
+        "Hidden-tool invocation example:".to_owned(),
         invoke_call_example,
     ];
 
@@ -846,6 +868,9 @@ fn should_skip_history_turn(role: &str, content: &str) -> bool {
     if role != "assistant" {
         return false;
     }
+    if content.trim_start().starts_with("[provider_error] ") {
+        return true;
+    }
     let parsed = match serde_json::from_str::<Value>(content) {
         Ok(value) => value,
         Err(_) => return false,
@@ -902,7 +927,7 @@ mod tests {
                         "query": "read note.md",
                         "entries": [
                             {
-                                "tool_id": "file.read",
+                                "tool_id": "read",
                                 "summary": "Read a file."
                             }
                         ]
@@ -987,9 +1012,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_base_messages_with_binding_skips_runtime_self_reads_when_disabled() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let agents_path = harness.temp_dir.join("AGENTS.md");
@@ -1012,8 +1037,8 @@ mod tests {
         let has_tool_plane_event = audit_events.iter().any(|event| {
             matches!(
                 &event.kind,
-                loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                    plane: loongclaw_contracts::ExecutionPlane::Tool,
+                loong_kernel::AuditEventKind::PlaneInvoked {
+                    plane: loong_contracts::ExecutionPlane::Tool,
                     ..
                 }
             )
@@ -1028,9 +1053,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_base_messages_with_binding_reads_only_existing_runtime_self_sources() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let agents_path = harness.temp_dir.join("AGENTS.md");
@@ -1053,8 +1078,8 @@ mod tests {
             .filter(|event| {
                 matches!(
                     &event.kind,
-                    loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                        plane: loongclaw_contracts::ExecutionPlane::Tool,
+                    loong_kernel::AuditEventKind::PlaneInvoked {
+                        plane: loong_contracts::ExecutionPlane::Tool,
                         ..
                     }
                 )
@@ -1070,9 +1095,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_base_messages_with_binding_prefers_runtime_workspace_root_over_file_root() {
         let capabilities = std::collections::BTreeSet::from([
-            loongclaw_contracts::Capability::InvokeTool,
-            loongclaw_contracts::Capability::FilesystemRead,
-            loongclaw_contracts::Capability::FilesystemWrite,
+            loong_contracts::Capability::InvokeTool,
+            loong_contracts::Capability::FilesystemRead,
+            loong_contracts::Capability::FilesystemWrite,
         ]);
         let harness = TurnTestHarness::with_capabilities(capabilities);
         let decoy_tool_root = harness.temp_dir.join("tool-root-decoy");
@@ -1098,8 +1123,8 @@ mod tests {
             .filter(|event| {
                 matches!(
                     &event.kind,
-                    loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                        plane: loongclaw_contracts::ExecutionPlane::Tool,
+                    loong_kernel::AuditEventKind::PlaneInvoked {
+                        plane: loong_contracts::ExecutionPlane::Tool,
                         ..
                     }
                 )
@@ -1121,9 +1146,12 @@ mod tests {
             build_system_message(&config, true).expect("system message when enabled");
         let system_content = system_message["content"].as_str().expect("system content");
 
-        assert!(system_content.contains("## Deferred Tool Text Workflow"));
+        assert!(system_content.contains("## Tool Access"));
+        assert!(system_content.contains("`web { query }` uses web-search providers"));
         assert!(system_content.contains("\"name\": \"tool_search\""));
         assert!(system_content.contains("\"name\": \"tool_invoke\""));
+        assert!(system_content.contains("invalid_tool_lease"));
+        assert!(system_content.contains("exact_tool_id"));
     }
 
     #[test]
@@ -1142,7 +1170,7 @@ mod tests {
                 build_system_message(&config, true).expect("system message when enabled");
             let system_content = system_message["content"].as_str().expect("system content");
 
-            assert!(!system_content.contains("## Deferred Tool Text Workflow"));
+            assert!(!system_content.contains("## Tool Access"));
         }
     }
 
@@ -1262,6 +1290,17 @@ mod tests {
         }))
         .expect("serialize");
         push_history_message(&mut messages, "assistant", payload.as_str());
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn push_history_message_skips_inline_provider_errors() {
+        let mut messages = Vec::new();
+        push_history_message(
+            &mut messages,
+            "assistant",
+            "[provider_error] provider credentials are missing",
+        );
         assert!(messages.is_empty());
     }
 
@@ -1475,7 +1514,7 @@ mod tests {
     #[test]
     fn message_builder_includes_summary_block_for_window_plus_summary_profile() {
         let tmp =
-            std::env::temp_dir().join(format!("loongclaw-provider-summary-{}", std::process::id()));
+            std::env::temp_dir().join(format!("loong-provider-summary-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("provider-summary.sqlite3");
         let _ = std::fs::remove_file(&db_path);

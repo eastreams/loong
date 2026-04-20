@@ -60,10 +60,10 @@ struct PlaneInvocationRecord<'a> {
     required_capabilities: &'a BTreeSet<Capability>,
 }
 
-pub struct LoongClawKernel<P: PolicyEngine> {
+pub struct LoongKernel<P: PolicyEngine> {
     policy: P,
     packs: BTreeMap<String, VerticalPackManifest>,
-    namespaces: BTreeMap<String, loongclaw_contracts::Namespace>,
+    namespaces: BTreeMap<String, loong_contracts::Namespace>,
     harness: HarnessBroker,
     connector_plane: ConnectorPlane,
     runtime_plane: RuntimePlane,
@@ -78,15 +78,15 @@ pub struct LoongClawKernel<P: PolicyEngine> {
 /// Additive migration alias for the legacy kernel surface.
 ///
 /// During the compatibility window this still exposes the executable
-/// `LoongClawKernel` API, while also supporting `.build()` into the new
+/// `LoongKernel` API, while also supporting `.build()` into the new
 /// frozen `Kernel<P>` handle.
-pub type KernelBuilder<P> = LoongClawKernel<P>;
+pub type KernelBuilder<P> = LoongKernel<P>;
 
 pub struct Kernel<P: PolicyEngine> {
-    inner: LoongClawKernel<P>,
+    inner: LoongKernel<P>,
 }
 
-impl<P: PolicyEngine> LoongClawKernel<P> {
+impl<P: PolicyEngine> LoongKernel<P> {
     /// Safe convenience constructor for callers that do not need to customize
     /// runtime components. This defaults to in-memory audit rather than silent
     /// audit dropping.
@@ -136,7 +136,7 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
         if self.packs.contains_key(&pack.pack_id) {
             return Err(KernelError::DuplicatePack(pack.pack_id));
         }
-        let namespace = loongclaw_contracts::Namespace {
+        let namespace = loong_contracts::Namespace {
             pack_id: pack.pack_id.clone(),
             domain: pack.domain.clone(),
             membrane: pack.pack_id.clone(),
@@ -148,7 +148,7 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
         Ok(())
     }
 
-    pub fn get_namespace(&self, pack_id: &str) -> Option<&loongclaw_contracts::Namespace> {
+    pub fn get_namespace(&self, pack_id: &str) -> Option<&loong_contracts::Namespace> {
         self.namespaces.get(pack_id)
     }
 
@@ -927,7 +927,7 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
 }
 
 impl<P: PolicyEngine> Kernel<P> {
-    pub fn get_namespace(&self, pack_id: &str) -> Option<&loongclaw_contracts::Namespace> {
+    pub fn get_namespace(&self, pack_id: &str) -> Option<&loong_contracts::Namespace> {
         self.inner.get_namespace(pack_id)
     }
 
@@ -1097,14 +1097,14 @@ impl<P: PolicyEngine> Kernel<P> {
     }
 }
 
-impl<P: PolicyEngine> AsRef<LoongClawKernel<P>> for Kernel<P> {
-    fn as_ref(&self) -> &LoongClawKernel<P> {
+impl<P: PolicyEngine> AsRef<LoongKernel<P>> for Kernel<P> {
+    fn as_ref(&self) -> &LoongKernel<P> {
         &self.inner
     }
 }
 
 impl<P: PolicyEngine> Deref for Kernel<P> {
-    type Target = LoongClawKernel<P>;
+    type Target = LoongKernel<P>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner

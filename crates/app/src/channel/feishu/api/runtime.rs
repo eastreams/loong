@@ -348,7 +348,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
-        let prefix = format!("loongclaw-feishu-runtime-{label}");
+        let prefix = format!("loong-feishu-runtime-{label}");
         crate::test_support::unique_temp_dir(prefix.as_str())
     }
 
@@ -484,10 +484,8 @@ mod tests {
                 "work".to_owned(),
                 crate::config::FeishuAccountConfig {
                     account_id: Some("feishu_shared".to_owned()),
-                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                        "cli_work".to_owned(),
-                    )),
-                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                    app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                    app_secret: Some(loong_contracts::SecretRef::Inline(
                         "app-secret-work".to_owned(),
                     )),
                     ..crate::config::FeishuAccountConfig::default()
@@ -517,10 +515,8 @@ mod tests {
                     "Work Bot".to_owned(),
                     crate::config::FeishuAccountConfig {
                         account_id: Some("feishu_shared".to_owned()),
-                        app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                            "cli_work".to_owned(),
-                        )),
-                        app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        app_id: Some(loong_contracts::SecretRef::Inline("cli_work".to_owned())),
+                        app_secret: Some(loong_contracts::SecretRef::Inline(
                             "app-secret-work".to_owned(),
                         )),
                         ..crate::config::FeishuAccountConfig::default()
@@ -530,10 +526,8 @@ mod tests {
                     "Alerts Bot".to_owned(),
                     crate::config::FeishuAccountConfig {
                         account_id: Some("feishu_shared".to_owned()),
-                        app_id: Some(loongclaw_contracts::SecretRef::Inline(
-                            "cli_alerts".to_owned(),
-                        )),
-                        app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        app_id: Some(loong_contracts::SecretRef::Inline("cli_alerts".to_owned())),
+                        app_secret: Some(loong_contracts::SecretRef::Inline(
                             "app-secret-alerts".to_owned(),
                         )),
                         ..crate::config::FeishuAccountConfig::default()

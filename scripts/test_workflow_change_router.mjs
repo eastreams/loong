@@ -20,8 +20,8 @@ function createRuntime(eventName, files, beforeSha = "abc123", headSha = "def456
       },
     },
     repo: {
-      owner: "loongclaw-ai",
-      repo: "loongclaw",
+      owner: "loong-ai",
+      repo: "loong",
     },
     sha: headSha,
   };

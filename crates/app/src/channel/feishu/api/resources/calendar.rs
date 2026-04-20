@@ -28,6 +28,19 @@ impl FeishuCalendarListQuery {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct FeishuPrimaryCalendarQuery {
+    pub user_id_type: Option<String>,
+}
+
+impl FeishuPrimaryCalendarQuery {
+    fn query_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs = Vec::new();
+        push_optional_query(&mut pairs, "user_id_type", self.user_id_type.as_deref());
+        pairs
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeishuCalendarFreebusyQuery {
     pub user_id_type: Option<String>,
@@ -113,15 +126,13 @@ pub async fn list_calendars(
 pub async fn get_primary_calendars(
     client: &FeishuClient,
     access_token: &str,
-    user_id_type: Option<&str>,
+    query: &FeishuPrimaryCalendarQuery,
 ) -> CliResult<FeishuPrimaryCalendarList> {
-    let mut query = Vec::new();
-    push_optional_query(&mut query, "user_id_type", user_id_type);
     let payload = client
         .post_json(
             "/open-apis/calendar/v4/calendars/primary",
             Some(access_token),
-            &query,
+            &query.query_pairs(),
             &Value::Object(serde_json::Map::new()),
         )
         .await?;
@@ -289,6 +300,25 @@ mod tests {
 
         let error = query.validate().expect_err("invalid freebusy query");
         assert!(error.contains("time_min"));
+    }
+
+    #[test]
+    fn primary_query_emits_user_id_type_pair_only_when_present() {
+        let empty = FeishuPrimaryCalendarQuery::default();
+        assert!(empty.query_pairs().is_empty());
+
+        let explicit = FeishuPrimaryCalendarQuery {
+            user_id_type: Some("union_id".to_owned()),
+        };
+        assert_eq!(
+            explicit.query_pairs(),
+            vec![("user_id_type".to_owned(), "union_id".to_owned())]
+        );
+
+        let blank = FeishuPrimaryCalendarQuery {
+            user_id_type: Some("   ".to_owned()),
+        };
+        assert!(blank.query_pairs().is_empty());
     }
 
     #[test]

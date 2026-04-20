@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     user_input: &str,
@@ -143,7 +143,7 @@ pub(super) async fn persist_resolved_provider_error_checkpoint<R: ConversationRu
 }
 
 pub(super) async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     user_input: &str,
@@ -201,7 +201,7 @@ pub(super) fn effective_tool_config_for_session(
 }
 
 pub(super) struct CoordinatorAppToolDispatcher<'a, R: ?Sized> {
-    pub(super) config: &'a LoongClawConfig,
+    pub(super) config: &'a LoongConfig,
     pub(super) runtime: &'a R,
     pub(super) fallback: &'a DefaultAppToolDispatcher,
 }
@@ -246,7 +246,7 @@ where
         &self,
         session_context: &SessionContext,
         intent: &ToolIntent,
-        request: loongclaw_contracts::ToolCoreRequest,
+        request: loong_contracts::ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolExecutionPreflight, String> {
@@ -264,9 +264,9 @@ where
     async fn execute_app_tool(
         &self,
         session_context: &SessionContext,
-        request: loongclaw_contracts::ToolCoreRequest,
+        request: loong_contracts::ToolCoreRequest,
         binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    ) -> Result<loong_contracts::ToolCoreOutcome, String> {
         match crate::tools::canonical_tool_name(request.tool_name.as_str()) {
             "approval_request_resolve" => {
                 #[cfg(not(feature = "memory-sqlite"))]
@@ -279,7 +279,7 @@ where
                 #[cfg(feature = "memory-sqlite")]
                 {
                     let memory_config =
-                        MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+                        store::session_store_config_from_memory_config(&self.config.memory);
                     let effective_tool_config =
                         effective_tool_config_for_session(&self.config.tools, session_context);
                     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
@@ -331,8 +331,8 @@ where
         session_context: &SessionContext,
         intent: &ToolIntent,
         intent_sequence: usize,
-        request: &loongclaw_contracts::ToolCoreRequest,
-        outcome: &loongclaw_contracts::ToolCoreOutcome,
+        request: &loong_contracts::ToolCoreRequest,
+        outcome: &loong_contracts::ToolCoreOutcome,
         binding: ConversationRuntimeBinding<'_>,
     ) {
         let tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
@@ -358,7 +358,7 @@ pub(super) async fn persist_tool_discovery_refresh_event_if_needed<
     intent: &ToolIntent,
     intent_sequence: usize,
     tool_name: &str,
-    outcome: &loongclaw_contracts::ToolCoreOutcome,
+    outcome: &loong_contracts::ToolCoreOutcome,
     binding: ConversationRuntimeBinding<'_>,
 ) {
     if tool_name != "tool.search" {

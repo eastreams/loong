@@ -1299,7 +1299,7 @@ mod tests {
 
     #[test]
     fn memory_system_runtime_snapshot_defaults_to_builtin() {
-        let config = crate::config::LoongClawConfig::default();
+        let config = crate::config::LoongConfig::default();
         let snapshot = crate::memory::collect_memory_system_runtime_snapshot(&config)
             .expect("collect memory-system snapshot");
         assert_eq!(snapshot.selected.id, DEFAULT_MEMORY_SYSTEM_ID);
@@ -1672,7 +1672,7 @@ mod tests {
         };
         let allowed_payload = json!({
             "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "workspace",
             "kind": "imported_profile",
             "content": "release checklist",

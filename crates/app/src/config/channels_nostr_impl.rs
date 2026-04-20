@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn nostr_default_config_keeps_default_env_pointers_when_table_is_omitted() {
-        let config = crate::config::LoongClawConfig::default();
+        let config = crate::config::LoongConfig::default();
 
         assert_eq!(
             config.nostr.relay_urls_env.as_deref(),

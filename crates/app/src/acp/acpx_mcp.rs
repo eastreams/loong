@@ -15,11 +15,11 @@ use tokio::time::timeout;
 use crate::CliResult;
 
 const ACPX_MCP_PROXY_NODE_COMMAND: &str = "node";
-const ACPX_MCP_PROXY_SCRIPT_STEM: &str = "loongclaw-acpx-mcp-proxy";
+const ACPX_MCP_PROXY_SCRIPT_STEM: &str = "loong-acpx-mcp-proxy";
 const ACPX_MCP_PROXY_SCRIPT_EXTENSION: &str = "mjs";
 const ACPX_MCP_PROXY_SCRIPT_HASH_PREFIX_LENGTH: usize = 12;
 const ACPX_MCP_PROXY_SCRIPT_SOURCE: &str = include_str!("assets/acpx-mcp-proxy.mjs");
-const LOONGCLAW_TEMP_DIR_NAME: &str = "loongclaw";
+const LOONG_TEMP_DIR_NAME: &str = "loong";
 const ACPX_MCP_PAYLOAD_DIR_NAME: &str = "acpx-mcp-payloads";
 static ACPX_MCP_PROXY_SCRIPT_PATH: OnceLock<Result<String, String>> = OnceLock::new();
 
@@ -174,11 +174,11 @@ fn ensure_mcp_proxy_script_path() -> CliResult<String> {
 }
 
 fn materialize_mcp_proxy_script() -> Result<String, String> {
-    let loongclaw_dir = loongclaw_temp_dir();
-    ensure_private_directory(loongclaw_dir.as_path(), "ACPX MCP proxy directory")?;
+    let loong_dir = loong_temp_dir();
+    ensure_private_directory(loong_dir.as_path(), "ACPX MCP proxy directory")?;
 
     let script_file_name = versioned_mcp_proxy_script_file_name();
-    let path = loongclaw_dir.join(script_file_name);
+    let path = loong_dir.join(script_file_name);
     let path_exists = path.exists();
 
     if !path_exists {
@@ -196,9 +196,9 @@ fn materialize_mcp_proxy_script() -> Result<String, String> {
 }
 
 fn materialize_mcp_proxy_payload_path(payload: &[u8]) -> CliResult<String> {
-    let loongclaw_dir = loongclaw_temp_dir();
-    ensure_private_directory(loongclaw_dir.as_path(), "ACPX MCP payload root directory")?;
-    let payload_dir = loongclaw_dir.join(ACPX_MCP_PAYLOAD_DIR_NAME);
+    let loong_dir = loong_temp_dir();
+    ensure_private_directory(loong_dir.as_path(), "ACPX MCP payload root directory")?;
+    let payload_dir = loong_dir.join(ACPX_MCP_PAYLOAD_DIR_NAME);
     ensure_private_directory(payload_dir.as_path(), "ACPX MCP payload directory")?;
 
     let mut payload_file = tempfile::Builder::new()
@@ -216,9 +216,9 @@ fn materialize_mcp_proxy_payload_path(payload: &[u8]) -> CliResult<String> {
     Ok(payload_path)
 }
 
-fn loongclaw_temp_dir() -> PathBuf {
+fn loong_temp_dir() -> PathBuf {
     let temp_dir = std::env::temp_dir();
-    temp_dir.join(LOONGCLAW_TEMP_DIR_NAME)
+    temp_dir.join(LOONG_TEMP_DIR_NAME)
 }
 
 fn versioned_mcp_proxy_script_file_name() -> String {

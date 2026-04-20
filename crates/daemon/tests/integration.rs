@@ -20,12 +20,12 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use loongclaw_daemon::kernel::ConnectorCommand;
-use loongclaw_daemon::kernel::{
+use loong_daemon::kernel::ConnectorCommand;
+use loong_daemon::kernel::{
     AuditEventKind, Capability, ExecutionRoute, HarnessKind, PluginBridgeKind, VerticalPackManifest,
 };
-use loongclaw_daemon::test_support::*;
-use loongclaw_daemon::*;
+use loong_daemon::test_support::*;
+use loong_daemon::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -45,9 +45,7 @@ impl MigrationEnvironmentGuard {
             .find_map(|(key, value)| (*key == "HOME").then_some(*value))
             .flatten()
             .map(std::path::PathBuf::from);
-        let explicit_home_override = pairs
-            .iter()
-            .any(|(key, _)| *key == "LOONG_HOME" || *key == "LOONGCLAW_HOME");
+        let explicit_home_override = pairs.iter().any(|(key, _)| *key == "LOONG_HOME");
 
         for (key, value) in pairs {
             saved.push(((*key).to_owned(), std::env::var_os(key)));

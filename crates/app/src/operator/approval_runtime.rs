@@ -289,26 +289,25 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{
         ApprovalDecision, ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionRecord,
         SessionKind, SessionRepository, SessionState,
     };
+    use crate::session::store::SessionStoreConfig;
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let process_id = std::process::id();
         let temp_dir = std::env::temp_dir();
-        let directory_name =
-            format!("loongclaw-operator-approval-runtime-{test_name}-{process_id}");
+        let directory_name = format!("loong-operator-approval-runtime-{test_name}-{process_id}");
         let base_dir = temp_dir.join(directory_name);
         let _ = std::fs::create_dir_all(&base_dir);
 
         let db_path = base_dir.join("memory.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -329,7 +328,7 @@ mod tests {
         repo.create_session(session_record).expect("create session");
     }
 
-    fn delete_session_row(memory_config: &MemoryRuntimeConfig, session_id: &str) {
+    fn delete_session_row(memory_config: &SessionStoreConfig, session_id: &str) {
         let db_path = memory_config
             .sqlite_path
             .as_ref()

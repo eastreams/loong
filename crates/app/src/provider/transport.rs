@@ -813,6 +813,7 @@ fn percent_encode_path_segment(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::provider::sse::{SseLine, SseStreamEvent, parse_sse_line};
+    #[cfg(feature = "provider-bedrock")]
     use crate::test_support::ScopedEnv;
     use std::collections::BTreeMap;
 
@@ -954,7 +955,7 @@ mod tests {
 
         let provider = ProviderConfig {
             kind: ProviderKind::Bedrock,
-            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+            api_key: Some(loong_contracts::SecretRef::Inline(
                 "bedrock-bearer-token".to_owned(),
             )),
             ..ProviderConfig::default()

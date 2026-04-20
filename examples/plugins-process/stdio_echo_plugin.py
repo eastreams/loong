@@ -1,4 +1,4 @@
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-echo-py",
 #   "provider_id": "stdio-echo",
@@ -14,4 +14,4 @@
 #     "source": "example"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END

@@ -9,7 +9,7 @@ use wasmtime::{
     Caller, Extern, Linker as WasmtimeLinker, Module as WasmtimeModule, Result as WasmtimeResult,
 };
 
-const WASM_HOST_ABI_IMPORT_MODULE: &str = "loongclaw";
+const WASM_HOST_ABI_IMPORT_MODULE: &str = "loong";
 const WASM_HOST_ABI_IMPORT_INPUT_LEN: &str = "input_len";
 const WASM_HOST_ABI_IMPORT_READ_INPUT: &str = "read_input";
 const WASM_HOST_ABI_IMPORT_CONFIG_LEN: &str = "config_len";

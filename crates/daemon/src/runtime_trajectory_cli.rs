@@ -1,6 +1,6 @@
 use clap::Args;
 use clap::Subcommand;
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 
 pub const ARTIFACT_MODE_EVENT_PAGE_LIMIT_DEFAULT: usize = 200;
 
@@ -125,10 +125,11 @@ pub fn run_runtime_trajectory_cli(
         }
 
         let rendered = format_runtime_trajectory_summary(&loaded_artifact);
+        let wrapped = wrap_runtime_trajectory_surface("runtime trajectory", rendered);
         if let Some(output_path) = output_path.as_ref() {
             println!("artifact_path={}", output_path.display());
         }
-        print!("{rendered}");
+        print!("{wrapped}");
         Ok(())
     }
 
@@ -145,6 +146,10 @@ pub fn run_runtime_trajectory_cli(
         );
         Err("runtime-trajectory requires memory-sqlite feature".to_owned())
     }
+}
+
+fn wrap_runtime_trajectory_surface(title: &str, body: String) -> String {
+    crate::render_operator_shell_surface_from_body(title, "runtime trajectory", body)
 }
 
 fn validate_runtime_trajectory_arguments(

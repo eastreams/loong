@@ -23,16 +23,16 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{process_id}-{nanos}"))
 }
 
-fn isolated_memory_env() -> loongclaw_daemon::test_support::ScopedEnv {
-    let mut env = loongclaw_daemon::test_support::ScopedEnv::new();
+fn isolated_memory_env() -> loong_daemon::test_support::ScopedEnv {
+    let mut env = loong_daemon::test_support::ScopedEnv::new();
     for key in [
-        "LOONGCLAW_CONFIG_PATH",
-        "LOONGCLAW_FILE_ROOT",
-        "LOONGCLAW_MEMORY_BACKEND",
-        "LOONGCLAW_MEMORY_PROFILE",
-        "LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS",
-        "LOONGCLAW_SLIDING_WINDOW",
-        "LOONGCLAW_SQLITE_PATH",
+        "LOONG_CONFIG_PATH",
+        "LOONG_FILE_ROOT",
+        "LOONG_MEMORY_BACKEND",
+        "LOONG_MEMORY_PROFILE",
+        "LOONG_MEMORY_SUMMARY_MAX_CHARS",
+        "LOONG_SLIDING_WINDOW",
+        "LOONG_SQLITE_PATH",
     ] {
         env.remove(key);
     }
@@ -42,10 +42,10 @@ fn isolated_memory_env() -> loongclaw_daemon::test_support::ScopedEnv {
 fn write_trajectory_export_config(root: &Path) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.tools.file_root = Some(root.display().to_string());
     config.memory.sqlite_path = root.join("memory.sqlite3").display().to_string();
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     config_path
@@ -54,7 +54,7 @@ fn write_trajectory_export_config(root: &Path) -> PathBuf {
 #[test]
 fn collect_trajectory_export_artifact_includes_turns_and_events() {
     let _env = isolated_memory_env();
-    let root = unique_temp_dir("loongclaw-trajectory-export");
+    let root = unique_temp_dir("loong-trajectory-export");
     let config_path = write_trajectory_export_config(&root);
     let (_, config) = mvp::config::load(Some(
         config_path
@@ -108,7 +108,7 @@ fn collect_trajectory_export_artifact_includes_turns_and_events() {
 #[test]
 fn load_trajectory_export_artifact_rejects_wrong_schema_surface() {
     let _env = isolated_memory_env();
-    let root = unique_temp_dir("loongclaw-trajectory-inspect-invalid");
+    let root = unique_temp_dir("loong-trajectory-inspect-invalid");
     fs::create_dir_all(&root).expect("create fixture root");
     let artifact_path = root.join("trajectory.json");
     fs::write(
@@ -153,7 +153,7 @@ fn load_trajectory_export_artifact_rejects_wrong_schema_surface() {
 #[test]
 fn load_trajectory_export_artifact_round_trips_written_json() {
     let _env = isolated_memory_env();
-    let root = unique_temp_dir("loongclaw-trajectory-inspect");
+    let root = unique_temp_dir("loong-trajectory-inspect");
     let config_path = write_trajectory_export_config(&root);
     let (_, config) = mvp::config::load(Some(
         config_path

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::CliResult;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 
 use super::{
     ACPX_DEFAULT_COMMAND, ACPX_DEFAULT_NON_INTERACTIVE_PERMISSIONS, ACPX_DEFAULT_PERMISSION_MODE,
@@ -11,7 +11,7 @@ use super::{
     normalized_non_empty, run_process,
 };
 
-pub(super) fn resolve_profile(config: &LoongClawConfig) -> CliResult<ResolvedAcpxProfile> {
+pub(super) fn resolve_profile(config: &LoongConfig) -> CliResult<ResolvedAcpxProfile> {
     let profile = config.acp.acpx_profile().cloned().unwrap_or_default();
     let command = profile
         .command()
@@ -60,7 +60,7 @@ pub(super) fn resolve_profile(config: &LoongClawConfig) -> CliResult<ResolvedAcp
 }
 
 pub(super) fn validate_requested_mcp_servers(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     profile: &ResolvedAcpxProfile,
     request: &AcpSessionBootstrap,
 ) -> CliResult<Vec<String>> {
@@ -286,7 +286,7 @@ pub(super) fn resolve_effective_cwd(
 }
 
 pub(super) fn derive_agent_id(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_key: &str,
     metadata: &BTreeMap<String, String>,
 ) -> CliResult<String> {

@@ -18,7 +18,7 @@ use crate::audit::{
 use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
 use crate::errors::{AuditError, KernelError, PolicyError};
-use crate::kernel::LoongClawKernel;
+use crate::kernel::LoongKernel;
 use crate::policy::{PolicyEngine, StaticPolicyEngine};
 use crate::task_supervisor::TaskSupervisor;
 use crate::{ExecutionPlane, PlaneTier};
@@ -31,7 +31,7 @@ fn fresh_audit_temp_path(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     std::env::temp_dir().join(format!(
-        "loongclaw-kernel-audit-{label}-{}-{nonce}",
+        "loong-kernel-audit-{label}-{}-{nonce}",
         std::process::id()
     ))
 }
@@ -316,8 +316,7 @@ fn fanout_audit_sink_records_to_all_children() {
 
 #[test]
 fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
-    let (mut kernel, audit) =
-        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -333,7 +332,7 @@ fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
 
 #[test]
 fn explicit_no_audit_kernel_constructor_keeps_side_effect_free_fixture_path() {
-    let mut kernel = LoongClawKernel::new_without_audit(StaticPolicyEngine::default());
+    let mut kernel = LoongKernel::new_without_audit(StaticPolicyEngine::default());
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -444,7 +443,7 @@ proptest! {
         let required_capabilities = capability_set_from_mask(required_mask);
 
         let (mut kernel, _audit) =
-            LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+            LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
         let mut pack = sample_pack();
         pack.granted_capabilities = pack_capabilities.clone();
         kernel
@@ -651,8 +650,7 @@ fn task_supervisor_rejects_execute_after_completion() {
 fn record_tool_call_denial_audits_extension_denied_errors() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_004_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel =
-        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
     let pack = sample_pack();
     kernel
         .register_pack(pack.clone())

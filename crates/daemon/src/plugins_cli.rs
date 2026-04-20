@@ -282,7 +282,7 @@ impl PluginInitBridgeKindArg {
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 #[command(
     about = "Scaffold a manifest-first plugin package root for external authors",
-    long_about = "Scaffold a manifest-first plugin package root for external authors.\n\nThe generated package contains a canonical `loongclaw.plugin.json` plus a README that points authors to `loongclaw plugins doctor` and `loongclaw plugins actions` for shared governance validation. This command scaffolds package metadata only; it does not generate runtime code or widen trust policy."
+    long_about = "Scaffold a manifest-first plugin package root for external authors.\n\nThe generated package contains a canonical `loong.plugin.json` plus a README that points authors to `loong plugins doctor` and `loong plugins actions` for shared governance validation. This command scaffolds package metadata only; it does not generate runtime code or widen trust policy."
 )]
 pub struct PluginInitCommand {
     /// Target package root to create or reuse when the directory is empty
@@ -1306,14 +1306,14 @@ fn plugin_scaffold_manifest_document(
 
 fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kind: &str) -> String {
     let doctor_command =
-        format!("loongclaw plugins doctor --root \"{package_root}\" --profile sdk-release");
+        format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release");
     let actions_command =
-        format!("loongclaw plugins actions --root \"{package_root}\" --profile sdk-release");
+        format!("loong plugins actions --root \"{package_root}\" --profile sdk-release");
 
     [
         format!("# {plugin_id}"),
         String::new(),
-        "This package was scaffolded by `loongclaw plugins init`.".to_owned(),
+        "This package was scaffolded by `loong plugins init`.".to_owned(),
         String::new(),
         format!("- Bridge kind: `{bridge_kind}`"),
         format!("- Manifest: `{PACKAGE_MANIFEST_FILE_NAME}`"),
@@ -1345,19 +1345,38 @@ fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kin
 }
 
 fn render_plugins_cli_text(execution: &PluginsCommandExecution) -> String {
-    match execution {
-        PluginsCommandExecution::Init(execution) => render_plugins_init_text(execution),
-        PluginsCommandExecution::Inventory(execution) => render_plugins_inventory_text(execution),
-        PluginsCommandExecution::Doctor(execution) => render_plugins_doctor_text(execution),
-        PluginsCommandExecution::BridgeProfiles(execution) => {
-            render_plugins_bridge_profiles_text(execution)
+    let (title, body) = match execution {
+        PluginsCommandExecution::Init(execution) => {
+            ("plugins init", render_plugins_init_text(execution))
         }
-        PluginsCommandExecution::BridgeTemplate(execution) => {
-            render_plugins_bridge_template_text(execution)
+        PluginsCommandExecution::Inventory(execution) => (
+            "plugins inventory",
+            render_plugins_inventory_text(execution),
+        ),
+        PluginsCommandExecution::Doctor(execution) => {
+            ("plugins doctor", render_plugins_doctor_text(execution))
         }
-        PluginsCommandExecution::Preflight(execution) => render_plugins_preflight_text(execution),
-        PluginsCommandExecution::Actions(execution) => render_plugins_actions_text(execution),
-    }
+        PluginsCommandExecution::BridgeProfiles(execution) => (
+            "bridge profiles",
+            render_plugins_bridge_profiles_text(execution),
+        ),
+        PluginsCommandExecution::BridgeTemplate(execution) => (
+            "bridge template",
+            render_plugins_bridge_template_text(execution),
+        ),
+        PluginsCommandExecution::Preflight(execution) => (
+            "plugins preflight",
+            render_plugins_preflight_text(execution),
+        ),
+        PluginsCommandExecution::Actions(execution) => {
+            ("operator actions", render_plugins_actions_text(execution))
+        }
+    };
+    wrap_plugins_surface_text(title, body)
+}
+
+fn wrap_plugins_surface_text(title: &str, body: String) -> String {
+    crate::render_operator_shell_surface_from_body(title, "operator plugins", body)
 }
 
 fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
@@ -1376,11 +1395,11 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
     lines.push(format!("- manifest={}", execution.manifest_path));
     lines.push(format!("- readme={}", execution.readme_path));
     lines.push(format!(
-        "- next_steps=loongclaw plugins doctor --root \"{}\" --profile sdk-release",
+        "- next_steps=loong plugins doctor --root \"{}\" --profile sdk-release",
         execution.package_root
     ));
     lines.push(format!(
-        "- operator_actions=loongclaw plugins actions --root \"{}\" --profile sdk-release",
+        "- operator_actions=loong plugins actions --root \"{}\" --profile sdk-release",
         execution.package_root
     ));
     lines.join("\n")
@@ -2959,6 +2978,20 @@ mod tests {
             .to_string()
     }
 
+    #[test]
+    fn wrap_plugins_surface_text_uses_operator_header() {
+        let rendered = wrap_plugins_surface_text("plugins inventory", "plugin=demo".to_owned());
+
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.starts_with("LOONG") || line.contains(" loong ")),
+            "plugins text should use the shared ratatui operator shell header: {rendered}"
+        );
+        assert!(rendered.contains("plugins inventory"));
+        assert!(rendered.contains("plugin=demo"));
+    }
+
     fn write_openclaw_weather_sdk_package(plugin_root: &str) {
         let package_root = format!("{plugin_root}/weather-sdk");
         fs::create_dir_all(format!("{package_root}/dist")).expect("create package root");
@@ -3203,7 +3236,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_inventory_surfaces_manifest_first_openclaw_package_truth() {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-inventory-openclaw");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-inventory-openclaw");
         write_openclaw_weather_sdk_package(&plugin_root);
 
         let mut source = plugin_scan_source(&plugin_root, "weather-sdk");
@@ -3296,7 +3329,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_doctor_defaults_to_sdk_release_and_surfaces_author_actions() {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-doctor-openclaw");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-doctor-openclaw");
         write_openclaw_weather_sdk_package(&plugin_root);
 
         let mut source = plugin_doctor_source(&plugin_root, "weather-sdk");
@@ -3394,12 +3427,12 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_actions_filters_operator_action_plan() {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-actions");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-actions");
         fs::create_dir_all(&plugin_root).expect("create plugin root");
         fs::write(
             format!("{plugin_root}/search_a.py"),
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-a",
 #   "provider_id": "search-a",
@@ -3412,14 +3445,14 @@ mod tests {
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write plugin a");
         fs::write(
             format!("{plugin_root}/search_b.py"),
             r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-b",
 #   "provider_id": "search-b",
@@ -3432,7 +3465,7 @@ mod tests {
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
         )
         .expect("write plugin b");
@@ -3498,7 +3531,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_preflight_uses_bundled_openclaw_bridge_profile() {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-openclaw");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-openclaw");
         write_openclaw_weather_sdk_package(&plugin_root);
 
         let mut source = plugin_governance_source(&plugin_root, "weather-sdk");
@@ -3645,7 +3678,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_preflight_recommends_openclaw_bridge_profile_without_active_profile() {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-openclaw-recommend");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-openclaw-recommend");
         write_openclaw_weather_sdk_package(&plugin_root);
 
         let source = plugin_governance_source(&plugin_root, "weather-sdk");
@@ -3728,7 +3761,7 @@ mod tests {
     #[tokio::test]
     async fn execute_plugins_preflight_recommends_custom_bridge_profile_delta_for_python_openclaw_plugins()
      {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-openclaw-python-delta");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-openclaw-python-delta");
         write_openclaw_weather_sdk_python_package(&plugin_root);
 
         let source = plugin_governance_source(&plugin_root, "weather-sdk");
@@ -3781,7 +3814,7 @@ mod tests {
     #[tokio::test]
     async fn execute_plugins_preflight_accepts_bridge_support_delta_artifact_and_suppresses_repeat_delta_recommendation()
      {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-openclaw-python-active-delta");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-openclaw-python-active-delta");
         write_openclaw_weather_sdk_python_package(&plugin_root);
         let delta_path = format!("{plugin_root}/bridge-support.delta.json");
         let artifact = materialize_bridge_support_delta_artifact(
@@ -3893,7 +3926,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_bridge_template_materializes_aligned_active_profile() {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-bridge-template-aligned");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-bridge-template-aligned");
         write_openclaw_weather_sdk_package(&plugin_root);
 
         let mut source = plugin_governance_source(&plugin_root, "weather-sdk");
@@ -3972,7 +4005,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_bridge_template_materializes_custom_delta_and_writes_output() {
-        let plugin_root = unique_temp_dir("loongclaw-plugins-cli-bridge-template-delta");
+        let plugin_root = unique_temp_dir("loong-plugins-cli-bridge-template-delta");
         write_openclaw_weather_sdk_python_package(&plugin_root);
         let output_path = format!("{plugin_root}/generated/bridge-support.json");
         let delta_output_path = format!("{plugin_root}/generated/bridge-support.delta.json");
@@ -4061,7 +4094,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_init_scaffolds_http_json_package_manifest() {
-        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-http");
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-http");
         let package_root = format!("{temp_root}/tavily-search");
 
         let execution = execute_plugins_command(PluginsCommandOptions {
@@ -4154,11 +4187,11 @@ mod tests {
         let rendered_readme =
             fs::read_to_string(&readme_path).expect("scaffold readme should exist");
         assert!(
-            rendered_readme.contains("loongclaw plugins doctor --root"),
+            rendered_readme.contains("loong plugins doctor --root"),
             "README should point authors to doctor: {rendered_readme}"
         );
         assert!(
-            rendered_readme.contains("loongclaw plugins actions --root"),
+            rendered_readme.contains("loong plugins actions --root"),
             "README should point authors to actions: {rendered_readme}"
         );
 
@@ -4181,7 +4214,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_init_requires_source_language_for_process_stdio() {
-        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-process-language");
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-process-language");
         let package_root = format!("{temp_root}/tavily-search");
 
         let error = execute_plugins_command(PluginsCommandOptions {
@@ -4206,7 +4239,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_init_rejects_invalid_semver_version() {
-        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-invalid-version");
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-invalid-version");
         let package_root = format!("{temp_root}/tavily-search");
 
         let error = execute_plugins_command(PluginsCommandOptions {
@@ -4231,7 +4264,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_init_process_stdio_scaffold_retains_source_language() {
-        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-process");
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-process");
         let package_root = format!("{temp_root}/weather-python");
 
         let execution = execute_plugins_command(PluginsCommandOptions {
@@ -4292,7 +4325,7 @@ mod tests {
 
     #[test]
     fn write_plugin_scaffold_files_rolls_back_manifest_when_readme_write_fails() {
-        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-rollback");
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-rollback");
         let package_root = Path::new(temp_root.as_str());
         let manifest_path = package_root.join(PACKAGE_MANIFEST_FILE_NAME);
         let readme_path = package_root.join(PLUGINS_INIT_README_FILE_NAME);
@@ -4325,7 +4358,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_plugins_init_rejects_non_empty_package_root() {
-        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-non-empty");
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-non-empty");
         let package_root = format!("{temp_root}/existing");
 
         fs::create_dir_all(&package_root).expect("create package root");

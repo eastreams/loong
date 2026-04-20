@@ -150,8 +150,9 @@ mod tests {
         );
         assert!(!compacted_result.contains_key("schema_preview"));
         assert!(!compacted_result.contains_key("why"));
-        assert_eq!(recovered_state.exact_tool_id.as_deref(), Some("file.read"));
+        assert_eq!(recovered_state.exact_tool_id.as_deref(), Some("read"));
         assert_eq!(recovered_state.entries.len(), 1);
+        assert_eq!(recovered_state.entries[0].tool_id.as_str(), "read");
         assert_eq!(
             recovered_state.entries[0].search_hint.as_deref(),
             Some("Use for UTF-8 text files.")

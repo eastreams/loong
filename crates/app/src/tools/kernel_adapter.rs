@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use loongclaw_contracts::ToolPlaneError;
-use loongclaw_kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::ToolPlaneError;
+use loong_kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
 
 use super::runtime_config::ToolRuntimeConfig;
 

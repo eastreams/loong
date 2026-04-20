@@ -17,7 +17,7 @@ use crate::channel::{
 };
 #[cfg(feature = "channel-feishu")]
 use crate::config::{
-    ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedFeishuChannelConfig,
+    ChannelDefaultAccountSelectionSource, LoongConfig, ResolvedFeishuChannelConfig,
 };
 
 #[cfg(feature = "channel-feishu")]
@@ -41,10 +41,10 @@ use send::send_channel_message_via_message_send_api;
 #[cfg(feature = "channel-feishu")]
 use webhook::{FeishuWebhookState, feishu_webhook_handler};
 
-#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
 const FEISHU_ALLOWLIST_ALL_SENTINEL: &str = "*";
 
-#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
 pub(in crate::channel) fn feishu_allowlist_allows_all<'a, I>(allowed_chat_ids: I) -> bool
 where
     I: IntoIterator<Item = &'a String>,
@@ -54,7 +54,7 @@ where
         .any(|chat_id| chat_id.trim() == FEISHU_ALLOWLIST_ALL_SENTINEL)
 }
 
-#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
 pub(in crate::channel) fn feishu_allowlist_allows_chat<'a, I>(
     allowed_chat_ids: I,
     chat_id: &str,
@@ -120,7 +120,7 @@ pub(super) async fn run_feishu_send(
 #[cfg(feature = "channel-feishu")]
 #[allow(clippy::print_stdout)] // CLI startup banner
 pub(super) async fn run_feishu_channel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved: &ResolvedFeishuChannelConfig,
     resolved_path: &Path,
     selected_by_default: bool,
@@ -132,7 +132,7 @@ pub(super) async fn run_feishu_channel(
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     if resolved.mode == crate::config::FeishuChannelServeMode::Websocket {
-        return websocket::run_feishu_websocket_channel(
+        return Box::pin(websocket::run_feishu_websocket_channel(
             config,
             resolved,
             resolved_path,
@@ -141,7 +141,7 @@ pub(super) async fn run_feishu_channel(
             kernel_ctx,
             runtime,
             stop,
-        )
+        ))
         .await;
     }
 
@@ -189,6 +189,19 @@ pub(super) async fn run_feishu_channel(
         default_account_source.as_str(),
         bind,
         path
+    );
+
+    tracing::info!(
+        target: "loong.channel.feishu",
+        transport = "webhook",
+        config_path = %resolved_path.display(),
+        configured_account_id = %resolved.configured_account_id,
+        account_id = %resolved.account.id,
+        selected_by_default,
+        default_source = default_account_source.as_str(),
+        bind = %bind,
+        path = %path,
+        "feishu runtime started"
     );
 
     axum::serve(listener, app)
@@ -342,23 +355,19 @@ mod tests {
     }
 
     fn resolved_config(base_url: &str) -> CliResult<ResolvedFeishuChannelConfig> {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.feishu.enabled = true;
         config.feishu.account_id = Some("feishu_work".to_owned());
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "cli_a1b2c3".to_owned(),
-        ));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "secret-123".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("secret-123".to_owned()));
         config.feishu.base_url = Some(base_url.to_owned());
         config.feishu.receive_id_type = "chat_id".to_owned();
-        config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.feishu.verification_token = Some(loong_contracts::SecretRef::Inline(
             "verify-token".to_owned(),
         ));
-        config.feishu.encrypt_key = Some(loongclaw_contracts::SecretRef::Inline(
-            "encrypt-key".to_owned(),
-        ));
+        config.feishu.encrypt_key =
+            Some(loong_contracts::SecretRef::Inline("encrypt-key".to_owned()));
         config.feishu.allowed_chat_ids = vec!["oc_demo".to_owned()];
         let resolved_result = config.feishu.resolve_account(None);
         let resolved =

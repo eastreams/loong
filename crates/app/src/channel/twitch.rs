@@ -441,7 +441,7 @@ mod tests {
         response::IntoResponse,
         routing::{get, post},
     };
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
     use tokio::net::TcpListener;
 
     use super::*;
@@ -488,7 +488,7 @@ mod tests {
             &resolved,
             ChannelOutboundTargetKind::Conversation,
             "streamer",
-            "hello from loongclaw",
+            "hello from loong",
             private_host_test_policy(),
         )
         .await;
@@ -526,7 +526,7 @@ mod tests {
             serde_json::json!({
                 "broadcaster_id": "broadcaster-456",
                 "sender_id": "sender-123",
-                "message": "hello from loongclaw",
+                "message": "hello from loong",
             })
         );
 
@@ -563,7 +563,7 @@ mod tests {
             &resolved,
             ChannelOutboundTargetKind::Conversation,
             "streamer",
-            "hello from loongclaw",
+            "hello from loong",
             private_host_test_policy(),
         )
         .await
@@ -600,7 +600,7 @@ mod tests {
             &resolved,
             ChannelOutboundTargetKind::Conversation,
             "   ",
-            "hello from loongclaw",
+            "hello from loong",
             private_host_test_policy(),
         )
         .await
@@ -646,7 +646,7 @@ mod tests {
             &resolved,
             ChannelOutboundTargetKind::Conversation,
             "12345",
-            "hello from loongclaw",
+            "hello from loong",
             private_host_test_policy(),
         )
         .await;
@@ -695,7 +695,7 @@ mod tests {
             &resolved,
             ChannelOutboundTargetKind::Conversation,
             "987654",
-            "hello from loongclaw",
+            "hello from loong",
             private_host_test_policy(),
         )
         .await;
@@ -744,7 +744,7 @@ mod tests {
             &resolved,
             ChannelOutboundTargetKind::Conversation,
             "55555",
-            "hello from loongclaw",
+            "hello from loong",
             private_host_test_policy(),
         )
         .await
@@ -789,7 +789,7 @@ mod tests {
             &resolved,
             ChannelOutboundTargetKind::Address,
             "streamer",
-            "hello from loongclaw",
+            "hello from loong",
             private_host_test_policy(),
         )
         .await
@@ -898,7 +898,7 @@ mod tests {
 
         let body = serde_json::json!({
             "client_id": "client-123",
-            "login": "loongclaw-bot",
+            "login": "loong-bot",
             "scopes": scopes,
             "user_id": "sender-123",
         });

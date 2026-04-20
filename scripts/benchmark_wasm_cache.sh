@@ -11,10 +11,10 @@ HOT_ITERATIONS="${4:-24}"
 WARMUP_ITERATIONS="${5:-2}"
 ENFORCE_GATE="${6:-true}"
 MIN_SPEEDUP_RATIO="${7:-1.5}"
-BENCH_PROFILE="${LOONG_BENCH_PROFILE:-${LOONGCLAW_BENCH_PROFILE:-release}}"
+BENCH_PROFILE="${LOONG_BENCH_PROFILE:-${LOONG_BENCH_PROFILE:-release}}"
 
 if [[ "$BENCH_PROFILE" != "dev" && "$BENCH_PROFILE" != "release" ]]; then
-  echo "invalid LOONG_BENCH_PROFILE/LOONGCLAW_BENCH_PROFILE: $BENCH_PROFILE (expected dev|release)" >&2
+  echo "invalid LOONG_BENCH_PROFILE/LOONG_BENCH_PROFILE: $BENCH_PROFILE (expected dev|release)" >&2
   exit 2
 fi
 

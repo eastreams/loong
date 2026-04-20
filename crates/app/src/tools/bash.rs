@@ -5,9 +5,9 @@ use std::time::Duration;
 #[cfg(feature = "tool-shell")]
 use std::time::Instant;
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
-use serde_json::{Value, json};
+use serde_json::Value;
 
 #[cfg(feature = "tool-shell")]
 use super::bash_governance::{FinalGovernanceDecision, evaluate_bash_command};
@@ -26,7 +26,7 @@ const BASH_EXEC_ALLOWED_FIELDS: &[&str] = &[
     "cwd",
     "timeout_ms",
     super::LOONG_INTERNAL_TOOL_CONTEXT_KEY,
-    super::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY,
+    super::LOONG_INTERNAL_TOOL_CONTEXT_KEY,
 ];
 
 pub(super) fn unavailable_bash_runtime_policy() -> BashExecRuntimePolicy {
@@ -138,35 +138,31 @@ pub(super) fn execute_bash_tool_with_config(
             .as_deref()
             .ok_or_else(|| "bash unavailable".to_owned())?;
         let args = bash_exec_args(command, runtime.login_shell);
+        let resolved_invocation = crate::process_launch::resolve_command_invocation(
+            runtime_command.to_string_lossy().as_ref(),
+            args.iter().map(String::as_str),
+        );
         let runtime_event_sink = current_tool_runtime_event_sink();
         let output = process_exec::run_tool_async(
             process_exec::run_process_with_timeout_with_sink(
-                runtime_command,
-                &args,
+                resolved_invocation.program.as_os_str(),
+                resolved_invocation.args.as_slice(),
                 cwd.as_path(),
                 timeout_ms,
                 "bash command",
                 runtime_event_sink.clone(),
+                config.file_root.as_deref(),
             ),
             "bash tool",
         )??;
 
-        Ok(ToolCoreOutcome {
-            status: if output.status.success() {
-                "ok".to_owned()
-            } else {
-                "failed".to_owned()
-            },
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "command": command,
-                "cwd": cwd.display().to_string(),
-                "exit_code": output.status.code(),
-                "stdout": String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }),
-        })
+        Ok(process_exec::build_process_tool_outcome(
+            request.tool_name.as_str(),
+            command,
+            None,
+            cwd.as_path(),
+            output,
+        ))
     }
 }
 
@@ -254,7 +250,7 @@ mod tests {
     use crate::tools::runtime_events::{
         ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
     };
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::json;
     use std::fs;
     #[cfg(unix)]
@@ -411,7 +407,7 @@ mod tests {
             tool_name: "bash.exec".to_owned(),
             payload: json!({
                 "command": "echo hi",
-                "_loongclaw": {
+                "_loong": {
                     "tool_search": {
                         "visible_tool_ids": ["bash.exec"]
                     }

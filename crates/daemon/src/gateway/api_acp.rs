@@ -163,7 +163,7 @@ fn gateway_acp_runtime_context(
     app_state: &GatewayControlAppState,
 ) -> Result<
     (
-        &crate::mvp::config::LoongClawConfig,
+        &crate::mvp::config::LoongConfig,
         &crate::mvp::acp::AcpSessionManager,
     ),
     GatewayAcpJsonResponse,
@@ -260,7 +260,7 @@ fn gateway_acp_error_code(status_code: StatusCode) -> &'static str {
 
 fn internal_server_error(context: &str, error: &str) -> GatewayAcpJsonResponse {
     tracing::error!(
-        target: "loongclaw.gateway",
+        target: "loong.gateway",
         context = context,
         error = %error,
         "gateway ACP request failed"
