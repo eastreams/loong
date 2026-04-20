@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 
 // Re-export data types from contracts
-pub use loongclaw_contracts::{
+pub use loong_contracts::{
     MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionOutcome, MemoryExtensionRequest,
     MemoryTier,
 };

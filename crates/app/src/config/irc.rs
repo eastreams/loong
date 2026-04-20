@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use loongclaw_contracts::SecretRef;
+use loong_contracts::SecretRef;
 
 use crate::CliResult;
 
@@ -173,7 +173,7 @@ pub(super) fn validate_irc_nickname_field(
         return;
     };
 
-    let suggested_fix = "use a single-token IRC nickname (for example: `loongclaw_bot`)";
+    let suggested_fix = "use a single-token IRC nickname (for example: `loong_bot`)";
     let mut extra_message_variables = BTreeMap::new();
     extra_message_variables.insert("invalid_reason".to_owned(), invalid_reason.to_owned());
     extra_message_variables.insert("suggested_fix".to_owned(), suggested_fix.to_owned());

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use time::OffsetDateTime;
 
 use crate::operator_prompt::{
@@ -401,7 +401,7 @@ fn render_review_lines(draft: &PersonalizationDraft) -> Vec<String> {
 fn save_personalization(
     ui: &mut impl OperatorPromptUi,
     resolved_path: &Path,
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     existing_personalization: Option<&mvp::config::PersonalizationConfig>,
     draft: PersonalizationDraft,
     now: OffsetDateTime,
@@ -488,7 +488,7 @@ fn build_configured_personalization(
 fn suppress_personalization(
     ui: &mut impl OperatorPromptUi,
     resolved_path: &Path,
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     existing_personalization: Option<&mvp::config::PersonalizationConfig>,
     now: OffsetDateTime,
 ) -> CliResult<PersonalizeCliOutcome> {
@@ -529,7 +529,7 @@ fn build_suppressed_personalization(
 }
 
 fn write_personalization_config(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     resolved_path: &Path,
 ) -> CliResult<PathBuf> {
     let resolved_path_string = resolved_path.display().to_string();
@@ -627,16 +627,16 @@ mod tests {
             .expect("time should be after epoch")
             .as_millis();
         std::env::temp_dir().join(format!(
-            "loongclaw-personalize-{label}-{}-{millis}.toml",
+            "loong-personalize-{label}-{}-{millis}.toml",
             std::process::id()
         ))
     }
 
     fn write_default_config(path: &Path) {
-        write_config(path, &mvp::config::LoongClawConfig::default());
+        write_config(path, &mvp::config::LoongConfig::default());
     }
 
-    fn write_config(path: &Path, config: &mvp::config::LoongClawConfig) {
+    fn write_config(path: &Path, config: &mvp::config::LoongConfig) {
         let path_string = path.display().to_string();
         mvp::config::write(Some(path_string.as_str()), config, true).expect("write config");
     }
@@ -661,9 +661,9 @@ mod tests {
         }
     }
 
-    fn configured_personalize_config_for_tests() -> mvp::config::LoongClawConfig {
+    fn configured_personalize_config_for_tests() -> mvp::config::LoongConfig {
         let personalization = configured_personalization_for_tests();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
         config.memory.personalization = Some(personalization);
         config
@@ -815,7 +815,7 @@ mod tests {
             schema_version: custom_schema_version,
             updated_at_epoch_seconds: preserved_updated_at_epoch_seconds,
         };
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
         config.memory.personalization = Some(personalization);
         write_config(&config_path, &config);
@@ -1017,7 +1017,7 @@ mod tests {
     fn personalize_cli_save_from_suppressed_state_prints_reenable_guidance() {
         let config_path = unique_config_path("suppressed-recovery");
         let config_path_string = config_path.display().to_string();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let schema_version = personalization_schema_version_for_tests();
         config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
         config.memory.personalization = Some(mvp::config::PersonalizationConfig {
@@ -1091,7 +1091,7 @@ mod tests {
     fn personalize_cli_empty_save_does_not_clear_suppressed_state_without_preferences() {
         let config_path = unique_config_path("suppressed-empty-save");
         let config_path_string = config_path.display().to_string();
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let schema_version = personalization_schema_version_for_tests();
         config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
         config.memory.personalization = Some(mvp::config::PersonalizationConfig {

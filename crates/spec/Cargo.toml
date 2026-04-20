@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [lib]
-name = "loongclaw_spec"
+name = "loong_spec"
 
 [features]
 test-hooks = []
@@ -17,9 +17,10 @@ test-support = ["test-hooks"]
 
 [dependencies]
 async-trait.workspace = true
-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
-loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-protocol = { package = "loong-protocol", version = "0.1.0-alpha.3", path = "../protocol" }
+kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+loong-protocol = { package = "loong-protocol", version = "0.1.2-alpha.1", path = "../protocol" }
+loong-bridge-runtime = { version = "0.1.2-alpha.1", path = "../bridge-runtime" }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true

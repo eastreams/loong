@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-use loongclaw_app::conversation::turn_engine::TurnResult;
-use loongclaw_app::test_support::{FakeProviderBuilder, TurnTestHarness};
-use loongclaw_app::tools::runtime_config::ToolRuntimeConfig;
-use loongclaw_contracts::Capability;
+use loong_app::conversation::turn_engine::TurnResult;
+use loong_app::test_support::{FakeProviderBuilder, TurnTestHarness};
+use loong_app::tools::runtime_config::ToolRuntimeConfig;
+use loong_contracts::Capability;
 use serde_json::json;
 
 #[test]
@@ -266,8 +266,8 @@ async fn integ_audit_captures_tool_plane_invocation() {
     let has_tool_plane = events.iter().any(|event| {
         matches!(
             &event.kind,
-            loongclaw_kernel::AuditEventKind::PlaneInvoked {
-                plane: loongclaw_contracts::ExecutionPlane::Tool,
+            loong_kernel::AuditEventKind::PlaneInvoked {
+                plane: loong_contracts::ExecutionPlane::Tool,
                 ..
             }
         )

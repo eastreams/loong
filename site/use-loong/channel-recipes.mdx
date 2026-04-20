@@ -1,6 +1,6 @@
 ---
 title: Channel Recipes
-description: Tutorial-style paths for runtime-backed service channels, outbound-only sends, and multi-channel rollout.
+description: Tutorial-style paths for gateway-supervised service channels, standalone native-serve lanes, outbound-only sends, and multi-channel rollout.
 ---
 
 # Channel Recipes
@@ -33,7 +33,7 @@ Most operators should start in one of these places:
 | Matrix should own a self-hosted or federated room runtime | Recipe 3 |
 | WeCom should own the official enterprise lane | Recipe 4 |
 | WhatsApp should own a Cloud API reply loop | [WhatsApp guide](/use-loong/channel-guides/whatsapp) |
-| you only need governed outbound delivery | Recipe 6 |
+| you need one standalone native-serve lane or governed outbound delivery | Recipe 6 |
 | several identities or several runtime-backed channels are already in scope | Recipe 5 or Recipe 7 |
 
 ## Pick The Right Recipe
@@ -46,6 +46,7 @@ Most operators should start in one of these places:
 | a WhatsApp Cloud runtime | [WhatsApp guide](/use-loong/channel-guides/whatsapp) | shipped Cloud API send plus verified webhook reply loop |
 | official WeCom runtime lane | WeCom | shipped AIBot long-connection flow |
 | several Feishu / Lark or WeCom identities in one config | Recipe 5 | explicit default account plus stable account selectors |
+| one LINE or generic webhook lane with a real built-in serve loop | Recipe 6 | native serve without overclaiming gateway supervision |
 | proactive delivery without a reply loop | Recipe 6 | outbound-only sends without overclaiming runtime support |
 | one host supervising several runtime-backed channels | Recipe 7 | explicit owner contract for long-lived service lanes |
 
@@ -56,10 +57,11 @@ surface map visible.
 
 | Surface family | Current examples | Best next page |
 | --- | --- | --- |
-| runtime-backed service channels | Feishu / Lark, Telegram, Matrix, WhatsApp, WeCom | Recipes 1 to 4 plus the [WhatsApp guide](/use-loong/channel-guides/whatsapp) |
+| gateway-supervised service channels | Feishu / Lark, Telegram, Matrix, WhatsApp, WeCom | Recipes 1 to 4 plus the [WhatsApp guide](/use-loong/channel-guides/whatsapp) |
+| standalone native-serve surfaces | LINE, Webhook | Recipe 6 |
 | workplace outbound surfaces | Slack, Discord, Microsoft Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat | Recipe 6 |
-| messaging and bridge outbound surfaces | LINE, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon | Recipe 6 |
-| direct delivery and alerting surfaces | Webhook, Email, Twitch | Recipe 6 |
+| messaging and bridge outbound surfaces | DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon | Recipe 6 |
+| direct delivery and alerting surfaces | Email, Twitch | Recipe 6 |
 | multi-account runtime-backed rollout | Feishu / Lark and WeCom account sets | Recipe 5 |
 | multi-channel runtime-backed supervision | several shipped runtime-backed channels on one host | Recipe 7 |
 
@@ -84,8 +86,9 @@ surface.
   want the shared `default_account`, `accounts.<id>`, and trust-toggle shape
   before the per-surface walkthroughs.
 - Start with one surface only; do not jump to multi-channel supervision first.
-- Keep Feishu / Lark, Telegram, Matrix, WhatsApp, and WeCom in the runtime-backed lane.
-- Keep webhook, email, Slack, Discord, Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat, LINE, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon, and similar sinks in the outbound-only lane.
+- Keep Feishu / Lark, Telegram, Matrix, WhatsApp, and WeCom in the gateway-supervised runtime lane.
+- Keep LINE and Webhook in the standalone native-serve lane.
+- Keep email, Slack, Discord, Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon, and similar sinks in the outbound-only lane.
 - Jump to [Common Setups](/use-loong/common-setups) when the provider and channel should be chosen together.
 
 ## Need A Full Rollout Instead?
@@ -317,12 +320,27 @@ Operational notes:
 - keep shared settings at the top level and override only the account-specific secrets or allowlists
 - channel-account selectors can target those configured ids directly, for example `lark=work` or `wecom=alerts`
 
-## Recipe 6: Outbound-Only Delivery Families
+## Recipe 6: Standalone Native-Serve And Outbound-Only Delivery Families
 
-Outbound-only surfaces are the right choice when you want governed delivery
-without pretending a reply loop already ships.
+Some surfaces now sit between the gateway-supervised and outbound-only stories:
+Loong ships a real built-in serve loop, but the runtime still belongs to the
+individual `*-serve` command.
 
-This recipe uses a few representative examples, but the same pattern covers the broader outbound-only catalog: Slack, Discord, Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat, LINE, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon, Webhook, Email, and Twitch.
+Standalone native-serve examples:
+
+LINE example:
+
+```toml
+[line]
+enabled = true
+channel_access_token_env = "LINE_CHANNEL_ACCESS_TOKEN"
+channel_secret_env = "LINE_CHANNEL_SECRET"
+```
+
+```bash
+loong line-send --target "U4af4980629..." --text "hello from loong"
+loong line-serve --bind 127.0.0.1:6401
+```
 
 Webhook example:
 
@@ -338,6 +356,7 @@ payload_text_field = "text"
 ```bash
 loong webhook-send --text "deployment finished"
 loong webhook-send --target "https://example.test/override" --text "one-off delivery"
+loong webhook-serve --bind 127.0.0.1:7401
 ```
 
 Email example:
@@ -370,9 +389,9 @@ loong dingtalk-send --text "robot delivery is healthy"
 
 Use these when:
 
-- you need delivery now, but not a reply-loop runtime
-- the target system is a webhook, SMTP relay, or other outbound sink
-- the surface should remain truthful as outbound-only in public docs
+- you need one standalone native-serve lane or one outbound-only delivery surface
+- the target system is a messaging webhook, SMTP relay, or other operator-owned delivery edge
+- the surface should remain truthful as standalone native-serve or outbound-only in public docs
 
 Workplace-platform variant:
 
@@ -394,14 +413,15 @@ surfaces follow the same direct-send pattern: keep the config explicit, use
 call the corresponding `loong <surface>-send` command instead of treating them
 as reply-loop runtimes.
 
-More outbound-only starting points:
+More delivery starting points:
 
 | Surface family | Current examples | What to configure first | Command shape |
 | --- | --- | --- | --- |
 | workplace chat sinks | Slack, Discord, Microsoft Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat | bot token or webhook URL, plus `default_account` / `accounts.<id>` when you need several identities | `loong <surface>-send` |
-| messaging and robot lanes | LINE, DingTalk, Signal | channel token, robot webhook, or account identity plus any required secret material | `loong <surface>-send` |
+| standalone native-serve lanes | LINE, Webhook | token or signing secret plus an explicit `*-serve --bind` address when you need inbound behavior | `loong <surface>-send`, `loong <surface>-serve` |
+| messaging and robot lanes | DingTalk, Signal | channel token, robot webhook, or account identity plus any required secret material | `loong <surface>-send` |
 | bridge and relay lanes | Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon | bridge URL, relay URLs, or server identity plus the account or key material that owns the lane | `loong <surface>-send` |
-| direct delivery and alerting lanes | Webhook, Email, Twitch | endpoint URL, SMTP relay, or OAuth/token material for the target delivery path | `loong <surface>-send` |
+| direct delivery and alerting lanes | Email, Twitch | endpoint URL, SMTP relay, or OAuth/token material for the target delivery path | `loong <surface>-send` |
 
 Trust-boundary note:
 
@@ -447,17 +467,17 @@ Use this when:
 
 Important boundary:
 
-- this lane is for runtime-backed service channels only
+- this lane is for gateway-supervised runtime-backed service channels only
 - `lark=` is the accepted alias for the Feishu channel family, and `feishu=` works too
 - selectors should reference configured account ids such as `work`, `alerts`, or `bot_123456`
-- outbound-only surfaces such as webhook, email, Slack, Discord, or Teams should not be described as if they join the same reply-loop supervisor
+- standalone native-serve or outbound-only surfaces such as LINE, Webhook, Email, Slack, Discord, or Teams should not be described as if they join the same reply-loop supervisor
 - when you need the ownership and inspection model without the recipe framing,
   switch to [Gateway And Supervision](/use-loong/gateway-and-supervision)
 
 ## Channel Rollout Order
 
 1. Get `loong ask` or `loong chat` healthy first.
-2. Add one runtime-backed service channel or one outbound-only surface.
+2. Add one gateway-supervised service channel, one standalone native-serve surface, or one outbound-only surface.
 3. Verify with `loong doctor` and `loong channels`.
 4. Only then graduate to `gateway run` or `multi-channel-serve`.
 

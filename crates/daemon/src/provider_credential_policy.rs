@@ -1,5 +1,5 @@
-use loongclaw_app as mvp;
-use loongclaw_contracts::SecretRef;
+use loong_app as mvp;
+use loong_contracts::SecretRef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderCredentialEnvField {
@@ -195,9 +195,7 @@ pub(crate) fn render_configured_provider_credential_source_value(
     render_provider_credential_source_value(configured_api_key.as_deref())
 }
 
-pub(crate) fn preferred_provider_credential_env_name(
-    config: &mvp::config::LoongClawConfig,
-) -> String {
+pub(crate) fn preferred_provider_credential_env_name(config: &mvp::config::LoongConfig) -> String {
     let provider = &config.provider;
     if let Some(binding) = configured_provider_credential_env_binding(provider) {
         return binding.env_name;
@@ -275,7 +273,7 @@ fn provider_credential_env_name_is_safe(raw: &str) -> bool {
         return false;
     }
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.provider.api_key = Some(SecretRef::Env {
         env: trimmed.to_owned(),
     });

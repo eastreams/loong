@@ -42,7 +42,7 @@ pub const fn suggested_starting_point_label() -> &'static str {
     SUGGESTED_STARTING_POINT_LABEL
 }
 
-pub fn existing_loongclaw_config_source_label(path: &Path) -> String {
+pub fn existing_loong_config_source_label(path: &Path) -> String {
     let rendered_path = display_path(path);
     format!("{EXISTING_CONFIG_SOURCE_PREFIX}{rendered_path}")
 }
@@ -55,7 +55,7 @@ pub fn codex_config_source_label(path: &Path) -> String {
 pub fn source_path(source_kind: Option<ImportSourceKind>, source: &str) -> Option<PathBuf> {
     let trimmed = source.trim();
     let raw_path = match source_kind {
-        Some(ImportSourceKind::ExistingLoongClawConfig) => {
+        Some(ImportSourceKind::ExistingLoongConfig) => {
             trimmed.strip_prefix(EXISTING_CONFIG_SOURCE_PREFIX)?
         }
         Some(ImportSourceKind::CodexConfig) => trimmed.strip_prefix(CODEX_CONFIG_SOURCE_PREFIX)?,

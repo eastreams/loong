@@ -6,8 +6,8 @@ use std::{
 
 use clap::ValueEnum;
 use kernel::{ToolCoreOutcome, ToolCoreRequest};
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -64,17 +64,14 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
     validate_migrate_cli_options(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
-    let kernel_ctx = mvp::context::bootstrap_kernel_context_with_config(
-        "daemon-migrate-cli",
-        mvp::context::DEFAULT_TOKEN_TTL_S,
-        &config,
-    )?;
+    let runtime_kernel = bootstrap_migrate_runtime_kernel(&config)?;
+    let kernel_ctx = runtime_kernel.kernel_context();
     let outcome = mvp::tools::execute_tool(
         ToolCoreRequest {
             tool_name: "config.import".to_owned(),
             payload: build_migrate_tool_payload(&options),
         },
-        &kernel_ctx,
+        kernel_ctx,
     )
     .await
     .map_err(|error| translate_migrate_cli_error(&options, error))?;
@@ -116,6 +113,14 @@ fn require_flag_value(value: Option<&str>, flag: &str, mode: MigrateMode) -> Cli
     ))
 }
 
+fn bootstrap_migrate_runtime_kernel(
+    config: &mvp::config::LoongConfig,
+) -> CliResult<mvp::runtime_bridge::RuntimeKernelOwner> {
+    let agent_id = "daemon-migrate-cli";
+    let runtime_kernel = mvp::runtime_bridge::RuntimeKernelOwner::bootstrap(agent_id, config)?;
+    Ok(runtime_kernel)
+}
+
 fn block_on_migrate_cli<F>(future: F) -> CliResult<()>
 where
     F: Future<Output = CliResult<()>>,
@@ -133,14 +138,14 @@ where
 
 fn load_migrate_cli_runtime_config(
     options: &MigrateCommandOptions,
-) -> CliResult<mvp::config::LoongClawConfig> {
+) -> CliResult<mvp::config::LoongConfig> {
     let config_path = mvp::config::default_config_path();
     let mut config = if config_path.exists() {
         let config_path_string = config_path.display().to_string();
         let (_, config) = mvp::config::load(Some(&config_path_string))?;
         config
     } else {
-        mvp::config::LoongClawConfig::default()
+        mvp::config::LoongConfig::default()
     };
 
     if config.tools.file_root.is_none()
@@ -369,11 +374,13 @@ fn render_discover_outcome(payload: &Value) -> CliResult<()> {
         .and_then(Value::as_array)
         .ok_or_else(|| "discover payload missing `sources`".to_owned())?;
 
-    println!("migration discovery complete");
-    println!("- input: {input_path}");
-    println!("- discovered sources: {}", sources.len());
+    let mut lines = vec![
+        "migration discovery complete".to_owned(),
+        format!("- input: {input_path}"),
+        format!("- discovered sources: {}", sources.len()),
+    ];
     for source in sources {
-        println!(
+        lines.push(format!(
             "- [{}] kind={} confidence={} path={}",
             source
                 .get("source_id")
@@ -391,8 +398,9 @@ fn render_discover_outcome(payload: &Value) -> CliResult<()> {
                 .get("input_path")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown")
-        );
+        ));
     }
+    print_migrate_surface("migration discovery", lines);
     Ok(())
 }
 
@@ -410,10 +418,12 @@ fn render_plan_many_outcome(payload: &Value) -> CliResult<()> {
         .and_then(Value::as_array)
         .ok_or_else(|| "planning payload missing `plans`".to_owned())?;
 
-    println!("migration planning complete");
-    println!("- mode: {mode}");
-    println!("- input: {input_path}");
-    println!("- planned sources: {}", plans.len());
+    let mut lines = vec![
+        "migration planning complete".to_owned(),
+        format!("- mode: {mode}"),
+        format!("- input: {input_path}"),
+        format!("- planned sources: {}", plans.len()),
+    ];
     if let Some(recommendation) = payload.get("recommendation")
         && let Some(source_id) = recommendation.get("source_id").and_then(Value::as_str)
     {
@@ -421,10 +431,10 @@ fn render_plan_many_outcome(payload: &Value) -> CliResult<()> {
             .get("source_kind")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
-        println!("- recommended source: {source_id} ({source_kind})");
+        lines.push(format!("- recommended source: {source_id} ({source_kind})"));
     }
     for plan in plans {
-        println!(
+        lines.push(format!(
             "- [{}] kind={} confidence={} prompt={} profile={} warnings={} path={}",
             plan.get("source_id")
                 .and_then(Value::as_str)
@@ -451,8 +461,9 @@ fn render_plan_many_outcome(payload: &Value) -> CliResult<()> {
             plan.get("input_path")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown")
-        );
+        ));
     }
+    print_migrate_surface("migration planning", lines);
     Ok(())
 }
 
@@ -469,15 +480,17 @@ fn render_merge_profiles_outcome(payload: &Value) -> CliResult<()> {
         .get("result")
         .ok_or_else(|| "merge_profiles payload missing `result`".to_owned())?;
 
-    println!("profile merge preview complete");
-    println!("- input: {input_path}");
-    println!("- source count: {}", plans.len());
+    let mut lines = vec![
+        "profile merge preview complete".to_owned(),
+        format!("- input: {input_path}"),
+        format!("- source count: {}", plans.len()),
+    ];
     if let Some(recommendation) = payload.get("recommendation")
         && let Some(source_id) = recommendation.get("source_id").and_then(Value::as_str)
     {
-        println!("- recommended prompt owner: {source_id}");
+        lines.push(format!("- recommended prompt owner: {source_id}"));
     }
-    println!(
+    lines.push(format!(
         "- auto apply allowed: {}",
         yes_no(
             result
@@ -485,28 +498,29 @@ fn render_merge_profiles_outcome(payload: &Value) -> CliResult<()> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         )
-    );
-    println!(
+    ));
+    lines.push(format!(
         "- unresolved conflicts: {}",
         result
             .get("unresolved_conflicts")
             .and_then(Value::as_array)
             .map_or(0, Vec::len)
-    );
-    println!(
+    ));
+    lines.push(format!(
         "- kept entries: {}",
         result
             .get("kept_entries")
             .and_then(Value::as_array)
             .map_or(0, Vec::len)
-    );
-    println!(
+    ));
+    lines.push(format!(
         "- dropped duplicates: {}",
         result
             .get("dropped_duplicates")
             .and_then(Value::as_array)
             .map_or(0, Vec::len)
-    );
+    ));
+    print_migrate_surface("profile merge preview", lines);
     Ok(())
 }
 
@@ -522,43 +536,45 @@ fn render_external_skill_mapping_outcome(
         .get("result")
         .ok_or_else(|| "map_external_skills payload missing `result`".to_owned())?;
 
-    println!("external skills mapping plan ready");
-    println!("- input: {input_path}");
-    println!(
-        "- detected artifacts: {}",
-        result
-            .get("artifact_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    );
-    println!(
-        "- declared skills: {}",
-        result
-            .get("declared_skills")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len)
-    );
-    println!(
-        "- locked skills: {}",
-        result
-            .get("locked_skills")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len)
-    );
-    println!(
-        "- resolved skills: {}",
-        result
-            .get("resolved_skills")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len)
-    );
-    println!(
-        "- profile addendum generated: {}",
-        yes_no(result.get("profile_note_addendum").is_some())
-    );
+    let mut lines = vec![
+        "external skills mapping plan ready".to_owned(),
+        format!("- input: {input_path}"),
+        format!(
+            "- detected artifacts: {}",
+            result
+                .get("artifact_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        ),
+        format!(
+            "- declared skills: {}",
+            result
+                .get("declared_skills")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
+        ),
+        format!(
+            "- locked skills: {}",
+            result
+                .get("locked_skills")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
+        ),
+        format!(
+            "- resolved skills: {}",
+            result
+                .get("resolved_skills")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
+        ),
+        format!(
+            "- profile addendum generated: {}",
+            yes_no(result.get("profile_note_addendum").is_some())
+        ),
+    ];
     if let Some(artifacts) = result.get("artifacts").and_then(Value::as_array) {
         for artifact in artifacts {
-            println!(
+            lines.push(format!(
                 "- artifact: kind={} path={}",
                 artifact
                     .get("kind")
@@ -568,22 +584,23 @@ fn render_external_skill_mapping_outcome(
                     .get("path")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown")
-            );
+            ));
         }
     }
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for warning in warnings.iter().filter_map(Value::as_str) {
-            println!("- warning: {warning}");
+            lines.push(format!("- warning: {warning}"));
         }
     }
     if let Some(output) = options.output.as_deref() {
-        println!(
+        lines.push(format!(
             "next step: {} migrate --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
             mvp::config::active_cli_command_name(),
             input_path,
             output
-        );
+        ));
     }
+    print_migrate_surface("external skills mapping", lines);
     Ok(())
 }
 
@@ -604,10 +621,12 @@ fn render_apply_selected_outcome(
         .get("result")
         .ok_or_else(|| "apply_selected payload missing `result`".to_owned())?;
 
-    println!("migration selection applied");
-    println!("- mode: apply_selected");
-    println!("- input: {input_path}");
-    println!("- output: {output_path}");
+    let mut lines = vec![
+        "migration selection applied".to_owned(),
+        "- mode: apply_selected".to_owned(),
+        format!("- input: {input_path}"),
+        format!("- output: {output_path}"),
+    ];
     let selection_mode = if options.safe_profile_merge {
         "safe_profile_merge"
     } else if options.source_id.is_some() {
@@ -615,12 +634,12 @@ fn render_apply_selected_outcome(
     } else {
         "recommended_single_source"
     };
-    println!("- selection mode: {selection_mode}");
+    lines.push(format!("- selection mode: {selection_mode}"));
     if let Some(source_id) = result
         .get("selected_primary_source_id")
         .and_then(Value::as_str)
     {
-        println!("- selected primary source: {source_id}");
+        lines.push(format!("- selected primary source: {source_id}"));
     }
     if let Some(merged_ids) = result.get("merged_source_ids").and_then(Value::as_array) {
         let merged = merged_ids
@@ -628,36 +647,36 @@ fn render_apply_selected_outcome(
             .filter_map(Value::as_str)
             .collect::<Vec<_>>()
             .join(", ");
-        println!("- merged source ids: {merged}");
+        lines.push(format!("- merged source ids: {merged}"));
     }
-    println!(
+    lines.push(format!(
         "- unresolved conflicts: {}",
         result
             .get("unresolved_conflicts")
             .and_then(Value::as_array)
             .map_or(0, Vec::len)
-    );
-    println!(
+    ));
+    lines.push(format!(
         "- external skill artifacts: {}",
         result
             .get("external_skill_artifact_count")
             .and_then(Value::as_u64)
             .unwrap_or(0)
-    );
-    println!(
+    ));
+    lines.push(format!(
         "- external skill entries applied: {}",
         result
             .get("external_skill_entries_applied")
             .and_then(Value::as_u64)
             .unwrap_or(0)
-    );
-    println!(
+    ));
+    lines.push(format!(
         "- managed external skills bridged: {}",
         result
             .get("external_skill_managed_install_count")
             .and_then(Value::as_u64)
             .unwrap_or(0)
-    );
+    ));
     if let Some(bridged_skill_ids) = result
         .get("external_skill_managed_skill_ids")
         .and_then(Value::as_array)
@@ -667,28 +686,29 @@ fn render_apply_selected_outcome(
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
         if !bridged.is_empty() {
-            println!("- bridged skill ids: {}", bridged.join(", "));
+            lines.push(format!("- bridged skill ids: {}", bridged.join(", ")));
         }
     }
     if let Some(manifest_path) = result
         .get("external_skills_manifest_path")
         .and_then(Value::as_str)
     {
-        println!("- external skills manifest: {manifest_path}");
+        lines.push(format!("- external skills manifest: {manifest_path}"));
     }
     if let Some(memory_path) = sqlite_memory_path.as_ref() {
-        println!("- sqlite memory: {}", memory_path.display());
+        lines.push(format!("- sqlite memory: {}", memory_path.display()));
     }
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for warning in warnings.iter().filter_map(Value::as_str) {
-            println!("- warning: {warning}");
+            lines.push(format!("- warning: {warning}"));
         }
     }
-    println!(
+    lines.push(format!(
         "next step: {} ask --config '{}' --message 'Summarize this repository and suggest the best next step.'",
         mvp::config::active_cli_command_name(),
         output_path
-    );
+    ));
+    print_migrate_surface("migration selection", lines);
     Ok(())
 }
 
@@ -727,48 +747,58 @@ fn render_apply_or_plan_outcome(
         .and_then(Value::as_str)
         .is_some();
 
+    let mut lines = Vec::new();
     if mode == "plan" {
-        println!("migration plan ready");
-        println!("- source: {source}");
-        println!("- input: {input_path}");
+        lines.push("migration plan ready".to_owned());
+        lines.push(format!("- source: {source}"));
+        lines.push(format!("- input: {input_path}"));
         if let Some(output_path) = output_path.or(options.output.as_deref()) {
-            println!("- output target: {output_path}");
+            lines.push(format!("- output target: {output_path}"));
         }
     } else {
-        println!("migration complete");
-        println!("- source: {source}");
-        println!("- input: {input_path}");
+        lines.push("migration complete".to_owned());
+        lines.push(format!("- source: {source}"));
+        lines.push(format!("- input: {input_path}"));
         if let Some(output_path) = output_path {
-            println!("- config: {output_path}");
+            lines.push(format!("- config: {output_path}"));
         }
     }
-    println!("- prompt pack: {prompt_pack_id}");
-    println!("- memory profile: {memory_profile}");
-    println!(
+    lines.push(format!("- prompt pack: {prompt_pack_id}"));
+    lines.push(format!("- memory profile: {memory_profile}"));
+    lines.push(format!(
         "- migrated prompt addendum: {}",
         yes_no(prompt_addendum_present)
-    );
-    println!("- migrated profile note: {}", yes_no(profile_note_present));
+    ));
+    lines.push(format!(
+        "- migrated profile note: {}",
+        yes_no(profile_note_present)
+    ));
     if let Some(memory_path) = sqlite_memory_path.as_ref() {
-        println!("- sqlite memory: {}", memory_path.display());
+        lines.push(format!("- sqlite memory: {}", memory_path.display()));
     }
     if let Some(warnings) = payload.get("warnings").and_then(Value::as_array) {
         for warning in warnings.iter().filter_map(Value::as_str) {
-            println!("- warning: {warning}");
+            lines.push(format!("- warning: {warning}"));
         }
     }
     if let Some(next_step) = payload.get("next_step").and_then(Value::as_str) {
-        println!("next step: {next_step}");
+        lines.push(format!("next step: {next_step}"));
     } else if mode == "plan"
         && let Some(output_path) = output_path.or(options.output.as_deref())
     {
-        println!(
+        lines.push(format!(
             "next step: {} migrate --mode apply --input {} --output {} --force",
             mvp::config::active_cli_command_name(),
             input_path,
             output_path
-        );
+        ));
     }
+    let title = if mode == "plan" {
+        "migration plan"
+    } else {
+        "migration apply"
+    };
+    print_migrate_surface(title, lines);
     Ok(())
 }
 
@@ -777,10 +807,23 @@ fn render_rollback_outcome(payload: &Value) -> CliResult<()> {
         .get("output_path")
         .and_then(Value::as_str)
         .ok_or_else(|| "rollback payload missing `output_path`".to_owned())?;
-    println!("migration rollback complete");
-    println!("- output: {output_path}");
-    println!("- rolled_back: yes");
+    print_migrate_surface(
+        "migration rollback",
+        vec![
+            "migration rollback complete".to_owned(),
+            format!("- output: {output_path}"),
+            "- rolled_back: yes".to_owned(),
+        ],
+    );
     Ok(())
+}
+
+fn print_migrate_surface(title: &str, lines: Vec<String>) {
+    println!("{}", render_migrate_surface_text(title, lines));
+}
+
+fn render_migrate_surface_text(title: &str, lines: Vec<String>) -> String {
+    crate::render_operator_shell_surface(title, "migration tools", Vec::new(), lines, Vec::new())
 }
 
 fn print_json_payload(payload: Value) -> CliResult<()> {
@@ -802,4 +845,39 @@ fn ensure_memory_ready_from_path(path: &Path) -> CliResult<PathBuf> {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvp;
+
+    #[test]
+    fn bootstrap_migrate_runtime_kernel_provides_kernel_context() {
+        let mut config = mvp::config::LoongConfig::default();
+        config.audit.mode = mvp::config::AuditMode::InMemory;
+
+        let runtime_kernel =
+            bootstrap_migrate_runtime_kernel(&config).expect("bootstrap migrate runtime kernel");
+
+        assert_eq!(
+            runtime_kernel.kernel_context().agent_id(),
+            "daemon-migrate-cli"
+        );
+    }
+
+    #[test]
+    fn render_migrate_surface_text_uses_operator_header() {
+        let rendered =
+            render_migrate_surface_text("migration plan", vec!["- input: /tmp/source".to_owned()]);
+
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.starts_with("LOONG") || line.contains(" loong ")),
+            "migrate text should use the shared ratatui operator shell header: {rendered}"
+        );
+        assert!(rendered.contains("migration plan"));
+        assert!(rendered.contains("- input: /tmp/source"));
+    }
 }

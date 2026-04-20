@@ -33,14 +33,41 @@ pub(crate) fn resolve_tool_invoke_request(
             .ok_or_else(|| "tool.invoke payload.arguments must be an object".to_owned())?;
         if let Some(internal_context) = payload
             .get(LOONG_INTERNAL_TOOL_CONTEXT_KEY)
-            .or_else(|| payload.get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY))
+            .or_else(|| payload.get(LOONG_INTERNAL_TOOL_CONTEXT_KEY))
         {
             merge_trusted_internal_tool_context_into_arguments(arguments_object, internal_context)?;
         }
     }
 
-    let resolved = resolve_tool_execution(tool_id)
-        .ok_or_else(|| format!("tool_not_found: unknown tool `{tool_id}`"))?;
+    let routed_hidden_tool_name = super::route_hidden_discoverable_tool_name(tool_id, &arguments);
+    let tool_lease_id = match routed_hidden_tool_name {
+        Ok(_resolved_hidden_tool_name)
+            if matches!(
+                tool_id,
+                super::HIDDEN_AGENT_TOOL_NAME
+                    | super::HIDDEN_SKILLS_TOOL_NAME
+                    | super::HIDDEN_CHANNEL_TOOL_NAME
+            ) =>
+        {
+            tool_id
+        }
+        _ => tool_id,
+    };
+    tool_lease_authority::validate_tool_lease(tool_lease_id, lease, payload)?;
+
+    if matches!(
+        tool_id,
+        super::HIDDEN_AGENT_TOOL_NAME
+            | super::HIDDEN_SKILLS_TOOL_NAME
+            | super::HIDDEN_CHANNEL_TOOL_NAME
+    ) && let Some(arguments_object) = arguments.as_object_mut()
+    {
+        arguments_object.remove("operation");
+    }
+
+    let resolved_tool_name = routed_hidden_tool_name.unwrap_or(tool_id);
+    let resolved = resolve_tool_execution(resolved_tool_name)
+        .ok_or_else(|| format!("tool_not_found: unknown tool `{resolved_tool_name}`"))?;
     let resolved_tool_name = resolved.canonical_name;
     if is_provider_exposed_tool_name(resolved_tool_name) {
         return Err(format!(
@@ -48,7 +75,6 @@ pub(crate) fn resolve_tool_invoke_request(
             resolved_tool_name
         ));
     }
-    tool_lease_authority::validate_tool_lease(resolved_tool_name, lease, payload)?;
 
     Ok((
         resolved,
@@ -105,15 +131,25 @@ pub(crate) fn bridge_provider_tool_call_with_scope(
 
     let mut lease_payload = serde_json::Map::new();
     inject_tool_lease_binding(&mut lease_payload, None, session_id, turn_id);
-    let lease = match tool_lease_authority::issue_tool_lease(entry.canonical_name, &lease_payload) {
+    let grouped_hidden_tool_name = hidden_facade_tool_name_for_hidden_tool(entry.canonical_name);
+    let tool_id = grouped_hidden_tool_name.unwrap_or(entry.canonical_name);
+    let lease = match tool_lease_authority::issue_tool_lease(tool_id, &lease_payload) {
         Ok(lease) => lease,
         Err(error) => format!("tool-lease-error:{error}"),
     };
+    let mut arguments = args_json;
+    if let Some(operation) = hidden_operation_for_tool_name(entry.canonical_name)
+        && let Some(arguments_object) = arguments.as_object_mut()
+    {
+        arguments_object
+            .entry("operation".to_owned())
+            .or_insert_with(|| json!(operation));
+    }
 
     let mut outer_payload = serde_json::Map::new();
-    outer_payload.insert("tool_id".to_owned(), json!(entry.canonical_name));
+    outer_payload.insert("tool_id".to_owned(), json!(tool_id));
     outer_payload.insert("lease".to_owned(), json!(lease));
-    outer_payload.insert("arguments".to_owned(), args_json);
+    outer_payload.insert("arguments".to_owned(), arguments);
     for (key, value) in lease_payload {
         outer_payload.insert(key, value);
     }

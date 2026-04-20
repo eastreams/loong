@@ -8,8 +8,9 @@ DEV_PORT="${DEV_PORT:-4173}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 WEB_ROOT="${REPO_ROOT}/web"
-LOG_ROOT="${HOME}/.loongclaw/logs"
-RUN_ROOT="${HOME}/.loongclaw/run"
+RUNTIME_ROOT="${HOME}/.loong"
+LOG_ROOT="${RUNTIME_ROOT}/logs"
+RUN_ROOT="${RUNTIME_ROOT}/run"
 
 mkdir -p "${LOG_ROOT}" "${RUN_ROOT}"
 
@@ -49,12 +50,27 @@ wait_for_http() {
 stop_port_processes 4317
 stop_port_processes "${DEV_PORT}"
 
-DAEMON_EXE="${REPO_ROOT}/target/debug/loongclaw"
-if [[ ! -f "${DAEMON_EXE}" ]]; then
-  echo "Missing daemon binary: ${DAEMON_EXE}" >&2
-  echo "Run: cargo build --bin loongclaw" >&2
-  exit 1
-fi
+resolve_daemon_exe() {
+  (
+    cd "${REPO_ROOT}"
+    cargo build --bin loong
+  )
+
+  if [[ -f "${REPO_ROOT}/target/debug/loong" ]]; then
+    echo "${REPO_ROOT}/target/debug/loong"
+    return 0
+  fi
+
+  if [[ -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
+    echo "${REPO_ROOT}/target/debug/loongclaw"
+    return 0
+  fi
+
+  echo "Missing daemon binary after build: ${REPO_ROOT}/target/debug/loong" >&2
+  return 1
+}
+
+DAEMON_EXE="$(resolve_daemon_exe)"
 
 VITE_CMD="${WEB_ROOT}/node_modules/.bin/vite"
 if [[ ! -f "${VITE_CMD}" ]]; then

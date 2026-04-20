@@ -17,7 +17,7 @@ use axum::{
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
 };
-use loongclaw_daemon::{
+use loong_daemon::{
     CliResult,
     gateway::{
         client::{GatewayAcpSessionsRequest, GatewayAcpStatusRequest, GatewayLocalClient},
@@ -30,7 +30,7 @@ use loongclaw_daemon::{
             AcpSessionHandle, AcpSessionState, AcpSessionStore, AcpSqliteSessionStore,
             AcpTurnRequest, AcpTurnResult, AcpTurnStopReason, register_acp_backend,
         },
-        config::{AcpConfig, LoongClawConfig},
+        config::{AcpConfig, LoongConfig},
     },
     supervisor::{LoadedSupervisorConfig, SupervisorRuntimeHooks},
 };
@@ -65,7 +65,7 @@ impl AcpRuntimeBackend for GatewayEchoBackend {
 
     async fn ensure_session(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         request: &AcpSessionBootstrap,
     ) -> CliResult<AcpSessionHandle> {
         let session_key = request.session_key.clone();
@@ -89,7 +89,7 @@ impl AcpRuntimeBackend for GatewayEchoBackend {
 
     async fn run_turn(
         &self,
-        _config: &LoongClawConfig,
+        _config: &LoongConfig,
         _session: &AcpSessionHandle,
         request: &AcpTurnRequest,
     ) -> CliResult<AcpTurnResult> {
@@ -108,15 +108,11 @@ impl AcpRuntimeBackend for GatewayEchoBackend {
         })
     }
 
-    async fn cancel(
-        &self,
-        _config: &LoongClawConfig,
-        _session: &AcpSessionHandle,
-    ) -> CliResult<()> {
+    async fn cancel(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
         Ok(())
     }
 
-    async fn close(&self, _config: &LoongClawConfig, _session: &AcpSessionHandle) -> CliResult<()> {
+    async fn close(&self, _config: &LoongConfig, _session: &AcpSessionHandle) -> CliResult<()> {
         Ok(())
     }
 }
@@ -162,17 +158,17 @@ fn gateway_config_path(sqlite_path: &Path) -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(std::env::temp_dir);
-    parent_directory.join("loongclaw-gateway-acp.toml")
+    parent_directory.join("loong-gateway-acp.toml")
 }
 
 fn gateway_turn_loaded_config_fixture(
     sqlite_path: &Path,
     backend_id: &str,
 ) -> LoadedSupervisorConfig {
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
     let sqlite_path_text = sqlite_path.display().to_string();
     config.memory.sqlite_path = sqlite_path_text;
-    config.audit.mode = loongclaw_app::config::AuditMode::InMemory;
+    config.audit.mode = loong_app::config::AuditMode::InMemory;
     config.acp = AcpConfig {
         enabled: true,
         backend: Some(backend_id.to_owned()),
@@ -216,7 +212,7 @@ async fn wait_for_gateway_control_surface(runtime_dir: &Path) {
 
 #[tokio::test]
 async fn gateway_turn_rejects_missing_auth() {
-    let app = loongclaw_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
+    let app = loong_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
     let body = json!({"session_id": "s1", "input": "hello"});
     let response = app
         .oneshot(
@@ -234,7 +230,7 @@ async fn gateway_turn_rejects_missing_auth() {
 
 #[tokio::test]
 async fn gateway_turn_rejects_missing_session_id() {
-    let app = loongclaw_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
+    let app = loong_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
     let body = json!({"input": "hello"});
     let response = app
         .oneshot(
@@ -253,7 +249,7 @@ async fn gateway_turn_rejects_missing_session_id() {
 
 #[tokio::test]
 async fn gateway_turn_rejects_empty_input() {
-    let app = loongclaw_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
+    let app = loong_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
     let body = json!({"session_id": "s1", "input": ""});
     let response = app
         .oneshot(
@@ -272,7 +268,7 @@ async fn gateway_turn_rejects_empty_input() {
 
 #[tokio::test]
 async fn gateway_turn_returns_503_when_no_acp_backend() {
-    let app = loongclaw_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
+    let app = loong_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
     let body = json!({"session_id": "s1", "input": "hello"});
     let response = app
         .oneshot(
@@ -291,7 +287,7 @@ async fn gateway_turn_returns_503_when_no_acp_backend() {
 
 #[tokio::test]
 async fn gateway_turn_rejects_channel_scope_without_conversation_id() {
-    let app = loongclaw_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
+    let app = loong_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
     let body = json!({
         "session_id": "opaque-session",
         "channel_id": "telegram",
@@ -314,7 +310,7 @@ async fn gateway_turn_rejects_channel_scope_without_conversation_id() {
 
 #[tokio::test]
 async fn gateway_turn_accepts_structured_session_scope_before_backend_check() {
-    let app = loongclaw_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
+    let app = loong_daemon::gateway::api_turn::build_turn_test_router_no_backend("tok".into());
     let body = json!({
         "session_id": "opaque-session",
         "channel_id": "telegram",

@@ -6,7 +6,9 @@ use serde::Serialize;
 pub(crate) const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str = "browser-companion-preview";
 pub(crate) const BROWSER_COMPANION_COMMAND: &str = "agent-browser";
 
-static BUNDLED_SKILLS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../skills");
+// Keep a vendored `crates/app/skills/` snapshot so the published `loong-app`
+// crate can embed bundled skills without relying on paths outside the package.
+static BUNDLED_SKILLS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BundledExternalSkill {
@@ -462,12 +464,31 @@ pub(crate) fn bundled_external_skill_markdown(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::Path;
 
     use super::{
         BUNDLED_SKILLS_DIR, bundled_external_skill, bundled_external_skill_dir,
         bundled_external_skill_markdown, bundled_external_skills, bundled_preinstall_targets,
         bundled_skill_pack, bundled_skill_pack_memberships,
     };
+
+    fn collect_fs_files(root: &Path, current: &Path, discovered: &mut BTreeSet<String>) {
+        let entries = std::fs::read_dir(current).expect("read bundled skills dir");
+        for entry in entries {
+            let entry = entry.expect("bundled skills entry");
+            let path = entry.path();
+            if path.is_dir() {
+                collect_fs_files(root, &path, discovered);
+                continue;
+            }
+            let relative = path
+                .strip_prefix(root)
+                .expect("relative bundled skill path")
+                .to_string_lossy()
+                .replace('\\', "/");
+            discovered.insert(relative);
+        }
+    }
 
     fn collect_embedded_skill_dirs(
         dir: &include_dir::Dir<'static>,
@@ -608,5 +629,41 @@ mod tests {
             registered_dirs, embedded_dirs,
             "every embedded bundled skill directory should be registered exactly once"
         );
+    }
+
+    #[test]
+    fn vendored_bundled_skills_snapshot_matches_repo_source_tree() {
+        let repo_source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
+        let vendored = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
+
+        assert!(
+            repo_source.is_dir(),
+            "missing repo skills source: {repo_source:?}"
+        );
+        assert!(
+            vendored.is_dir(),
+            "missing vendored skills snapshot: {vendored:?}"
+        );
+
+        let mut repo_files = BTreeSet::new();
+        collect_fs_files(&repo_source, &repo_source, &mut repo_files);
+        let mut vendored_files = BTreeSet::new();
+        collect_fs_files(&vendored, &vendored, &mut vendored_files);
+
+        assert_eq!(
+            repo_files, vendored_files,
+            "vendored skills file set drifted"
+        );
+
+        for relative in repo_files {
+            let repo_bytes = std::fs::read(repo_source.join(&relative))
+                .unwrap_or_else(|error| panic!("read repo skills file `{relative}`: {error}"));
+            let vendored_bytes = std::fs::read(vendored.join(&relative))
+                .unwrap_or_else(|error| panic!("read vendored skills file `{relative}`: {error}"));
+            assert_eq!(
+                repo_bytes, vendored_bytes,
+                "vendored skills file contents drifted for `{relative}`"
+            );
+        }
     }
 }

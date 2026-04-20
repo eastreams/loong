@@ -71,10 +71,10 @@ impl Drop for RuntimeRestoreEnvGuard {
     }
 }
 
-fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClawConfig) {
+fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongConfig) {
     fs::create_dir_all(root).expect("create fixture root");
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.shell_allow = vec!["git".to_owned(), "cargo".to_owned()];
     config.tools.shell_deny = vec!["rm".to_owned()];
@@ -124,7 +124,7 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Openai,
                 model: "gpt-4.1-mini".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "${OPENAI_API_KEY}".to_owned(),
                 )),
                 ..Default::default()
@@ -138,7 +138,7 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "${RUNTIME_RESTORE_DEEPSEEK_KEY}".to_owned(),
                 )),
                 ..Default::default()
@@ -146,23 +146,21 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
         },
     );
 
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     (config_path, config)
 }
 
-fn install_demo_skill(root: &Path, config: &mvp::config::LoongClawConfig, config_path: &Path) {
+fn install_demo_skill(root: &Path, config: &mvp::config::LoongConfig, config_path: &Path) {
     write_file(
         root,
         "source/demo-skill/SKILL.md",
         "# Demo Skill\n\nInstalled for runtime restore coverage.\n",
     );
 
-    let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        config,
-        Some(config_path),
-    );
+    let runtime_config =
+        mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, Some(config_path));
     mvp::tools::execute_tool_core_with_config(
         kernel::ToolCoreRequest {
             tool_name: "external_skills.install".to_owned(),
@@ -178,20 +176,19 @@ fn install_demo_skill(root: &Path, config: &mvp::config::LoongClawConfig, config
 fn write_snapshot_artifact(
     root: &Path,
     config_path: &Path,
-) -> (PathBuf, loongclaw_daemon::RuntimeSnapshotCliState, Value) {
+) -> (PathBuf, loong_daemon::RuntimeSnapshotCliState, Value) {
     let snapshot = collect_runtime_snapshot_cli_state(Some(
         config_path.to_str().expect("config path should be utf-8"),
     ))
     .expect("collect runtime snapshot");
-    let metadata = loongclaw_daemon::RuntimeSnapshotArtifactMetadata {
+    let metadata = loong_daemon::RuntimeSnapshotArtifactMetadata {
         created_at: "2026-03-16T11:30:00Z".to_owned(),
         label: Some("baseline".to_owned()),
         experiment_id: Some("exp-runtime-restore".to_owned()),
         parent_snapshot_id: Some("snapshot-parent".to_owned()),
     };
-    let payload =
-        loongclaw_daemon::build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)
-            .expect("build runtime snapshot artifact");
+    let payload = loong_daemon::build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)
+        .expect("build runtime snapshot artifact");
     let artifact_path = root.join("artifacts/runtime-snapshot.json");
     if let Some(parent) = artifact_path.parent() {
         fs::create_dir_all(parent).expect("create artifact directory");
@@ -264,7 +261,7 @@ fn mutate_runtime_restore_config(config_path: &Path, root: &Path) {
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Openai,
                 model: "gpt-4.1".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "${OPENAI_API_KEY}".to_owned(),
                 )),
                 ..Default::default()
@@ -284,9 +281,9 @@ fn mutate_runtime_restore_config(config_path: &Path, root: &Path) {
 
 #[test]
 fn runtime_snapshot_artifact_json_includes_lineage_and_restore_spec() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-artifact");
+    let root = unique_temp_dir("loong-runtime-restore-artifact");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -330,9 +327,9 @@ fn runtime_snapshot_artifact_json_includes_lineage_and_restore_spec() {
 
 #[test]
 fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_restore_field() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-legacy-runtime-plugins");
+    let root = unique_temp_dir("loong-runtime-restore-legacy-runtime-plugins");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -350,8 +347,8 @@ fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_restore_fie
         &payload,
     );
 
-    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let execution = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -365,9 +362,9 @@ fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_restore_fie
 
 #[test]
 fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_top_level_field() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-legacy-runtime-plugins-top-level");
+    let root = unique_temp_dir("loong-runtime-restore-legacy-runtime-plugins-top-level");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -385,8 +382,8 @@ fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_top_level_f
         &payload,
     );
 
-    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let execution = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -400,9 +397,9 @@ fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_top_level_f
 
 #[test]
 fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_spec() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-redaction");
+    let root = unique_temp_dir("loong-runtime-restore-redaction");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", None),
     ]);
@@ -414,7 +411,7 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "literal-secret-value".to_owned(),
                 )),
                 headers: BTreeMap::from([
@@ -425,7 +422,7 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
                     ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
                     ("x-secret-beta".to_owned(), "literal-beta-secret".to_owned()),
                     ("x-goog-api-key".to_owned(), "${GOOGLE_API_KEY}".to_owned()),
-                    ("user-agent".to_owned(), "loongclaw-test-suite".to_owned()),
+                    ("user-agent".to_owned(), "loong-test-suite".to_owned()),
                 ]),
                 ..Default::default()
             },
@@ -443,7 +440,7 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
     assert_eq!(profile["headers"]["anthropic-version"], "2023-06-01");
     assert!(profile["headers"]["x-secret-beta"].is_null());
     assert_eq!(profile["headers"]["x-goog-api-key"], "${GOOGLE_API_KEY}");
-    assert_eq!(profile["headers"]["user-agent"], "loongclaw-test-suite");
+    assert_eq!(profile["headers"]["user-agent"], "loong-test-suite");
     let warnings = payload["restore_spec"]["warnings"]
         .as_array()
         .expect("warnings should be an array");
@@ -464,9 +461,9 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
 
 #[test]
 fn runtime_snapshot_artifact_json_warns_when_managed_skill_inventory_is_disabled() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-disabled-inventory");
+    let root = unique_temp_dir("loong-runtime-restore-disabled-inventory");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -490,9 +487,9 @@ fn runtime_snapshot_artifact_json_warns_when_managed_skill_inventory_is_disabled
 
 #[test]
 fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-dry-run");
+    let root = unique_temp_dir("loong-runtime-restore-dry-run");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -502,8 +499,8 @@ fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged
 
     mutate_runtime_restore_config(&config_path, &root);
 
-    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let execution = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -547,9 +544,9 @@ fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged
 
 #[test]
 fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-redacted-block");
+    let root = unique_temp_dir("loong-runtime-restore-redacted-block");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", None),
     ]);
@@ -561,7 +558,7 @@ fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted(
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "literal-secret-value".to_owned(),
                 )),
                 ..Default::default()
@@ -573,8 +570,8 @@ fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted(
 
     let (artifact_path, _snapshot, _payload) = write_snapshot_artifact(&root, &config_path);
 
-    let dry_run = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let dry_run = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -593,8 +590,8 @@ fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted(
         "dry-run should keep the redacted credential warning visible"
     );
 
-    let apply_error = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let apply_error = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -607,9 +604,9 @@ fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted(
 
 #[test]
 fn runtime_restore_dry_run_blocks_apply_when_managed_skill_inventory_was_not_captured() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-missing-managed-inventory");
+    let root = unique_temp_dir("loong-runtime-restore-missing-managed-inventory");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -629,8 +626,8 @@ fn runtime_restore_dry_run_blocks_apply_when_managed_skill_inventory_was_not_cap
         "fixture should capture the managed-skill inventory warning"
     );
 
-    let dry_run = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let dry_run = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -653,9 +650,9 @@ fn runtime_restore_dry_run_blocks_apply_when_managed_skill_inventory_was_not_cap
 #[test]
 fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disables_external_skills()
  {
-    let root = unique_temp_dir("loongclaw-runtime-restore-target-disabled");
+    let root = unique_temp_dir("loong-runtime-restore-target-disabled");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -671,8 +668,8 @@ fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disab
         &payload,
     );
 
-    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let execution = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: disabled_artifact_path.display().to_string(),
             json: false,
@@ -694,9 +691,9 @@ fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disab
 
 #[test]
 fn runtime_restore_dry_run_ignores_source_path_only_drift_for_managed_skills() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-source-drift");
+    let root = unique_temp_dir("loong-runtime-restore-source-drift");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -712,8 +709,8 @@ fn runtime_restore_dry_run_ignores_source_path_only_drift_for_managed_skills() {
         &payload,
     );
 
-    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let execution = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -734,9 +731,9 @@ fn runtime_restore_dry_run_ignores_source_path_only_drift_for_managed_skills() {
 
 #[test]
 fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-apply");
+    let root = unique_temp_dir("loong-runtime-restore-apply");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -746,8 +743,8 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
 
     mutate_runtime_restore_config(&config_path, &root);
 
-    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let execution = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -814,9 +811,9 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
 
 #[test]
 fn runtime_restore_apply_reports_verification_failure_without_reverting_applied_state() {
-    let root = unique_temp_dir("loongclaw-runtime-restore-verification-failure");
+    let root = unique_temp_dir("loong-runtime-restore-verification-failure");
     let _env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
@@ -834,8 +831,8 @@ fn runtime_restore_apply_reports_verification_failure_without_reverting_applied_
         &payload,
     );
 
-    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let execution = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,
@@ -879,12 +876,12 @@ fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fail
         return;
     }
 
-    let root = unique_temp_dir("loongclaw-runtime-restore-rollback");
+    let root = unique_temp_dir("loong-runtime-restore-rollback");
     let (config_path, config) = write_runtime_restore_config(&root);
     let config_path_text = config_path.to_string_lossy().to_string();
     let artifact_path = {
         let _runtime_env = RuntimeRestoreEnvGuard::set(&[
-            ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+            ("LOONG_BROWSER_COMPANION_READY", Some("true")),
             ("OPENAI_API_KEY", None),
             ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
         ]);
@@ -895,17 +892,17 @@ fn runtime_restore_apply_rolls_back_managed_skill_changes_when_config_write_fail
 
     mutate_runtime_restore_config(&config_path, &root);
     let _apply_env = RuntimeRestoreEnvGuard::set(&[
-        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
         ("OPENAI_API_KEY", None),
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
         (
-            "LOONGCLAW_TEST_FAIL_CONFIG_WRITE_PATH",
+            "LOONG_TEST_FAIL_CONFIG_WRITE_PATH",
             Some(config_path_text.as_str()),
         ),
     ]);
 
-    let apply_error = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
-        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+    let apply_error = loong_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loong_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
             config: Some(config_path.display().to_string()),
             snapshot: artifact_path.display().to_string(),
             json: false,

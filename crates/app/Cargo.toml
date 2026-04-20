@@ -9,11 +9,12 @@ repository.workspace = true
 homepage.workspace = true
 
 [lib]
-name = "loongclaw_app"
+name = "loong_app"
 
 [features]
-default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-http", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
+default = ["channel-cli", "channel-plugin-bridge", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-http", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
 channel-cli = []
+channel-plugin-bridge = []
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "dep:prost", "dep:rustls", "dep:tokio-tungstenite", "feishu-integration"]
 channel-matrix = []
@@ -21,9 +22,9 @@ channel-wecom = ["dep:rustls", "dep:tokio-tungstenite"]
 channel-discord = []
 channel-dingtalk = []
 channel-slack = []
-channel-webhook = []
+channel-webhook = ["dep:axum"]
 channel-google-chat = []
-channel-line = []
+channel-line = ["dep:axum"]
 channel-signal = []
 channel-twitch = []
 channel-teams = []
@@ -52,11 +53,12 @@ tool-websearch = []
 test-support = []
 
 [dependencies]
-loongclaw-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
-loongclaw-kernel = { package = "loong-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
 bytes = "1"
 async-trait.workspace = true
 console.workspace = true
+ratatui = "0.30.0"
 dunce = "1"
 rand.workspace = true
 chrono.workspace = true
@@ -92,6 +94,7 @@ tempfile = "3"
 which.workspace = true
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
+jieba-rs = "0.8"
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25"
 starlark = "0.13"

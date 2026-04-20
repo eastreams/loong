@@ -1,9 +1,9 @@
 use clap::{Args, Subcommand, ValueEnum};
-use loongclaw_contracts::{
+use loong_contracts::{
     WorkSourceKind, WorkUnitKind, WorkUnitPriority, WorkUnitRetryPolicy, WorkUnitSnapshot,
     WorkUnitSourceRef, WorkUnitStatus,
 };
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 
 use crate::mvp;
 
@@ -828,7 +828,7 @@ fn render_work_unit_list_text(snapshots: &[WorkUnitSnapshot]) -> String {
     lines.join("\n")
 }
 
-fn render_work_unit_events_text(events: &[loongclaw_contracts::WorkUnitEventRecord]) -> String {
+fn render_work_unit_events_text(events: &[loong_contracts::WorkUnitEventRecord]) -> String {
     if events.is_empty() {
         return "work_unit_events: (none)\n".to_owned();
     }
@@ -851,11 +851,11 @@ fn render_work_unit_events_text(events: &[loongclaw_contracts::WorkUnitEventReco
     lines.join("\n")
 }
 
-fn render_single_work_unit_event_text(event: &loongclaw_contracts::WorkUnitEventRecord) -> String {
+fn render_single_work_unit_event_text(event: &loong_contracts::WorkUnitEventRecord) -> String {
     render_work_unit_events_text(std::slice::from_ref(event))
 }
 
-fn render_work_unit_health_text(health: &loongclaw_contracts::WorkRuntimeHealthSnapshot) -> String {
+fn render_work_unit_health_text(health: &loong_contracts::WorkRuntimeHealthSnapshot) -> String {
     format!(
         "total_count={} ready_count={} leased_count={} running_count={} blocked_count={} retry_pending_count={} terminal_count={} archived_count={} expired_lease_count={}\n",
         health.total_count,
@@ -896,7 +896,7 @@ fn render_retry_policy(retry_policy: &WorkUnitRetryPolicy) -> String {
     )
 }
 
-fn render_lease_text(lease: &loongclaw_contracts::WorkUnitLeaseRecord) -> String {
+fn render_lease_text(lease: &loong_contracts::WorkUnitLeaseRecord) -> String {
     format!(
         "lease: owner={} lease_version={} acquired_at_ms={} heartbeat_at_ms={} expires_at_ms={}",
         lease.owner,

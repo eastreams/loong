@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH},
 };
 
-use loongclaw_app::{
+use loong_app::{
     config::{MemoryMode, MemoryProfile},
     conversation::{
         ContextArtifactDescriptor, ContextArtifactKind, PromptFragment, PromptFrame,
@@ -17,7 +17,7 @@ use loongclaw_app::{
         SqliteContextLoadDiagnostics, runtime_config::MemoryRuntimeConfig,
     },
 };
-use loongclaw_bench::{
+use loong_bench::{
     MemoryContextBenchmarkReportAugmentContext, MemoryContextBenchmarkSuiteSamples,
     MemoryContextColdPathPhaseSamples, MemoryContextShape, copy_benchmark_file,
     run_memory_context_benchmark_cli_with_suite_runner as run_bench_memory_context_benchmark_cli,
@@ -116,7 +116,7 @@ fn run_memory_context_benchmark_suite(
     hot_iterations: usize,
     warmup_iterations: usize,
 ) -> CliResult<MemoryContextBenchmarkSuiteSamples> {
-    let temp_root = benchmark_temp_root("loongclaw-memory-context-benchmark", temp_root_override);
+    let temp_root = benchmark_temp_root("loong-memory-context-benchmark", temp_root_override);
     fs::create_dir_all(&temp_root)
         .map_err(|error| format!("failed to create memory benchmark temp directory: {error}"))?;
 

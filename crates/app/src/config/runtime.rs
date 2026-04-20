@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::CliResult;
 use crate::mcp::McpConfig;
 use crate::secrets::DefaultSecretResolver;
-use loongclaw_contracts::{SecretRef, SecretResolver};
+use loong_contracts::{SecretRef, SecretResolver};
 
 use super::{
     OnebotChannelConfig, QqbotChannelConfig, WeixinChannelConfig,
@@ -33,7 +33,7 @@ use super::{
     provider::{ProviderConfig, ProviderKind, ProviderProfileConfig},
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, ConfigValidationSeverity,
-        DEFAULT_CONFIG_FILE, default_loongclaw_home as shared_default_loongclaw_home, expand_path,
+        DEFAULT_CONFIG_FILE, default_loong_home as shared_default_loong_home, expand_path,
         format_config_validation_issues,
     },
     tools::{
@@ -106,7 +106,7 @@ impl ConfigValidationDiagnostic {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct LoongClawConfig {
+pub struct LoongConfig {
     #[serde(default, skip_serializing)]
     pub provider: ProviderConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1098,7 +1098,7 @@ fn canonicalize_provider_profile_for_encoding(profile: &mut ProviderProfileConfi
     );
 }
 
-fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
+fn canonicalize_channel_configs_for_encoding(config: &mut LoongConfig) {
     canonicalize_telegram_channel_for_encoding(&mut config.telegram);
     canonicalize_feishu_channel_for_encoding(&mut config.feishu);
     canonicalize_matrix_channel_for_encoding(&mut config.matrix);
@@ -1213,9 +1213,14 @@ fn canonicalize_onebot_channel_for_encoding(config: &mut OnebotChannelConfig) {
 
 fn canonicalize_discord_channel_for_encoding(config: &mut DiscordChannelConfig) {
     canonicalize_env_secret_reference(&mut config.bot_token, &mut config.bot_token_env);
+    canonicalize_env_string_reference(&mut config.application_id, &mut config.application_id_env);
 
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.bot_token, &mut account.bot_token_env);
+        canonicalize_env_string_reference(
+            &mut account.application_id,
+            &mut account.application_id_env,
+        );
     }
 }
 
@@ -1417,11 +1422,11 @@ fn canonicalize_optional_env_name(env_name: &mut Option<String>) {
 }
 
 fn canonicalize_provider_secret_env_reference(
-    inline_secret: &mut Option<loongclaw_contracts::SecretRef>,
+    inline_secret: &mut Option<loong_contracts::SecretRef>,
     env_name: &mut Option<String>,
 ) {
     if let Some(explicit_env_name) = secret_ref_env_name(inline_secret.as_ref()) {
-        *inline_secret = Some(loongclaw_contracts::SecretRef::Env {
+        *inline_secret = Some(loong_contracts::SecretRef::Env {
             env: explicit_env_name,
         });
         *env_name = None;
@@ -1430,7 +1435,7 @@ fn canonicalize_provider_secret_env_reference(
 
     if inline_secret
         .as_ref()
-        .is_some_and(loongclaw_contracts::SecretRef::is_configured)
+        .is_some_and(loong_contracts::SecretRef::is_configured)
     {
         *env_name = None;
         return;
@@ -1442,7 +1447,7 @@ fn canonicalize_provider_secret_env_reference(
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
     if let Some(normalized_env_name) = normalized_env_name {
-        *inline_secret = Some(loongclaw_contracts::SecretRef::Env {
+        *inline_secret = Some(loong_contracts::SecretRef::Env {
             env: normalized_env_name,
         });
     }
@@ -1455,7 +1460,7 @@ fn canonicalize_env_string_reference(value: &mut Option<String>, env_name: &mut 
         .map(str::trim)
         .filter(|raw| !raw.is_empty())
         .and_then(|raw| {
-            let secret_ref = loongclaw_contracts::SecretRef::Inline(raw.to_owned());
+            let secret_ref = loong_contracts::SecretRef::Inline(raw.to_owned());
             secret_ref_env_name(Some(&secret_ref))
         });
     let Some(explicit_env_name) = explicit_env_name else {
@@ -1546,7 +1551,7 @@ pub(crate) fn normalize_dispatch_account_id(raw: &str) -> Option<String> {
     }
 }
 
-impl LoongClawConfig {
+impl LoongConfig {
     fn collect_validation_issues_with_report(
         &self,
         selection_report: Option<&ProviderSelectionNormalizationReport>,
@@ -1626,8 +1631,36 @@ impl LoongClawConfig {
         crate::channel::enabled_channel_ids(self, None)
     }
 
+    pub fn enabled_runtime_backed_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::RuntimeBacked),
+        )
+    }
+
     pub fn enabled_service_channel_ids(&self) -> Vec<String> {
-        crate::channel::enabled_channel_ids(self, Some(crate::channel::ChannelRuntimeKind::Service))
+        self.enabled_runtime_backed_channel_ids()
+    }
+
+    pub fn enabled_plugin_backed_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::PluginBacked),
+        )
+    }
+
+    pub fn enabled_outbound_only_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::OutboundOnly),
+        )
+    }
+
+    pub fn enabled_catalog_only_channel_ids(&self) -> Vec<String> {
+        crate::channel::enabled_channel_ids(
+            self,
+            Some(crate::channel::ChannelRuntimeKind::CatalogOnly),
+        )
     }
 
     pub fn active_provider_id(&self) -> Option<&str> {
@@ -1697,10 +1730,7 @@ impl LoongClawConfig {
         preferred_provider_selector(self.provider_selector_profiles(), target_profile_id)
     }
 
-    pub fn clone_with_provider_runtime_state(
-        &self,
-        provider_runtime_state: &LoongClawConfig,
-    ) -> Self {
+    pub fn clone_with_provider_runtime_state(&self, provider_runtime_state: &LoongConfig) -> Self {
         let mut merged = self.clone();
         merged.provider = provider_runtime_state.provider.clone();
         merged.providers = provider_runtime_state.providers.clone();
@@ -2007,8 +2037,8 @@ fn inspect_raw_provider_selection_intent(raw: &str) -> CliResult<RawProviderSele
 #[cfg(feature = "config-toml")]
 fn parse_toml_config_components(
     raw: &str,
-) -> CliResult<(LoongClawConfig, ProviderSelectionNormalizationReport)> {
-    let mut config = toml::from_str::<LoongClawConfig>(raw)
+) -> CliResult<(LoongConfig, ProviderSelectionNormalizationReport)> {
+    let mut config = toml::from_str::<LoongConfig>(raw)
         .map_err(|error| format!("failed to parse TOML config: {error}"))?;
     let selection_intent = inspect_raw_provider_selection_intent(raw)?;
     let had_saved_provider_profiles = !config.providers.is_empty();
@@ -2025,11 +2055,11 @@ fn parse_toml_config_components(
 #[cfg(not(feature = "config-toml"))]
 fn parse_toml_config_components(
     _raw: &str,
-) -> CliResult<(LoongClawConfig, ProviderSelectionNormalizationReport)> {
+) -> CliResult<(LoongConfig, ProviderSelectionNormalizationReport)> {
     Err("config-toml feature is disabled for this build".to_owned())
 }
 
-pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongClawConfig)> {
+pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongConfig)> {
     let config_path = path.map(expand_path).unwrap_or_else(default_config_path);
     let raw = fs::read_to_string(&config_path).map_err(|error| {
         format!(
@@ -2095,7 +2125,7 @@ pub fn write_template(path: Option<&str>, force: bool) -> CliResult<PathBuf> {
         "{}{}{}",
         template_secret_usage_comment(),
         template_web_search_usage_comment(),
-        encode_toml_config(&LoongClawConfig::default())?
+        encode_toml_config(&LoongConfig::default())?
     );
     fs::write(&output_path, encoded).map_err(|error| {
         format!(
@@ -2106,7 +2136,7 @@ pub fn write_template(path: Option<&str>, force: bool) -> CliResult<PathBuf> {
     Ok(output_path)
 }
 
-pub fn write(path: Option<&str>, config: &LoongClawConfig, force: bool) -> CliResult<PathBuf> {
+pub fn write(path: Option<&str>, config: &LoongConfig, force: bool) -> CliResult<PathBuf> {
     let output_path = path.map(expand_path).unwrap_or_else(default_config_path);
     if output_path.exists() && !force {
         return Err(format!(
@@ -2139,20 +2169,16 @@ pub fn write(path: Option<&str>, config: &LoongClawConfig, force: bool) -> CliRe
     Ok(output_path)
 }
 
-pub fn render(config: &LoongClawConfig) -> CliResult<String> {
+pub fn render(config: &LoongConfig) -> CliResult<String> {
     encode_toml_config(config)
 }
 
 pub fn default_config_path() -> PathBuf {
-    default_loongclaw_home().join(DEFAULT_CONFIG_FILE)
+    default_loong_home().join(DEFAULT_CONFIG_FILE)
 }
 
 pub fn default_loong_home() -> PathBuf {
-    default_loongclaw_home()
-}
-
-pub fn default_loongclaw_home() -> PathBuf {
-    shared_default_loongclaw_home()
+    shared_default_loong_home()
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -2162,7 +2188,7 @@ fn config_write_failure_injected(output_path: &Path) -> bool {
         return true;
     }
 
-    let configured_path = std::env::var_os("LOONGCLAW_TEST_FAIL_CONFIG_WRITE_PATH");
+    let configured_path = std::env::var_os("LOONG_TEST_FAIL_CONFIG_WRITE_PATH");
     let Some(configured_path) = configured_path else {
         return false;
     };
@@ -2172,36 +2198,36 @@ fn config_write_failure_injected(output_path: &Path) -> bool {
 }
 
 #[cfg(feature = "config-toml")]
-fn parse_toml_config(raw: &str) -> CliResult<LoongClawConfig> {
+fn parse_toml_config(raw: &str) -> CliResult<LoongConfig> {
     let (config, selection_report) = parse_toml_config_components(raw)?;
     config.validate_with_report(Some(&selection_report))?;
     Ok(config)
 }
 
 #[cfg(feature = "config-toml")]
-fn parse_toml_config_without_validation(raw: &str) -> CliResult<LoongClawConfig> {
+fn parse_toml_config_without_validation(raw: &str) -> CliResult<LoongConfig> {
     parse_toml_config_components(raw).map(|(config, _selection_report)| config)
 }
 
 #[cfg(not(feature = "config-toml"))]
-fn parse_toml_config(_raw: &str) -> CliResult<LoongClawConfig> {
+fn parse_toml_config(_raw: &str) -> CliResult<LoongConfig> {
     Err("config-toml feature is disabled for this build".to_owned())
 }
 
 #[cfg(not(feature = "config-toml"))]
-fn parse_toml_config_without_validation(_raw: &str) -> CliResult<LoongClawConfig> {
+fn parse_toml_config_without_validation(_raw: &str) -> CliResult<LoongConfig> {
     Err("config-toml feature is disabled for this build".to_owned())
 }
 
 #[cfg(feature = "config-toml")]
-fn encode_toml_config(config: &LoongClawConfig) -> CliResult<String> {
+fn encode_toml_config(config: &LoongConfig) -> CliResult<String> {
     let encoded = config.clone_for_encoding();
     toml::to_string_pretty(&encoded)
         .map_err(|error| format!("failed to encode TOML config: {error}"))
 }
 
 #[cfg(not(feature = "config-toml"))]
-fn encode_toml_config(_config: &LoongClawConfig) -> CliResult<String> {
+fn encode_toml_config(_config: &LoongConfig) -> CliResult<String> {
     Err("config-toml feature is disabled for this build".to_owned())
 }
 
@@ -2209,7 +2235,7 @@ fn template_secret_usage_comment() -> &'static str {
     "# Secret configuration notes:\n\
 # - Preferred provider credential form: `providers.<profile_id>.api_key = { env = \"PROVIDER_API_KEY\" }`.\n\
 # - `providers.<profile_id>.api_key` still accepts direct literals and explicit env refs like `$VAR`, `env:VAR`, and `%VAR%`.\n\
-# - Legacy `*_env` provider fields still load, but LoongClaw now writes provider env refs back into the main secret field.\n\
+# - Legacy `*_env` provider fields still load, but Loong now writes provider env refs back into the main secret field.\n\
 \n"
 }
 
@@ -2218,6 +2244,7 @@ fn template_web_search_usage_comment() -> String {
         "# Web search provider notes:\n\
 # - `[tools.web_search].default_provider` accepts {WEB_SEARCH_PROVIDER_VALID_VALUES}.\n\
 # - The default provider is `{DEFAULT_WEB_SEARCH_PROVIDER}`.\n\
+# - These settings affect only `web {{ query }}` / `web.search`; plain `web {{ url }}`, low-level HTTP request mode, browser sessions, and other networked tools use their own runtime policy.\n\
 # - Brave credentials can use `tools.web_search.brave_api_key = \"${{{WEB_SEARCH_BRAVE_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_BRAVE_API_KEY_ENV}` environment variable.\n\
 # - Tavily credentials can use `tools.web_search.tavily_api_key = \"${{{WEB_SEARCH_TAVILY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_TAVILY_API_KEY_ENV}` environment variable.\n\
 # - Perplexity credentials can use `tools.web_search.perplexity_api_key = \"${{{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}}}\"` or the `{WEB_SEARCH_PERPLEXITY_API_KEY_ENV}` environment variable.\n\
@@ -2236,7 +2263,7 @@ mod tests {
         ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV,
         QQBOT_CLIENT_SECRET_ENV, WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
     };
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_config_path(prefix: &str) -> PathBuf {
@@ -2254,7 +2281,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("loongclaw-config-validate-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-config-validate-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
         let raw = r#"
@@ -2282,7 +2309,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("loongclaw-template-comment-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-template-comment-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
 
@@ -2304,7 +2331,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("loongclaw-template-api-key-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-template-api-key-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
 
@@ -2327,7 +2354,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .expect("system clock before unix epoch")
             .as_nanos();
         let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-template-web-search-notes-{unique}"));
+            std::env::temp_dir().join(format!("loong-template-web-search-notes-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
 
@@ -2344,6 +2371,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains(WEB_SEARCH_FIRECRAWL_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
+        assert!(raw.contains("These settings affect only `web { query }` / `web.search`"));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -2357,7 +2385,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .expect("system clock before unix epoch")
             .as_nanos();
         let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-template-tool-summary-limit-{unique}"));
+            std::env::temp_dir().join(format!("loong-template-tool-summary-limit-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
 
@@ -2384,7 +2412,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .expect("system clock before unix epoch")
             .as_nanos();
         let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-template-fast-lane-parallel-execution-{unique}"
+            "loong-template-fast-lane-parallel-execution-{unique}"
         ));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
@@ -2408,7 +2436,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("loongclaw-template-matrix-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-template-matrix-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
 
@@ -2432,8 +2460,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-template-plugin-bridges-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-template-plugin-bridges-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
 
@@ -2471,7 +2498,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("loongclaw-config-diagnostics-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-config-diagnostics-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
         let raw = r#"
@@ -2487,7 +2514,7 @@ api_key_env = "$OPENAI_API_KEY"
         assert_eq!(diagnostics[0].code, "config.env_pointer.dollar_prefix");
         assert_eq!(
             diagnostics[0].problem_type,
-            "urn:loongclaw:problem:config.env_pointer.dollar_prefix"
+            "urn:loong:problem:config.env_pointer.dollar_prefix"
         );
         assert_eq!(
             diagnostics[0].title_key,
@@ -2522,7 +2549,7 @@ api_key_env = "$OPENAI_API_KEY"
             .expect("system clock before unix epoch")
             .as_nanos();
         let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-config-typed-env-diagnostics-{unique}"));
+            std::env::temp_dir().join(format!("loong-config-typed-env-diagnostics-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
         let raw = r#"
@@ -2553,8 +2580,7 @@ api_key = { env = "$OPENAI_API_KEY" }
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-config-channel-account-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-config-channel-account-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
         let raw = r#"
@@ -2573,7 +2599,7 @@ bot_token_env = "WORK_TELEGRAM_TOKEN_DUP"
         assert_eq!(diagnostics[0].code, "config.channel_account.duplicate_id");
         assert_eq!(
             diagnostics[0].problem_type,
-            "urn:loongclaw:problem:config.channel_account.duplicate_id"
+            "urn:loong:problem:config.channel_account.duplicate_id"
         );
         assert_eq!(diagnostics[0].field_path, "telegram.accounts");
         assert_eq!(
@@ -2598,7 +2624,7 @@ bot_token_env = "WORK_TELEGRAM_TOKEN_DUP"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("loongclaw-config-locale-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-config-locale-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
         let raw = r#"
@@ -2630,8 +2656,8 @@ api_key_env = "$OPENAI_API_KEY"
     }
 
     #[test]
-    fn load_missing_config_guides_user_to_loongclaw_onboard() {
-        let missing = unique_config_path("loongclaw-config-missing");
+    fn load_missing_config_guides_user_to_loong_onboard() {
+        let missing = unique_config_path("loong-config-missing");
         let path_string = missing.display().to_string();
 
         let error = load(Some(&path_string)).expect_err("missing config should fail");
@@ -2645,7 +2671,7 @@ api_key_env = "$OPENAI_API_KEY"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("loongclaw-config-percent-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-config-percent-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
         let raw = r#"
@@ -2660,7 +2686,7 @@ api_key_env = "%OPENAI_API_KEY%"
         assert_eq!(diagnostics[0].code, "config.env_pointer.percent_wrapped");
         assert_eq!(
             diagnostics[0].problem_type,
-            "urn:loongclaw:problem:config.env_pointer.percent_wrapped"
+            "urn:loong:problem:config.env_pointer.percent_wrapped"
         );
 
         std::fs::remove_file(&config_path).ok();
@@ -2674,8 +2700,7 @@ api_key_env = "%OPENAI_API_KEY%"
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
             .as_nanos();
-        let temp_dir =
-            std::env::temp_dir().join(format!("loongclaw-config-no-secret-echo-{unique}"));
+        let temp_dir = std::env::temp_dir().join(format!("loong-config-no-secret-echo-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("create temp directory");
         let config_path = temp_dir.join("config.toml");
         let secret = "sk-inline-super-secret-token";
@@ -2702,9 +2727,9 @@ api_key_env = "{secret}"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_persists_custom_model_and_prompt() {
-        let path = unique_config_path("loongclaw-config-runtime");
+        let path = unique_config_path("loong-config-runtime");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.model = "openai/gpt-5.1-codex".to_owned();
         config.cli.system_prompt = "You are an onboarding assistant.".to_owned();
 
@@ -2721,19 +2746,16 @@ api_key_env = "{secret}"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_persists_prompt_pack_and_personality_metadata() {
-        let path = unique_config_path("loongclaw-prompt-config");
+        let path = unique_config_path("loong-prompt-config");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
-        config.cli.prompt_pack_id = Some("loongclaw-core-v1".to_owned());
+        let mut config = LoongConfig::default();
+        config.cli.prompt_pack_id = Some("loong-core-v1".to_owned());
         config.cli.personality = Some(crate::prompt::PromptPersonality::CyberRadical);
 
         write(Some(&path_string), &config, true).expect("config write should pass");
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
 
-        assert_eq!(
-            loaded.cli.prompt_pack_id.as_deref(),
-            Some("loongclaw-core-v1")
-        );
+        assert_eq!(loaded.cli.prompt_pack_id.as_deref(), Some("loong-core-v1"));
         assert_eq!(
             loaded.cli.personality,
             Some(crate::prompt::PromptPersonality::CyberRadical)
@@ -2745,10 +2767,10 @@ api_key_env = "{secret}"
     #[test]
     #[cfg(feature = "config-toml")]
     fn load_accepts_legacy_prompt_personality_ids() {
-        let path = unique_config_path("loongclaw-legacy-prompt-config");
+        let path = unique_config_path("loong-legacy-prompt-config");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
-        config.cli.prompt_pack_id = Some("loongclaw-core-v1".to_owned());
+        let mut config = LoongConfig::default();
+        config.cli.prompt_pack_id = Some("loong-core-v1".to_owned());
         config.cli.personality = Some(crate::prompt::PromptPersonality::Hermit);
 
         write(Some(&path_string), &config, true).expect("config write should pass");
@@ -2791,9 +2813,9 @@ api_key_env = "{secret}"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_persists_memory_profile_metadata() {
-        let path = unique_config_path("loongclaw-memory-config");
+        let path = unique_config_path("loong-memory-config");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
         config.memory.summary_max_chars = 900;
         config.memory.profile_note = Some("Imported NanoBot preferences".to_owned());
@@ -2817,9 +2839,9 @@ api_key_env = "{secret}"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_persists_typed_personalization_metadata() {
-        let path = unique_config_path("loongclaw-personalization-config");
+        let path = unique_config_path("loong-personalization-config");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let personalization = crate::config::PersonalizationConfig {
             preferred_name: Some("Chum".to_owned()),
             response_density: Some(crate::config::ResponseDensity::Thorough),
@@ -2878,7 +2900,7 @@ api_key_env = "{secret}"
     #[test]
     #[cfg(feature = "config-toml")]
     fn load_legacy_provider_table_populates_active_provider_profile_storage() {
-        let path = unique_config_path("loongclaw-config-legacy-provider");
+        let path = unique_config_path("loong-config-legacy-provider");
         let raw = r#"
 [provider]
 kind = "deepseek"
@@ -2940,7 +2962,7 @@ chat_completions_path = "/api/v1/chat/completions"
     #[test]
     #[cfg(feature = "config-toml")]
     fn validate_file_reports_warning_for_implicit_active_provider_recovery_in_mixed_config() {
-        let path = unique_config_path("loongclaw-config-provider-selection-warning");
+        let path = unique_config_path("loong-config-provider-selection-warning");
         let raw = r#"
 [provider]
 kind = "volcengine_coding"
@@ -3005,7 +3027,7 @@ chat_completions_path = "/api/v1/chat/completions"
     #[test]
     #[cfg(feature = "config-toml")]
     fn validate_file_reports_warning_for_unknown_active_provider_recovery_in_mixed_config() {
-        let path = unique_config_path("loongclaw-config-provider-selection-unknown-active");
+        let path = unique_config_path("loong-config-provider-selection-unknown-active");
         let raw = r#"
 active_provider = "missing-profile"
 
@@ -3043,7 +3065,7 @@ chat_completions_path = "/api/v1/chat/completions"
     #[test]
     #[cfg(feature = "config-toml")]
     fn validate_file_reports_legacy_provider_field_errors_even_when_provider_profiles_exist() {
-        let path = unique_config_path("loongclaw-config-legacy-provider-validation");
+        let path = unique_config_path("loong-config-legacy-provider-validation");
         let raw = r#"
 active_provider = "openrouter"
 
@@ -3125,10 +3147,10 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_default_config_does_not_eagerly_persist_provider_api_key_env_field() {
-        let path = unique_config_path("loongclaw-config-runtime-default");
+        let path = unique_config_path("loong-config-runtime-default");
         let path_string = path.display().to_string();
 
-        write(Some(&path_string), &LoongClawConfig::default(), true)
+        write(Some(&path_string), &LoongConfig::default(), true)
             .expect("default config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
@@ -3141,10 +3163,10 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_default_config_uses_provider_profiles_and_active_provider() {
-        let path = unique_config_path("loongclaw-config-runtime-profiles");
+        let path = unique_config_path("loong-config-runtime-profiles");
         let path_string = path.display().to_string();
 
-        write(Some(&path_string), &LoongClawConfig::default(), true)
+        write(Some(&path_string), &LoongConfig::default(), true)
             .expect("default config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
@@ -3158,10 +3180,10 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_default_config_includes_durable_audit_defaults() {
-        let path = unique_config_path("loongclaw-config-runtime-audit");
+        let path = unique_config_path("loong-config-runtime-audit");
         let path_string = path.display().to_string();
 
-        write(Some(&path_string), &LoongClawConfig::default(), true)
+        write(Some(&path_string), &LoongConfig::default(), true)
             .expect("default config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
@@ -3179,9 +3201,9 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_persists_provider_env_pointers_as_secret_refs() {
-        let path = unique_config_path("loongclaw-config-runtime-canonical-provider-env");
+        let path = unique_config_path("loong-config-runtime-canonical-provider-env");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key_env = Some("OPENAI_API_KEY".to_owned());
 
         write(Some(&path_string), &config, true).expect("config write should pass");
@@ -3197,9 +3219,9 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_migrates_inline_provider_env_references_to_secret_refs() {
-        let path = unique_config_path("loongclaw-config-runtime-inline-provider-env");
+        let path = unique_config_path("loong-config-runtime-inline-provider-env");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let inline_references = [
             "${TEAM_OPENAI_KEY}",
             "$TEAM_OPENAI_KEY",
@@ -3229,9 +3251,9 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_canonicalizes_matching_provider_env_name_fields_into_secret_refs() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-provider-env");
+        let path = unique_config_path("loong-config-runtime-trimmed-provider-env");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("${TEAM_OPENAI_KEY}".to_owned()));
         config.provider.api_key_env = Some(" TEAM_OPENAI_KEY ".to_owned());
 
@@ -3249,9 +3271,9 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_canonicalizes_matching_wecom_env_name_fields() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-wecom-env");
+        let path = unique_config_path("loong-config-runtime-trimmed-wecom-env");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.wecom.bot_id = Some(SecretRef::Inline("${WECOM_BOT_ID}".to_owned()));
         config.wecom.bot_id_env = Some(" WECOM_BOT_ID ".to_owned());
         config.wecom.secret = Some(SecretRef::Inline("${WECOM_SECRET}".to_owned()));
@@ -3273,9 +3295,9 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_canonicalizes_matching_config_backed_channel_env_name_fields() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-config-backed-env");
+        let path = unique_config_path("loong-config-runtime-trimmed-config-backed-env");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let mut ops_nostr_account = crate::config::NostrAccountConfig::default();
 
         config.discord.bot_token = Some(SecretRef::Inline("${DISCORD_BOT_TOKEN}".to_owned()));
@@ -3335,9 +3357,9 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_canonicalizes_matching_plugin_backed_channel_env_name_fields() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-plugin-bridge-env");
+        let path = unique_config_path("loong-config-runtime-trimmed-plugin-bridge-env");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         config.weixin.bridge_url = Some("${WEIXIN_BRIDGE_URL}".to_owned());
         config.weixin.bridge_url_env = Some(" WEIXIN_BRIDGE_URL ".to_owned());
@@ -3386,9 +3408,9 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_preserves_provider_env_binding_when_inline_secret_is_blank() {
-        let path = unique_config_path("loongclaw-config-runtime-blank-inline-provider-env");
+        let path = unique_config_path("loong-config-runtime-blank-inline-provider-env");
         let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("   ".to_owned()));
         config.provider.api_key_env = Some("TEAM_OPENAI_KEY".to_owned());
 
@@ -3405,7 +3427,7 @@ model = "gpt-5"
 
     #[test]
     fn resolve_provider_switch_target_prefers_profile_id_then_kind_default() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.set_active_provider_profile(
             "openai-main",
             ProviderProfileConfig {
@@ -3456,7 +3478,7 @@ model = "gpt-5"
 
     #[test]
     fn resolve_provider_switch_target_accepts_unique_model_selector() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.set_active_provider_profile(
             "openai-main",
             ProviderProfileConfig {
@@ -3492,7 +3514,7 @@ model = "gpt-5"
 
     #[test]
     fn resolve_provider_switch_target_accepts_unique_model_suffix_selector() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.set_active_provider_profile(
             "openrouter-main",
             ProviderProfileConfig {
@@ -3524,7 +3546,7 @@ model = "gpt-5"
 
     #[test]
     fn resolve_provider_switch_target_rejects_ambiguous_kind_without_default() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.set_active_provider_profile(
             "openai-main",
             ProviderProfileConfig {
@@ -3621,7 +3643,7 @@ model = "gpt-5"
 
     #[test]
     fn resolve_provider_switch_target_unknown_selector_lists_accepted_selectors() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.set_active_provider_profile(
             "openai-main",
             ProviderProfileConfig {
@@ -3660,7 +3682,7 @@ model = "gpt-5"
 
     #[test]
     fn switch_active_provider_updates_last_provider_and_kind_default() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.set_active_provider_profile(
             "openai-main",
             ProviderProfileConfig {
@@ -3727,26 +3749,23 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_default_config_keeps_external_skills_guardrails() {
-        let path = unique_config_path("loongclaw-config-runtime-external-skills");
+        let path = unique_config_path("loong-config-runtime-external-skills");
         let path_string = path.display().to_string();
 
-        write(Some(&path_string), &LoongClawConfig::default(), true)
+        write(Some(&path_string), &LoongConfig::default(), true)
             .expect("default config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
         assert!(raw.contains("[external_skills]"));
         assert!(raw.contains("enabled = false"));
-        assert!(raw.contains("require_download_approval = true"));
+        assert!(raw.contains("require_download_approval = false"));
         assert!(raw.contains("auto_expose_installed = false"));
 
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
         assert!(!loaded.external_skills.enabled);
-        assert!(loaded.external_skills.require_download_approval);
+        assert!(!loaded.external_skills.require_download_approval);
         assert!(loaded.external_skills.allowed_domains.is_empty());
-        assert_eq!(
-            loaded.external_skills.blocked_domains,
-            vec!["*.clawhub.io".to_owned()]
-        );
+        assert!(loaded.external_skills.blocked_domains.is_empty());
         assert!(loaded.external_skills.install_root.is_none());
         assert!(!loaded.external_skills.auto_expose_installed);
 
@@ -3756,12 +3775,12 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn write_rejects_overwrite_without_force() {
-        let path = unique_config_path("loongclaw-config-runtime");
+        let path = unique_config_path("loong-config-runtime");
         let path_string = path.display().to_string();
-        let first = LoongClawConfig::default();
+        let first = LoongConfig::default();
         write(Some(&path_string), &first, true).expect("initial config write should pass");
 
-        let mut updated = LoongClawConfig::default();
+        let mut updated = LoongConfig::default();
         updated.provider.model = "openai/gpt-5".to_owned();
         let error = write(Some(&path_string), &updated, false)
             .expect_err("overwrite without --force should fail");
@@ -3773,7 +3792,7 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn tool_config_round_trips_session_and_delegate_settings() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.tools.sessions.visibility = crate::config::tools::SessionVisibility::SelfOnly;
         config.tools.sessions.list_limit = 12;
         config.tools.sessions.history_limit = 34;
@@ -3786,7 +3805,7 @@ model = "gpt-5"
             vec!["file.read".to_owned(), "shell.exec".to_owned()];
 
         let encoded = encode_toml_config(&config).expect("encode config");
-        let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
+        let parsed = toml::from_str::<LoongConfig>(&encoded).expect("parse encoded config");
 
         assert_eq!(parsed.tools.sessions, config.tools.sessions);
         assert_eq!(parsed.tools.messages, config.tools.messages);
@@ -3796,13 +3815,13 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn audit_config_round_trips_mode_and_path_settings() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.audit.mode = crate::config::AuditMode::Jsonl;
-        config.audit.path = "~/.loongclaw/audit/custom-events.jsonl".to_owned();
+        config.audit.path = "~/.loong/audit/custom-events.jsonl".to_owned();
         config.audit.retain_in_memory = false;
 
         let encoded = encode_toml_config(&config).expect("encode config");
-        let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
+        let parsed = toml::from_str::<LoongConfig>(&encoded).expect("parse encoded config");
 
         assert_eq!(parsed.audit, config.audit);
     }
@@ -3810,11 +3829,11 @@ model = "gpt-5"
     #[test]
     #[cfg(feature = "config-toml")]
     fn outbound_http_config_round_trips_private_host_override() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.outbound_http.allow_private_hosts = true;
 
         let encoded = encode_toml_config(&config).expect("encode config");
-        let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
+        let parsed = toml::from_str::<LoongConfig>(&encoded).expect("parse encoded config");
 
         assert!(parsed.outbound_http.allow_private_hosts);
     }

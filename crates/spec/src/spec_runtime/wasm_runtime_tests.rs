@@ -237,9 +237,9 @@ fn execute_wasm_component_bridge_reads_allowlisted_guest_config_value() {
     let wat_source = format!(
         r#"
             (module
-              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
-              (import "loongclaw" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
-              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (import "loong" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loong" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
+              (import "loong" "write_output" (func $write_output (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 (local $value_len i32)
                 i32.const 0
@@ -289,10 +289,8 @@ fn execute_wasm_component_bridge_reads_allowlisted_guest_config_value() {
               (data (i32.const 0) "{config_key}"))
         "#
     );
-    let (root, wasm_path) = temp_wasm_fixture(
-        "loongclaw-wasm-host-abi-config-allowed",
-        wat_source.as_str(),
-    );
+    let (root, wasm_path) =
+        temp_wasm_fixture("loong-wasm-host-abi-config-allowed", wat_source.as_str());
     let component_path = wasm_path.display().to_string();
     let provider = provider_with_metadata(BTreeMap::from([
         ("component".to_owned(), component_path),
@@ -326,7 +324,7 @@ fn execute_wasm_component_bridge_fails_closed_for_missing_guest_config_key() {
     let wat_source = format!(
         r#"
             (module
-              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loong" "config_len" (func $config_len (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 i32.const 0
                 i32.const {config_key_len}
@@ -342,10 +340,8 @@ fn execute_wasm_component_bridge_fails_closed_for_missing_guest_config_key() {
               (data (i32.const 0) "{config_key}"))
         "#
     );
-    let (root, wasm_path) = temp_wasm_fixture(
-        "loongclaw-wasm-host-abi-config-missing",
-        wat_source.as_str(),
-    );
+    let (root, wasm_path) =
+        temp_wasm_fixture("loong-wasm-host-abi-config-missing", wat_source.as_str());
     let component_path = wasm_path.display().to_string();
     let provider = provider_with_metadata(BTreeMap::from([
         ("component".to_owned(), component_path),
@@ -379,7 +375,7 @@ fn execute_wasm_component_bridge_fails_closed_for_disallowed_guest_config_key() 
     let wat_source = format!(
         r#"
             (module
-              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loong" "config_len" (func $config_len (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 i32.const 0
                 i32.const {config_key_len}
@@ -395,10 +391,8 @@ fn execute_wasm_component_bridge_fails_closed_for_disallowed_guest_config_key() 
               (data (i32.const 0) "{config_key}"))
         "#
     );
-    let (root, wasm_path) = temp_wasm_fixture(
-        "loongclaw-wasm-host-abi-config-disallowed",
-        wat_source.as_str(),
-    );
+    let (root, wasm_path) =
+        temp_wasm_fixture("loong-wasm-host-abi-config-disallowed", wat_source.as_str());
     let component_path = wasm_path.display().to_string();
     let provider = provider_with_metadata(BTreeMap::from([
         ("component".to_owned(), component_path),
@@ -429,8 +423,8 @@ fn execute_wasm_component_bridge_reports_buffer_too_small_for_guest_config_read(
     let wat_source = format!(
         r#"
             (module
-              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
-              (import "loongclaw" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
+              (import "loong" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loong" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
               (func (export "run") (result i32)
                 (local $value_len i32)
                 i32.const 0
@@ -456,7 +450,7 @@ fn execute_wasm_component_bridge_reports_buffer_too_small_for_guest_config_read(
         "#
     );
     let (root, wasm_path) = temp_wasm_fixture(
-        "loongclaw-wasm-host-abi-config-buffer-small",
+        "loong-wasm-host-abi-config-buffer-small",
         wat_source.as_str(),
     );
     let component_path = wasm_path.display().to_string();
@@ -489,10 +483,10 @@ fn execute_wasm_component_bridge_reports_buffer_too_small_for_guest_config_read(
 fn execute_wasm_component_bridge_exchanges_request_output_and_logs() {
     let wat_source = r#"
             (module
-              (import "loongclaw" "input_len" (func $input_len (result i32)))
-              (import "loongclaw" "read_input" (func $read_input (param i32 i32) (result i32)))
-              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
-              (import "loongclaw" "log" (func $log (param i32 i32) (result i32)))
+              (import "loong" "input_len" (func $input_len (result i32)))
+              (import "loong" "read_input" (func $read_input (param i32 i32) (result i32)))
+              (import "loong" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (import "loong" "log" (func $log (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 (local $input_len i32)
                 i32.const 0
@@ -513,7 +507,7 @@ fn execute_wasm_component_bridge_exchanges_request_output_and_logs() {
               (memory (export "memory") 1)
               (data (i32.const 0) "hello"))
         "#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-host-abi-ok", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-host-abi-ok", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -551,7 +545,7 @@ fn execute_wasm_component_bridge_exchanges_request_output_and_logs() {
 #[test]
 fn execute_wasm_component_bridge_preserves_legacy_unit_signature() {
     let wat_source = r#"(module (func (export "run")))"#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-legacy-ok", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-legacy-ok", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -583,13 +577,13 @@ fn execute_wasm_component_bridge_preserves_legacy_unit_signature() {
 fn execute_wasm_component_bridge_allows_scalar_host_abi_imports_without_memory() {
     let wat_source = r#"
             (module
-              (import "loongclaw" "input_len" (func $input_len (result i32)))
+              (import "loong" "input_len" (func $input_len (result i32)))
               (func (export "run") (result i32)
                 call $input_len
                 drop
                 i32.const 0))
         "#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-host-abi-no-memory", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-host-abi-no-memory", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -615,7 +609,7 @@ fn execute_wasm_component_bridge_allows_scalar_host_abi_imports_without_memory()
 fn execute_wasm_component_bridge_fails_when_memory_backed_host_abi_is_missing_memory() {
     let wat_source = r#"
             (module
-              (import "loongclaw" "read_input" (func $read_input (param i32 i32) (result i32)))
+              (import "loong" "read_input" (func $read_input (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 i32.const 0
                 i32.const 0
@@ -623,7 +617,7 @@ fn execute_wasm_component_bridge_fails_when_memory_backed_host_abi_is_missing_me
                 drop
                 i32.const 0))
         "#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-host-abi-no-memory", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-host-abi-no-memory", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -659,7 +653,7 @@ fn execute_wasm_component_bridge_times_out_during_instantiation_start_function()
                 i32.const 0)
               (start $start))
         "#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-instantiate-timeout", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-instantiate-timeout", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -691,7 +685,7 @@ fn execute_wasm_component_bridge_times_out_during_instantiation_start_function()
 fn execute_wasm_component_bridge_fails_when_guest_output_is_not_json() {
     let wat_source = r#"
             (module
-              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (import "loong" "write_output" (func $write_output (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 i32.const 0
                 i32.const 8
@@ -701,7 +695,7 @@ fn execute_wasm_component_bridge_fails_when_guest_output_is_not_json() {
               (memory (export "memory") 1)
               (data (i32.const 0) "not-json"))
         "#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-host-abi-bad-output", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-host-abi-bad-output", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -732,7 +726,7 @@ fn execute_wasm_component_bridge_fails_when_guest_output_is_not_json() {
 fn execute_wasm_component_bridge_respects_configured_output_limit() {
     let wat_source = r#"
             (module
-              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (import "loong" "write_output" (func $write_output (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 i32.const 0
                 i32.const 8
@@ -742,7 +736,7 @@ fn execute_wasm_component_bridge_respects_configured_output_limit() {
               (memory (export "memory") 1)
               (data (i32.const 0) "not-json"))
         "#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-host-abi-output-limit", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-host-abi-output-limit", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -772,14 +766,14 @@ fn execute_wasm_component_bridge_respects_configured_output_limit() {
 fn execute_wasm_component_bridge_reports_guest_abort_reason() {
     let wat_source = r#"
             (module
-              (import "loongclaw" "abort" (func $abort (param i32)))
+              (import "loong" "abort" (func $abort (param i32)))
               (func (export "run") (result i32)
                 i32.const 7
                 call $abort
                 i32.const 0)
               (memory (export "memory") 1))
         "#;
-    let (root, wasm_path) = temp_wasm_fixture("loongclaw-wasm-host-abi-abort", wat_source);
+    let (root, wasm_path) = temp_wasm_fixture("loong-wasm-host-abi-abort", wat_source);
     let component_path = wasm_path.display().to_string();
     let provider =
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
@@ -875,7 +869,7 @@ fn process_stdio_runtime_evidence_reports_balanced_execution_tier() {
 #[test]
 fn execute_wasm_component_bridge_reports_restricted_execution_tier() {
     let mut builder = Builder::new();
-    builder.prefix("loongclaw-wasm-tier-");
+    builder.prefix("loong-wasm-tier-");
     let root = builder.tempdir().expect("create temp wasm root");
     let root_path = root.path();
     let wasm_path = root_path.join("fixture.wasm");
@@ -1054,7 +1048,7 @@ fn wasm_module_cache_skips_single_module_larger_than_byte_budget() {
 #[test]
 fn wasm_artifact_file_identity_distinguishes_different_files() {
     let mut builder = Builder::new();
-    builder.prefix("loongclaw-wasm-file-identity-");
+    builder.prefix("loong-wasm-file-identity-");
     let base = builder.tempdir().expect("create temp dir");
     let base_path = base.path();
     let file_a = base_path.join("a.wasm");

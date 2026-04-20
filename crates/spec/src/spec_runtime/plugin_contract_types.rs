@@ -742,6 +742,277 @@ pub struct ToolSearchOperationSummaryEntry {
     pub loaded: bool,
 }
 
+pub(crate) fn invalid_plugin_runtime_health_result(reason: String) -> PluginRuntimeHealthResult {
+    PluginRuntimeHealthResult {
+        status: "unknown".to_owned(),
+        circuit_enabled: false,
+        circuit_phase: "unknown".to_owned(),
+        consecutive_failures: 0,
+        half_open_remaining_calls: 0,
+        half_open_successes: 0,
+        last_failure_reason: None,
+        issue: Some(reason),
+    }
+}
+
+fn plugin_runtime_health_status(
+    circuit_enabled: bool,
+    circuit_phase: &str,
+    consecutive_failures: usize,
+) -> String {
+    if !circuit_enabled || circuit_phase == "disabled" {
+        return "disabled".to_owned();
+    }
+
+    if circuit_phase == "open" {
+        return "quarantined".to_owned();
+    }
+
+    if circuit_phase == "half_open" {
+        return "degraded".to_owned();
+    }
+
+    if circuit_phase == "closed" && consecutive_failures > 0 {
+        return "degraded".to_owned();
+    }
+
+    if circuit_phase == "closed" {
+        return "healthy".to_owned();
+    }
+
+    "unknown".to_owned()
+}
+
+pub(crate) fn build_plugin_runtime_health_result(
+    policy: &ConnectorCircuitBreakerPolicy,
+    circuit_phase: String,
+    consecutive_failures: usize,
+    half_open_remaining_calls: usize,
+    half_open_successes: usize,
+    last_failure_reason: Option<String>,
+) -> PluginRuntimeHealthResult {
+    let circuit_enabled = policy.enabled;
+    let status = plugin_runtime_health_status(
+        circuit_enabled,
+        circuit_phase.as_str(),
+        consecutive_failures,
+    );
+
+    PluginRuntimeHealthResult {
+        status,
+        circuit_enabled,
+        circuit_phase,
+        consecutive_failures,
+        half_open_remaining_calls,
+        half_open_successes,
+        last_failure_reason,
+        issue: None,
+    }
+}
+
+pub(crate) fn encode_plugin_runtime_health_result(
+    health: &PluginRuntimeHealthResult,
+) -> Result<String, String> {
+    serde_json::to_string(health)
+        .map_err(|error| format!("serialize plugin runtime health failed: {error}"))
+}
+
+pub(crate) fn activation_runtime_contract_checksum_hex(bytes: &[u8]) -> String {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    format!("{hash:016x}")
+}
+
+pub(crate) fn plugin_activation_runtime_contract_value(
+    contract: &PluginActivationRuntimeContract,
+) -> Value {
+    let mut value = Map::new();
+    let plugin_id = contract.plugin_id.clone();
+    let source_path = contract.source_path.clone();
+    let source_kind = contract.source_kind.as_str().to_owned();
+    let dialect = contract.dialect.as_str().to_owned();
+    let compatibility_mode = contract.compatibility_mode.as_str().to_owned();
+    let bridge_kind = contract.bridge_kind.as_str().to_owned();
+    let adapter_family = contract.adapter_family.clone();
+    let entrypoint_hint = contract.entrypoint_hint.clone();
+    let source_language = contract.source_language.clone();
+
+    value.insert("plugin_id".to_owned(), Value::String(plugin_id));
+    value.insert("source_path".to_owned(), Value::String(source_path));
+    value.insert("source_kind".to_owned(), Value::String(source_kind));
+    value.insert("dialect".to_owned(), Value::String(dialect));
+    value.insert(
+        "compatibility_mode".to_owned(),
+        Value::String(compatibility_mode),
+    );
+    value.insert("bridge_kind".to_owned(), Value::String(bridge_kind));
+    value.insert("adapter_family".to_owned(), Value::String(adapter_family));
+    value.insert("entrypoint_hint".to_owned(), Value::String(entrypoint_hint));
+    value.insert("source_language".to_owned(), Value::String(source_language));
+
+    if let Some(dialect_version) = &contract.dialect_version {
+        value.insert(
+            "dialect_version".to_owned(),
+            Value::String(dialect_version.clone()),
+        );
+    }
+    if let Some(compatibility_shim) = &contract.compatibility_shim {
+        let mut compatibility_shim_value = Map::new();
+        compatibility_shim_value.insert(
+            "shim_id".to_owned(),
+            Value::String(compatibility_shim.shim_id.clone()),
+        );
+        compatibility_shim_value.insert(
+            "family".to_owned(),
+            Value::String(compatibility_shim.family.clone()),
+        );
+        value.insert(
+            "compatibility_shim".to_owned(),
+            Value::Object(compatibility_shim_value),
+        );
+    }
+    if let Some(compatibility) = &contract.compatibility {
+        let mut compatibility_value = Map::new();
+
+        if let Some(host_api) = &compatibility.host_api {
+            compatibility_value.insert("host_api".to_owned(), Value::String(host_api.clone()));
+        }
+        if let Some(host_version_req) = &compatibility.host_version_req {
+            compatibility_value.insert(
+                "host_version_req".to_owned(),
+                Value::String(host_version_req.clone()),
+            );
+        }
+
+        value.insert(
+            "compatibility".to_owned(),
+            Value::Object(compatibility_value),
+        );
+    }
+
+    Value::Object(value)
+}
+
+pub(crate) fn plugin_activation_runtime_contract_json(
+    contract: &PluginActivationRuntimeContract,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&plugin_activation_runtime_contract_value(contract))
+}
+
+fn parse_plugin_activation_runtime_source_kind(raw: &str) -> Option<PluginSourceKind> {
+    match raw {
+        "package_manifest" => Some(PluginSourceKind::PackageManifest),
+        "embedded_source" => Some(PluginSourceKind::EmbeddedSource),
+        _ => None,
+    }
+}
+
+fn optional_contract_string_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(format!(
+            "plugin activation contract field `{key}` must be a string"
+        )),
+    }
+}
+
+fn required_contract_string_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<String, String> {
+    optional_contract_string_field(object, key)?
+        .ok_or_else(|| format!("plugin activation contract field `{key}` is required"))
+}
+
+pub(crate) fn parse_plugin_activation_runtime_contract(
+    raw: &str,
+) -> Result<PluginActivationRuntimeContract, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|error| {
+        format!("plugin activation contract payload must be valid JSON: {error}")
+    })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "plugin activation contract payload must be a JSON object".to_owned())?;
+
+    let compatibility_shim = match object.get("compatibility_shim") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(shim)) => Some(PluginCompatibilityShim {
+            shim_id: required_contract_string_field(shim, "shim_id")?,
+            family: required_contract_string_field(shim, "family")?,
+        }),
+        Some(_) => {
+            return Err(
+                "plugin activation contract field `compatibility_shim` must be an object"
+                    .to_owned(),
+            );
+        }
+    };
+
+    let compatibility = match object.get("compatibility") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(compatibility)) => Some(PluginCompatibility {
+            host_api: optional_contract_string_field(compatibility, "host_api")?,
+            host_version_req: optional_contract_string_field(compatibility, "host_version_req")?,
+        }),
+        Some(_) => {
+            return Err(
+                "plugin activation contract field `compatibility` must be an object".to_owned(),
+            );
+        }
+    };
+
+    let source_kind_raw = required_contract_string_field(object, "source_kind")?;
+    let dialect_raw = required_contract_string_field(object, "dialect")?;
+    let compatibility_mode_raw = required_contract_string_field(object, "compatibility_mode")?;
+    let bridge_kind_raw = required_contract_string_field(object, "bridge_kind")?;
+
+    Ok(PluginActivationRuntimeContract {
+        plugin_id: required_contract_string_field(object, "plugin_id")?,
+        source_path: required_contract_string_field(object, "source_path")?,
+        source_kind: parse_plugin_activation_runtime_source_kind(&source_kind_raw).ok_or_else(
+            || {
+                format!(
+                    "plugin activation contract field `source_kind` has unsupported value `{source_kind_raw}`"
+                )
+            },
+        )?,
+        dialect: parse_plugin_activation_runtime_dialect(&dialect_raw).ok_or_else(|| {
+            format!(
+                "plugin activation contract field `dialect` has unsupported value `{dialect_raw}`"
+            )
+        })?,
+        dialect_version: optional_contract_string_field(object, "dialect_version")?,
+        compatibility_mode: parse_plugin_activation_runtime_mode(&compatibility_mode_raw)
+            .ok_or_else(|| {
+                format!(
+                    "plugin activation contract field `compatibility_mode` has unsupported value `{compatibility_mode_raw}`"
+                )
+            })?,
+        compatibility_shim,
+        bridge_kind: parse_plugin_activation_runtime_bridge_kind(&bridge_kind_raw).ok_or_else(
+            || {
+                format!(
+                    "plugin activation contract field `bridge_kind` has unsupported value `{bridge_kind_raw}`"
+                )
+            },
+        )?,
+        adapter_family: required_contract_string_field(object, "adapter_family")?,
+        entrypoint_hint: required_contract_string_field(object, "entrypoint_hint")?,
+        source_language: required_contract_string_field(object, "source_language")?,
+        compatibility,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginInventoryEntry {
     pub manifest_api_version: Option<String>,

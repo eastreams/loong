@@ -9,7 +9,7 @@ use super::turn_middleware::{
     BUILTIN_TURN_MIDDLEWARES, ConversationTurnMiddleware, TurnMiddlewareMetadata,
 };
 
-pub const TURN_MIDDLEWARE_ENV: &str = "LOONGCLAW_TURN_MIDDLEWARES";
+pub const TURN_MIDDLEWARE_ENV: &str = "LOONG_TURN_MIDDLEWARES";
 
 type TurnMiddlewareFactory = Arc<dyn Fn() -> Box<dyn ConversationTurnMiddleware> + Send + Sync>;
 

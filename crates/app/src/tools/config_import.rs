@@ -3,11 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 
 use crate::{
-    config::{self, LoongClawConfig, MemoryProfile},
+    config::{self, LoongConfig, MemoryProfile},
     migration::{self, LegacyClawSource},
 };
 
@@ -478,19 +478,19 @@ fn parse_apply_selection_mode(
     })
 }
 
-fn load_or_default_config(path: Option<&Path>) -> Result<LoongClawConfig, String> {
+fn load_or_default_config(path: Option<&Path>) -> Result<LoongConfig, String> {
     let Some(path) = path else {
-        return Ok(LoongClawConfig::default());
+        return Ok(LoongConfig::default());
     };
     if !path.exists() {
-        return Ok(LoongClawConfig::default());
+        return Ok(LoongConfig::default());
     }
     let path_string = path.display().to_string();
     let (_, config) = config::load(Some(&path_string))?;
     Ok(config)
 }
 
-fn config_preview_payload(config: &LoongClawConfig) -> Value {
+fn config_preview_payload(config: &LoongConfig) -> Value {
     json!({
         "prompt_pack_id": config
             .cli
@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn resolve_safe_path_rejects_root_escape_with_policy_prefix() {
-        let base = unique_temp_dir("loongclaw-config-import");
+        let base = unique_temp_dir("loong-config-import");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 

@@ -1,4 +1,4 @@
-use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
+use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
 use crate::config::{MemoryMode, MemoryProfile, MemorySystemKind};
@@ -304,29 +304,41 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    #[cfg(feature = "memory-sqlite")]
+    use crate::config::MemoryProfile;
     use crate::memory::{
         build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
         decode_stage_envelope,
     };
 
     #[cfg(feature = "memory-sqlite")]
+    fn sqlite_memory_config(db_path: std::path::PathBuf) -> MemoryRuntimeConfig {
+        MemoryRuntimeConfig::for_sqlite_path(db_path)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn sqlite_memory_config_with_profile(
+        db_path: std::path::PathBuf,
+        profile: MemoryProfile,
+        sliding_window: usize,
+    ) -> MemoryRuntimeConfig {
+        let mut config = sqlite_memory_config(db_path);
+        config.profile = profile;
+        config.mode = profile.mode();
+        config.sliding_window = sliding_window;
+        config
+    }
+
+    #[cfg(feature = "memory-sqlite")]
     #[test]
     fn window_plus_summary_includes_condensed_older_context() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
-        let tmp =
-            std::env::temp_dir().join(format!("loongclaw-summary-memory-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("loong-summary-memory-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("summary.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         super::super::append_turn_direct("summary-session", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -398,22 +410,14 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn profile_plus_window_includes_profile_note_block() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
-        let tmp =
-            std::env::temp_dir().join(format!("loongclaw-profile-memory-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("loong-profile-memory-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("profile.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::ProfilePlusWindow,
-            mode: MemoryMode::ProfilePlusWindow,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            profile_note: Some("Imported ZeroClaw preferences".to_owned()),
-            ..MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::ProfilePlusWindow, 2);
+        config.profile_note = Some("Imported ZeroClaw preferences".to_owned());
 
         super::super::append_turn_direct("profile-session", "user", "recent turn", &config)
             .expect("append turn should succeed");
@@ -462,10 +466,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn profile_plus_window_includes_typed_personalization_section() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-personalization-memory-{}",
+            "loong-personalization-memory-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -484,14 +486,9 @@ mod tests {
             schema_version,
             updated_at_epoch_seconds: Some(1_775_095_200),
         };
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::ProfilePlusWindow,
-            mode: MemoryMode::ProfilePlusWindow,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            personalization: Some(personalization),
-            ..MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::ProfilePlusWindow, 2);
+        config.personalization = Some(personalization);
 
         super::super::append_turn_direct("personalization-session", "user", "recent turn", &config)
             .expect("append turn should succeed");
@@ -519,10 +516,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn window_only_ignores_typed_personalization_section() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-window-only-personalization-{}",
+            "loong-window-only-personalization-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -541,14 +536,9 @@ mod tests {
             schema_version,
             updated_at_epoch_seconds: Some(1_775_095_200),
         };
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowOnly,
-            mode: MemoryMode::WindowOnly,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            personalization: Some(personalization),
-            ..MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
+        config.personalization = Some(personalization);
 
         super::super::append_turn_direct(
             "window-only-personalization-session",
@@ -576,10 +566,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn profile_plus_window_omits_legacy_identity_blocks_from_profile_projection() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-profile-memory-projection-{}",
+            "loong-profile-memory-projection-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -587,14 +575,9 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
 
         let profile_note = "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot\n\n## Imported External Skills Artifacts\n- kind=skills_catalog\n- declared=custom/skill-a";
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::ProfilePlusWindow,
-            mode: MemoryMode::ProfilePlusWindow,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            profile_note: Some(profile_note.to_owned()),
-            ..MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::ProfilePlusWindow, 2);
+        config.profile_note = Some(profile_note.to_owned());
 
         super::super::append_turn_direct(
             "profile-projection-session",
@@ -625,10 +608,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn profile_plus_window_drops_profile_entry_when_only_legacy_identity_exists() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-profile-memory-identity-only-{}",
+            "loong-profile-memory-identity-only-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
@@ -636,14 +617,9 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
 
         let profile_note = "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot";
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::ProfilePlusWindow,
-            mode: MemoryMode::ProfilePlusWindow,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            profile_note: Some(profile_note.to_owned()),
-            ..MemoryRuntimeConfig::default()
-        };
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::ProfilePlusWindow, 2);
+        config.profile_note = Some(profile_note.to_owned());
 
         super::super::append_turn_direct(
             "profile-identity-only-session",
@@ -669,23 +645,14 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn read_context_operation_serializes_prompt_context_entries() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
-        let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-read-context-memory-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("loong-read-context-memory-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("read-context.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         super::super::append_turn_direct("read-context-session", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -738,23 +705,16 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn read_stage_envelope_operation_serializes_hydrated_entries_and_diagnostics() {
-        use crate::config::{MemoryMode, MemoryProfile};
-
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-read-stage-envelope-memory-{}",
+            "loong-read-stage-envelope-memory-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("read-stage-envelope.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            profile: MemoryProfile::WindowPlusSummary,
-            mode: MemoryMode::WindowPlusSummary,
-            sqlite_path: Some(db_path.clone()),
-            sliding_window: 2,
-            ..MemoryRuntimeConfig::default()
-        };
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
 
         super::super::append_turn_direct("read-stage-envelope-session", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -801,17 +761,14 @@ mod tests {
     #[test]
     fn execute_memory_core_dispatches_read_stage_envelope_operation() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-dispatch-stage-envelope-memory-{}",
+            "loong-dispatch-stage-envelope-memory-{}",
             std::process::id()
         ));
         let _ = std::fs::create_dir_all(&tmp);
         let db_path = tmp.join("dispatch-stage-envelope.sqlite3");
         let _ = std::fs::remove_file(&db_path);
 
-        let config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_memory_config(db_path.clone());
 
         let outcome = super::super::execute_memory_core_with_config(
             build_read_stage_envelope_request("dispatch-session"),
@@ -844,10 +801,7 @@ mod tests {
         .expect("write durable recall");
 
         let db_path = workspace_root.join("stage-envelope-durable-recall.sqlite3");
-        let config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
-        };
+        let config = sqlite_memory_config(db_path);
 
         let outcome = super::super::execute_memory_core_with_config(
             build_read_stage_envelope_request_with_workspace_root(
@@ -877,12 +831,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let db_path = temp_dir.path().join("selected-system.sqlite3");
 
-        let mut config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path),
-            profile: crate::config::MemoryProfile::WindowOnly,
-            mode: crate::config::MemoryMode::WindowOnly,
-            ..MemoryRuntimeConfig::default()
-        };
+        let mut config = sqlite_memory_config_with_profile(db_path, MemoryProfile::WindowOnly, 10);
         config.resolved_system_id =
             Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
 

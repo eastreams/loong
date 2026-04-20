@@ -6,7 +6,7 @@ use super::{
     ChannelOutboundTargetKind,
     http::{
         ChannelOutboundHttpPolicy, build_outbound_http_client, read_json_or_text_response,
-        response_body_detail, validate_outbound_http_target,
+        response_body_detail, validate_outbound_http_base_url, validate_outbound_http_target,
     },
 };
 
@@ -35,7 +35,9 @@ pub(super) async fn run_mattermost_send(
         return Err("mattermost outbound target id is empty".to_owned());
     }
 
-    let trimmed_server_url = server_url.trim_end_matches('/');
+    let validated_server_url =
+        validate_outbound_http_base_url("mattermost server_url", server_url.as_str(), policy)?;
+    let trimmed_server_url = validated_server_url.as_str().trim_end_matches('/');
     let request_url = format!("{trimmed_server_url}/api/v4/posts");
     let request_url =
         validate_outbound_http_target("mattermost server_url", request_url.as_str(), policy)?;

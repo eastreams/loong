@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{LoongClawConfig, PersonalizationConfig};
+use crate::config::{LoongConfig, PersonalizationConfig};
 use crate::runtime_identity::{self, ResolvedRuntimeIdentity};
 use crate::runtime_self::{self, RuntimeSelfModel};
 #[cfg(feature = "memory-sqlite")]
@@ -94,16 +94,16 @@ pub(crate) fn resolve_runtime_self_continuity(
 }
 
 pub(crate) fn resolve_runtime_self_continuity_for_config(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Option<RuntimeSelfContinuity> {
     resolve_runtime_self_continuity_for_config_with_workspace_root(config, None)
 }
 
 pub(crate) fn resolve_runtime_self_continuity_for_config_with_workspace_root(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     workspace_root_override: Option<&Path>,
 ) -> Option<RuntimeSelfContinuity> {
-    let tool_runtime_config = ToolRuntimeConfig::from_loongclaw_config(config, None);
+    let tool_runtime_config = ToolRuntimeConfig::from_loong_config(config, None);
     let configured_workspace_root = tool_runtime_config.effective_workspace_root();
     let workspace_root = workspace_root_override.or(configured_workspace_root);
     let profile_note = config.memory.trimmed_profile_note();
@@ -299,39 +299,10 @@ pub(crate) const fn runtime_durable_recall_intro() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LoongClawConfig;
+    use crate::config::LoongConfig;
+    use crate::test_support::ScopedCurrentDir;
     use serde_json::json;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
-
-    struct ScopedCurrentDir {
-        _guard: MutexGuard<'static, ()>,
-        original: std::path::PathBuf,
-    }
-
-    impl ScopedCurrentDir {
-        fn lock() -> &'static Mutex<()> {
-            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-            LOCK.get_or_init(|| Mutex::new(()))
-        }
-
-        fn enter(path: &std::path::Path) -> Self {
-            let guard = Self::lock().lock().expect("lock current dir test");
-            let original = std::env::current_dir().expect("read current dir");
-            std::env::set_current_dir(path).expect("set current dir");
-
-            Self {
-                _guard: guard,
-                original,
-            }
-        }
-    }
-
-    impl Drop for ScopedCurrentDir {
-        fn drop(&mut self) {
-            std::env::set_current_dir(&self.original).expect("restore current dir");
-        }
-    }
 
     #[test]
     fn runtime_self_continuity_from_event_payload_defaults_missing_tool_usage_policy_lane() {
@@ -411,7 +382,7 @@ mod tests {
         let decoy_tool_root = temp_dir.path().join("tool-root");
         let agents_path = workspace_root.join("AGENTS.md");
         let agents_text = "Keep runtime self rooted in the active workspace.";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::create_dir_all(&workspace_root).expect("create workspace root");
         std::fs::create_dir_all(&decoy_tool_root).expect("create decoy tool root");
@@ -459,8 +430,8 @@ mod tests {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         let agents_path = workspace_root.join("AGENTS.md");
-        let mut config = LoongClawConfig::default();
-        let _guard = ScopedCurrentDir::enter(workspace_root);
+        let mut config = LoongConfig::default();
+        let _guard = ScopedCurrentDir::new(workspace_root);
 
         std::fs::write(&agents_path, "cwd runtime self should stay advisory-only")
             .expect("write AGENTS");

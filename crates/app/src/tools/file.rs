@@ -9,7 +9,7 @@ use std::{
 use super::runtime_events::{
     ToolFileChangeKind, ToolFileChangePreview, ToolRuntimeEvent, current_tool_runtime_event_sink,
 };
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-file")]
 use regex::{Regex, RegexBuilder};
 #[cfg(feature = "tool-file")]
@@ -25,6 +25,100 @@ const FILE_CHANGE_PREVIEW_MAX_LINES: usize = 8;
 const FILE_CHANGE_PREVIEW_MAX_CHARS: usize = 1_200;
 #[cfg(feature = "tool-file")]
 const FILE_CHANGE_PREVIEW_MAX_COMPARISON_CELLS: usize = 200_000;
+
+#[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileReadSelection {
+    content: String,
+    truncated: bool,
+    line_start: Option<usize>,
+    line_end: Option<usize>,
+    total_lines: Option<usize>,
+    next_offset: Option<usize>,
+}
+
+#[cfg(feature = "tool-file")]
+fn optional_positive_usize_field(
+    payload: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Result<Option<usize>, String> {
+    let Some(value) = payload.get(field_name) else {
+        return Ok(None);
+    };
+
+    let raw_value = value
+        .as_u64()
+        .ok_or_else(|| format!("file.read payload.{field_name} must be a positive integer"))?;
+    if raw_value == 0 {
+        return Err(format!(
+            "file.read payload.{field_name} must be a positive integer"
+        ));
+    }
+
+    usize::try_from(raw_value)
+        .map(Some)
+        .map_err(|conversion_error| {
+            format!("file.read payload.{field_name} is too large: {conversion_error}")
+        })
+}
+
+#[cfg(feature = "tool-file")]
+fn clip_file_read_content(content: &str, max_bytes: usize) -> FileReadSelection {
+    let content_bytes = content.as_bytes();
+    let truncated = content_bytes.len() > max_bytes;
+    let visible_bytes = if truncated {
+        content_bytes.get(..max_bytes).unwrap_or(content_bytes)
+    } else {
+        content_bytes
+    };
+
+    FileReadSelection {
+        content: String::from_utf8_lossy(visible_bytes).to_string(),
+        truncated,
+        line_start: None,
+        line_end: None,
+        total_lines: None,
+        next_offset: None,
+    }
+}
+
+#[cfg(feature = "tool-file")]
+fn select_file_read_content(
+    file_text: &str,
+    max_bytes: usize,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<FileReadSelection, String> {
+    let line_window_requested = offset.is_some() || limit.is_some();
+    if !line_window_requested {
+        return Ok(clip_file_read_content(file_text, max_bytes));
+    }
+
+    let all_lines = file_text.split('\n').collect::<Vec<_>>();
+    let total_lines = all_lines.len();
+    let line_start = offset.unwrap_or(1);
+    if line_start > total_lines {
+        return Err(format!(
+            "offset {line_start} is beyond end of file ({total_lines} lines total)"
+        ));
+    }
+
+    let start_index = line_start.saturating_sub(1);
+    let requested_line_count = limit.unwrap_or(total_lines.saturating_sub(start_index));
+    let end_index = start_index
+        .saturating_add(requested_line_count)
+        .min(total_lines);
+    let selected_lines = all_lines
+        .get(start_index..end_index)
+        .ok_or_else(|| "file.read internal line window is out of bounds".to_owned())?;
+    let selected_content = selected_lines.join("\n");
+    let mut selection = clip_file_read_content(selected_content.as_str(), max_bytes);
+    selection.line_start = Some(line_start);
+    selection.line_end = Some(end_index);
+    selection.total_lines = Some(total_lines);
+    selection.next_offset = (end_index < total_lines).then_some(end_index + 1);
+    Ok(selection)
+}
 
 pub(super) fn execute_file_read_tool_with_config(
     request: ToolCoreRequest,
@@ -54,6 +148,8 @@ pub(super) fn execute_file_read_tool_with_config(
             .and_then(Value::as_u64)
             .unwrap_or(1_048_576)
             .min(8 * 1_048_576) as usize;
+        let offset = optional_positive_usize_field(payload, "offset")?;
+        let limit = optional_positive_usize_field(payload, "limit")?;
 
         let resolved = resolve_safe_file_path_with_config(target, config)?;
         if resolved.is_dir() {
@@ -64,23 +160,36 @@ pub(super) fn execute_file_read_tool_with_config(
         }
         let bytes = fs::read(&resolved)
             .map_err(|error| format!("failed to read file {}: {error}", resolved.display()))?;
-        let clipped = bytes.len() > max_bytes;
-        let content_slice = if clipped {
-            bytes.get(..max_bytes).unwrap_or(&bytes)
-        } else {
-            &bytes
+        let file_text = String::from_utf8_lossy(&bytes).to_string();
+        let selection = select_file_read_content(file_text.as_str(), max_bytes, offset, limit)?;
+
+        let mut response_payload = json!({
+            "adapter": "core-tools",
+            "tool_name": request.tool_name,
+            "path": resolved.display().to_string(),
+            "bytes": bytes.len(),
+            "truncated": selection.truncated,
+            "content": selection.content,
+        });
+        let Some(response_object) = response_payload.as_object_mut() else {
+            return Err("file.read internal response payload must be an object".to_owned());
         };
+        if let Some(line_start) = selection.line_start {
+            response_object.insert("line_start".to_owned(), json!(line_start));
+        }
+        if let Some(line_end) = selection.line_end {
+            response_object.insert("line_end".to_owned(), json!(line_end));
+        }
+        if let Some(total_lines) = selection.total_lines {
+            response_object.insert("total_lines".to_owned(), json!(total_lines));
+        }
+        if let Some(next_offset) = selection.next_offset {
+            response_object.insert("next_offset".to_owned(), json!(next_offset));
+        }
 
         Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "path": resolved.display().to_string(),
-                "bytes": bytes.len(),
-                "truncated": clipped,
-                "content": String::from_utf8_lossy(content_slice).to_string(),
-            }),
+            payload: response_payload,
         })
     }
 }
@@ -230,6 +339,231 @@ fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExactTextEditBlock {
+    old_text: String,
+    new_text: String,
+}
+
+#[cfg(feature = "tool-file")]
+enum FileEditRequest {
+    ExactBlocks(Vec<ExactTextEditBlock>),
+    LegacySingle {
+        old_string: String,
+        new_string: String,
+        replace_all: bool,
+    },
+}
+
+#[cfg(feature = "tool-file")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocatedExactTextEditBlock<'a> {
+    start: usize,
+    end: usize,
+    block: &'a ExactTextEditBlock,
+}
+
+#[cfg(feature = "tool-file")]
+fn payload_optional_edit_string_field<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Result<Option<&'a str>, String> {
+    let Some(value) = payload.get(field_name) else {
+        return Ok(None);
+    };
+
+    let string_value = value
+        .as_str()
+        .ok_or_else(|| format!("file.edit payload.{field_name} must be a string"))?;
+    Ok(Some(string_value))
+}
+
+#[cfg(feature = "tool-file")]
+fn exact_edit_block_field<'a>(
+    block: &'a serde_json::Map<String, Value>,
+    snake_case_field: &str,
+    camel_case_field: &str,
+) -> Option<&'a str> {
+    block
+        .get(snake_case_field)
+        .and_then(Value::as_str)
+        .or_else(|| block.get(camel_case_field).and_then(Value::as_str))
+}
+
+#[cfg(feature = "tool-file")]
+fn parse_exact_edit_blocks(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<Option<Vec<ExactTextEditBlock>>, String> {
+    let Some(raw_blocks) = payload.get("edits") else {
+        return Ok(None);
+    };
+    let blocks = raw_blocks
+        .as_array()
+        .ok_or_else(|| "file.edit payload.edits must be an array".to_owned())?;
+    if blocks.is_empty() {
+        return Err("file.edit payload.edits must contain at least one edit block".to_owned());
+    }
+
+    let mut parsed_blocks = Vec::with_capacity(blocks.len());
+    for (index, raw_block) in blocks.iter().enumerate() {
+        let block = raw_block
+            .as_object()
+            .ok_or_else(|| format!("file.edit payload.edits[{index}] must be an object"))?;
+        let old_text = exact_edit_block_field(block, "old_text", "oldText")
+            .ok_or_else(|| format!("file.edit payload.edits[{index}].old_text must be a string"))?;
+        if old_text.is_empty() {
+            return Err(format!(
+                "edit_failed: edits[{index}].old_text must not be empty"
+            ));
+        }
+        let new_text = exact_edit_block_field(block, "new_text", "newText")
+            .ok_or_else(|| format!("file.edit payload.edits[{index}].new_text must be a string"))?;
+        parsed_blocks.push(ExactTextEditBlock {
+            old_text: old_text.to_owned(),
+            new_text: new_text.to_owned(),
+        });
+    }
+
+    Ok(Some(parsed_blocks))
+}
+
+#[cfg(feature = "tool-file")]
+fn parse_file_edit_request(
+    payload: &serde_json::Map<String, Value>,
+) -> Result<FileEditRequest, String> {
+    let parsed_blocks = parse_exact_edit_blocks(payload)?;
+    let old_string = payload_optional_edit_string_field(payload, "old_string")?;
+    let new_string = payload_optional_edit_string_field(payload, "new_string")?;
+    let replace_all = payload
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mixed_modes = parsed_blocks.is_some()
+        && (old_string.is_some() || new_string.is_some() || payload.contains_key("replace_all"));
+    if mixed_modes {
+        return Err(
+            "file.edit does not allow mixing `edits` with legacy `old_string` / `new_string` fields"
+                .to_owned(),
+        );
+    }
+
+    if let Some(blocks) = parsed_blocks {
+        return Ok(FileEditRequest::ExactBlocks(blocks));
+    }
+
+    let Some(old_string) = old_string else {
+        return Err(
+            "file.edit requires payload.edits, or legacy payload.old_string and payload.new_string"
+                .to_owned(),
+        );
+    };
+    let Some(new_string) = new_string else {
+        return Err("file.edit requires payload.new_string (string)".to_owned());
+    };
+    if old_string.is_empty() {
+        return Err("edit_failed: old_string must not be empty".to_owned());
+    }
+
+    Ok(FileEditRequest::LegacySingle {
+        old_string: old_string.to_owned(),
+        new_string: new_string.to_owned(),
+        replace_all,
+    })
+}
+
+#[cfg(feature = "tool-file")]
+fn locate_exact_edit_block<'a>(
+    content: &str,
+    block: &'a ExactTextEditBlock,
+    index: usize,
+) -> Result<LocatedExactTextEditBlock<'a>, String> {
+    let match_offsets = content
+        .match_indices(block.old_text.as_str())
+        .map(|(offset, _)| offset)
+        .collect::<Vec<_>>();
+    if match_offsets.is_empty() {
+        return Err(format!(
+            "edit_failed: edits[{index}].old_text not found in file"
+        ));
+    }
+    if match_offsets.len() > 1 {
+        return Err(format!(
+            "edit_failed: edits[{index}].old_text matches {} locations; each edit block must match uniquely in the original file",
+            match_offsets.len()
+        ));
+    }
+
+    let start = match_offsets
+        .first()
+        .copied()
+        .ok_or_else(|| format!("edit_failed: edits[{index}].old_text not found in file"))?;
+    let end = start.saturating_add(block.old_text.len());
+    Ok(LocatedExactTextEditBlock { start, end, block })
+}
+
+#[cfg(feature = "tool-file")]
+fn apply_exact_edit_blocks(
+    content: &str,
+    blocks: &[ExactTextEditBlock],
+) -> Result<(String, usize), String> {
+    let mut located_blocks = Vec::with_capacity(blocks.len());
+    for (index, block) in blocks.iter().enumerate() {
+        let located_block = locate_exact_edit_block(content, block, index)?;
+        located_blocks.push(located_block);
+    }
+    located_blocks.sort_by(|left, right| left.start.cmp(&right.start));
+
+    for window in located_blocks.windows(2) {
+        let [left, right] = window else {
+            continue;
+        };
+        if left.end > right.start {
+            return Err(
+                "edit_failed: edit blocks overlap in the original file; merge nested or overlapping edits into one block"
+                    .to_owned(),
+            );
+        }
+    }
+
+    let mut updated = String::with_capacity(content.len());
+    let mut cursor = 0usize;
+    for located_block in &located_blocks {
+        updated.push_str(&content[cursor..located_block.start]);
+        updated.push_str(located_block.block.new_text.as_str());
+        cursor = located_block.end;
+    }
+    updated.push_str(&content[cursor..]);
+
+    Ok((updated, located_blocks.len()))
+}
+
+#[cfg(feature = "tool-file")]
+fn apply_legacy_single_edit(
+    content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<(String, usize), String> {
+    let match_count = content.matches(old_string).count();
+    if match_count == 0 {
+        return Err("edit_failed: old_string not found in file".to_owned());
+    }
+    if match_count > 1 && !replace_all {
+        return Err(format!(
+            "edit_failed: old_string matches {match_count} locations; \
+             set replace_all:true to replace all occurrences"
+        ));
+    }
+
+    let (updated, replacements_made) = if replace_all {
+        (content.replace(old_string, new_string), match_count)
+    } else {
+        (content.replacen(old_string, new_string, 1), 1usize)
+    };
+    Ok((updated, replacements_made))
+}
+
 pub(super) fn execute_file_edit_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
@@ -252,50 +586,27 @@ pub(super) fn execute_file_edit_tool_with_config(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "file.edit requires payload.path (string)".to_owned())?;
-        let old_string = payload
-            .get("old_string")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "file.edit requires payload.old_string (string)".to_owned())?;
-        let new_string = payload
-            .get("new_string")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "file.edit requires payload.new_string (string)".to_owned())?;
-        let replace_all = payload
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // Empty pattern matches every boundary position — reject for a well-defined edit contract.
-        if old_string.is_empty() {
-            return Err("edit_failed: old_string must not be empty".to_owned());
-        }
+        let edit_request = parse_file_edit_request(payload)?;
 
         let resolved = resolve_safe_file_path_with_config(path, config)?;
         let content = fs::read_to_string(&resolved)
             .map_err(|e| format!("failed to read {}: {e}", resolved.display()))?;
 
-        // str::matches() — literal substring, non-overlapping, left-to-right.
-        let match_count = content.matches(old_string).count();
-
-        if match_count == 0 {
-            return Err("edit_failed: old_string not found in file".to_owned());
-        }
-        if match_count > 1 && !replace_all {
-            return Err(format!(
-                "edit_failed: old_string matches {match_count} locations; \
-                 set replace_all:true to replace all occurrences"
-            ));
-        }
-
-        let (updated, replacements_made) = if replace_all {
-            // str::replace uses the same non-overlapping semantics as str::matches.
-            let s = content.replace(old_string, new_string);
-            (s, match_count)
-        } else {
-            // Exactly one match confirmed above.
-            let s = content.replacen(old_string, new_string, 1);
-            (s, 1usize)
-        };
+        let (updated, replacements_made) = match &edit_request {
+            FileEditRequest::ExactBlocks(blocks) => {
+                apply_exact_edit_blocks(content.as_str(), blocks)
+            }
+            FileEditRequest::LegacySingle {
+                old_string,
+                new_string,
+                replace_all,
+            } => apply_legacy_single_edit(
+                content.as_str(),
+                old_string.as_str(),
+                new_string.as_str(),
+                *replace_all,
+            ),
+        }?;
 
         fs::write(&resolved, updated.as_bytes())
             .map_err(|e| format!("failed to write {}: {e}", resolved.display()))?;
@@ -306,15 +617,26 @@ pub(super) fn execute_file_edit_tool_with_config(
             updated.as_str(),
         );
 
+        let edit_blocks_applied = match &edit_request {
+            FileEditRequest::ExactBlocks(blocks) => Some(blocks.len()),
+            FileEditRequest::LegacySingle { .. } => None,
+        };
+        let mut response_payload = json!({
+            "adapter": "core-tools",
+            "tool_name": request.tool_name,
+            "path": resolved.display().to_string(),
+            "replacements_made": replacements_made,
+            "bytes_written": updated.len(),
+        });
+        if let Some(edit_blocks_applied) = edit_blocks_applied
+            && let Some(response_object) = response_payload.as_object_mut()
+        {
+            response_object.insert("edit_blocks_applied".to_owned(), json!(edit_blocks_applied));
+        }
+
         Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "path": resolved.display().to_string(),
-                "replacements_made": replacements_made,
-                "bytes_written": updated.len(),
-            }),
+            payload: response_payload,
         })
     }
 }
@@ -1371,7 +1693,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::json;
 
     use super::*;
@@ -1417,7 +1739,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_safe_file_path_rejects_symlink_escape_on_read() {
-        let base = unique_temp_dir("loongclaw-file-read");
+        let base = unique_temp_dir("loong-file-read");
         let root = base.join("root");
         let outside = base.join("outside");
         fs::create_dir_all(&root).expect("create root");
@@ -1440,10 +1762,68 @@ mod tests {
         let _ = fs::remove_dir_all(base);
     }
 
+    #[test]
+    fn file_read_supports_line_window_pagination() {
+        let base = unique_temp_dir("loongclaw-file-read-window");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\ndelta").expect("write fixture");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "notes.txt",
+                "offset": 2,
+                "limit": 2
+            }),
+        };
+
+        let outcome = execute_file_read_tool_with_config(request, &config)
+            .expect("file.read window should succeed");
+
+        assert_eq!(outcome.payload["content"], json!("beta\ngamma"));
+        assert_eq!(outcome.payload["line_start"], json!(2));
+        assert_eq!(outcome.payload["line_end"], json!(3));
+        assert_eq!(outcome.payload["total_lines"], json!(4));
+        assert_eq!(outcome.payload["next_offset"], json!(4));
+        assert_eq!(outcome.payload["truncated"], json!(false));
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_read_rejects_line_offset_beyond_end_of_file() {
+        let base = unique_temp_dir("loongclaw-file-read-window-bounds");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("notes.txt"), "alpha\nbeta").expect("write fixture");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let request = ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "notes.txt",
+                "offset": 3
+            }),
+        };
+
+        let error = execute_file_read_tool_with_config(request, &config)
+            .expect_err("out-of-bounds file.read window should fail");
+
+        assert!(error.contains("offset 3 is beyond end of file (2 lines total)"));
+        let _ = fs::remove_dir_all(base);
+    }
+
     #[cfg(unix)]
     #[test]
     fn file_write_rejects_symlink_directory_escape() {
-        let base = unique_temp_dir("loongclaw-file-write");
+        let base = unique_temp_dir("loong-file-write");
         let root = base.join("root");
         let outside_dir = base.join("outside-dir");
         fs::create_dir_all(&root).expect("create root");
@@ -1474,7 +1854,7 @@ mod tests {
 
     #[test]
     fn file_write_allows_path_inside_root() {
-        let base = unique_temp_dir("loongclaw-file-safe");
+        let base = unique_temp_dir("loong-file-safe");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1500,7 +1880,7 @@ mod tests {
 
     #[test]
     fn file_write_emits_create_change_preview_event() {
-        let base = unique_temp_dir("loongclaw-file-write-preview");
+        let base = unique_temp_dir("loong-file-write-preview");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1546,7 +1926,7 @@ mod tests {
 
     #[test]
     fn file_write_emits_overwrite_change_preview_event() {
-        let base = unique_temp_dir("loongclaw-file-write-overwrite-preview");
+        let base = unique_temp_dir("loong-file-write-overwrite-preview");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("preview.txt");
@@ -1597,7 +1977,7 @@ mod tests {
 
     #[test]
     fn file_write_rejects_existing_file_without_overwrite_flag() {
-        let base = unique_temp_dir("loongclaw-file-overwrite-denied");
+        let base = unique_temp_dir("loong-file-overwrite-denied");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1630,7 +2010,7 @@ mod tests {
 
     #[test]
     fn file_write_allows_existing_file_with_overwrite_true() {
-        let base = unique_temp_dir("loongclaw-file-overwrite-allowed");
+        let base = unique_temp_dir("loong-file-overwrite-allowed");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 
@@ -1662,7 +2042,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_write_rejects_dangling_symlink_even_with_overwrite_true() {
-        let base = unique_temp_dir("loongclaw-file-overwrite-symlink");
+        let base = unique_temp_dir("loong-file-overwrite-symlink");
         let root = base.join("root");
         let outside = base.join("outside");
         fs::create_dir_all(&root).expect("create root");
@@ -1711,9 +2091,47 @@ mod tests {
         }
     }
 
+    fn make_edit_blocks_request(path: &str, edits: &[(&str, &str)]) -> ToolCoreRequest {
+        let edit_blocks = edits
+            .iter()
+            .map(|(old, new)| {
+                json!({
+                    "old_text": old,
+                    "new_text": new,
+                })
+            })
+            .collect::<Vec<_>>();
+        ToolCoreRequest {
+            tool_name: "file.edit".to_owned(),
+            payload: json!({
+                "path": path,
+                "edits": edit_blocks,
+            }),
+        }
+    }
+
+    fn make_camel_case_edit_blocks_request(path: &str, edits: &[(&str, &str)]) -> ToolCoreRequest {
+        let edit_blocks = edits
+            .iter()
+            .map(|(old, new)| {
+                json!({
+                    "oldText": old,
+                    "newText": new,
+                })
+            })
+            .collect::<Vec<_>>();
+        ToolCoreRequest {
+            tool_name: "file.edit".to_owned(),
+            payload: json!({
+                "path": path,
+                "edits": edit_blocks,
+            }),
+        }
+    }
+
     #[test]
     fn file_edit_single_match_succeeds() {
-        let base = unique_temp_dir("loongclaw-file-edit-single");
+        let base = unique_temp_dir("loong-file-edit-single");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");
@@ -1737,7 +2155,7 @@ mod tests {
 
     #[test]
     fn file_edit_no_match_errors() {
-        let base = unique_temp_dir("loongclaw-file-edit-nomatch");
+        let base = unique_temp_dir("loong-file-edit-nomatch");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("file.txt"), "hello world").expect("write");
@@ -1757,7 +2175,7 @@ mod tests {
 
     #[test]
     fn file_edit_multiple_match_without_replace_all_errors() {
-        let base = unique_temp_dir("loongclaw-file-edit-multi");
+        let base = unique_temp_dir("loong-file-edit-multi");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("file.txt"), "a\na\n").expect("write");
@@ -1777,7 +2195,7 @@ mod tests {
 
     #[test]
     fn file_edit_replace_all_replaces_all_occurrences() {
-        let base = unique_temp_dir("loongclaw-file-edit-replaceall");
+        let base = unique_temp_dir("loong-file-edit-replaceall");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");
@@ -1800,7 +2218,7 @@ mod tests {
 
     #[test]
     fn file_edit_emits_change_preview_event() {
-        let base = unique_temp_dir("loongclaw-file-edit-preview");
+        let base = unique_temp_dir("loong-file-edit-preview");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");
@@ -1842,6 +2260,72 @@ mod tests {
     }
 
     #[test]
+    fn file_edit_exact_edit_blocks_apply_multiple_replacements() {
+        let base = unique_temp_dir("loongclaw-file-edit-blocks");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        let target = root.join("file.txt");
+        fs::write(&target, "alpha\nbeta\ngamma\n").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let result = execute_file_edit_tool_with_config(
+            make_edit_blocks_request("file.txt", &[("alpha", "ALPHA"), ("gamma", "GAMMA")]),
+            &config,
+        );
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+        let outcome = result.unwrap();
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["replacements_made"], 2);
+        assert_eq!(outcome.payload["edit_blocks_applied"], 2);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "ALPHA\nbeta\nGAMMA\n");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_edit_exact_edit_blocks_reject_non_unique_matches() {
+        let base = unique_temp_dir("loongclaw-file-edit-blocks-non-unique");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("file.txt"), "dup\ndup\n").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let err = execute_file_edit_tool_with_config(
+            make_edit_blocks_request("file.txt", &[("dup", "only once")]),
+            &config,
+        )
+        .expect_err("non-unique block should fail");
+        assert!(err.contains("matches 2 locations"), "got: {err}");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn file_edit_exact_edit_blocks_accept_camel_case_aliases() {
+        let base = unique_temp_dir("loongclaw-file-edit-blocks-camel");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        let target = root.join("file.txt");
+        fs::write(&target, "hello world").expect("write");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let result = execute_file_edit_tool_with_config(
+            make_camel_case_edit_blocks_request("file.txt", &[("hello", "hi")]),
+            &config,
+        );
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "hi world");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn summarize_file_change_preview_preserves_shared_middle_lines_when_appending_tail() {
         let before_lines = vec!["old line".to_owned(), "shared".to_owned()];
         let after_lines = vec![
@@ -1863,7 +2347,7 @@ mod tests {
 
     #[test]
     fn file_edit_empty_old_string_errors() {
-        let base = unique_temp_dir("loongclaw-file-edit-empty");
+        let base = unique_temp_dir("loong-file-edit-empty");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("file.txt"), "hello").expect("write");
@@ -1884,7 +2368,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_edit_rejects_path_escape() {
-        let base = unique_temp_dir("loongclaw-file-edit-escape");
+        let base = unique_temp_dir("loong-file-edit-escape");
         let root = base.join("root");
         let outside = base.join("outside");
         fs::create_dir_all(&root).expect("create root");
@@ -1912,7 +2396,7 @@ mod tests {
 
     #[test]
     fn glob_search_returns_workspace_relative_matches() {
-        let base = unique_temp_dir("loongclaw-glob-search");
+        let base = unique_temp_dir("loong-glob-search");
         let root = base.join("root");
         let nested = root.join("src/nested");
         fs::create_dir_all(&nested).expect("create nested root");
@@ -1945,7 +2429,7 @@ mod tests {
 
     #[test]
     fn content_search_returns_line_column_and_snippet() {
-        let base = unique_temp_dir("loongclaw-content-search");
+        let base = unique_temp_dir("loong-content-search");
         let root = base.join("root");
         let nested = root.join("src");
         fs::create_dir_all(&nested).expect("create nested root");
@@ -1985,7 +2469,7 @@ mod tests {
 
     #[test]
     fn content_search_honors_explicit_root() {
-        let base = unique_temp_dir("loongclaw-content-search-root");
+        let base = unique_temp_dir("loong-content-search-root");
         let root = base.join("root");
         let include = root.join("include");
         let exclude = root.join("exclude");
@@ -2018,7 +2502,7 @@ mod tests {
 
     #[test]
     fn content_search_does_not_mark_exact_limit_files_as_truncated() {
-        let base = unique_temp_dir("loongclaw-content-search-exact-limit");
+        let base = unique_temp_dir("loong-content-search-exact-limit");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("exact.txt"), "hello").expect("write exact-limit file");
@@ -2047,7 +2531,7 @@ mod tests {
 
     #[test]
     fn content_search_handles_unicode_case_insensitive_matches() {
-        let base = unique_temp_dir("loongclaw-content-search-unicode");
+        let base = unique_temp_dir("loong-content-search-unicode");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("city.txt"), "Key value\n").expect("write city");

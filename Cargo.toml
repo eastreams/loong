@@ -3,6 +3,7 @@ members = [
   "crates/contracts",
   "crates/kernel",
   "crates/protocol",
+  "crates/bridge-runtime",
   "crates/spec",
   "crates/bench",
   "crates/app",
@@ -13,7 +14,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.1.0-alpha.3"
+version = "0.1.2-alpha.1"
 authors = ["chumyin"]
 repository = "https://github.com/eastreams/loong"
 homepage = "https://github.com/eastreams/loong"

@@ -6,7 +6,7 @@ use crate::trust::{
     runtime_binding_missing_trust_event,
 };
 
-use super::super::config::LoongClawConfig;
+use super::super::config::LoongConfig;
 use super::persistence::persist_conversation_event;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
@@ -77,7 +77,7 @@ pub(super) async fn emit_runtime_binding_trust_event_if_needed<R: ConversationRu
 pub(super) async fn emit_provider_failover_trust_event_if_needed<
     R: ConversationRuntime + ?Sized,
 >(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     error_text: &str,

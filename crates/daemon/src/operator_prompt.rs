@@ -1,4 +1,4 @@
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 
 pub use crate::onboard_cli::{OnboardUi as OperatorPromptUi, SelectInteractionMode, SelectOption};
 

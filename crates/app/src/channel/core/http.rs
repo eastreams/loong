@@ -52,6 +52,24 @@ pub fn validate_outbound_http_target(
     Ok(parsed_url)
 }
 
+pub fn validate_outbound_http_base_url(
+    field_name: &str,
+    raw_url: &str,
+    policy: ChannelOutboundHttpPolicy,
+) -> Result<reqwest::Url, String> {
+    let parsed_url = validate_outbound_http_target(field_name, raw_url, policy)?;
+
+    if parsed_url.query().is_some() {
+        return Err(format!("{field_name} must not include a query string"));
+    }
+
+    if parsed_url.fragment().is_some() {
+        return Err(format!("{field_name} must not include a fragment"));
+    }
+
+    Ok(parsed_url)
+}
+
 pub async fn read_json_or_text_response(
     response: reqwest::Response,
     context: &str,
@@ -243,6 +261,35 @@ mod tests {
                 .expect("private hosts should be allowed when the policy is widened");
 
         assert_eq!(url.as_str(), "http://127.0.0.1:8080/");
+    }
+
+    #[test]
+    fn outbound_http_base_url_rejects_query_strings() {
+        let policy = ChannelOutboundHttpPolicy::default();
+        let error = validate_outbound_http_base_url(
+            "discord api_base_url",
+            "https://discord.com/api/v10?debug=1",
+            policy,
+        )
+        .expect_err("base urls with query strings should be rejected");
+
+        assert_eq!(
+            error,
+            "discord api_base_url must not include a query string"
+        );
+    }
+
+    #[test]
+    fn outbound_http_base_url_rejects_fragments() {
+        let policy = ChannelOutboundHttpPolicy::default();
+        let error = validate_outbound_http_base_url(
+            "slack api_base_url",
+            "https://slack.com/api#fragment",
+            policy,
+        )
+        .expect_err("base urls with fragments should be rejected");
+
+        assert_eq!(error, "slack api_base_url must not include a fragment");
     }
 
     #[test]

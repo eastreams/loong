@@ -1,0 +1,128 @@
+---
+title: Weixin
+description: Configure the Weixin plugin-backed bridge surface in Loong.
+---
+
+# Weixin
+
+This is a shipped plugin-backed bridge surface. The channel contract is real and operator-visible, but the active listener and login lifecycle stay in an external bridge or managed plugin rather than a built-in Loong `*-serve` runtime.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `weixin` |
+| Config key | `weixin` |
+| Implementation status | `plugin_backed` |
+| Transport | `wechat_clawbot_ilink_bridge` |
+| Aliases | `wechat`, `wx`, `wechat-clawbot` |
+| Default send target kind | `conversation` |
+| Runtime owner | external plugin |
+
+## Minimal Config
+
+```toml
+[weixin]
+enabled = true
+bridge_url_env = "WEIXIN_BRIDGE_URL"
+bridge_access_token_env = "WEIXIN_BRIDGE_ACCESS_TOKEN"
+allowed_contact_ids = ["wxid_ops"]
+```
+
+If you already know which managed bridge plugin should own this surface, pin it explicitly:
+
+```toml
+[weixin]
+enabled = true
+managed_bridge_plugin_id = "weixin-clawbot-bridge"
+bridge_url_env = "WEIXIN_BRIDGE_URL"
+bridge_access_token_env = "WEIXIN_BRIDGE_ACCESS_TOKEN"
+allowed_contact_ids = ["wxid_ops"]
+```
+
+## Smoke Test
+
+```bash
+loong channels
+loong channels --json
+loong doctor
+```
+
+What success looks like:
+
+- `loong channels` lists `Weixin [weixin]` under the plugin-backed section
+- the managed bridge discovery line selects one compatible plugin or explains exactly why discovery is incomplete or ambiguous
+- `loong doctor` reports the bridge contract as ready, or gives a bounded remediation path
+
+## Current Command Surface
+
+| Operation | Current path | Usage or status |
+| --- | --- | --- |
+| managed bridge contract check | `loong doctor` | current readiness and remediation surface |
+| inventory + discovery inspection | `loong channels` | current operator inventory surface |
+| bridge-backed send | `weixin-send` | executes through the selected managed bridge runtime; target contract stays `weixin:<account>:contact:<id>` or `weixin:<account>:room:<id>` |
+| bridge-backed serve | `weixin-serve` | starts the selected managed bridge reply loop; upstream session ownership still stays in the external bridge |
+
+## Required Fields For Bridge Send Contract
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `weixin.enabled`<br/>`weixin.accounts.<account>.enabled` | none | none |
+| clawbot bridge url | `weixin.bridge_url`<br/>`weixin.accounts.<account>.bridge_url` | `weixin.bridge_url_env`<br/>`weixin.accounts.<account>.bridge_url_env` | `WEIXIN_BRIDGE_URL` |
+| bridge access token | `weixin.bridge_access_token`<br/>`weixin.accounts.<account>.bridge_access_token` | `weixin.bridge_access_token_env`<br/>`weixin.accounts.<account>.bridge_access_token_env` | `WEIXIN_BRIDGE_ACCESS_TOKEN` |
+
+## Required Fields For Bridge Reply Contract
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `weixin.enabled`<br/>`weixin.accounts.<account>.enabled` | none | none |
+| clawbot bridge url | `weixin.bridge_url`<br/>`weixin.accounts.<account>.bridge_url` | `weixin.bridge_url_env`<br/>`weixin.accounts.<account>.bridge_url_env` | `WEIXIN_BRIDGE_URL` |
+| bridge access token | `weixin.bridge_access_token`<br/>`weixin.accounts.<account>.bridge_access_token` | `weixin.bridge_access_token_env`<br/>`weixin.accounts.<account>.bridge_access_token_env` | `WEIXIN_BRIDGE_ACCESS_TOKEN` |
+| allowed contact ids | `weixin.allowed_contact_ids`<br/>`weixin.accounts.<account>.allowed_contact_ids` | none | none |
+
+## Stable Target Templates
+
+Use these templates when you need one bridge implementation and later tooling to converge on the same route semantics.
+
+| Target | Meaning |
+| --- | --- |
+| `weixin:<account>:contact:<id>` | direct contact conversation |
+| `weixin:<account>:room:<id>` | group room conversation |
+
+## Managed Bridge Discovery Notes
+
+- Loong scans the configured managed install root for compatible bridge manifests.
+- Managed bridge execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`.
+- If exactly one compatible bridge is found, `loong doctor` and `loong channels` can surface it as the selected plugin.
+- If several compatible bridges are found, set `managed_bridge_plugin_id` to make the selection explicit.
+- If discovery is incomplete, Loong keeps the bridge-owned surface visible and reports the missing fields instead of pretending the channel is ready.
+
+## Gateway And Ownership
+
+This surface does **not** join `multi-channel-serve` or `gateway run` today. The upstream Weixin listener and login flow remain owned by the external bridge.
+
+Use Loong here for:
+
+- the stable channel id and target contract
+- config validation
+- managed bridge discovery
+- bounded operator diagnostics and remediation
+
+## Operator Notes
+
+- Keep `allowed_contact_ids` tight. Treat it as the trust boundary, not a convenience list.
+- Loong validates `allowed_contact_ids` locally before forwarding a contact send through the managed bridge runtime.
+- `weixin-serve` retries transient managed bridge runtime failures with bounded backoff; repeated failures still surface as a hard error so the bridge can be inspected.
+- `weixin-serve --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
+- When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
+- `weixin-serve --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
+- While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
+- Prefer one explicit managed bridge per environment. If discovery is ambiguous, fix the ambiguity instead of relying on accidental selection.
+- If you need multiple bridge identities, move to `default_account` plus `accounts.<id>` before inventing ad-hoc routes.
+
+## Related Docs
+
+- Continue to [QQ Bot](/use-loong/channel-guides/qqbot) or [OneBot](/use-loong/channel-guides/onebot) if your Tencent or personal-account bridge lane uses a different upstream contract.
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full actionable matrix.
+- Continue to [Channels](/use-loong/channels) for the surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

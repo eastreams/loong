@@ -201,16 +201,17 @@ fn format_significant_channel_turn_tool_event(event: &ConversationTurnToolEvent)
         return None;
     }
 
+    let visible_tool_name = crate::tools::user_visible_tool_name(event.tool_name.as_str());
     let state = event.state.as_str();
     match detail {
         Some(detail) => {
             let summarized_detail = summarize_channel_turn_trace_detail(detail);
             Some(format!(
                 "- {} {}: {}",
-                event.tool_name, state, summarized_detail
+                visible_tool_name, state, summarized_detail
             ))
         }
-        None => Some(format!("- {} {}", event.tool_name, state)),
+        None => Some(format!("- {} {}", visible_tool_name, state)),
     }
 }
 
@@ -267,7 +268,7 @@ mod tests {
         assert!(reply.contains("final reply"));
         assert!(reply.contains("execution trace:"));
         assert!(reply.contains("- tool.search completed: returned 0 results"));
-        assert!(reply.contains("- web.fetch failed: missing network egress capability"));
+        assert!(reply.contains("- web failed: missing network egress capability"));
         assert!(
             !reply.contains("tool.search running"),
             "the capture should keep only the latest event per tool call"

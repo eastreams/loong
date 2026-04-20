@@ -8,7 +8,7 @@ use tempfile::TempDir;
 fn sample_channel_bridge_manifest(
     channel_id: Option<&str>,
     setup_surface: Option<&str>,
-) -> loongclaw_kernel::PluginManifest {
+) -> loong_kernel::PluginManifest {
     sample_channel_bridge_manifest_with_metadata(channel_id, setup_surface, BTreeMap::new())
 }
 
@@ -16,12 +16,12 @@ fn sample_channel_bridge_manifest_with_metadata(
     channel_id: Option<&str>,
     setup_surface: Option<&str>,
     metadata: BTreeMap<String, String>,
-) -> loongclaw_kernel::PluginManifest {
+) -> loong_kernel::PluginManifest {
     let normalized_channel_id = channel_id.map(str::to_owned);
     let normalized_setup_surface = setup_surface.map(str::to_owned);
 
-    let setup = normalized_setup_surface.map(|surface| loongclaw_kernel::PluginSetup {
-        mode: loongclaw_kernel::PluginSetupMode::MetadataOnly,
+    let setup = normalized_setup_surface.map(|surface| loong_kernel::PluginSetup {
+        mode: loong_kernel::PluginSetupMode::MetadataOnly,
         surface: Some(surface),
         required_env_vars: Vec::new(),
         recommended_env_vars: Vec::new(),
@@ -31,7 +31,7 @@ fn sample_channel_bridge_manifest_with_metadata(
         remediation: None,
     });
 
-    loongclaw_kernel::PluginManifest {
+    loong_kernel::PluginManifest {
         api_version: Some("v1alpha1".to_owned()),
         version: Some("1.0.0".to_owned()),
         plugin_id: "sample-bridge".to_owned(),
@@ -40,7 +40,7 @@ fn sample_channel_bridge_manifest_with_metadata(
         channel_id: normalized_channel_id,
         endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
         capabilities: BTreeSet::new(),
-        trust_tier: loongclaw_kernel::PluginTrustTier::Unverified,
+        trust_tier: loong_kernel::PluginTrustTier::Unverified,
         metadata,
         summary: None,
         tags: Vec::new(),
@@ -56,11 +56,11 @@ fn sample_channel_bridge_manifest_with_metadata(
 fn sample_channel_bridge_manifest_with_setup(
     channel_id: Option<&str>,
     metadata: BTreeMap<String, String>,
-    setup: Option<loongclaw_kernel::PluginSetup>,
-) -> loongclaw_kernel::PluginManifest {
+    setup: Option<loong_kernel::PluginSetup>,
+) -> loong_kernel::PluginManifest {
     let normalized_channel_id = channel_id.map(str::to_owned);
 
-    loongclaw_kernel::PluginManifest {
+    loong_kernel::PluginManifest {
         api_version: Some("v1alpha1".to_owned()),
         version: Some("1.0.0".to_owned()),
         plugin_id: "sample-bridge".to_owned(),
@@ -69,7 +69,7 @@ fn sample_channel_bridge_manifest_with_setup(
         channel_id: normalized_channel_id,
         endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
         capabilities: BTreeSet::new(),
-        trust_tier: loongclaw_kernel::PluginTrustTier::Unverified,
+        trust_tier: loong_kernel::PluginTrustTier::Unverified,
         metadata,
         summary: None,
         tags: Vec::new(),
@@ -86,8 +86,8 @@ fn sample_channel_bridge_manifest_with_plugin_id(
     plugin_id: &str,
     channel_id: Option<&str>,
     metadata: BTreeMap<String, String>,
-    setup: Option<loongclaw_kernel::PluginSetup>,
-) -> loongclaw_kernel::PluginManifest {
+    setup: Option<loong_kernel::PluginSetup>,
+) -> loong_kernel::PluginManifest {
     let mut manifest = sample_channel_bridge_manifest_with_setup(channel_id, metadata, setup);
 
     manifest.plugin_id = plugin_id.to_owned();
@@ -98,10 +98,10 @@ fn sample_channel_bridge_manifest_with_plugin_id(
 fn write_plugin_package_manifest(
     root: &Path,
     directory_name: &str,
-    manifest: &loongclaw_kernel::PluginManifest,
+    manifest: &loong_kernel::PluginManifest,
 ) {
     let plugin_directory = root.join(directory_name);
-    let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+    let manifest_path = plugin_directory.join("loong.plugin.json");
     let encoded_manifest =
         serde_json::to_string_pretty(manifest).expect("serialize plugin package manifest");
 
@@ -114,10 +114,53 @@ fn compatible_bridge_metadata(
     target_contract: &str,
 ) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::new();
+    let runtime_operations = vec![
+        "send_message".to_owned(),
+        "receive_batch".to_owned(),
+        "ack_inbound".to_owned(),
+        "complete_batch".to_owned(),
+    ];
+    let runtime_operations_json =
+        serde_json::to_string(&runtime_operations).expect("serialize runtime operations");
 
     metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
     metadata.insert("transport_family".to_owned(), transport_family.to_owned());
     metadata.insert("target_contract".to_owned(), target_contract.to_owned());
+    metadata.insert(
+        "channel_runtime_contract".to_owned(),
+        "loong_channel_bridge_v1".to_owned(),
+    );
+    metadata.insert(
+        "channel_runtime_operations_json".to_owned(),
+        runtime_operations_json,
+    );
+
+    metadata
+}
+
+fn compatible_runtime_bridge_metadata(
+    transport_family: &str,
+    target_contract: &str,
+    runtime_contract: &str,
+    runtime_operations: &[&str],
+) -> BTreeMap<String, String> {
+    let mut metadata = compatible_bridge_metadata(transport_family, target_contract);
+
+    let runtime_operations = runtime_operations
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    let encoded_runtime_operations =
+        serde_json::to_string(&runtime_operations).expect("encode runtime operations");
+
+    metadata.insert(
+        "channel_runtime_contract".to_owned(),
+        runtime_contract.to_owned(),
+    );
+    metadata.insert(
+        "channel_runtime_operations_json".to_owned(),
+        encoded_runtime_operations,
+    );
 
     metadata
 }
@@ -126,12 +169,12 @@ fn bridge_setup_with_docs_and_remediation(
     surface: &str,
     docs_urls: Vec<&str>,
     remediation: Option<&str>,
-) -> loongclaw_kernel::PluginSetup {
+) -> loong_kernel::PluginSetup {
     let normalized_docs_urls = docs_urls.into_iter().map(str::to_owned).collect();
     let normalized_remediation = remediation.map(str::to_owned);
 
-    loongclaw_kernel::PluginSetup {
-        mode: loongclaw_kernel::PluginSetupMode::MetadataOnly,
+    loong_kernel::PluginSetup {
+        mode: loong_kernel::PluginSetupMode::MetadataOnly,
         surface: Some(surface.to_owned()),
         required_env_vars: Vec::new(),
         recommended_env_vars: Vec::new(),
@@ -155,6 +198,17 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         .plugin_bridge_contract
         .as_ref()
         .expect("weixin plugin bridge contract");
+    assert_eq!(
+        weixin
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
     assert_eq!(weixin_contract.manifest_channel_id, "weixin");
     assert_eq!(weixin_contract.required_setup_surface, "channel");
     assert_eq!(weixin_contract.runtime_owner, "external_plugin");
@@ -168,6 +222,8 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
             "transport_family",
             "target_contract",
             "account_scope",
+            "channel_runtime_contract",
+            "channel_runtime_operations_json",
         ]
     );
 
@@ -175,12 +231,34 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         .plugin_bridge_contract
         .as_ref()
         .expect("qqbot plugin bridge contract");
+    assert_eq!(
+        qqbot
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
     assert_eq!(qqbot_contract.manifest_channel_id, "qqbot");
 
     let onebot_contract = onebot
         .plugin_bridge_contract
         .as_ref()
         .expect("onebot plugin bridge contract");
+    assert_eq!(
+        onebot
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
     assert_eq!(onebot_contract.manifest_channel_id, "onebot");
 }
 
@@ -298,6 +376,8 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
             "transport_family",
             "target_contract",
             "account_scope",
+            "channel_runtime_contract",
+            "channel_runtime_operations_json",
         ]
     );
 
@@ -330,7 +410,7 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
 
 #[test]
 fn channel_inventory_marks_managed_bridge_discovery_unavailable_when_install_root_is_unset() {
-    let config = LoongClawConfig::default();
+    let config = LoongConfig::default();
     let inventory = channel_inventory(&config);
     let weixin = inventory
         .channel_surfaces
@@ -370,7 +450,7 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         incomplete_metadata,
     );
     let incompatible_manifest = sample_channel_bridge_manifest(Some("onebot"), Some("tool"));
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     assert_eq!(
         removed_transport_family.as_deref(),
@@ -471,11 +551,11 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
 #[test]
 fn channel_inventory_reports_managed_bridge_scan_failures() {
     let missing_install_root = std::env::temp_dir().join(format!(
-        "loongclaw-missing-managed-bridge-root-{}",
+        "loong-missing-managed-bridge-root-{}",
         std::process::id()
     ));
     let expected_install_root = missing_install_root.display().to_string();
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     let _ = fs::remove_dir_all(&missing_install_root);
 
@@ -523,7 +603,7 @@ fn channel_inventory_reports_managed_bridge_ambiguity_and_setup_guidance() {
         compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         Some(compatible_setup),
     );
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
@@ -580,7 +660,7 @@ fn channel_inventory_reports_duplicate_compatible_plugin_ids_as_distinct_ambigui
             None,
         )),
     );
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
@@ -638,7 +718,7 @@ fn channel_inventory_reports_duplicate_configured_plugin_id_selection_failure() 
             None,
         )),
     );
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
@@ -692,7 +772,7 @@ fn channel_inventory_resolves_managed_bridge_selection_from_configured_plugin_id
             None,
         )),
     );
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
@@ -749,7 +829,7 @@ fn channel_inventory_reports_missing_configured_managed_bridge_plugin_id() {
             None,
         )),
     );
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
@@ -793,7 +873,7 @@ fn channel_inventory_marks_single_compatible_plugin_without_explicit_selection()
             None,
         )),
     );
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-only", &manifest);
 
@@ -819,5 +899,51 @@ fn channel_inventory_marks_single_compatible_plugin_without_explicit_selection()
     assert_eq!(
         discovery.selected_plugin_id.as_deref(),
         Some("weixin-bridge-only")
+    );
+}
+
+#[test]
+fn channel_inventory_reports_runtime_contract_metadata_for_discovered_plugin_bridge() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let manifest = sample_channel_bridge_manifest_with_metadata(
+        Some("weixin"),
+        Some("channel"),
+        compatible_runtime_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+            "loong_channel_bridge_v1",
+            &["send", "receive_batch", "ack_inbound", "complete_batch"],
+        ),
+    );
+    let mut config = LoongConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-runtime", &manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+    let plugin = discovery.plugins.first().expect("discovered plugin");
+
+    assert_eq!(
+        plugin.runtime_contract.as_deref(),
+        Some("loong_channel_bridge_v1")
+    );
+    assert_eq!(
+        plugin.runtime_operations,
+        vec![
+            "send".to_owned(),
+            "receive_batch".to_owned(),
+            "ack_inbound".to_owned(),
+            "complete_batch".to_owned(),
+        ]
     );
 }

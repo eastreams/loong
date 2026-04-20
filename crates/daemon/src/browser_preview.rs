@@ -1,6 +1,6 @@
 use std::{env, ffi::OsStr, path::PathBuf};
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 pub(crate) const BROWSER_PREVIEW_SKILL_ID: &str = mvp::tools::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub(crate) const BROWSER_PREVIEW_ENABLE_LABEL: &str = "enable browser preview";
@@ -74,14 +74,14 @@ impl BrowserPreviewState {
 }
 
 pub(crate) fn inspect_browser_preview_state(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> BrowserPreviewState {
     let path_env = env::var_os("PATH");
     inspect_browser_preview_state_with_path_env(config, path_env.as_deref())
 }
 
 pub(crate) fn inspect_browser_preview_state_with_path_env(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     path_env: Option<&OsStr>,
 ) -> BrowserPreviewState {
     BrowserPreviewState {
@@ -150,7 +150,7 @@ pub(crate) fn browser_preview_ready_command(config_path: &str) -> String {
         .unwrap_or_else(|| browser_preview_ask_command(config_path, "Use the browser companion preview to open https://example.com and summarize the result."))
 }
 
-pub(crate) fn ensure_browser_preview_config(config: &mut mvp::config::LoongClawConfig) -> bool {
+pub(crate) fn ensure_browser_preview_config(config: &mut mvp::config::LoongConfig) -> bool {
     let mut updated = false;
 
     if config
@@ -162,7 +162,7 @@ pub(crate) fn ensure_browser_preview_config(config: &mut mvp::config::LoongClawC
         .is_empty()
     {
         config.tools.file_root = Some(
-            mvp::config::default_loongclaw_home()
+            mvp::config::default_loong_home()
                 .join("workspace")
                 .display()
                 .to_string(),
@@ -198,7 +198,7 @@ pub(crate) fn ensure_browser_preview_config(config: &mut mvp::config::LoongClawC
     updated
 }
 
-pub(crate) fn bundled_skill_install_path(config: &mvp::config::LoongClawConfig) -> PathBuf {
+pub(crate) fn bundled_skill_install_path(config: &mvp::config::LoongConfig) -> PathBuf {
     let install_root = config
         .external_skills
         .resolved_install_root()
@@ -212,7 +212,7 @@ pub(crate) fn bundled_skill_install_path(config: &mvp::config::LoongClawConfig) 
 }
 
 pub(crate) fn shell_policy_allows_command(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     command: &str,
 ) -> bool {
     if shell_policy_explicitly_denies_command(config, command) {
@@ -233,7 +233,7 @@ pub(crate) fn shell_policy_allows_command(
 }
 
 pub(crate) fn shell_policy_explicitly_denies_command(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     command: &str,
 ) -> bool {
     config
@@ -244,7 +244,7 @@ pub(crate) fn shell_policy_explicitly_denies_command(
 }
 
 pub(crate) fn browser_preview_check(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     path_env: Option<&OsStr>,
 ) -> Option<crate::doctor_cli::DoctorCheck> {
     let state = inspect_browser_preview_state_with_path_env(config, path_env);
@@ -341,19 +341,19 @@ mod tests {
 
     #[test]
     fn browser_preview_commands_shell_escape_config_paths() {
-        let config_path = "/tmp/loongclaw's config.toml";
+        let config_path = "/tmp/loong's config.toml";
 
         assert_eq!(
             browser_preview_enable_command(config_path),
-            "loong skills enable-browser-preview --config '/tmp/loongclaw'\"'\"'s config.toml'"
+            "loong skills enable-browser-preview --config '/tmp/loong'\"'\"'s config.toml'"
         );
         assert_eq!(
             browser_preview_unblock_command(config_path),
-            "edit '/tmp/loongclaw'\"'\"'s config.toml' and remove `agent-browser` from [tools].shell_deny"
+            "edit '/tmp/loong'\"'\"'s config.toml' and remove `agent-browser` from [tools].shell_deny"
         );
         assert!(
             browser_preview_ready_command(config_path)
-                .starts_with("loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message "),
+                .starts_with("loong ask --config '/tmp/loong'\"'\"'s config.toml' --message "),
             "ready command should quote the config path for copy-paste safety"
         );
     }

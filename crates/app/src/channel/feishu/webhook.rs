@@ -28,7 +28,7 @@ use crate::channel::{
     access_policy::ChannelInboundAccessPolicy, process_inbound_with_provider,
     runtime::state::ChannelOperationRuntimeTracker,
 };
-use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
+use crate::config::{LoongConfig, ResolvedFeishuChannelConfig};
 use crate::crypto::timing_safe_eq;
 
 use super::adapter::{FeishuAdapter, outbound_reply_message_from_text};
@@ -39,7 +39,7 @@ const FEISHU_CALLBACK_RESPONSE_MARKER: &str = "[feishu_callback_response]";
 
 #[derive(Clone)]
 pub(super) struct FeishuWebhookState {
-    config: LoongClawConfig,
+    config: LoongConfig,
     resolved_path: Option<PathBuf>,
     adapter: Arc<Mutex<FeishuAdapter>>,
     configured_account_id: String,
@@ -58,7 +58,7 @@ pub(super) struct FeishuWebhookState {
 impl FeishuWebhookState {
     #[cfg(test)]
     pub(super) fn new(
-        config: LoongClawConfig,
+        config: LoongConfig,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
         kernel_ctx: KernelContext,
@@ -68,7 +68,7 @@ impl FeishuWebhookState {
     }
 
     pub(super) fn new_with_resolved_path(
-        config: LoongClawConfig,
+        config: LoongConfig,
         resolved_path: PathBuf,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
@@ -86,7 +86,7 @@ impl FeishuWebhookState {
     }
 
     fn new_with_optional_resolved_path(
-        config: LoongClawConfig,
+        config: LoongConfig,
         resolved_path: Option<PathBuf>,
         resolved: &ResolvedFeishuChannelConfig,
         adapter: FeishuAdapter,
@@ -136,6 +136,14 @@ impl FeishuWebhookState {
         updates: Vec<crate::tools::DeferredFeishuCardUpdate>,
     ) {
         dispatch_deferred_feishu_card_updates(self.config.clone(), updates);
+    }
+
+    pub(super) fn configured_account_id(&self) -> &str {
+        self.configured_account_id.as_str()
+    }
+
+    pub(super) fn account_id(&self) -> &str {
+        self.account_id.as_str()
     }
 }
 
@@ -210,7 +218,7 @@ struct FeishuWebhookSuccessResponse {
 
 #[derive(Debug)]
 struct FeishuWebhookPostResponseDispatch {
-    config: LoongClawConfig,
+    config: LoongConfig,
     deferred_updates: Vec<crate::tools::DeferredFeishuCardUpdate>,
 }
 
@@ -248,7 +256,7 @@ impl FeishuCallbackResponse {
 }
 
 impl FeishuWebhookSuccessResponse {
-    fn from_parsed_response(response: FeishuParsedActionResponse, config: LoongClawConfig) -> Self {
+    fn from_parsed_response(response: FeishuParsedActionResponse, config: LoongConfig) -> Self {
         Self {
             body: response.body,
             post_response_dispatch: (!response.deferred_updates.is_empty()).then_some(
@@ -414,6 +422,15 @@ pub(super) async fn feishu_webhook_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    tracing::debug!(
+        target: "loong.channel.feishu",
+        transport = "webhook",
+        configured_account_id = %state.configured_account_id,
+        content_length = body.len(),
+        has_signature = headers.contains_key("X-Lark-Signature"),
+        "received feishu webhook request"
+    );
+
     let body_text = match std::str::from_utf8(&body) {
         Ok(value) => value,
         Err(error) => {
@@ -485,19 +502,46 @@ pub(super) async fn handle_feishu_parsed_action(
     parsed: FeishuWebhookAction,
 ) -> Result<FeishuParsedActionResponse, (StatusCode, String)> {
     match parsed {
-        FeishuWebhookAction::UrlVerification { challenge } => Ok(
-            FeishuParsedActionResponse::immediate(json!({ "challenge": challenge })),
-        ),
+        FeishuWebhookAction::UrlVerification { challenge } => {
+            tracing::debug!(
+                target: "loong.channel.feishu",
+                transport = "webhook",
+                configured_account_id = %state.configured_account_id,
+                "accepted feishu url verification request"
+            );
+            Ok(FeishuParsedActionResponse::immediate(
+                json!({ "challenge": challenge }),
+            ))
+        }
         FeishuWebhookAction::Ignore => Ok(FeishuParsedActionResponse::immediate(
             json!({"code": 0, "msg": "ignored"}),
         )),
         FeishuWebhookAction::CardCallback(event) => {
+            tracing::info!(
+                target: "loong.channel.feishu",
+                transport = "webhook",
+                action = "card_callback",
+                configured_account_id = %state.configured_account_id,
+                event_id = %event.event_id,
+                conversation_id = %event.session.conversation_id,
+                has_open_message_id = event.context.open_message_id.is_some(),
+                has_open_chat_id = event.context.open_chat_id.is_some(),
+                has_principal = event.principal.is_some(),
+                "accepted feishu card callback event"
+            );
             {
                 let mut dedupe = state.seen_events.lock().await;
-                if !matches!(
-                    dedupe.begin_processing(&event.event_id),
-                    RecentIdReservation::Accepted
-                ) {
+                let reservation = dedupe.begin_processing(&event.event_id);
+                if !matches!(reservation, RecentIdReservation::Accepted) {
+                    tracing::debug!(
+                        target: "loong.channel.feishu",
+                        transport = "webhook",
+                        action = "card_callback",
+                        configured_account_id = %state.configured_account_id,
+                        event_id = %event.event_id,
+                        reservation = ?reservation,
+                        "deduplicated feishu card callback event"
+                    );
                     return Ok(FeishuParsedActionResponse::immediate(
                         FeishuCallbackResponse::Noop.as_json(),
                     ));
@@ -515,12 +559,32 @@ pub(super) async fn handle_feishu_parsed_action(
             Ok(response)
         }
         FeishuWebhookAction::Inbound(event) => {
+            tracing::info!(
+                target: "loong.channel.feishu",
+                transport = "webhook",
+                action = "inbound",
+                configured_account_id = %state.configured_account_id,
+                event_id = %event.event_id,
+                message_id = %event.message_id,
+                conversation_id = %event.session.conversation_id,
+                has_thread = event.session.thread_id.is_some(),
+                has_principal = event.principal.is_some(),
+                resource_count = event.resources.len(),
+                "accepted feishu inbound event"
+            );
             {
                 let mut dedupe = state.seen_events.lock().await;
-                if !matches!(
-                    dedupe.begin_processing(&event.event_id),
-                    RecentIdReservation::Accepted
-                ) {
+                let reservation = dedupe.begin_processing(&event.event_id);
+                if !matches!(reservation, RecentIdReservation::Accepted) {
+                    tracing::debug!(
+                        target: "loong.channel.feishu",
+                        transport = "webhook",
+                        action = "inbound",
+                        configured_account_id = %state.configured_account_id,
+                        event_id = %event.event_id,
+                        reservation = ?reservation,
+                        "deduplicated feishu inbound event"
+                    );
                     return Ok(FeishuParsedActionResponse::immediate(
                         json!({"code": 0, "msg": "duplicate_event"}),
                     ));
@@ -584,6 +648,10 @@ async fn handle_feishu_inbound_event(
     state: &FeishuWebhookState,
     event: super::payload::FeishuInboundEvent,
 ) -> Result<FeishuParsedActionResponse, (StatusCode, String)> {
+    let inbound_event_id = event.event_id.clone();
+    let inbound_message_id = event.message_id.clone();
+    let inbound_conversation_id = event.session.conversation_id.clone();
+
     state.runtime.mark_run_start().await.map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -652,6 +720,19 @@ async fn handle_feishu_inbound_event(
         ))
     }
     .await;
+
+    if result.is_ok() {
+        tracing::info!(
+            target: "loong.channel.feishu",
+            transport = "webhook",
+            action = "inbound",
+            configured_account_id = %state.configured_account_id,
+            event_id = %inbound_event_id,
+            message_id = %inbound_message_id,
+            conversation_id = %inbound_conversation_id,
+            "feishu inbound event processed successfully"
+        );
+    }
 
     if let Err(error) = state.runtime.mark_run_end().await {
         log_feishu_inbound_warning("runtime end failed", &error);
@@ -808,7 +889,7 @@ fn build_feishu_card_callback_inbound_message(
 }
 
 fn dispatch_deferred_feishu_card_updates(
-    config: LoongClawConfig,
+    config: LoongConfig,
     updates: Vec<crate::tools::DeferredFeishuCardUpdate>,
 ) {
     if updates.is_empty() {
@@ -826,7 +907,7 @@ fn dispatch_deferred_feishu_card_updates(
 }
 
 async fn execute_deferred_feishu_card_update(
-    config: LoongClawConfig,
+    config: LoongConfig,
     update: crate::tools::DeferredFeishuCardUpdate,
 ) -> crate::CliResult<()> {
     let resolved = config
@@ -939,7 +1020,7 @@ mod tests {
     use super::*;
     use crate::channel::ChannelPlatform;
     use crate::channel::runtime::state::start_channel_operation_runtime_tracker_for_test;
-    use crate::config::{LoongClawConfig, ProviderConfig};
+    use crate::config::{LoongConfig, ProviderConfig};
     use crate::context::{DEFAULT_TOKEN_TTL_S, KernelContext, bootstrap_test_kernel_context};
     use crate::tools::runtime_config::ToolRuntimeConfig;
     use axum::{
@@ -949,9 +1030,9 @@ mod tests {
         response::IntoResponse,
         routing::post,
     };
-    use loongclaw_contracts::Capability;
-    use loongclaw_kernel::{
-        ExecutionRoute, HarnessKind, InMemoryAuditSink, LoongClawKernel, StaticPolicyEngine,
+    use loong_contracts::Capability;
+    use loong_kernel::{
+        ExecutionRoute, HarnessKind, InMemoryAuditSink, LoongKernel, StaticPolicyEngine,
         SystemClock, VerticalPackManifest,
     };
     use serde_json::json;
@@ -980,7 +1061,7 @@ mod tests {
 
     fn temp_webhook_test_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-feishu-webhook-{label}-{}",
+            "loong-feishu-webhook-{label}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -1010,16 +1091,16 @@ mod tests {
         }
     }
 
-    fn webhook_tool_runtime_config(config: &LoongClawConfig) -> ToolRuntimeConfig {
-        ToolRuntimeConfig::from_loongclaw_config(config, None)
+    fn webhook_tool_runtime_config(config: &LoongConfig) -> ToolRuntimeConfig {
+        ToolRuntimeConfig::from_loong_config(config, None)
     }
 
     fn bootstrap_webhook_kernel_context(
         agent_id: &str,
         ttl_s: u64,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
     ) -> Result<KernelContext, String> {
-        let mut kernel = LoongClawKernel::with_runtime(
+        let mut kernel = LoongKernel::with_runtime(
             StaticPolicyEngine::default(),
             Arc::new(SystemClock),
             Arc::new(InMemoryAuditSink::default()),
@@ -1319,14 +1400,13 @@ data: [DONE]\n\n",
                             // tool_invoke with the lease obtained from tool_search.
                             // Extract the lease from the tool_search result in the
                             // request body.
-                            let lease = extract_lease_from_provider_request_body(
-                                &body_text,
-                                "feishu.card.update",
-                            );
+                            let lease =
+                                extract_lease_from_provider_request_body(&body_text, "channel");
                             let arguments = json!({
-                                "tool_id": "feishu.card.update",
+                                "tool_id": "channel",
                                 "lease": lease,
                                 "arguments": {
+                                    "operation": "card.update",
                                     "card": {
                                         "config": {"wide_screen_mode": true},
                                         "elements": [{"tag": "markdown", "content": "callback updated"}]
@@ -1413,9 +1493,9 @@ data: [DONE]\n\n",
         let payload_summary = serde_json::to_string(&json!({
             "query": "feishu card update callback token markdown",
             "results": [{
-                "tool_id": "feishu.card.update",
-                "summary": "Update a Feishu interactive card after a card callback.",
-                "argument_hint": "callback_token?:string,card?:object,markdown?:string",
+                "tool_id": "channel",
+                "summary": "Operate channel-specific capabilities such as Feishu through one separate addon tool.",
+                "argument_hint": "operation:string,account_id?:string,open_id?:string,receive_id?:string,message_id?:string,url?:string,query?:string",
                 "lease": "lease-feishu-card-update"
             }]
         }))
@@ -1439,7 +1519,7 @@ data: [DONE]\n\n",
         .expect("encode provider request body");
 
         assert_eq!(
-            extract_lease_from_provider_request_body(body.as_str(), "feishu.card.update"),
+            extract_lease_from_provider_request_body(body.as_str(), "channel"),
             "lease-feishu-card-update"
         );
     }
@@ -1448,7 +1528,7 @@ data: [DONE]\n\n",
     fn extract_lease_from_provider_request_body_ignores_non_search_envelopes() {
         let misleading_summary = serde_json::to_string(&json!({
             "results": [{
-                "tool_id": "feishu.card.update",
+                "tool_id": "channel",
                 "lease": "lease-from-non-search"
             }]
         }))
@@ -1456,9 +1536,9 @@ data: [DONE]\n\n",
         let search_summary = serde_json::to_string(&json!({
             "query": "feishu card update callback token markdown",
             "results": [{
-                "tool_id": "feishu.card.update",
-                "summary": "Update a Feishu interactive card after a card callback.",
-                "argument_hint": "callback_token?:string,card?:object,markdown?:string",
+                "tool_id": "channel",
+                "summary": "Operate channel-specific capabilities such as Feishu through one separate addon tool.",
+                "argument_hint": "operation:string,account_id?:string,open_id?:string,receive_id?:string,message_id?:string,url?:string,query?:string",
                 "lease": "lease-from-search"
             }]
         }))
@@ -1490,7 +1570,7 @@ data: [DONE]\n\n",
         .expect("encode provider request body");
 
         assert_eq!(
-            extract_lease_from_provider_request_body(body.as_str(), "feishu.card.update"),
+            extract_lease_from_provider_request_body(body.as_str(), "channel"),
             "lease-from-search"
         );
     }
@@ -1649,40 +1729,36 @@ data: [DONE]\n\n",
         spawn_mock_server(router).await
     }
 
-    fn test_webhook_config(provider_base_url: &str, feishu_base_url: &str) -> LoongClawConfig {
+    fn test_webhook_config(provider_base_url: &str, feishu_base_url: &str) -> LoongConfig {
         let temp_dir = temp_webhook_test_dir("runtime");
         std::fs::create_dir_all(&temp_dir).expect("create webhook temp dir");
 
-        let mut config = LoongClawConfig {
+        let mut config = LoongConfig {
             provider: ProviderConfig {
                 base_url: provider_base_url.to_owned(),
-                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                api_key: Some(loong_contracts::SecretRef::Inline(
                     "test-provider-key".to_owned(),
                 )),
                 model: "test-model".to_owned(),
                 ..ProviderConfig::default()
             },
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
         config.memory.sqlite_path = temp_dir.join("memory.sqlite3").display().to_string();
         config.tools.file_root = Some(temp_dir.join("tool-root").display().to_string());
         config.feishu.enabled = true;
         config.feishu.account_id = Some("feishu_main".to_owned());
-        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
-            "cli_a1b2c3".to_owned(),
-        ));
-        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
-            "secret-123".to_owned(),
-        ));
+        config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret =
+            Some(loong_contracts::SecretRef::Inline("secret-123".to_owned()));
         config.feishu.base_url = Some(feishu_base_url.to_owned());
         config.feishu.receive_id_type = "chat_id".to_owned();
         config.feishu.allowed_chat_ids = vec!["oc_demo".to_owned()];
-        config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+        config.feishu.verification_token = Some(loong_contracts::SecretRef::Inline(
             "verify-token".to_owned(),
         ));
-        config.feishu.encrypt_key = Some(loongclaw_contracts::SecretRef::Inline(
-            "encrypt-key".to_owned(),
-        ));
+        config.feishu.encrypt_key =
+            Some(loong_contracts::SecretRef::Inline("encrypt-key".to_owned()));
         config
     }
 

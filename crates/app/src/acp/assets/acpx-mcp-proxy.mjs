@@ -139,7 +139,7 @@ function rewriteLine(line, mcpServers) {
 }
 
 if (process.argv.includes("--version")) {
-  process.stdout.write("loongclaw-acpx-mcp-proxy 1\n");
+  process.stdout.write("loong-acpx-mcp-proxy 1\n");
   process.exit(0);
 }
 

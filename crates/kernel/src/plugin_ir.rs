@@ -98,6 +98,12 @@ pub struct PluginChannelBridgeContract {
     #[serde(default)]
     pub account_scope: Option<String>,
     #[serde(default)]
+    pub runtime_contract: Option<String>,
+    #[serde(default)]
+    pub runtime_operations: Vec<String>,
+    #[serde(default)]
+    pub runtime_metadata_issues: Vec<String>,
+    #[serde(default)]
     pub readiness: PluginChannelBridgeReadiness,
 }
 
@@ -1031,7 +1037,7 @@ fn activation_diagnostic_finding(
             PluginDiagnosticCode::CompatibilityShimRequired,
             Some("compatibility_mode".to_owned()),
             Some(
-                "enable or widen the required compatibility shim support policy in the runtime bridge matrix, or migrate the plugin to the native LoongClaw contract before activation"
+                "enable or widen the required compatibility shim support policy in the runtime bridge matrix, or migrate the plugin to the native Loong contract before activation"
                     .to_owned(),
             ),
         ),
@@ -1039,7 +1045,7 @@ fn activation_diagnostic_finding(
             PluginDiagnosticCode::IncompatibleHost,
             Some("compatibility".to_owned()),
             Some(
-                "align `compatibility.host_api` / `compatibility.host_version_req` with the current host, or upgrade LoongClaw before activation"
+                "align `compatibility.host_api` / `compatibility.host_version_req` with the current host, or upgrade Loong before activation"
                     .to_owned(),
             ),
         ),
@@ -1282,6 +1288,17 @@ fn derive_channel_bridge_contract(
     let transport_family = normalized_manifest_metadata_value(manifest, "transport_family");
     let target_contract = normalized_manifest_metadata_value(manifest, "target_contract");
     let account_scope = normalized_manifest_metadata_value(manifest, "account_scope");
+    let runtime_contract = normalized_manifest_metadata_value(manifest, "channel_runtime_contract");
+    let runtime_operations =
+        normalized_manifest_metadata_string_list(manifest, "channel_runtime_operations_json");
+    let mut runtime_metadata_issues = Vec::new();
+    let runtime_operations = match runtime_operations {
+        Ok(runtime_operations) => runtime_operations,
+        Err(issue) => {
+            runtime_metadata_issues.push(issue);
+            Vec::new()
+        }
+    };
     let adapter_family = normalized_manifest_metadata_value(manifest, "adapter_family");
 
     let has_channel_bridge_metadata =
@@ -1309,6 +1326,9 @@ fn derive_channel_bridge_contract(
         transport_family,
         target_contract,
         account_scope,
+        runtime_contract,
+        runtime_operations,
+        runtime_metadata_issues,
         readiness,
     })
 }
@@ -1349,6 +1369,31 @@ fn normalized_manifest_metadata_value(manifest: &PluginManifest, key: &str) -> O
     let value = manifest.metadata.get(key);
     let value = value.map(String::as_str);
     normalized_optional_value(value)
+}
+
+fn normalized_manifest_metadata_string_list(
+    manifest: &PluginManifest,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let Some(raw_value) = manifest.metadata.get(key) else {
+        return Ok(Vec::new());
+    };
+
+    let parsed_values = serde_json::from_str::<Vec<String>>(raw_value)
+        .map_err(|error| format!("metadata.{key} must be valid json string array: {error}"))?;
+
+    let mut normalized_values = Vec::new();
+    for parsed_value in parsed_values {
+        let trimmed_value = parsed_value.trim();
+        if trimmed_value.is_empty() {
+            continue;
+        }
+
+        let normalized_value = trimmed_value.to_owned();
+        normalized_values.push(normalized_value);
+    }
+
+    Ok(normalized_values)
 }
 
 fn normalized_optional_value(raw: Option<&str>) -> Option<String> {
@@ -1401,8 +1446,8 @@ pub fn plugin_runtime_scaffold_defaults(
 
 fn legacy_plugin_ir_dialect(source_kind: PluginSourceKind) -> PluginContractDialect {
     match source_kind {
-        PluginSourceKind::PackageManifest => PluginContractDialect::LoongClawPackageManifest,
-        PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+        PluginSourceKind::PackageManifest => PluginContractDialect::LoongPackageManifest,
+        PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongEmbeddedSource,
     }
 }
 
@@ -1575,7 +1620,7 @@ mod tests {
             PluginSourceKind::EmbeddedSource
         };
         let path = if language == "manifest" {
-            "/tmp/loongclaw.plugin.json".to_owned()
+            "/tmp/loong.plugin.json".to_owned()
         } else {
             format!("/tmp/plugin.{language}")
         };
@@ -1589,10 +1634,8 @@ mod tests {
             path,
             source_kind,
             dialect: match source_kind {
-                PluginSourceKind::PackageManifest => {
-                    PluginContractDialect::LoongClawPackageManifest
-                }
-                PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+                PluginSourceKind::PackageManifest => PluginContractDialect::LoongPackageManifest,
+                PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongEmbeddedSource,
             },
             dialect_version: matches!(source_kind, PluginSourceKind::PackageManifest)
                 .then(|| CURRENT_PLUGIN_MANIFEST_API_VERSION.to_owned()),
@@ -1759,7 +1802,7 @@ mod tests {
         );
         assert_eq!(
             ir.package_manifest_path,
-            Some("/tmp/loongclaw.plugin.json".to_owned())
+            Some("/tmp/loong.plugin.json".to_owned())
         );
     }
 
@@ -1775,6 +1818,14 @@ mod tests {
                 "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
             ),
             ("account_scope".to_owned(), "multi_account".to_owned()),
+            (
+                "channel_runtime_contract".to_owned(),
+                "loong_channel_bridge_v1".to_owned(),
+            ),
+            (
+                "channel_runtime_operations_json".to_owned(),
+                "[\"send\",\"receive_batch\",\"ack_inbound\",\"complete_batch\"]".to_owned(),
+            ),
         ]));
 
         let translator = PluginTranslator::new();
@@ -1798,6 +1849,19 @@ mod tests {
         assert_eq!(
             channel_bridge.account_scope.as_deref(),
             Some("multi_account")
+        );
+        assert_eq!(
+            channel_bridge.runtime_contract.as_deref(),
+            Some("loong_channel_bridge_v1")
+        );
+        assert_eq!(
+            channel_bridge.runtime_operations,
+            vec![
+                "send".to_owned(),
+                "receive_batch".to_owned(),
+                "ack_inbound".to_owned(),
+                "complete_batch".to_owned(),
+            ]
         );
         assert!(channel_bridge.readiness.ready);
         assert!(channel_bridge.readiness.missing_fields.is_empty());
@@ -1824,6 +1888,41 @@ mod tests {
                 "metadata.target_contract".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn translator_preserves_invalid_runtime_operations_metadata_json_as_issue() {
+        let descriptor = channel_bridge_descriptor(BTreeMap::from([
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            (
+                "target_contract".to_owned(),
+                "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+            ),
+            (
+                "channel_runtime_operations_json".to_owned(),
+                "{not-json}".to_owned(),
+            ),
+        ]));
+
+        let translator = PluginTranslator::new();
+        let ir = translator.translate_descriptor(&descriptor);
+        let channel_bridge = ir
+            .channel_bridge
+            .as_ref()
+            .expect("channel bridge contract should exist");
+
+        assert!(channel_bridge.runtime_operations.is_empty());
+        assert_eq!(channel_bridge.runtime_metadata_issues.len(), 1);
+        let issue = channel_bridge
+            .runtime_metadata_issues
+            .first()
+            .expect("runtime metadata issue should exist");
+        assert!(issue.starts_with(
+            "metadata.channel_runtime_operations_json must be valid json string array:"
+        ));
     }
 
     #[test]
@@ -1926,7 +2025,7 @@ mod tests {
                 source_kind: Some(PluginSourceKind::EmbeddedSource),
                 field_path: None,
                 message: "legacy source marker".to_owned(),
-                remediation: Some("add loongclaw.plugin.json".to_owned()),
+                remediation: Some("add loong.plugin.json".to_owned()),
             }],
             descriptors: vec![descriptor],
         });
@@ -2123,7 +2222,7 @@ mod tests {
         let ir: PluginIR =
             serde_json::from_str(raw).expect("legacy embedded-source payload should deserialize");
 
-        assert_eq!(ir.dialect, PluginContractDialect::LoongClawEmbeddedSource);
+        assert_eq!(ir.dialect, PluginContractDialect::LoongEmbeddedSource);
         assert_eq!(ir.compatibility_mode, PluginCompatibilityMode::Native);
         assert!(ir.diagnostic_findings.is_empty());
         assert!(ir.slot_claims.is_empty());
@@ -2141,7 +2240,7 @@ mod tests {
             "endpoint": "https://plugins.example.test/invoke",
             "capabilities": [],
             "metadata": {},
-            "source_path": "/tmp/loongclaw.plugin.json",
+            "source_path": "/tmp/loong.plugin.json",
             "source_kind": "package_manifest",
             "package_root": "/tmp"
         }"#;
@@ -2149,7 +2248,7 @@ mod tests {
         let ir: PluginIR =
             serde_json::from_str(raw).expect("legacy package payload should deserialize");
 
-        assert_eq!(ir.dialect, PluginContractDialect::LoongClawPackageManifest);
+        assert_eq!(ir.dialect, PluginContractDialect::LoongPackageManifest);
         assert_eq!(ir.compatibility_mode, PluginCompatibilityMode::Native);
         assert_eq!(ir.runtime.source_language, "unknown");
         assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::HttpJson);
@@ -2413,7 +2512,7 @@ mod tests {
             BTreeMap::from([("bridge_kind".to_owned(), "mcp_server".to_owned())]),
         );
         descriptor.manifest.compatibility = Some(PluginCompatibility {
-            host_api: Some("loongclaw-plugin/v999".to_owned()),
+            host_api: Some("loong-plugin/v999".to_owned()),
             host_version_req: None,
         });
 
@@ -2488,7 +2587,7 @@ mod tests {
         assert_eq!(inventory[0].plugin_version.as_deref(), Some("1.0.0"));
         assert_eq!(
             inventory[0].dialect,
-            PluginContractDialect::LoongClawPackageManifest
+            PluginContractDialect::LoongPackageManifest
         );
         assert_eq!(
             inventory[0].compatibility_mode,

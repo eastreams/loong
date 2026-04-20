@@ -35,7 +35,7 @@ where
     let ordered_profiles =
         prioritize_provider_auth_profiles_by_health(auth_profiles, profile_state_policy);
     tracing::debug!(
-        target: "loongclaw.provider",
+        target: "loong.provider",
         provider_id = %provider.kind.profile().id,
         binding = %binding.as_str(),
         model_candidate_count = model_candidates.len(),
@@ -56,7 +56,7 @@ where
                         mark_provider_profile_success(policy, profile);
                     }
                     tracing::debug!(
-                        target: "loongclaw.provider",
+                        target: "loong.provider",
                         provider_id = %provider.kind.profile().id,
                         binding = %binding.as_str(),
                         model = %model,
@@ -94,7 +94,7 @@ where
                         mark_provider_profile_failure(policy, profile, reason);
                     }
                     tracing::warn!(
-                        target: "loongclaw.provider",
+                        target: "loong.provider",
                         provider_id = %provider.kind.profile().id,
                         binding = %binding.as_str(),
                         model = %snapshot.model,

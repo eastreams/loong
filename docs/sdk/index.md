@@ -19,7 +19,7 @@ Start with:
 
 - [Internal Integration Quickstart](quickstart-internal.md)
 - [Internal Integration SDK Contract](../design-docs/internal-integration-sdk-contract.md)
-- [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loongclaw/implementation-plans)
+- [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loong/implementation-plans)
 
 ### External authors
 
@@ -35,14 +35,14 @@ Start with:
 Start with:
 
 - [Capability Promotion Contract](../design-docs/capability-promotion-contract.md)
-- [SDK Strategy Implementation Roadmap](https://github.com/eastreams/knowledge-base/tree/main/loongclaw/implementation-plans)
+- [SDK Strategy Implementation Roadmap](https://github.com/eastreams/knowledge-base/tree/main/loong/implementation-plans)
 
 ## Document Map
 
 | Document | Use it for |
 |----------|------------|
 | [Internal Integration Quickstart](quickstart-internal.md) | Adding or refactoring repository-owned surfaces |
-| [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loongclaw/implementation-plans) | Converging the provider family into a clearer maintainer-facing seam |
+| [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loong/implementation-plans) | Converging the provider family into a clearer maintainer-facing seam |
 | [External Authoring Quickstart](quickstart-external.md) | Understanding what external authors should build today |
 | [Compatibility Matrix](compatibility-matrix.md) | Stability and maturity boundaries across SDK surfaces |
 | [SDK Strategy](../design-docs/sdk-strategy.md) | Overall architecture framing |

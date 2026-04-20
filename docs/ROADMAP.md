@@ -404,8 +404,8 @@ Focus: ship a low-friction daily-usable daemon entry for non-developers.
   - `ConversationRuntime` port for non-invasive backend extension and contract testing
 - daemon runtime entrypoint decomposition:
   - `crates/daemon/src/main.rs` reduced to CLI routing + bootstrap wiring
-  - spec/runtime models and adapter inventory extracted to `spec_runtime.inc.rs`
-  - heavy spec execution/security/approval pipeline extracted to `spec_execution.inc.rs`
+  - `crates/spec/src/spec_runtime.rs` now keeps runtime contracts/orchestration at the root while helper slices live under `crates/spec/src/spec_runtime/*`
+  - `crates/spec/src/spec_execution.rs` now keeps execution/security/approval orchestration at the root while helper slices live under `crates/spec/src/spec_execution/*`
   - keeps behavior stable while removing multi-thousand-line single-file coupling
 
 ### Next Public Product Tracks

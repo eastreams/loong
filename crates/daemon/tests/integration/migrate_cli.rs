@@ -34,40 +34,40 @@ fn write_file(root: &Path, relative: &str, content: &str) {
 #[test]
 fn parse_legacy_claw_source_accepts_supported_ids() {
     assert_eq!(
-        loongclaw_daemon::migrate_cli::parse_legacy_claw_source("nanobot"),
+        loong_daemon::migrate_cli::parse_legacy_claw_source("nanobot"),
         Some(mvp::migration::LegacyClawSource::Nanobot)
     );
     assert_eq!(
-        loongclaw_daemon::migrate_cli::parse_legacy_claw_source("openclaw"),
+        loong_daemon::migrate_cli::parse_legacy_claw_source("openclaw"),
         Some(mvp::migration::LegacyClawSource::OpenClaw)
     );
     assert_eq!(
-        loongclaw_daemon::migrate_cli::parse_legacy_claw_source("picoclaw"),
+        loong_daemon::migrate_cli::parse_legacy_claw_source("picoclaw"),
         Some(mvp::migration::LegacyClawSource::PicoClaw)
     );
     assert_eq!(
-        loongclaw_daemon::migrate_cli::parse_legacy_claw_source("zeroclaw"),
+        loong_daemon::migrate_cli::parse_legacy_claw_source("zeroclaw"),
         Some(mvp::migration::LegacyClawSource::ZeroClaw)
     );
     assert_eq!(
-        loongclaw_daemon::migrate_cli::parse_legacy_claw_source("nanoclaw"),
+        loong_daemon::migrate_cli::parse_legacy_claw_source("nanoclaw"),
         Some(mvp::migration::LegacyClawSource::NanoClaw)
     );
     assert_eq!(
-        loongclaw_daemon::migrate_cli::parse_legacy_claw_source("auto"),
+        loong_daemon::migrate_cli::parse_legacy_claw_source("auto"),
         Some(mvp::migration::LegacyClawSource::Unknown)
     );
     assert_eq!(
-        loongclaw_daemon::migrate_cli::parse_legacy_claw_source("unsupported"),
+        loong_daemon::migrate_cli::parse_legacy_claw_source("unsupported"),
         None
     );
 }
 
 #[test]
 fn run_migrate_cli_writes_nativeized_config() {
-    let legacy_root = unique_temp_dir("loongclaw-import-cli-legacy");
-    let output_root = unique_temp_dir("loongclaw-import-cli-output");
-    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-home");
+    let legacy_root = unique_temp_dir("loong-import-cli-legacy");
+    let output_root = unique_temp_dir("loong-import-cli-output");
+    let (home_root, _env_guard) = isolated_home_guard("loong-import-cli-home");
     fs::create_dir_all(&legacy_root).expect("create legacy root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -82,21 +82,19 @@ fn run_migrate_cli_writes_nativeized_config() {
         "# Identity\n\n- Name: Release copilot\n- Motto: your nanobot agent for deploys\n",
     );
 
-    let output_path = output_root.join("loongclaw.toml");
-    loongclaw_daemon::migrate_cli::run_migrate_cli(
-        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
-            input: Some(legacy_root.display().to_string()),
-            output: Some(output_path.display().to_string()),
-            source: Some("nanobot".to_owned()),
-            mode: loongclaw_daemon::migrate_cli::MigrateMode::Apply,
-            json: false,
-            source_id: None,
-            safe_profile_merge: false,
-            primary_source_id: None,
-            apply_external_skills_plan: false,
-            force: true,
-        },
-    )
+    let output_path = output_root.join("loong.toml");
+    loong_daemon::migrate_cli::run_migrate_cli(loong_daemon::migrate_cli::MigrateCommandOptions {
+        input: Some(legacy_root.display().to_string()),
+        output: Some(output_path.display().to_string()),
+        source: Some("nanobot".to_owned()),
+        mode: loong_daemon::migrate_cli::MigrateMode::Apply,
+        json: false,
+        source_id: None,
+        safe_profile_merge: false,
+        primary_source_id: None,
+        apply_external_skills_plan: false,
+        force: true,
+    })
     .expect("migrate command should succeed");
 
     let (_, config) = mvp::config::load(Some(&output_path.display().to_string()))
@@ -112,13 +110,13 @@ fn run_migrate_cli_writes_nativeized_config() {
     assert_eq!(
         config.cli.system_prompt_addendum.as_deref(),
         Some(
-            "## Imported SOUL.md\n# Soul\n\nAlways prefer concise shell output. updated by LoongClaw."
+            "## Imported SOUL.md\n# Soul\n\nAlways prefer concise shell output. updated by Loong."
         )
     );
     assert_eq!(
         config.memory.profile_note.as_deref(),
         Some(
-            "## Imported IDENTITY.md\n# Identity\n\n- Name: Release copilot\n- Motto: your LoongClaw agent for deploys"
+            "## Imported IDENTITY.md\n# Identity\n\n- Name: Release copilot\n- Motto: your Loong agent for deploys"
         )
     );
 
@@ -129,9 +127,9 @@ fn run_migrate_cli_writes_nativeized_config() {
 
 #[test]
 fn run_migrate_cli_plan_mode_returns_preview_without_writing() {
-    let legacy_root = unique_temp_dir("loongclaw-import-cli-plan-legacy");
-    let output_root = unique_temp_dir("loongclaw-import-cli-plan-output");
-    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-plan-home");
+    let legacy_root = unique_temp_dir("loong-import-cli-plan-legacy");
+    let output_root = unique_temp_dir("loong-import-cli-plan-output");
+    let (home_root, _env_guard) = isolated_home_guard("loong-import-cli-plan-home");
     fs::create_dir_all(&legacy_root).expect("create legacy root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -141,20 +139,18 @@ fn run_migrate_cli_plan_mode_returns_preview_without_writing() {
         "# Soul\n\nAlways prefer concise shell output. updated by nanobot.\n",
     );
     let output_path = output_root.join("preview-only.toml");
-    loongclaw_daemon::migrate_cli::run_migrate_cli(
-        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
-            input: Some(legacy_root.display().to_string()),
-            output: Some(output_path.display().to_string()),
-            source: Some("nanobot".to_owned()),
-            mode: loongclaw_daemon::migrate_cli::MigrateMode::Plan,
-            json: false,
-            source_id: None,
-            safe_profile_merge: false,
-            primary_source_id: None,
-            apply_external_skills_plan: false,
-            force: true,
-        },
-    )
+    loong_daemon::migrate_cli::run_migrate_cli(loong_daemon::migrate_cli::MigrateCommandOptions {
+        input: Some(legacy_root.display().to_string()),
+        output: Some(output_path.display().to_string()),
+        source: Some("nanobot".to_owned()),
+        mode: loong_daemon::migrate_cli::MigrateMode::Plan,
+        json: false,
+        source_id: None,
+        safe_profile_merge: false,
+        primary_source_id: None,
+        apply_external_skills_plan: false,
+        force: true,
+    })
     .expect("plan mode should succeed");
 
     assert!(
@@ -169,9 +165,9 @@ fn run_migrate_cli_plan_mode_returns_preview_without_writing() {
 
 #[test]
 fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
-    let discovery_root = unique_temp_dir("loongclaw-import-cli-selected-discovery");
-    let output_root = unique_temp_dir("loongclaw-import-cli-selected-output");
-    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-selected-home");
+    let discovery_root = unique_temp_dir("loong-import-cli-selected-discovery");
+    let output_root = unique_temp_dir("loong-import-cli-selected-output");
+    let (home_root, _env_guard) = isolated_home_guard("loong-import-cli-selected-home");
     fs::create_dir_all(&discovery_root).expect("create discovery root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -189,20 +185,18 @@ fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
     );
 
     let output_path = output_root.join("selected.toml");
-    loongclaw_daemon::migrate_cli::run_migrate_cli(
-        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
-            input: Some(discovery_root.display().to_string()),
-            output: Some(output_path.display().to_string()),
-            source: None,
-            mode: loongclaw_daemon::migrate_cli::MigrateMode::ApplySelected,
-            json: false,
-            source_id: Some("openclaw".to_owned()),
-            safe_profile_merge: false,
-            primary_source_id: None,
-            apply_external_skills_plan: false,
-            force: true,
-        },
-    )
+    loong_daemon::migrate_cli::run_migrate_cli(loong_daemon::migrate_cli::MigrateCommandOptions {
+        input: Some(discovery_root.display().to_string()),
+        output: Some(output_path.display().to_string()),
+        source: None,
+        mode: loong_daemon::migrate_cli::MigrateMode::ApplySelected,
+        json: false,
+        source_id: Some("openclaw".to_owned()),
+        safe_profile_merge: false,
+        primary_source_id: None,
+        apply_external_skills_plan: false,
+        force: true,
+    })
     .expect("apply_selected mode should succeed");
 
     assert!(
@@ -210,7 +204,7 @@ fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
         "selected migration should write config"
     );
     let manifest_path = output_root
-        .join(".loongclaw-migration")
+        .join(".loong-migration")
         .join("selected.toml.last-migration.json");
     assert!(
         manifest_path.exists(),
@@ -224,9 +218,9 @@ fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
 
 #[test]
 fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
-    let discovery_root = unique_temp_dir("loongclaw-import-cli-external-skills-discovery");
-    let output_root = unique_temp_dir("loongclaw-import-cli-external-skills-output");
-    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-external-skills-home");
+    let discovery_root = unique_temp_dir("loong-import-cli-external-skills-discovery");
+    let output_root = unique_temp_dir("loong-import-cli-external-skills-output");
+    let (home_root, _env_guard) = isolated_home_guard("loong-import-cli-external-skills-home");
     fs::create_dir_all(&discovery_root).expect("create discovery root");
     fs::create_dir_all(&output_root).expect("create output root");
 
@@ -254,20 +248,18 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
     );
 
     let output_path = output_root.join("selected-external.toml");
-    loongclaw_daemon::migrate_cli::run_migrate_cli(
-        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
-            input: Some(discovery_root.display().to_string()),
-            output: Some(output_path.display().to_string()),
-            source: None,
-            mode: loongclaw_daemon::migrate_cli::MigrateMode::ApplySelected,
-            json: false,
-            source_id: Some("openclaw".to_owned()),
-            safe_profile_merge: false,
-            primary_source_id: None,
-            apply_external_skills_plan: true,
-            force: true,
-        },
-    )
+    loong_daemon::migrate_cli::run_migrate_cli(loong_daemon::migrate_cli::MigrateCommandOptions {
+        input: Some(discovery_root.display().to_string()),
+        output: Some(output_path.display().to_string()),
+        source: None,
+        mode: loong_daemon::migrate_cli::MigrateMode::ApplySelected,
+        json: false,
+        source_id: Some("openclaw".to_owned()),
+        safe_profile_merge: false,
+        primary_source_id: None,
+        apply_external_skills_plan: true,
+        force: true,
+    })
     .expect("apply_selected mode with external skills should succeed");
 
     let raw = fs::read_to_string(&output_path).expect("read generated config");
@@ -278,7 +270,7 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
         "bridged installs should enable external skills in the written config"
     );
     let external_manifest_path = output_root
-        .join(".loongclaw-migration")
+        .join(".loong-migration")
         .join("selected-external.toml.external-skills.json");
     assert!(
         external_manifest_path.exists(),
@@ -300,14 +292,14 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
 
 #[test]
 fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root() {
-    let policy_root = unique_temp_dir("loongclaw-import-cli-policy-root");
+    let policy_root = unique_temp_dir("loong-import-cli-policy-root");
     let legacy_root = policy_root.join("legacy-root");
-    let escape_root = unique_temp_dir("loongclaw-import-cli-policy-escape");
-    let (home_root, _env_guard) = isolated_home_guard("loongclaw-import-cli-policy-home");
+    let escape_root = unique_temp_dir("loong-import-cli-policy-escape");
+    let (home_root, _env_guard) = isolated_home_guard("loong-import-cli-policy-home");
     fs::create_dir_all(&legacy_root).expect("create legacy root under policy root");
     fs::create_dir_all(&escape_root).expect("create escape root");
 
-    let mut config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongConfig::default();
     config.tools.file_root = Some(policy_root.display().to_string());
     mvp::config::write(None, &config, true).expect("write discovered config");
 
@@ -318,12 +310,12 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
     );
 
     let escape_output = escape_root.join("outside-root.toml");
-    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
-        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+    let error = loong_daemon::migrate_cli::run_migrate_cli(
+        loong_daemon::migrate_cli::MigrateCommandOptions {
             input: Some(legacy_root.display().to_string()),
             output: Some(escape_output.display().to_string()),
             source: Some("nanobot".to_owned()),
-            mode: loongclaw_daemon::migrate_cli::MigrateMode::Apply,
+            mode: loong_daemon::migrate_cli::MigrateMode::Apply,
             json: false,
             source_id: None,
             safe_profile_merge: false,
@@ -346,12 +338,12 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
 
 #[test]
 fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
-    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
-        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+    let error = loong_daemon::migrate_cli::run_migrate_cli(
+        loong_daemon::migrate_cli::MigrateCommandOptions {
             input: Some(".".to_owned()),
             output: None,
             source: None,
-            mode: loongclaw_daemon::migrate_cli::MigrateMode::Apply,
+            mode: loong_daemon::migrate_cli::MigrateMode::Apply,
             json: false,
             source_id: None,
             safe_profile_merge: false,
@@ -374,12 +366,12 @@ fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
 
 #[test]
 fn migrate_cli_ux_discover_mode_reports_flag_level_input_requirement() {
-    let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
-        loongclaw_daemon::migrate_cli::MigrateCommandOptions {
+    let error = loong_daemon::migrate_cli::run_migrate_cli(
+        loong_daemon::migrate_cli::MigrateCommandOptions {
             input: None,
             output: None,
             source: None,
-            mode: loongclaw_daemon::migrate_cli::MigrateMode::Discover,
+            mode: loong_daemon::migrate_cli::MigrateMode::Discover,
             json: false,
             source_id: None,
             safe_profile_merge: false,
@@ -405,7 +397,7 @@ fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args(["migrate", "--help"])
         .output()
-        .expect("run loongclaw migrate --help");
+        .expect("run loong migrate --help");
 
     assert!(output.status.success(), "help should succeed");
     let stdout = String::from_utf8(output.stdout).expect("help output should be utf8");
@@ -424,7 +416,7 @@ fn root_help_lists_migrate_with_config_import_wording() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .arg("--help")
         .output()
-        .expect("run loongclaw --help");
+        .expect("run loong --help");
 
     assert!(output.status.success(), "help should succeed");
     let stdout = String::from_utf8(output.stdout).expect("help output should be utf8");

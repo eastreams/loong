@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use kernel::ToolCoreRequest;
-use loongclaw_app as mvp;
+use loong_app as mvp;
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use loongclaw_app as mvp;
+use loong_app as mvp;
 
 use crate::provider_credential_policy;
 
@@ -97,7 +97,7 @@ pub fn prepend_recommended_import_candidate(
 fn current_candidate(candidates: &[ImportCandidate]) -> Option<&ImportCandidate> {
     candidates
         .iter()
-        .find(|candidate| candidate.source_kind == ImportSourceKind::ExistingLoongClawConfig)
+        .find(|candidate| candidate.source_kind == ImportSourceKind::ExistingLoongConfig)
 }
 
 fn domain_for_kind(candidate: &ImportCandidate, kind: SetupDomainKind) -> Option<&DomainPreview> {
@@ -116,12 +116,12 @@ fn choose_passive_domain_candidate(
 
     candidates
         .iter()
-        .filter(|candidate| candidate.source_kind != ImportSourceKind::ExistingLoongClawConfig)
+        .filter(|candidate| candidate.source_kind != ImportSourceKind::ExistingLoongConfig)
         .find(|candidate| domain_for_kind(candidate, kind).is_some())
 }
 
 fn compose_provider_domain(
-    merged_config: &mut mvp::config::LoongClawConfig,
+    merged_config: &mut mvp::config::LoongConfig,
     candidates: &[ImportCandidate],
 ) -> Option<DomainPreview> {
     let current = current_candidate(candidates);
@@ -407,7 +407,7 @@ mod tests {
         assert!(changed);
         assert_eq!(
             target.api_key,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "OPENAI_API_KEY".to_owned(),
             })
         );
@@ -416,11 +416,11 @@ mod tests {
 
     #[test]
     fn compose_provider_domain_canonicalizes_selected_current_provider() {
-        let mut merged_config = mvp::config::LoongClawConfig::default();
+        let mut merged_config = mvp::config::LoongConfig::default();
         let mut current = ImportCandidate {
-            source_kind: ImportSourceKind::ExistingLoongClawConfig,
+            source_kind: ImportSourceKind::ExistingLoongConfig,
             source: "current config".to_owned(),
-            config: mvp::config::LoongClawConfig::default(),
+            config: mvp::config::LoongConfig::default(),
             surfaces: Vec::new(),
             domains: Vec::new(),
             channel_candidates: Vec::new(),
@@ -445,7 +445,7 @@ mod tests {
         assert!(domain.is_some());
         assert_eq!(
             merged_config.provider.api_key,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "OPENAI_API_KEY".to_owned(),
             })
         );
@@ -469,7 +469,7 @@ mod tests {
         assert!(changed);
         assert_eq!(
             target.api_key,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "ANTHROPIC_API_KEY".to_owned(),
             })
         );
@@ -482,7 +482,7 @@ mod tests {
 
         let mut target =
             mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
-        target.api_key = Some(loongclaw_contracts::SecretRef::Env {
+        target.api_key = Some(loong_contracts::SecretRef::Env {
             env: "TEAM_OPENAI_KEY".to_owned(),
         });
 
@@ -492,7 +492,7 @@ mod tests {
 
         assert_eq!(
             target.api_key,
-            Some(loongclaw_contracts::SecretRef::Env {
+            Some(loong_contracts::SecretRef::Env {
                 env: "TEAM_OPENAI_KEY".to_owned(),
             })
         );
@@ -525,7 +525,7 @@ mod tests {
 }
 
 fn compose_cli_domain(
-    merged_config: &mut mvp::config::LoongClawConfig,
+    merged_config: &mut mvp::config::LoongConfig,
     candidates: &[ImportCandidate],
 ) -> Option<DomainPreview> {
     let primary_candidate = choose_passive_domain_candidate(SetupDomainKind::Cli, candidates)?;
@@ -559,7 +559,7 @@ fn compose_cli_domain(
 }
 
 fn compose_memory_domain(
-    merged_config: &mut mvp::config::LoongClawConfig,
+    merged_config: &mut mvp::config::LoongConfig,
     candidates: &[ImportCandidate],
 ) -> Option<DomainPreview> {
     let primary_candidate = choose_passive_domain_candidate(SetupDomainKind::Memory, candidates)?;
@@ -593,7 +593,7 @@ fn compose_memory_domain(
 }
 
 fn compose_tools_domain(
-    merged_config: &mut mvp::config::LoongClawConfig,
+    merged_config: &mut mvp::config::LoongConfig,
     candidates: &[ImportCandidate],
 ) -> Option<DomainPreview> {
     let primary_candidate = choose_passive_domain_candidate(SetupDomainKind::Tools, candidates)?;
@@ -797,7 +797,7 @@ fn provider_summary(
 }
 
 fn compose_channels_domain(
-    merged_config: &mut mvp::config::LoongClawConfig,
+    merged_config: &mut mvp::config::LoongConfig,
     candidates: &[ImportCandidate],
 ) -> (Vec<ChannelCandidate>, Option<DomainPreview>) {
     let mut chosen_channels = Vec::new();
@@ -811,7 +811,7 @@ fn compose_channels_domain(
         let Some(channel) = select_channel_candidate(channel_id, candidates) else {
             continue;
         };
-        if channel.source_kind != ImportSourceKind::ExistingLoongClawConfig {
+        if channel.source_kind != ImportSourceKind::ExistingLoongConfig {
             all_channels_from_current = false;
         }
         distinct_channel_sources.insert(channel.source.clone());
@@ -1045,7 +1045,7 @@ fn passive_domain_decision(
 ) -> PreviewDecision {
     if !supplemented_from.is_empty() {
         PreviewDecision::Supplement
-    } else if source_kind == ImportSourceKind::ExistingLoongClawConfig {
+    } else if source_kind == ImportSourceKind::ExistingLoongConfig {
         PreviewDecision::KeepCurrent
     } else {
         PreviewDecision::UseDetected
@@ -1090,7 +1090,7 @@ struct SelectedChannel {
     source_kind: ImportSourceKind,
     source: String,
     summary: String,
-    config: mvp::config::LoongClawConfig,
+    config: mvp::config::LoongConfig,
 }
 
 fn selected_channel_score(channel: &SelectedChannel) -> u8 {

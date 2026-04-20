@@ -3,11 +3,11 @@ use std::{
     path::PathBuf,
 };
 
-use loongclaw_kernel::{BridgeSupportMatrix, PluginBridgeKind};
+use loong_kernel::{BridgeSupportMatrix, PluginBridgeKind};
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
-    ConfigValidationIssue, default_loongclaw_home, expand_path, validate_numeric_range,
+    ConfigValidationIssue, default_loong_home, expand_path, validate_numeric_range,
 };
 
 pub const DEFAULT_WEB_FETCH_MAX_BYTES: usize = 1024 * 1024;
@@ -227,6 +227,8 @@ pub struct DelegateToolConfig {
     pub announce_debounce_ms: u64,
     #[serde(default = "default_delegate_announce_max_batch")]
     pub announce_max_batch: usize,
+    #[serde(default = "default_delegate_max_pending")]
+    pub max_pending: Option<usize>,
     #[serde(default)]
     pub child_runtime: DelegateChildRuntimeConfig,
 }
@@ -469,7 +471,7 @@ pub struct WebSearchToolConfig {
 }
 
 fn default_shell_default_mode() -> String {
-    "deny".to_owned()
+    "allow".to_owned()
 }
 
 const fn default_browser_companion_timeout_seconds() -> u64 {
@@ -486,9 +488,8 @@ const fn default_runtime_self_max_total_chars() -> usize {
 
 /// Default allow list used when the config file omits `shell_allow`.
 ///
-/// Empty by design: no commands are allowed unless the user explicitly
-/// configures `shell_allow` in their config file. This upholds the
-/// default-deny principle — silent implicit permissions are not injected.
+/// Empty by design: Loong starts in broad YOLO mode via `shell_default_mode = "allow"`,
+/// and `shell_allow` is reserved for users who later want an explicit allowlist.
 ///
 /// Also used by `ToolRuntimeConfig::default()` so the runtime fallback
 /// and a freshly-parsed config file agree on the initial allow set.
@@ -496,7 +497,7 @@ pub const DEFAULT_SHELL_ALLOW: &[&str] = &[];
 
 /// Serde default for `ToolConfig::shell_allow`.
 ///
-/// Returns an empty list — no commands are implicitly allowed.
+/// Returns an empty list — no explicit allowlist entries are injected.
 fn default_shell_allow() -> Vec<String> {
     DEFAULT_SHELL_ALLOW
         .iter()
@@ -505,10 +506,7 @@ fn default_shell_allow() -> Vec<String> {
 }
 
 fn default_external_skills_blocked_domains() -> Vec<String> {
-    DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES
-        .iter()
-        .map(|rule| (*rule).to_owned())
-        .collect()
+    Vec::new()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -537,6 +535,8 @@ pub struct RuntimePluginsConfig {
     pub supported_bridges: Vec<String>,
     #[serde(default)]
     pub supported_adapter_families: Vec<String>,
+    #[serde(default)]
+    pub allowed_process_commands: Vec<String>,
 }
 
 impl Default for ToolConfig {
@@ -604,7 +604,7 @@ impl Default for SessionToolConfig {
             visibility: SessionVisibility::default(),
             list_limit: default_session_list_limit(),
             history_limit: default_session_history_limit(),
-            allow_mutation: false,
+            allow_mutation: true,
         }
     }
 }
@@ -621,6 +621,7 @@ impl Default for DelegateToolConfig {
             max_frozen_bytes: default_delegate_max_frozen_bytes(),
             announce_debounce_ms: default_delegate_announce_debounce_ms(),
             announce_max_batch: default_delegate_announce_max_batch(),
+            max_pending: default_delegate_max_pending(),
             child_runtime: DelegateChildRuntimeConfig::default(),
         }
     }
@@ -978,7 +979,7 @@ impl BashToolConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(expand_path)
-            .unwrap_or_else(|| default_loongclaw_home().join("rules"))
+            .unwrap_or_else(|| default_loong_home().join("rules"))
     }
 }
 
@@ -1028,7 +1029,7 @@ pub fn parse_autonomy_profile(raw: &str) -> Option<AutonomyProfile> {
 #[cfg(feature = "tool-websearch")]
 pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
-        "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, Firecrawl, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.firecrawl_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_FIRECRAWL_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
+        "Web search provider. This affects only `web {{ query }}` / `web.search`; plain URL fetch/request mode uses normal network egress instead. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, Firecrawl, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.firecrawl_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_FIRECRAWL_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
     )
 }
 
@@ -1108,6 +1109,22 @@ impl RuntimePluginsConfig {
         }
 
         families.into_iter().collect()
+    }
+
+    pub fn normalized_allowed_process_commands(&self) -> Vec<String> {
+        let mut commands = BTreeSet::new();
+
+        for raw_command in &self.allowed_process_commands {
+            let trimmed_command = raw_command.trim();
+            if trimmed_command.is_empty() {
+                continue;
+            }
+
+            let normalized_command = trimmed_command.to_ascii_lowercase();
+            commands.insert(normalized_command);
+        }
+
+        commands.into_iter().collect()
     }
 
     pub fn readiness_evaluation_label(&self) -> &'static str {
@@ -1343,6 +1360,9 @@ const fn default_delegate_announce_debounce_ms() -> u64 {
 const fn default_delegate_announce_max_batch() -> usize {
     20
 }
+const fn default_delegate_max_pending() -> Option<usize> {
+    None
+}
 
 const fn default_browser_max_sessions() -> usize {
     DEFAULT_BROWSER_MAX_SESSIONS
@@ -1389,7 +1409,7 @@ const fn default_web_search_max_results() -> usize {
 }
 
 const fn default_require_download_approval() -> bool {
-    true
+    false
 }
 
 const fn default_auto_expose_installed() -> bool {
@@ -1410,14 +1430,14 @@ fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongClawHome};
+    use crate::test_support::{ScopedEnv, ScopedLoongHome};
 
     #[test]
     fn tool_config_defaults_expose_session_runtime_policy() {
         let config = ToolConfig::default();
         assert!(config.shell_allow.is_empty());
         assert!(config.shell_deny.is_empty());
-        assert_eq!(config.shell_default_mode, "deny");
+        assert_eq!(config.shell_default_mode, "allow");
         assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
         assert_eq!(config.consent.default_mode, ToolConsentMode::Full);
         assert_eq!(config.approval.mode, GovernedToolApprovalMode::Disabled);
@@ -1427,7 +1447,7 @@ mod tests {
         assert_eq!(config.sessions.visibility, SessionVisibility::Children);
         assert_eq!(config.sessions.list_limit, 100);
         assert_eq!(config.sessions.history_limit, 200);
-        assert!(!config.sessions.allow_mutation);
+        assert!(config.sessions.allow_mutation);
         assert!(!config.messages.enabled);
         assert!(config.delegate.enabled);
         assert_eq!(config.delegate.max_depth, 1);
@@ -1602,6 +1622,8 @@ mod tests {
         assert!(description.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
         assert!(description.contains(DEFAULT_WEB_SEARCH_PROVIDER));
         assert!(description.contains(WEB_SEARCH_PROVIDER_VALID_VALUES));
+        assert!(description.contains("`web { query }` / `web.search`"));
+        assert!(description.contains("plain URL fetch/request mode"));
     }
 
     #[test]
@@ -1758,7 +1780,7 @@ default_mode = "{raw_mode}"
 "#
             );
             let parsed =
-                toml::from_str::<crate::config::LoongClawConfig>(&raw).expect("parse tool config");
+                toml::from_str::<crate::config::LoongConfig>(&raw).expect("parse tool config");
 
             assert_eq!(parsed.tools.consent.default_mode, expected_mode);
         }
@@ -1772,8 +1794,7 @@ default_mode = "{raw_mode}"
 default_timeout_seconds = 12
 per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(
             parsed.tools.tool_execution.default_timeout_seconds,
@@ -1804,8 +1825,7 @@ per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
 [tools]
 autonomy_profile = "guided_acquisition"
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(
             parsed.tools.autonomy_profile,
@@ -1855,8 +1875,7 @@ max_sessions = 2
 max_links = 10
 max_text_chars = 1024
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(parsed.tools.approval.mode, GovernedToolApprovalMode::Strict);
         assert_eq!(
@@ -1943,8 +1962,7 @@ max_text_chars = 1024
 max_source_chars = 12345
 max_total_chars = 67890
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert_eq!(parsed.tools.runtime_self.max_source_chars, 12345);
         assert_eq!(parsed.tools.runtime_self.max_total_chars, 67890);
@@ -1963,8 +1981,7 @@ timeout_seconds = 9
 max_bytes = 262144
 max_redirects = 1
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(!parsed.tools.web.enabled);
         assert!(parsed.tools.web.allow_private_hosts);
@@ -1991,8 +2008,7 @@ max_sessions = 4
 max_links = 12
 max_text_chars = 2048
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(!parsed.tools.browser.enabled);
         assert_eq!(parsed.tools.browser.max_sessions, 4);
@@ -2006,20 +2022,19 @@ max_text_chars = 2048
         let raw = r#"
 [tools.browser_companion]
 enabled = true
-command = "loongclaw-browser-companion"
+command = "loong-browser-companion"
 expected_version = "1.2.3"
 timeout_seconds = 7
 allow_private_hosts = true
 allowed_domains = ["Docs.Example.com", "docs.example.com", " api.example.com "]
 blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 "#;
-        let parsed =
-            toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
+        let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
         assert!(parsed.tools.browser_companion.enabled);
         assert_eq!(
             parsed.tools.browser_companion.command.as_deref(),
-            Some("loongclaw-browser-companion")
+            Some("loong-browser-companion")
         );
         assert_eq!(
             parsed.tools.browser_companion.expected_version.as_deref(),
@@ -2047,8 +2062,8 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
-    fn bash_tool_config_defaults_to_loongclaw_home_rules_dir() {
-        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-home");
+    fn bash_tool_config_defaults_to_loong_home_rules_dir() {
+        let home = ScopedLoongHome::new("loong-bash-tool-config-home");
 
         assert_eq!(
             BashToolConfig::default().resolved_rules_dir(),
@@ -2068,7 +2083,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
     #[test]
     fn bash_tool_config_treats_blank_rules_dir_override_as_unset() {
-        let home = ScopedLoongClawHome::new("loongclaw-bash-tool-config-blank-home");
+        let home = ScopedLoongHome::new("loong-bash-tool-config-blank-home");
         let expected_rules_dir = home.path().join("rules");
 
         for raw in ["", "   "] {
@@ -2164,12 +2179,12 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
-    fn external_skills_defaults_to_safe_off_mode() {
+    fn external_skills_defaults_to_yolo_off_mode() {
         let config = ExternalSkillsConfig::default();
         assert!(!config.enabled);
-        assert!(config.require_download_approval);
+        assert!(!config.require_download_approval);
         assert!(config.allowed_domains.is_empty());
-        assert_eq!(config.blocked_domains, vec!["*.clawhub.io".to_owned()]);
+        assert!(config.blocked_domains.is_empty());
         assert!(config.install_root.is_none());
         assert!(!config.auto_expose_installed);
     }
@@ -2224,6 +2239,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         assert!(config.roots.is_empty());
         assert!(config.supported_bridges.is_empty());
         assert!(config.supported_adapter_families.is_empty());
+        assert!(config.allowed_process_commands.is_empty());
         assert_eq!(
             config.readiness_evaluation_label(),
             "default_bridge_support_matrix"
@@ -2241,6 +2257,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["~/runtime-plugins".to_owned()],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let roots = config.resolved_roots();
@@ -2260,6 +2277,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             ],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let roots = config.resolved_roots();
@@ -2281,6 +2299,11 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 " web-search ".to_owned(),
                 "python-stdio-adapter".to_owned(),
                 "web-search".to_owned(),
+            ],
+            allowed_process_commands: vec![
+                " node ".to_owned(),
+                "python".to_owned(),
+                "node".to_owned(),
             ],
         };
         let default_matrix = BridgeSupportMatrix::default();
@@ -2309,6 +2332,8 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 .contains("python-stdio-adapter")
         );
         assert!(matrix.supported_adapter_families.contains("web-search"));
+        let commands = config.normalized_allowed_process_commands();
+        assert_eq!(commands, vec!["node".to_owned(), "python".to_owned()]);
         assert_eq!(
             matrix.supported_compatibility_modes,
             default_matrix.supported_compatibility_modes
@@ -2330,6 +2355,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["/tmp/runtime-plugins".to_owned()],
             supported_bridges: vec!["bogus".to_owned(), "unknown".to_owned()],
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let issues = config.validate();
@@ -2349,6 +2375,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             roots: vec!["   ".to_owned()],
             supported_bridges: Vec::new(),
             supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
         };
 
         let issues = config.validate();

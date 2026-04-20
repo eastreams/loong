@@ -6,7 +6,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn gateway_health_returns_ok() {
-    let app = loongclaw_daemon::gateway::control::build_gateway_health_test_router();
+    let app = loong_daemon::gateway::control::build_gateway_health_test_router();
     let response = app
         .oneshot(
             Request::builder()
@@ -27,7 +27,7 @@ async fn gateway_health_returns_ok() {
 
 #[tokio::test]
 async fn gateway_health_requires_no_auth() {
-    let app = loongclaw_daemon::gateway::control::build_gateway_health_test_router();
+    let app = loong_daemon::gateway::control::build_gateway_health_test_router();
     let response = app
         .oneshot(
             Request::builder()

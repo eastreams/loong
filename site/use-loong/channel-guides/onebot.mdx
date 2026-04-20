@@ -1,0 +1,121 @@
+---
+title: OneBot
+description: Configure the OneBot plugin-backed bridge surface in Loong.
+---
+
+# OneBot
+
+This is a shipped plugin-backed bridge surface. Loong owns the stable OneBot-facing channel contract, but the active websocket listener and upstream bridge runtime stay external.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `onebot` |
+| Config key | `onebot` |
+| Implementation status | `plugin_backed` |
+| Transport | `onebot_v11_bridge` |
+| Aliases | `onebot-v11`, `napcat`, `llonebot` |
+| Default send target kind | `conversation` |
+| Runtime owner | external plugin |
+
+## Minimal Config
+
+```toml
+[onebot]
+enabled = true
+websocket_url_env = "ONEBOT_WEBSOCKET_URL"
+access_token_env = "ONEBOT_ACCESS_TOKEN"
+allowed_group_ids = ["123456789"]
+```
+
+Optional explicit selection when several compatible managed bridges are installed:
+
+```toml
+[onebot]
+enabled = true
+managed_bridge_plugin_id = "onebot-managed-bridge"
+websocket_url_env = "ONEBOT_WEBSOCKET_URL"
+access_token_env = "ONEBOT_ACCESS_TOKEN"
+allowed_group_ids = ["123456789"]
+```
+
+## Smoke Test
+
+```bash
+loong channels
+loong channels --json
+loong doctor
+```
+
+What success looks like:
+
+- `OneBot [onebot]` appears in the plugin-backed section
+- discovery keeps the selected compatible bridge visible when one exists
+- doctor reports a bridge-ready contract instead of falling back to generic channel-placeholder wording
+
+## Current Command Surface
+
+| Operation | Current path | Usage or status |
+| --- | --- | --- |
+| managed bridge contract check | `loong doctor` | current readiness and remediation surface |
+| inventory + discovery inspection | `loong channels` | current operator inventory surface |
+| bridge-backed send | `onebot-send` | executes through the selected managed bridge runtime; target contract stays `onebot:<account>:private:<user_id>` or `onebot:<account>:group:<group_id>` |
+| bridge-backed serve | `onebot-serve` | starts the selected managed bridge reply loop; upstream event-loop ownership still stays in the external bridge |
+
+## Required Fields For Bridge Send Contract
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `onebot.enabled`<br/>`onebot.accounts.<account>.enabled` | none | none |
+| onebot websocket url | `onebot.websocket_url`<br/>`onebot.accounts.<account>.websocket_url` | `onebot.websocket_url_env`<br/>`onebot.accounts.<account>.websocket_url_env` | `ONEBOT_WEBSOCKET_URL` |
+| onebot access token | `onebot.access_token`<br/>`onebot.accounts.<account>.access_token` | `onebot.access_token_env`<br/>`onebot.accounts.<account>.access_token_env` | `ONEBOT_ACCESS_TOKEN` |
+
+## Required Fields For Bridge Event Contract
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `onebot.enabled`<br/>`onebot.accounts.<account>.enabled` | none | none |
+| onebot websocket url | `onebot.websocket_url`<br/>`onebot.accounts.<account>.websocket_url` | `onebot.websocket_url_env`<br/>`onebot.accounts.<account>.websocket_url_env` | `ONEBOT_WEBSOCKET_URL` |
+| onebot access token | `onebot.access_token`<br/>`onebot.accounts.<account>.access_token` | `onebot.access_token_env`<br/>`onebot.accounts.<account>.access_token_env` | `ONEBOT_ACCESS_TOKEN` |
+| allowed group ids | `onebot.allowed_group_ids`<br/>`onebot.accounts.<account>.allowed_group_ids` | none | none |
+
+## Stable Target Templates
+
+| Target | Meaning |
+| --- | --- |
+| `onebot:<account>:private:<user_id>` | private conversation user id |
+| `onebot:<account>:group:<group_id>` | group conversation id |
+
+## Account Scope Note
+
+Keep `<account>` stable so personal-account bridge routes stay unambiguous across bridge replacements or reconnects.
+
+## Managed Bridge Discovery Notes
+
+- OneBot is the right Loong surface when the upstream bridge already speaks OneBot v11 and you want a stable protocol contract inside Loong.
+- Managed bridge execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`.
+- Discovery ambiguity should be resolved explicitly with `managed_bridge_plugin_id` rather than by relying on whichever plugin happens to be found first.
+- Bridge setup docs and missing-field guidance flow through `loong doctor` when the compatible plugin advertises them.
+
+## Gateway And Ownership
+
+This surface does **not** join `multi-channel-serve` or `gateway run` today. The upstream OneBot-compatible bridge remains the runtime owner.
+
+## Operator Notes
+
+- Keep `allowed_group_ids` explicit.
+- Loong validates `allowed_group_ids` locally before forwarding a managed bridge group send, so disallowed groups fail before the external bridge sees the request.
+- `onebot-serve` retries transient managed bridge runtime failures with bounded backoff; repeated failures still terminate loudly so the upstream bridge can be checked.
+- `onebot-serve --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
+- When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
+- `onebot-serve --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
+- While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
+- Treat the OneBot websocket URL as part of the trust boundary; do not point it at a vague shared relay unless you intend to widen that boundary.
+- Prefer stable account ids before layering more than one bridge identity into the same config.
+
+## Related Docs
+
+- Continue to [QQ Bot](/use-loong/channel-guides/qqbot) for the Tencent official-bot lane.
+- Continue to [Weixin](/use-loong/channel-guides/weixin) for the ClawBot / iLink-style WeChat lane.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

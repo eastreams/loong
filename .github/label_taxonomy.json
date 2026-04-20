@@ -167,7 +167,6 @@
         "scripts/architecture_budget_lib.sh",
         "scripts/bootstrap_release_local_artifacts.sh",
         "scripts/check*.sh",
-        "scripts/generate_architecture_drift_report.sh",
         "scripts/lint_*.sh",
         "scripts/release_artifact_lib.sh",
         "scripts/sync_github_labels.py",

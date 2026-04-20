@@ -220,14 +220,7 @@ fn resolve_workspace_memory_trust(
     source_label: &str,
 ) -> Result<MemoryTrustLevel, String> {
     if let Some(trust_text) = frontmatter.trust.as_deref() {
-        let maybe_parsed_trust = match trust_text {
-            "session" => Some(MemoryTrustLevel::Session),
-            "derived" => Some(MemoryTrustLevel::Derived),
-            "workspace_curated" => Some(MemoryTrustLevel::WorkspaceCurated),
-            "workspace_log" => Some(MemoryTrustLevel::WorkspaceLog),
-            _ => None,
-        };
-        let Some(parsed_trust) = maybe_parsed_trust else {
+        let Some(parsed_trust) = MemoryTrustLevel::parse_id(trust_text) else {
             return Err(format!(
                 "workspace memory file {source_label} declares unsupported frontmatter trust `{trust_text}`"
             ));
@@ -251,14 +244,7 @@ fn resolve_workspace_memory_status(
         return Ok(MemoryRecordStatus::Active);
     };
 
-    let maybe_parsed_status = match status_text {
-        "active" => Some(MemoryRecordStatus::Active),
-        "superseded" => Some(MemoryRecordStatus::Superseded),
-        "tombstoned" => Some(MemoryRecordStatus::Tombstoned),
-        "archived" => Some(MemoryRecordStatus::Archived),
-        _ => None,
-    };
-    let Some(parsed_status) = maybe_parsed_status else {
+    let Some(parsed_status) = MemoryRecordStatus::parse_id(status_text) else {
         return Err(format!(
             "workspace memory file {source_label} declares unsupported frontmatter status `{status_text}`"
         ));

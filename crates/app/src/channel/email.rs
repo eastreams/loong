@@ -67,7 +67,7 @@ fn derive_email_subject(text: &str) -> String {
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .unwrap_or("LoongClaw message");
+        .unwrap_or("Loong message");
     first_line.to_owned()
 }
 
@@ -142,7 +142,7 @@ mod tests {
     fn derive_email_subject_falls_back_for_blank_body() {
         let subject = derive_email_subject(" \n\t ");
 
-        assert_eq!(subject, "LoongClaw message");
+        assert_eq!(subject, "Loong message");
     }
 
     #[test]

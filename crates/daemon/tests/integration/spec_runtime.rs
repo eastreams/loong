@@ -1,8 +1,9 @@
 use super::*;
-use loongclaw_daemon::kernel::{
+use loong_daemon::kernel::{
     PluginActivationStatus, PluginBridgeKind, PluginCompatibilityMode, PluginCompatibilityShim,
     PluginCompatibilityShimSupport, PluginContractDialect,
 };
+use loong_spec::hex_lower;
 
 fn render_cli_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -57,7 +58,7 @@ fn init_spec_cli_plugin_trust_guard_preset_writes_expected_bootstrap_defaults() 
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("loongclaw-plugin-trust-guard-{unique}.json"));
+    let path = std::env::temp_dir().join(format!("loong-plugin-trust-guard-{unique}.json"));
 
     init_spec_cli(
         path.to_str().expect("temp path should be utf8"),
@@ -263,7 +264,7 @@ async fn plugin_bootstrap_trust_policy_fixture_blocks_unverified_process_plugin(
     assert_eq!(report.plugin_bootstrap_reports[0].deferred_tasks, 1);
     assert_eq!(
         report.plugin_bootstrap_reports[0].tasks[0].trust_tier,
-        loongclaw_daemon::kernel::PluginTrustTier::Unverified
+        loong_daemon::kernel::PluginTrustTier::Unverified
     );
     assert_eq!(report.plugin_trust_summary.scanned_plugins, 1);
     assert_eq!(report.plugin_trust_summary.unverified_plugins, 1);
@@ -275,7 +276,7 @@ async fn plugin_bootstrap_trust_policy_fixture_blocks_unverified_process_plugin(
         report.plugin_trust_summary.review_required_plugins[0]
             .bootstrap_status
             .expect("bootstrap status should exist"),
-        loongclaw_daemon::kernel::BootstrapTaskStatus::DeferredUnsupportedAutoApply
+        loong_daemon::kernel::BootstrapTaskStatus::DeferredUnsupportedAutoApply
     );
     let audit = report.audit_events.expect("audit events should exist");
     assert!(audit.iter().any(|event| {
@@ -305,7 +306,7 @@ fn read_spec_file_materializes_relative_bridge_support_delta_selection() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-delta-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-run-spec-delta-{unique}"));
     fs::create_dir_all(&root).expect("create temp root");
     let delta_path = root.join("bridge-support.delta.json");
     let spec_path = root.join("runner.spec.json");
@@ -399,7 +400,7 @@ fn read_spec_file_rejects_inline_bridge_support_and_selection_mix() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-bridge-mix-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-run-spec-bridge-mix-{unique}"));
     fs::create_dir_all(&root).expect("create temp root");
     let spec_path = root.join("runner.spec.json");
 
@@ -444,7 +445,7 @@ fn read_spec_file_accepts_cli_bridge_support_selection_override_when_file_has_no
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-cli-delta-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-run-spec-cli-delta-{unique}"));
     fs::create_dir_all(&root).expect("create temp root");
     let delta_path = root.join("bridge-support.delta.json");
     let spec_path = root.join("runner.spec.json");
@@ -532,7 +533,7 @@ fn read_spec_file_surfaces_inline_bridge_support_provenance() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-inline-bridge-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-run-spec-inline-bridge-{unique}"));
     fs::create_dir_all(&root).expect("create temp root");
     let spec_path = root.join("runner.spec.json");
 
@@ -584,7 +585,7 @@ fn run_spec_cli_emits_bridge_support_provenance_in_final_report() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-report-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-run-spec-report-{unique}"));
     fs::create_dir_all(&root).expect("create temp root");
     let delta_path = root.join("bridge-support.delta.json");
     let spec_path = root.join("runner.spec.json");
@@ -703,8 +704,7 @@ fn run_spec_cli_resolves_bridge_support_delta_override_relative_to_process_cwd()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root =
-        std::env::temp_dir().join(format!("loongclaw-run-spec-cli-relative-bridge-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-run-spec-cli-relative-bridge-{unique}"));
     let spec_dir = root.join("configs");
     fs::create_dir_all(&spec_dir).expect("create spec dir");
     let delta_path = root.join("bridge-support.delta.json");
@@ -807,7 +807,7 @@ fn run_spec_cli_rejects_bridge_support_sha256_pins_without_policy_source() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-sha-only-{unique}"));
+    let root = std::env::temp_dir().join(format!("loong-run-spec-sha-only-{unique}"));
     fs::create_dir_all(&root).expect("create temp root");
     let spec_path = root.join("runner.spec.json");
 
@@ -887,7 +887,7 @@ fn approval_uses_external_risk_profile_without_inline_overrides() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("loongclaw-risk-profile-{unique}.json"));
+    let path = std::env::temp_dir().join(format!("loong-risk-profile-{unique}.json"));
     write_temp_risk_profile(
         &path,
         r#"{
@@ -925,7 +925,7 @@ fn approval_inline_risk_signals_override_external_profile() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("loongclaw-risk-profile-override-{unique}.json"));
+    let path = std::env::temp_dir().join(format!("loong-risk-profile-override-{unique}.json"));
     write_temp_risk_profile(
         &path,
         r#"{
@@ -959,7 +959,7 @@ fn approval_inline_risk_signals_override_external_profile() {
 #[test]
 fn approval_falls_back_to_bundled_profile_when_path_missing() {
     let policy = HumanApprovalSpec {
-        risk_profile_path: Some("/tmp/loongclaw-risk-profile-missing.json".to_owned()),
+        risk_profile_path: Some("/tmp/loong-risk-profile-missing.json".to_owned()),
         ..HumanApprovalSpec::default()
     };
     let operation = approval_test_operation("delete-file", json!({"path":"/tmp/demo.txt"}));
@@ -978,7 +978,7 @@ fn security_scan_profile_path_overrides_bundled_defaults() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("loongclaw-security-profile-{unique}.json"));
+    let path = std::env::temp_dir().join(format!("loong-security-profile-{unique}.json"));
     fs::write(
         &path,
         r#"{
@@ -1084,9 +1084,7 @@ fn security_scan_profile_sha256_pin_accepts_matching_profile() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "loongclaw-security-profile-sha-match-{unique}.json"
-    ));
+    let path = std::env::temp_dir().join(format!("loong-security-profile-sha-match-{unique}.json"));
     fs::write(
         &path,
         r#"{
@@ -1192,9 +1190,8 @@ async fn execute_spec_blocks_when_security_scan_profile_sha256_mismatches() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "loongclaw-security-profile-sha-mismatch-{unique}.json"
-    ));
+    let path =
+        std::env::temp_dir().join(format!("loong-security-profile-sha-mismatch-{unique}.json"));
     fs::write(
         &path,
         r#"{
@@ -1297,7 +1294,7 @@ fn security_scan_profile_signature_accepts_matching_signature() {
         .expect("clock should be monotonic")
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "loongclaw-security-profile-signature-match-{unique}.json"
+        "loong-security-profile-signature-match-{unique}.json"
     ));
     fs::write(
         &path,
@@ -1408,7 +1405,7 @@ async fn execute_spec_blocks_when_security_scan_profile_signature_mismatches() {
         .expect("clock should be monotonic")
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "loongclaw-security-profile-signature-mismatch-{unique}.json"
+        "loong-security-profile-signature-mismatch-{unique}.json"
     ));
     fs::write(
         &path,
@@ -1686,14 +1683,14 @@ async fn execute_spec_scans_plugin_files_and_absorbs_them_for_hotplug() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-plugin-{}", unique));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-{}", unique));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let plugin_file = plugin_root.join("openrouter_plugin.rs");
     fs::write(
         &plugin_file,
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "openrouter-rs",
 //   "provider_id": "openrouter",
@@ -1703,7 +1700,7 @@ async fn execute_spec_scans_plugin_files_and_absorbs_them_for_hotplug() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"version":"0.4.0","source":"community"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin file");
@@ -1767,14 +1764,14 @@ async fn execute_spec_blocks_when_bridge_matrix_does_not_support_plugin() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-plugin-bridge-{}", unique));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-bridge-{}", unique));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let plugin_file = plugin_root.join("openrouter_plugin.rs");
     fs::write(
         &plugin_file,
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "openrouter-rs",
 //   "provider_id": "openrouter",
@@ -1784,7 +1781,7 @@ async fn execute_spec_blocks_when_bridge_matrix_does_not_support_plugin() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"version":"0.4.0","source":"community"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin file");
@@ -1863,14 +1860,14 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-bridge-selective-{}", unique));
+        std::env::temp_dir().join(format!("loong-plugin-bridge-selective-{}", unique));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let rust_plugin = plugin_root.join("openrouter.rs");
     fs::write(
         &rust_plugin,
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "openrouter-rs",
 //   "provider_id": "openrouter",
@@ -1880,7 +1877,7 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"version":"0.4.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write rust plugin");
@@ -1889,7 +1886,7 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
     fs::write(
         &http_plugin,
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "webhook-js",
 //   "provider_id": "webhookx",
@@ -1899,7 +1896,7 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write http plugin");
@@ -1982,14 +1979,13 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-setup-incomplete-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-setup-incomplete-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
-    let required_env_var = format!("LOONGCLAW_TEST_MISSING_ENV_{unique}");
+    let required_env_var = format!("LOONG_TEST_MISSING_ENV_{unique}");
     let plugin_file = plugin_root.join("tavily_search.py");
     let plugin_manifest = r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "tavily-search",
 #   "provider_id": "tavily-search",
@@ -2007,7 +2003,7 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
 #     "remediation": "configure tavily before enabling search"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#;
     let plugin_manifest = plugin_manifest.replace("__REQUIRED_ENV_VAR__", &required_env_var);
     fs::write(&plugin_file, &plugin_manifest).expect("write plugin file");
@@ -2111,13 +2107,13 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-bootstrap-selective-{}", unique));
+        std::env::temp_dir().join(format!("loong-plugin-bootstrap-selective-{}", unique));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("ffi_plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "ffi-plugin",
 //   "provider_id": "ffi-provider",
@@ -2127,7 +2123,7 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"native_ffi","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write ffi plugin");
@@ -2135,7 +2131,7 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
     fs::write(
         plugin_root.join("http_plugin.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "http-plugin",
 //   "provider_id": "http-provider",
@@ -2145,7 +2141,7 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write http plugin");
@@ -2250,13 +2246,13 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-bootstrap-enforce-{}", unique));
+        std::env::temp_dir().join(format!("loong-plugin-bootstrap-enforce-{}", unique));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("ffi_plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "ffi-plugin",
 //   "provider_id": "ffi-provider",
@@ -2266,7 +2262,7 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"native_ffi","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write ffi plugin");
@@ -2367,14 +2363,13 @@ async fn execute_spec_bootstrap_trust_policy_blocks_unverified_high_risk_auto_ap
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-bootstrap-trust-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-bootstrap-trust-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("ffi_plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "ffi-plugin",
 //   "provider_id": "ffi-provider",
@@ -2384,7 +2379,7 @@ async fn execute_spec_bootstrap_trust_policy_blocks_unverified_high_risk_auto_ap
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"native_ffi","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write ffi plugin");
@@ -2466,7 +2461,7 @@ async fn execute_spec_bootstrap_trust_policy_blocks_unverified_high_risk_auto_ap
     assert_eq!(report.plugin_bootstrap_reports[0].deferred_tasks, 1);
     assert_eq!(
         report.plugin_bootstrap_reports[0].tasks[0].trust_tier,
-        loongclaw_daemon::kernel::PluginTrustTier::Unverified
+        loong_daemon::kernel::PluginTrustTier::Unverified
     );
     assert_eq!(report.plugin_trust_summary.scanned_plugins, 1);
     assert_eq!(report.plugin_trust_summary.unverified_plugins, 1);
@@ -2704,13 +2699,13 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-plugin-bridge-enrich-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-bridge-enrich-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("ffi_plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "ffi-plugin",
 //   "provider_id": "ffi-provider",
@@ -2720,7 +2715,7 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write ffi plugin");
@@ -2840,16 +2835,16 @@ async fn execute_spec_wasm_component_bridge_exchanges_request_output_when_runtim
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-wasm-runtime-run-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-wasm-runtime-run-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let wasm_bytes = wat::parse_str(
         r#"
             (module
-              (import "loongclaw" "input_len" (func $input_len (result i32)))
-              (import "loongclaw" "read_input" (func $read_input (param i32 i32) (result i32)))
-              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
-              (import "loongclaw" "log" (func $log (param i32 i32) (result i32)))
+              (import "loong" "input_len" (func $input_len (result i32)))
+              (import "loong" "read_input" (func $read_input (param i32 i32) (result i32)))
+              (import "loong" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (import "loong" "log" (func $log (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 (local $input_len i32)
                 i32.const 0
@@ -2876,7 +2871,7 @@ async fn execute_spec_wasm_component_bridge_exchanges_request_output_when_runtim
     let digest_hex = hex_lower(&digest);
 
     let plugin_manifest = r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-run",
 //   "provider_id": "wasm-runtime-provider",
@@ -2892,7 +2887,7 @@ async fn execute_spec_wasm_component_bridge_exchanges_request_output_when_runtim
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#
     .replace("__COMPONENT_SHA256__", digest_hex.as_str());
     fs::write(plugin_root.join("plugin.rs"), plugin_manifest).expect("write wasm plugin manifest");
@@ -3138,8 +3133,7 @@ async fn execute_spec_wasm_component_bridge_reads_allowlisted_guest_config_when_
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-config-read-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-wasm-runtime-config-read-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let config_key = "provider.region";
@@ -3147,9 +3141,9 @@ async fn execute_spec_wasm_component_bridge_reads_allowlisted_guest_config_when_
     let wat_source = format!(
         r#"
             (module
-              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
-              (import "loongclaw" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
-              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (import "loong" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loong" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
+              (import "loong" "write_output" (func $write_output (param i32 i32) (result i32)))
               (func (export "run") (result i32)
                 (local $value_len i32)
                 i32.const 0
@@ -3204,7 +3198,7 @@ async fn execute_spec_wasm_component_bridge_reads_allowlisted_guest_config_when_
     let digest_hex = hex_lower(&digest);
 
     let plugin_manifest = r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-config-read",
 //   "provider_id": "wasm-runtime-config-provider",
@@ -3221,7 +3215,7 @@ async fn execute_spec_wasm_component_bridge_reads_allowlisted_guest_config_when_
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#
     .replace("__COMPONENT_SHA256__", digest_hex.as_str());
     fs::write(plugin_root.join("plugin.rs"), plugin_manifest).expect("write wasm plugin manifest");
@@ -3344,7 +3338,7 @@ async fn execute_spec_wasm_component_bridge_executes_with_timeout_guard_and_no_c
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-timeout-pass-{unique}"));
+        std::env::temp_dir().join(format!("loong-wasm-runtime-timeout-pass-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let wasm_bytes = wat::parse_str(r#"(module (func (export "run")))"#).expect("compile wasm");
@@ -3352,7 +3346,7 @@ async fn execute_spec_wasm_component_bridge_executes_with_timeout_guard_and_no_c
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-timeout-pass",
 //   "provider_id": "wasm-timeout-pass-provider",
@@ -3367,7 +3361,7 @@ async fn execute_spec_wasm_component_bridge_executes_with_timeout_guard_and_no_c
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write wasm plugin manifest");
@@ -3536,7 +3530,7 @@ async fn execute_spec_wasm_component_bridge_times_out_and_reports_timeout_eviden
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-timeout-fail-{unique}"));
+        std::env::temp_dir().join(format!("loong-wasm-runtime-timeout-fail-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let wasm_bytes =
@@ -3545,7 +3539,7 @@ async fn execute_spec_wasm_component_bridge_times_out_and_reports_timeout_eviden
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-timeout-fail",
 //   "provider_id": "wasm-timeout-fail-provider",
@@ -3560,7 +3554,7 @@ async fn execute_spec_wasm_component_bridge_times_out_and_reports_timeout_eviden
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write wasm plugin manifest");
@@ -3700,12 +3694,12 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-wasm-runtime-hash-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-wasm-runtime-hash-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let wrong_digest = "00".repeat(32);
     let plugin_manifest = r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-hash",
 //   "provider_id": "wasm-runtime-hash-provider",
@@ -3721,7 +3715,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#
     .replace("__WRONG_COMPONENT_SHA256__", wrong_digest.as_str());
     fs::write(plugin_root.join("plugin.rs"), plugin_manifest).expect("write wasm plugin manifest");
@@ -3842,7 +3836,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-pin-conflict-{unique}"));
+        std::env::temp_dir().join(format!("loong-wasm-runtime-pin-conflict-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let wasm_bytes = wat::parse_str(r#"(module (func (export "run")))"#).expect("compile wasm");
@@ -3851,7 +3845,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
     let wrong_digest = "00".repeat(32);
 
     let plugin_manifest = r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-pin-conflict",
 //   "provider_id": "wasm-runtime-pin-conflict-provider",
@@ -3867,7 +3861,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#
     .replace("__COMPONENT_SHA256__", digest_hex.as_str());
     fs::write(plugin_root.join("plugin.rs"), plugin_manifest).expect("write wasm plugin manifest");
@@ -3990,13 +3984,13 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-pin-required-{unique}"));
+        std::env::temp_dir().join(format!("loong-wasm-runtime-pin-required-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-pin-required",
 //   "provider_id": "wasm-runtime-pin-required-provider",
@@ -4011,7 +4005,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write wasm plugin manifest");
@@ -4134,17 +4128,16 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-block-path-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-wasm-runtime-block-path-{unique}"));
     let disallowed_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-deny-prefix-{unique}"));
+        std::env::temp_dir().join(format!("loong-wasm-runtime-deny-prefix-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
     fs::create_dir_all(&disallowed_root).expect("create disallowed root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-path-block",
 //   "provider_id": "wasm-runtime-path-provider",
@@ -4159,7 +4152,7 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write wasm plugin manifest");
@@ -4283,16 +4276,16 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-symlink-root-{unique}"));
+        std::env::temp_dir().join(format!("loong-wasm-runtime-symlink-root-{unique}"));
     let outside_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-symlink-outside-{unique}"));
+        std::env::temp_dir().join(format!("loong-wasm-runtime-symlink-outside-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
     fs::create_dir_all(&outside_root).expect("create outside root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-symlink-block",
 //   "provider_id": "wasm-runtime-symlink-provider",
@@ -4307,7 +4300,7 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write wasm plugin manifest");
@@ -4432,15 +4425,14 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!(
-        "loongclaw-wasm-runtime-regular-file-check-{unique}"
-    ));
+    let plugin_root =
+        std::env::temp_dir().join(format!("loong-wasm-runtime-regular-file-check-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-regular-file-check",
 //   "provider_id": "wasm-runtime-regular-file-provider",
@@ -4455,7 +4447,7 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write wasm plugin manifest");
@@ -4575,14 +4567,13 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-block-size-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-wasm-runtime-block-size-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-runtime-size-block",
 //   "provider_id": "wasm-runtime-size-provider",
@@ -4597,7 +4588,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write wasm plugin manifest");
@@ -4814,13 +4805,13 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-security-wasm-block-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-security-wasm-block-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-risky",
 //   "provider_id": "wasm-risky",
@@ -4834,7 +4825,7 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin manifest");
@@ -4969,13 +4960,13 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-security-wasm-pass-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-security-wasm-pass-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-clean",
 //   "provider_id": "wasm-clean",
@@ -4989,7 +4980,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin manifest");
@@ -5109,7 +5100,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-security-wasm-pass-metadata-{unique}"));
+        std::env::temp_dir().join(format!("loong-security-wasm-pass-metadata-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let wasm_bytes = wat::parse_str(r#"(module (func (export "run")))"#).expect("compile wasm");
@@ -5117,7 +5108,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
     let digest_hex = hex_lower(&digest);
 
     let plugin_manifest = r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-clean-metadata-pin",
 //   "provider_id": "wasm-clean-metadata-pin",
@@ -5132,7 +5123,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#
     .replace("__COMPONENT_SHA256__", digest_hex.as_str());
     fs::write(plugin_root.join("plugin.rs"), plugin_manifest).expect("write plugin manifest");
@@ -5250,13 +5241,13 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-security-wasm-invalid-pin-{unique}"));
+        std::env::temp_dir().join(format!("loong-security-wasm-invalid-pin-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-invalid-metadata-pin",
 //   "provider_id": "wasm-invalid-metadata-pin",
@@ -5271,7 +5262,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin manifest");
@@ -5384,7 +5375,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-security-wasm-pin-conflict-{unique}"));
+        std::env::temp_dir().join(format!("loong-security-wasm-pin-conflict-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     let wasm_bytes = wat::parse_str(r#"(module (func (export "run")))"#).expect("compile wasm");
@@ -5393,7 +5384,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
     let wrong_digest = "00".repeat(32);
 
     let plugin_manifest = r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "wasm-conflict",
 //   "provider_id": "wasm-conflict",
@@ -5408,7 +5399,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
 //     "version":"1.0.0"
 //   }
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#
     .replace("__COMPONENT_SHA256__", digest_hex.as_str());
     fs::write(plugin_root.join("plugin.rs"), plugin_manifest).expect("write plugin manifest");
@@ -5521,13 +5512,13 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-security-audit-pass-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-security-audit-pass-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-audit",
 #   "provider_id": "stdio-audit",
@@ -5541,7 +5532,7 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin manifest");
@@ -5674,15 +5665,14 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-security-siem-pass-{unique}"));
-    let siem_path =
-        std::env::temp_dir().join(format!("loongclaw-security-siem-pass-{unique}.jsonl"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-security-siem-pass-{unique}"));
+    let siem_path = std::env::temp_dir().join(format!("loong-security-siem-pass-{unique}.jsonl"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-siem",
 #   "provider_id": "stdio-siem",
@@ -5697,7 +5687,7 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin manifest");
@@ -5821,9 +5811,9 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-security-siem-block-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-security-siem-block-{unique}"));
     let invalid_parent =
-        std::env::temp_dir().join(format!("loongclaw-security-siem-parent-file-{unique}.tmp"));
+        std::env::temp_dir().join(format!("loong-security-siem-parent-file-{unique}.tmp"));
     let invalid_siem_path = invalid_parent.join("events.jsonl");
     fs::create_dir_all(&plugin_root).expect("create plugin root");
     fs::write(&invalid_parent, "not-a-directory").expect("create invalid parent marker file");
@@ -5831,7 +5821,7 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
     fs::write(
         plugin_root.join("plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-siem-block",
 #   "provider_id": "stdio-siem-block",
@@ -5845,7 +5835,7 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin manifest");
@@ -5963,14 +5953,13 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-security-deferred-ready-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-security-deferred-ready-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("01-safe.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-safe",
 #   "provider_id": "stdio-safe",
@@ -5984,7 +5973,7 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write safe plugin");
@@ -5992,7 +5981,7 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
     fs::write(
         plugin_root.join("02-risky.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "stdio-risky",
 #   "provider_id": "stdio-risky",
@@ -6006,7 +5995,7 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
 #     "version":"1.0.0"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write risky plugin");
@@ -6367,7 +6356,7 @@ async fn execute_spec_tool_core_can_run_config_import_plan_via_native_tool_runti
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-spec-tool-core-migrate");
+    let root = unique_temp_dir("loong-spec-tool-core-migrate");
     fs::create_dir_all(&root).expect("create fixture root");
     write_file(
         &root,
@@ -6423,13 +6412,13 @@ async fn execute_spec_tool_core_can_run_config_import_plan_via_native_tool_runti
     assert_eq!(report.outcome["outcome"]["payload"]["source"], "nanobot");
     assert_eq!(
         report.outcome["outcome"]["payload"]["config_preview"]["prompt_pack_id"],
-        "loongclaw-core-v1"
+        "loong-core-v1"
     );
     assert!(
         report.outcome["outcome"]["payload"]["config_preview"]["system_prompt_addendum"]
             .as_str()
             .expect("prompt addendum should exist")
-            .contains("LoongClaw")
+            .contains("Loong")
     );
 
     fs::remove_dir_all(&root).ok();
@@ -6459,7 +6448,7 @@ async fn execute_spec_tool_extension_can_hot_handle_config_import_via_core_wrapp
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-spec-tool-extension-import");
+    let root = unique_temp_dir("loong-spec-tool-extension-import");
     fs::create_dir_all(&root).expect("create fixture root");
     write_file(
         &root,
@@ -6547,7 +6536,7 @@ async fn execute_spec_tool_extension_can_discover_multiple_sources() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-spec-tool-extension-discover-many");
+    let root = unique_temp_dir("loong-spec-tool-extension-discover-many");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -6646,7 +6635,7 @@ async fn execute_spec_tool_extension_can_merge_profiles_without_merging_prompt_l
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-spec-tool-extension-merge-profiles");
+    let root = unique_temp_dir("loong-spec-tool-extension-merge-profiles");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -6745,7 +6734,7 @@ async fn execute_spec_tool_extension_apply_selected_safe_merge_keeps_native_prom
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-spec-tool-extension-apply-safe-merge");
+    let root = unique_temp_dir("loong-spec-tool-extension-apply-safe-merge");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -6769,10 +6758,10 @@ async fn execute_spec_tool_extension_apply_selected_safe_merge_keeps_native_prom
         "# Identity\n\n- region: apac\n",
     );
 
-    let output_path = root.join("loongclaw.toml");
-    let mut existing = loongclaw_app::config::LoongClawConfig::default();
-    existing.cli.system_prompt_addendum = Some("Native LoongClaw prompt".to_owned());
-    let existing_body = loongclaw_app::config::render(&existing).expect("render existing config");
+    let output_path = root.join("loong.toml");
+    let mut existing = loong_app::config::LoongConfig::default();
+    existing.cli.system_prompt_addendum = Some("Native Loong prompt".to_owned());
+    let existing_body = loong_app::config::render(&existing).expect("render existing config");
     fs::write(&output_path, existing_body).expect("write existing config");
 
     let spec = RunnerSpec {
@@ -6828,10 +6817,10 @@ async fn execute_spec_tool_extension_apply_selected_safe_merge_keeps_native_prom
 
     let output_string = output_path.display().to_string();
     let (_, merged_config) =
-        loongclaw_app::config::load(Some(&output_string)).expect("load merged config");
+        loong_app::config::load(Some(&output_string)).expect("load merged config");
     assert_eq!(
         merged_config.cli.system_prompt_addendum.as_deref(),
-        Some("Native LoongClaw prompt")
+        Some("Native Loong prompt")
     );
     let profile_note = merged_config
         .memory
@@ -6898,7 +6887,10 @@ async fn execute_spec_denylist_overrides_other_approvals() {
 
 #[tokio::test]
 async fn execute_spec_one_time_full_access_expired_is_rejected() {
-    let now = current_epoch_s();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_secs();
     let spec = RunnerSpec {
         pack: VerticalPackManifest {
             pack_id: "spec-approval-full-expired".to_owned(),
@@ -6998,14 +6990,13 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-bootstrap-limit-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-bootstrap-limit-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("http_a.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "http-a",
 //   "provider_id": "http-a",
@@ -7015,7 +7006,7 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write http plugin a");
@@ -7023,7 +7014,7 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
     fs::write(
         plugin_root.join("http_b.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "http-b",
 //   "provider_id": "http-b",
@@ -7033,7 +7024,7 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write http plugin b");
@@ -7124,15 +7115,15 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
         .expect("clock should be monotonic")
         .as_nanos();
 
-    let root_a = std::env::temp_dir().join(format!("loongclaw-plugin-root-a-{unique}"));
-    let root_b = std::env::temp_dir().join(format!("loongclaw-plugin-root-b-{unique}"));
+    let root_a = std::env::temp_dir().join(format!("loong-plugin-root-a-{unique}"));
+    let root_b = std::env::temp_dir().join(format!("loong-plugin-root-b-{unique}"));
     fs::create_dir_all(&root_a).expect("create root a");
     fs::create_dir_all(&root_b).expect("create root b");
 
     fs::write(
         root_a.join("a.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "root-a",
 //   "provider_id": "root-a",
@@ -7142,7 +7133,7 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write root a plugin");
@@ -7150,7 +7141,7 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
     fs::write(
         root_b.join("b.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "root-b",
 //   "provider_id": "root-b",
@@ -7160,7 +7151,7 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write root b plugin");
@@ -7255,15 +7246,15 @@ async fn execute_spec_blocks_cross_root_slot_claim_conflicts_during_planning() {
         .expect("clock should be monotonic")
         .as_nanos();
 
-    let root_a = std::env::temp_dir().join(format!("loongclaw-plugin-slot-a-{unique}"));
-    let root_b = std::env::temp_dir().join(format!("loongclaw-plugin-slot-b-{unique}"));
+    let root_a = std::env::temp_dir().join(format!("loong-plugin-slot-a-{unique}"));
+    let root_b = std::env::temp_dir().join(format!("loong-plugin-slot-b-{unique}"));
     fs::create_dir_all(&root_a).expect("create root a");
     fs::create_dir_all(&root_b).expect("create root b");
 
     fs::write(
         root_a.join("a.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-a",
 #   "provider_id": "search-a",
@@ -7276,7 +7267,7 @@ async fn execute_spec_blocks_cross_root_slot_claim_conflicts_during_planning() {
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write root a plugin");
@@ -7284,7 +7275,7 @@ async fn execute_spec_blocks_cross_root_slot_claim_conflicts_during_planning() {
     fs::write(
         root_b.join("b.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-b",
 #   "provider_id": "search-b",
@@ -7297,7 +7288,7 @@ async fn execute_spec_blocks_cross_root_slot_claim_conflicts_during_planning() {
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write root b plugin");
@@ -7380,15 +7371,15 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
         .expect("clock should be monotonic")
         .as_nanos();
 
-    let root_a = std::env::temp_dir().join(format!("loongclaw-plugin-rollback-a-{unique}"));
-    let root_b = std::env::temp_dir().join(format!("loongclaw-plugin-rollback-b-{unique}"));
+    let root_a = std::env::temp_dir().join(format!("loong-plugin-rollback-a-{unique}"));
+    let root_b = std::env::temp_dir().join(format!("loong-plugin-rollback-b-{unique}"));
     fs::create_dir_all(&root_a).expect("create root a");
     fs::create_dir_all(&root_b).expect("create root b");
 
     fs::write(
         root_a.join("a.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "rollback-a",
 //   "provider_id": "rollback-a",
@@ -7398,7 +7389,7 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write root a plugin");
@@ -7406,7 +7397,7 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
     fs::write(
         root_b.join("b.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "rollback-b",
 //   "provider_id": "rollback-b",
@@ -7416,7 +7407,7 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"native_ffi","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write root b plugin");
@@ -7497,11 +7488,11 @@ async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifes
         .expect("clock should be monotonic")
         .as_nanos();
 
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-plugin-conflict-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-conflict-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
-        plugin_root.join("loongclaw.plugin.json"),
+        plugin_root.join("loong.plugin.json"),
         r#"
 {
   "api_version": "v1alpha1",
@@ -7523,7 +7514,7 @@ async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifes
     fs::write(
         plugin_root.join("plugin.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "conflict-plugin",
 #   "provider_id": "source-provider",
@@ -7533,7 +7524,7 @@ async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifes
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write conflicting source manifest");
@@ -7607,12 +7598,11 @@ async fn execute_spec_blocks_when_package_manifest_uses_legacy_version_metadata(
         .expect("clock should be monotonic")
         .as_nanos();
 
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-legacy-version-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-legacy-version-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
-        plugin_root.join("loongclaw.plugin.json"),
+        plugin_root.join("loong.plugin.json"),
         r#"
 {
   "api_version": "v1alpha1",
@@ -7690,15 +7680,15 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
         .expect("clock should be monotonic")
         .as_nanos();
 
-    let root_a = std::env::temp_dir().join(format!("loongclaw-bootstrap-global-a-{unique}"));
-    let root_b = std::env::temp_dir().join(format!("loongclaw-bootstrap-global-b-{unique}"));
+    let root_a = std::env::temp_dir().join(format!("loong-bootstrap-global-a-{unique}"));
+    let root_b = std::env::temp_dir().join(format!("loong-bootstrap-global-b-{unique}"));
     fs::create_dir_all(&root_a).expect("create root a");
     fs::create_dir_all(&root_b).expect("create root b");
 
     fs::write(
         root_a.join("a.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "global-a",
 //   "provider_id": "global-a",
@@ -7708,7 +7698,7 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write root a plugin");
@@ -7716,7 +7706,7 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
     fs::write(
         root_b.join("b.js"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "global-b",
 //   "provider_id": "global-b",
@@ -7726,7 +7716,7 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
 //   "capabilities": ["InvokeConnector"],
 //   "metadata": {"bridge_kind":"http_json","version":"1.0.0"}
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write root b plugin");
@@ -7832,13 +7822,13 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!("loongclaw-tool-search-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-tool-search-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("openrouter_research.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "openrouter-research",
 #   "provider_id": "openrouter-research",
@@ -7853,7 +7843,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
 #   "output_examples": [{"answer":"top crates"}],
 #   "defer_loading": true
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin a");
@@ -7861,7 +7851,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
     fs::write(
         plugin_root.join("search_docs.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "doc-search",
 #   "provider_id": "doc-search",
@@ -7876,7 +7866,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
 #   "output_examples": [{"answer":"docs"}],
 #   "defer_loading": true
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write plugin b");
@@ -7990,11 +7980,10 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-tool-search-readiness-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-tool-search-readiness-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
-    let plugin_manifest_path = plugin_root.join("loongclaw.plugin.json");
+    let plugin_manifest_path = plugin_root.join("loong.plugin.json");
     fs::write(
         &plugin_manifest_path,
         r#"
@@ -8113,7 +8102,7 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
     );
     assert!(matches!(
         report.plugin_activation_plans[0].candidates[0].status,
-        loongclaw_daemon::kernel::PluginActivationStatus::Ready
+        loong_daemon::kernel::PluginActivationStatus::Ready
     ));
     assert_eq!(report.outcome["returned"], 1);
     assert_eq!(report.outcome["results"][0]["provider_id"], "tavily");
@@ -8136,14 +8125,13 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-tool-search-translation-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-tool-search-translation-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("rusty_plugin.rs"),
         r#"
-// LOONGCLAW_PLUGIN_START
+// LOONG_PLUGIN_START
 // {
 //   "plugin_id": "rusty-search",
 //   "provider_id": "rusty-search",
@@ -8154,7 +8142,7 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
 //   "metadata": {"version":"1.0.0"},
 //   "summary": "Rust-native search plugin"
 // }
-// LOONGCLAW_PLUGIN_END
+// LOONG_PLUGIN_END
 "#,
     )
     .expect("write translation plugin");
@@ -8245,14 +8233,13 @@ async fn execute_spec_tool_search_filters_by_trust_tier_query_prefix() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-tool-search-trust-filter-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-tool-search-trust-filter-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("official_search.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "official-search",
 #   "provider_id": "official-search",
@@ -8264,7 +8251,7 @@ async fn execute_spec_tool_search_filters_by_trust_tier_query_prefix() {
 #   "summary": "Search trusted official docs",
 #   "trust_tier": "official"
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write official plugin");
@@ -8272,7 +8259,7 @@ async fn execute_spec_tool_search_filters_by_trust_tier_query_prefix() {
     fs::write(
         plugin_root.join("unverified_search.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "unverified-search",
 #   "provider_id": "unverified-search",
@@ -8284,7 +8271,7 @@ async fn execute_spec_tool_search_filters_by_trust_tier_query_prefix() {
 #   "summary": "Search unreviewed docs",
 #   "trust_tier": "unverified"
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write unverified plugin");
@@ -8415,13 +8402,13 @@ async fn execute_spec_tool_search_filters_by_structured_trust_tiers() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-tool-search-structured-trust-{unique}"));
+        std::env::temp_dir().join(format!("loong-tool-search-structured-trust-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("official_search.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "official-search",
 #   "provider_id": "official-search",
@@ -8433,7 +8420,7 @@ async fn execute_spec_tool_search_filters_by_structured_trust_tiers() {
 #   "summary": "Search trusted official docs",
 #   "trust_tier": "official"
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write official plugin");
@@ -8441,7 +8428,7 @@ async fn execute_spec_tool_search_filters_by_structured_trust_tiers() {
     fs::write(
         plugin_root.join("verified_search.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "verified-search",
 #   "provider_id": "verified-search",
@@ -8453,7 +8440,7 @@ async fn execute_spec_tool_search_filters_by_structured_trust_tiers() {
 #   "summary": "Search trusted community docs",
 #   "trust_tier": "verified-community"
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write verified plugin");
@@ -8519,7 +8506,7 @@ async fn execute_spec_tool_search_filters_by_structured_trust_tiers() {
         operation: OperationSpec::ToolSearch {
             query: "search".to_owned(),
             limit: 5,
-            trust_tiers: vec![loongclaw_daemon::kernel::PluginTrustTier::Official],
+            trust_tiers: vec![loong_daemon::kernel::PluginTrustTier::Official],
             include_deferred: true,
             include_examples: false,
         },
@@ -8582,13 +8569,13 @@ async fn execute_spec_tool_search_conflicting_trust_filters_fail_closed() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-tool-search-conflicting-trust-{unique}"));
+        std::env::temp_dir().join(format!("loong-tool-search-conflicting-trust-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("official_search.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "official-search",
 #   "provider_id": "official-search",
@@ -8600,7 +8587,7 @@ async fn execute_spec_tool_search_conflicting_trust_filters_fail_closed() {
 #   "summary": "Search trusted official docs",
 #   "trust_tier": "official"
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write official plugin");
@@ -8608,7 +8595,7 @@ async fn execute_spec_tool_search_conflicting_trust_filters_fail_closed() {
     fs::write(
         plugin_root.join("verified_search.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "verified-search",
 #   "provider_id": "verified-search",
@@ -8620,7 +8607,7 @@ async fn execute_spec_tool_search_conflicting_trust_filters_fail_closed() {
 #   "summary": "Search trusted community docs",
 #   "trust_tier": "verified-community"
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write verified plugin");
@@ -8686,7 +8673,7 @@ async fn execute_spec_tool_search_conflicting_trust_filters_fail_closed() {
         operation: OperationSpec::ToolSearch {
             query: "trust:official search".to_owned(),
             limit: 5,
-            trust_tiers: vec![loongclaw_daemon::kernel::PluginTrustTier::VerifiedCommunity],
+            trust_tiers: vec![loong_daemon::kernel::PluginTrustTier::VerifiedCommunity],
             include_deferred: true,
             include_examples: false,
         },
@@ -8793,13 +8780,13 @@ async fn execute_spec_tool_search_surfaces_slot_claim_activation_conflicts() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-tool-search-slot-conflict-{unique}"));
+        std::env::temp_dir().join(format!("loong-tool-search-slot-conflict-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("search_a.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-a",
 #   "provider_id": "search-a",
@@ -8812,7 +8799,7 @@ async fn execute_spec_tool_search_surfaces_slot_claim_activation_conflicts() {
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-a plugin");
@@ -8820,7 +8807,7 @@ async fn execute_spec_tool_search_surfaces_slot_claim_activation_conflicts() {
     fs::write(
         plugin_root.join("search_b.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-b",
 #   "provider_id": "search-b",
@@ -8833,7 +8820,7 @@ async fn execute_spec_tool_search_surfaces_slot_claim_activation_conflicts() {
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-b plugin");
@@ -8912,13 +8899,13 @@ async fn execute_spec_plugin_inventory_surfaces_activation_setup_and_ownership_t
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-inventory-slot-conflict-{unique}"));
+        std::env::temp_dir().join(format!("loong-plugin-inventory-slot-conflict-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("search_a.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-a",
 #   "provider_id": "search-a",
@@ -8940,7 +8927,7 @@ async fn execute_spec_plugin_inventory_surfaces_activation_setup_and_ownership_t
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-a plugin");
@@ -8948,7 +8935,7 @@ async fn execute_spec_plugin_inventory_surfaces_activation_setup_and_ownership_t
     fs::write(
         plugin_root.join("search_b.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-b",
 #   "provider_id": "search-b",
@@ -8961,7 +8948,7 @@ async fn execute_spec_plugin_inventory_surfaces_activation_setup_and_ownership_t
 #     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-b plugin");
@@ -9051,13 +9038,13 @@ async fn execute_spec_plugin_inventory_surfaces_host_compatibility_blockers() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-inventory-host-compat-{unique}"));
+        std::env::temp_dir().join(format!("loong-plugin-inventory-host-compat-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("incompatible_host.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "incompatible-host",
 #   "provider_id": "incompatible-host",
@@ -9067,11 +9054,11 @@ async fn execute_spec_plugin_inventory_surfaces_host_compatibility_blockers() {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
 #   "compatibility": {
-#     "host_api": "loongclaw-plugin/v999",
+#     "host_api": "loong-plugin/v999",
 #     "host_version_req": ">=0.1.0-alpha.1"
 #   }
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write incompatible-host plugin");
@@ -9143,7 +9130,7 @@ async fn execute_spec_plugin_inventory_surfaces_host_compatibility_blockers() {
     );
     assert_eq!(
         report.outcome["results"][0]["compatibility"]["host_api"],
-        "loongclaw-plugin/v999"
+        "loong-plugin/v999"
     );
     assert_eq!(
         report.outcome["results"][0]["compatibility"]["host_version_req"],
@@ -9152,7 +9139,7 @@ async fn execute_spec_plugin_inventory_surfaces_host_compatibility_blockers() {
     assert!(
         report.outcome["results"][0]["activation_reason"]
             .as_str()
-            .is_some_and(|reason| reason.contains("loongclaw-plugin/v1"))
+            .is_some_and(|reason| reason.contains("loong-plugin/v1"))
     );
     assert!(
         report.outcome["results"][0]["diagnostic_findings"]
@@ -9175,7 +9162,7 @@ async fn execute_spec_plugin_inventory_requires_explicit_openclaw_shim_enablemen
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-inventory-openclaw-shim-{unique}"));
+        std::env::temp_dir().join(format!("loong-plugin-inventory-openclaw-shim-{unique}"));
     let package_root = plugin_root.join("weather-sdk");
     fs::create_dir_all(package_root.join("dist")).expect("create plugin root");
 
@@ -9304,7 +9291,7 @@ async fn execute_spec_plugin_inventory_requires_explicit_openclaw_shim_enablemen
 
     let mut enabled_bridge_support = bridge_support.clone();
     enabled_bridge_support.supported_compatibility_shims =
-        vec![loongclaw_daemon::kernel::PluginCompatibilityShim {
+        vec![loong_daemon::kernel::PluginCompatibilityShim {
             shim_id: "openclaw-modern-compat".to_owned(),
             family: "openclaw-modern-compat".to_owned(),
         }];
@@ -9393,9 +9380,8 @@ async fn execute_spec_plugin_inventory_blocks_openclaw_shim_profile_mismatch() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root = std::env::temp_dir().join(format!(
-        "loongclaw-plugin-inventory-openclaw-profile-{unique}"
-    ));
+    let plugin_root =
+        std::env::temp_dir().join(format!("loong-plugin-inventory-openclaw-profile-{unique}"));
     let package_root = plugin_root.join("weather-sdk");
     fs::create_dir_all(package_root.join("dist")).expect("create plugin root");
 
@@ -9600,7 +9586,7 @@ async fn execute_spec_openclaw_connector_runtime_surfaces_attested_activation_co
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-openclaw-runtime-attested-{unique}"));
+        std::env::temp_dir().join(format!("loong-openclaw-runtime-attested-{unique}"));
     let package_root = plugin_root.join("weather-sdk");
     fs::create_dir_all(package_root.join("dist")).expect("create plugin root");
 
@@ -9803,14 +9789,13 @@ async fn execute_spec_plugin_preflight_summarizes_runtime_activation_blockers() 
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-runtime-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-preflight-runtime-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("search_a.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-a",
 #   "provider_id": "search-a",
@@ -9823,7 +9808,7 @@ async fn execute_spec_plugin_preflight_summarizes_runtime_activation_blockers() 
 #     {"slot":"provider:web_search","key":"default","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-a plugin");
@@ -9831,7 +9816,7 @@ async fn execute_spec_plugin_preflight_summarizes_runtime_activation_blockers() 
     fs::write(
         plugin_root.join("search_b.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-b",
 #   "provider_id": "search-b",
@@ -9844,7 +9829,7 @@ async fn execute_spec_plugin_preflight_summarizes_runtime_activation_blockers() 
 #     {"slot":"provider:web_search","key":"default","mode":"exclusive"}
 #   ]
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-b plugin");
@@ -10010,13 +9995,13 @@ async fn execute_spec_plugin_preflight_blocks_embedded_source_sdk_release_contra
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-sdk-release-{unique}"));
+        std::env::temp_dir().join(format!("loong-plugin-preflight-sdk-release-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("search_sdk.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-sdk",
 #   "version": "0.1.0",
@@ -10027,7 +10012,7 @@ async fn execute_spec_plugin_preflight_blocks_embedded_source_sdk_release_contra
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-sdk plugin");
@@ -10120,13 +10105,13 @@ async fn execute_spec_plugin_preflight_honors_custom_policy_path_and_sha() {
         .expect("clock should be monotonic")
         .as_nanos();
     let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-custom-policy-{unique}"));
+        std::env::temp_dir().join(format!("loong-plugin-preflight-custom-policy-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("search_sdk.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-sdk",
 #   "provider_id": "search-sdk",
@@ -10136,7 +10121,7 @@ async fn execute_spec_plugin_preflight_honors_custom_policy_path_and_sha() {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-sdk plugin");
@@ -10150,7 +10135,7 @@ async fn execute_spec_plugin_preflight_honors_custom_policy_path_and_sha() {
         ..PluginPreflightPolicyProfile::default()
     };
     let policy_path =
-        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-policy-{unique}.json"));
+        std::env::temp_dir().join(format!("loong-plugin-preflight-policy-{unique}.json"));
     fs::write(
         &policy_path,
         serde_json::to_string_pretty(&policy).expect("encode policy"),
@@ -10232,14 +10217,13 @@ async fn execute_spec_plugin_preflight_applies_contract_drift_exception_lane() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be monotonic")
         .as_nanos();
-    let plugin_root =
-        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-waiver-{unique}"));
+    let plugin_root = std::env::temp_dir().join(format!("loong-plugin-preflight-waiver-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
     fs::write(
         plugin_root.join("search_sdk.py"),
         r#"
-# LOONGCLAW_PLUGIN_START
+# LOONG_PLUGIN_START
 # {
 #   "plugin_id": "search-sdk",
 #   "provider_id": "search-sdk",
@@ -10249,7 +10233,7 @@ async fn execute_spec_plugin_preflight_applies_contract_drift_exception_lane() {
 #   "capabilities": ["InvokeConnector"],
 #   "metadata": {"bridge_kind":"http_json"}
 # }
-# LOONGCLAW_PLUGIN_END
+# LOONG_PLUGIN_END
 "#,
     )
     .expect("write search-sdk plugin");
@@ -10271,7 +10255,7 @@ async fn execute_spec_plugin_preflight_applies_contract_drift_exception_lane() {
         ..PluginPreflightPolicyProfile::default()
     };
     let policy_path = std::env::temp_dir().join(format!(
-        "loongclaw-plugin-preflight-waiver-policy-{unique}.json"
+        "loong-plugin-preflight-waiver-policy-{unique}.json"
     ));
     fs::write(
         &policy_path,

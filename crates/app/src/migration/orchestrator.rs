@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -519,7 +519,7 @@ where
 }
 
 fn bridge_installable_external_skills(
-    config: &mut crate::config::LoongClawConfig,
+    config: &mut crate::config::LoongConfig,
     output_path: &Path,
     input_path: &Path,
     mapping: &super::ExternalSkillMappingPlan,
@@ -729,11 +729,11 @@ fn default_external_skills_install_root(output_path: &Path) -> PathBuf {
 }
 
 fn build_external_skills_bridge_runtime(
-    config: &crate::config::LoongClawConfig,
+    config: &crate::config::LoongConfig,
     output_path: &Path,
     input_path: &Path,
 ) -> crate::tools::runtime_config::ToolRuntimeConfig {
-    let mut runtime = crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let mut runtime = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         Some(output_path),
     );
@@ -750,7 +750,7 @@ fn resolve_external_skills_bridge_file_root(input_path: &Path) -> PathBuf {
 }
 
 fn parse_external_skills_install_outcome(
-    outcome: &loongclaw_contracts::ToolCoreOutcome,
+    outcome: &loong_contracts::ToolCoreOutcome,
 ) -> CliResult<ExternalSkillsInstalledSkill> {
     let payload = &outcome.payload;
     Ok(ExternalSkillsInstalledSkill {
@@ -816,7 +816,7 @@ fn remove_config_output_path(output_path: &Path) -> CliResult<()> {
 
 fn finalize_apply_import_selection_failure(
     error: String,
-    config: &crate::config::LoongClawConfig,
+    config: &crate::config::LoongConfig,
     output_path: &Path,
     input_path: Option<&Path>,
     installs: &[ExternalSkillsInstalledSkill],
@@ -846,7 +846,7 @@ fn installed_skill_ids(installs: &[ExternalSkillsInstalledSkill]) -> Vec<String>
 }
 
 fn rollback_bridged_external_skill_ids(
-    config: &crate::config::LoongClawConfig,
+    config: &crate::config::LoongConfig,
     output_path: &Path,
     input_path: Option<&Path>,
     skill_ids: &[String],
@@ -878,7 +878,7 @@ fn rollback_bridged_external_skill_ids(
 }
 
 fn rollback_bridged_external_skills(
-    config: &crate::config::LoongClawConfig,
+    config: &crate::config::LoongConfig,
     output_path: &Path,
     input_path: Option<&Path>,
     installs: &[ExternalSkillsInstalledSkill],
@@ -1183,12 +1183,12 @@ fn resolve_discovered_source<'a>(
         .ok_or_else(|| format!("selected import source `{source_id}` was not discovered"))
 }
 
-fn load_or_default_config(path: Option<&Path>) -> CliResult<crate::config::LoongClawConfig> {
+fn load_or_default_config(path: Option<&Path>) -> CliResult<crate::config::LoongConfig> {
     let Some(path) = path else {
-        return Ok(crate::config::LoongClawConfig::default());
+        return Ok(crate::config::LoongConfig::default());
     };
     if !path.exists() {
-        return Ok(crate::config::LoongClawConfig::default());
+        return Ok(crate::config::LoongConfig::default());
     }
     let path_string = path.display().to_string();
     let (_, config) = crate::config::load(Some(&path_string))?;
@@ -1199,14 +1199,14 @@ fn migration_state_dir(output_path: &Path) -> PathBuf {
     output_path
         .parent()
         .unwrap_or(Path::new("."))
-        .join(".loongclaw-migration")
+        .join(".loong-migration")
 }
 
 fn manifest_path_for_output(output_path: &Path, state_dir: &Path) -> PathBuf {
     let file_tag = output_path
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| "loongclaw-config".to_owned());
+        .unwrap_or_else(|| "loong-config".to_owned());
     state_dir.join(format!("{file_tag}.last-migration.json"))
 }
 
@@ -1214,7 +1214,7 @@ fn legacy_manifest_path_for_output(output_path: &Path, state_dir: &Path) -> Path
     let file_tag = output_path
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| "loongclaw-config".to_owned());
+        .unwrap_or_else(|| "loong-config".to_owned());
     state_dir.join(format!("{file_tag}.last-import.json"))
 }
 
@@ -1222,7 +1222,7 @@ fn external_skills_manifest_path_for_output(output_path: &Path, state_dir: &Path
     let file_tag = output_path
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| "loongclaw-config".to_owned());
+        .unwrap_or_else(|| "loong-config".to_owned());
     state_dir.join(format!("{file_tag}.external-skills.json"))
 }
 
@@ -1230,7 +1230,7 @@ fn backup_path_for_output(output_path: &Path, state_dir: &Path, session_id: &str
     let file_tag = output_path
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| "loongclaw-config".to_owned());
+        .unwrap_or_else(|| "loong-config".to_owned());
     state_dir.join(format!("{file_tag}.{session_id}.bak"))
 }
 
@@ -1269,7 +1269,7 @@ mod tests {
 
     #[test]
     fn write_bytes_atomically_preserves_existing_file_when_staged_write_fails() {
-        let root = unique_temp_dir("loongclaw-import-atomic-write-failure");
+        let root = unique_temp_dir("loong-import-atomic-write-failure");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let target = root.join("manifest.json");
@@ -1293,7 +1293,7 @@ mod tests {
 
     #[test]
     fn discover_import_sources_returns_ranked_candidates_from_fixture_root() {
-        let root = unique_temp_dir("loongclaw-import-discovery-ranked");
+        let root = unique_temp_dir("loong-import-discovery-ranked");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1343,7 +1343,7 @@ mod tests {
 
     #[test]
     fn discover_import_sources_ignores_empty_or_stock_only_noise_directories() {
-        let root = unique_temp_dir("loongclaw-import-discovery-noise");
+        let root = unique_temp_dir("loong-import-discovery-noise");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let empty_root = root.join("empty");
@@ -1374,7 +1374,7 @@ mod tests {
 
     #[test]
     fn plan_import_sources_returns_summary_for_each_candidate() {
-        let root = unique_temp_dir("loongclaw-import-plan-many");
+        let root = unique_temp_dir("loong-import-plan-many");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1412,7 +1412,7 @@ mod tests {
 
     #[test]
     fn recommend_primary_source_prefers_richer_custom_source() {
-        let root = unique_temp_dir("loongclaw-import-recommend-primary");
+        let root = unique_temp_dir("loong-import-recommend-primary");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1454,7 +1454,7 @@ mod tests {
 
     #[test]
     fn apply_import_selection_writes_backup_and_manifest() {
-        let root = unique_temp_dir("loongclaw-import-apply-selection");
+        let root = unique_temp_dir("loong-import-apply-selection");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1472,9 +1472,9 @@ mod tests {
 
         let discovery = discover_import_sources(&root, DiscoveryOptions::default())
             .expect("discovery should succeed");
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
         let original_body =
-            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+            crate::config::render(&crate::config::LoongConfig::default()).expect("render");
         fs::write(&output_path, &original_body).expect("write original config");
 
         let result = apply_import_selection(&ApplyImportSelection {
@@ -1497,7 +1497,7 @@ mod tests {
 
     #[test]
     fn safe_profile_merge_keeps_existing_prompt_and_applies_only_profile_lane() {
-        let root = unique_temp_dir("loongclaw-import-safe-merge-profile-only");
+        let root = unique_temp_dir("loong-import-safe-merge-profile-only");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1526,10 +1526,10 @@ mod tests {
         let summary = plan_import_sources(&discovery).expect("summary should succeed");
         let recommendation =
             recommend_primary_source(&summary).expect("recommendation should succeed");
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
 
-        let mut existing = crate::config::LoongClawConfig::default();
-        existing.cli.system_prompt_addendum = Some("Native LoongClaw prompt".to_owned());
+        let mut existing = crate::config::LoongConfig::default();
+        existing.cli.system_prompt_addendum = Some("Native Loong prompt".to_owned());
         let existing_body = crate::config::render(&existing).expect("render existing config");
         fs::write(&output_path, existing_body).expect("write existing config");
 
@@ -1550,7 +1550,7 @@ mod tests {
         assert_eq!(result.prompt_owner_source_id, None);
         assert_eq!(
             merged_config.cli.system_prompt_addendum.as_deref(),
-            Some("Native LoongClaw prompt")
+            Some("Native Loong prompt")
         );
         assert_eq!(
             merged_config.memory.profile,
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[test]
     fn duplicate_source_types_get_distinct_ids_and_apply_selected_uses_requested_source() {
-        let root = unique_temp_dir("loongclaw-import-duplicate-source-kind");
+        let root = unique_temp_dir("loong-import-duplicate-source-kind");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let alpha_root = root.join("openclaw-alpha");
@@ -1591,9 +1591,9 @@ mod tests {
         assert!(summary.plans[1].source_id.starts_with("openclaw-"));
 
         let selected_source_id = summary.plans[1].source_id.clone();
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
         let original_body =
-            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+            crate::config::render(&crate::config::LoongConfig::default()).expect("render");
         fs::write(&output_path, original_body).expect("write original config");
 
         let result = apply_import_selection(&ApplyImportSelection {
@@ -1633,7 +1633,7 @@ mod tests {
 
     #[test]
     fn apply_import_selection_can_attach_external_skill_mapping() {
-        let root = unique_temp_dir("loongclaw-import-apply-external-skills");
+        let root = unique_temp_dir("loong-import-apply-external-skills");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1652,7 +1652,7 @@ mod tests {
 
         let discovery = discover_import_sources(&root, DiscoveryOptions::default())
             .expect("discovery should succeed");
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
 
         let result = apply_import_selection(&ApplyImportSelection {
             discovery,
@@ -1703,7 +1703,7 @@ mod tests {
 
     #[test]
     fn apply_import_selection_bridges_installable_external_skills_into_managed_runtime() {
-        let root = unique_temp_dir("loongclaw-import-apply-managed-external-skills");
+        let root = unique_temp_dir("loong-import-apply-managed-external-skills");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1726,7 +1726,7 @@ mod tests {
 
         let discovery = discover_import_sources(&root, DiscoveryOptions::default())
             .expect("discovery should succeed");
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
 
         let result = apply_import_selection(&ApplyImportSelection {
             discovery,
@@ -1774,7 +1774,7 @@ mod tests {
 
     #[test]
     fn collect_installable_external_skill_roots_prefers_highest_precedence_duplicate_skill_ids() {
-        let root = unique_temp_dir("loongclaw-import-duplicate-installable-skill-ids");
+        let root = unique_temp_dir("loong-import-duplicate-installable-skill-ids");
         fs::create_dir_all(&root).expect("create fixture root");
 
         write_file(
@@ -1813,7 +1813,7 @@ mod tests {
     #[test]
     fn collect_installable_external_skill_roots_honors_probe_precedence_for_noncanonical_artifacts()
     {
-        let root = unique_temp_dir("loongclaw-import-noncanonical-probe-precedence");
+        let root = unique_temp_dir("loong-import-noncanonical-probe-precedence");
         fs::create_dir_all(&root).expect("create fixture root");
         fs::create_dir_all(root.join("workspace")).expect("create workspace root");
 
@@ -1861,7 +1861,7 @@ mod tests {
 
     #[test]
     fn apply_import_selection_rolls_back_bridged_external_skills_when_state_dir_setup_fails() {
-        let root = unique_temp_dir("loongclaw-import-apply-managed-external-skills-state-dir");
+        let root = unique_temp_dir("loong-import-apply-managed-external-skills-state-dir");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1882,8 +1882,8 @@ mod tests {
             "# Release Guard\n\nUse this skill when release discipline matters.\n",
         );
 
-        let output_path = root.join("loongclaw.toml");
-        let mut baseline = crate::config::LoongClawConfig::default();
+        let output_path = root.join("loong.toml");
+        let mut baseline = crate::config::LoongConfig::default();
         baseline.external_skills.install_root =
             Some(root.join("managed-skills").display().to_string());
         let baseline_body = crate::config::render(&baseline).expect("render baseline config");
@@ -1924,7 +1924,7 @@ mod tests {
 
     #[test]
     fn apply_import_selection_rolls_back_bridged_external_skills_when_config_write_fails() {
-        let root = unique_temp_dir("loongclaw-import-apply-managed-external-skills-rollback");
+        let root = unique_temp_dir("loong-import-apply-managed-external-skills-rollback");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -1945,8 +1945,8 @@ mod tests {
             "# Release Guard\n\nUse this skill when release discipline matters.\n",
         );
 
-        let output_path = root.join("readonly-loongclaw.toml");
-        let mut baseline = crate::config::LoongClawConfig::default();
+        let output_path = root.join("readonly-loong.toml");
+        let mut baseline = crate::config::LoongConfig::default();
         baseline.external_skills.install_root =
             Some(root.join("managed-skills").display().to_string());
         let baseline_body = crate::config::render(&baseline).expect("render baseline config");
@@ -1985,7 +1985,7 @@ mod tests {
     #[test]
     fn apply_import_selection_restores_config_and_rolls_back_bridged_external_skills_when_external_manifest_write_fails()
      {
-        let root = unique_temp_dir("loongclaw-import-apply-managed-external-skills-manifest");
+        let root = unique_temp_dir("loong-import-apply-managed-external-skills-manifest");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -2006,8 +2006,8 @@ mod tests {
             "# Release Guard\n\nUse this skill when release discipline matters.\n",
         );
 
-        let output_path = root.join("loongclaw.toml");
-        let mut baseline = crate::config::LoongClawConfig::default();
+        let output_path = root.join("loong.toml");
+        let mut baseline = crate::config::LoongConfig::default();
         baseline.external_skills.install_root =
             Some(root.join("managed-skills").display().to_string());
         let baseline_body = crate::config::render(&baseline).expect("render baseline config");
@@ -2052,7 +2052,7 @@ mod tests {
 
     #[test]
     fn rollback_last_migration_restores_previous_config() {
-        let root = unique_temp_dir("loongclaw-import-rollback");
+        let root = unique_temp_dir("loong-import-rollback");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -2070,9 +2070,9 @@ mod tests {
 
         let discovery = discover_import_sources(&root, DiscoveryOptions::default())
             .expect("discovery should succeed");
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
         let original_body =
-            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+            crate::config::render(&crate::config::LoongConfig::default()).expect("render");
         fs::write(&output_path, &original_body).expect("write original config");
 
         apply_import_selection(&ApplyImportSelection {
@@ -2097,7 +2097,7 @@ mod tests {
 
     #[test]
     fn rollback_last_migration_falls_back_to_legacy_manifest_name() {
-        let root = unique_temp_dir("loongclaw-import-rollback-legacy-manifest");
+        let root = unique_temp_dir("loong-import-rollback-legacy-manifest");
         fs::create_dir_all(&root).expect("create fixture root");
 
         let openclaw_root = root.join("openclaw-workspace");
@@ -2115,9 +2115,9 @@ mod tests {
 
         let discovery = discover_import_sources(&root, DiscoveryOptions::default())
             .expect("discovery should succeed");
-        let output_path = root.join("loongclaw.toml");
+        let output_path = root.join("loong.toml");
         let original_body =
-            crate::config::render(&crate::config::LoongClawConfig::default()).expect("render");
+            crate::config::render(&crate::config::LoongConfig::default()).expect("render");
         fs::write(&output_path, &original_body).expect("write original config");
 
         let result = apply_import_selection(&ApplyImportSelection {
@@ -2132,7 +2132,7 @@ mod tests {
         .expect("apply should succeed");
 
         let legacy_manifest_path =
-            migration_state_dir(&output_path).join("loongclaw.toml.last-import.json");
+            migration_state_dir(&output_path).join("loong.toml.last-import.json");
         fs::rename(&result.manifest_path, &legacy_manifest_path)
             .expect("rename manifest to legacy name");
 

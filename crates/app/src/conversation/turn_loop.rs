@@ -6,12 +6,12 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
-use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::session::store;
 
-use super::super::config::LoongClawConfig;
+use super::super::config::LoongConfig;
 use super::ProviderErrorMode;
 use super::persistence::persist_reply_turns_with_mode;
-use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
+use super::runtime::{ConversationRuntime, load_default_conversation_runtime};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
@@ -94,13 +94,13 @@ impl ConversationTurnLoop {
 
     pub async fn handle_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = load_default_conversation_runtime(config)?;
         self.handle_turn_with_runtime(
             config, session_id, user_input, error_mode, &runtime, binding,
         )
@@ -109,7 +109,7 @@ impl ConversationTurnLoop {
 
     pub async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -120,7 +120,7 @@ impl ConversationTurnLoop {
         let session_context = runtime.session_context(config, session_id, binding)?;
         let tool_view = session_context.tool_view.clone();
         let app_dispatcher = DefaultAppToolDispatcher::with_config(
-            MemoryRuntimeConfig::from_memory_config(&config.memory),
+            store::session_store_config_from_memory_config(&config.memory),
             config.clone(),
         );
         let turn_id = super::turn_shared::next_conversation_turn_id();
@@ -284,7 +284,7 @@ fn build_round_limit_terminal_action(last_raw_reply: &str) -> TurnLoopTerminalAc
 
 async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session: &mut TurnLoopSessionState,
     user_input: &str,
     decision: RoundKernelDecision,
@@ -375,7 +375,7 @@ fn initialize_turn_loop_session(
 }
 
 async fn evaluate_round_kernel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     policy: &TurnLoopPolicy,
     turn: &ProviderTurn,
     session_context: &super::runtime::SessionContext,
@@ -735,7 +735,7 @@ struct TurnLoopPolicy {
 }
 
 impl TurnLoopPolicy {
-    fn from_config(config: &LoongClawConfig) -> Self {
+    fn from_config(config: &LoongConfig) -> Self {
         let turn_loop = &config.conversation.turn_loop;
         Self {
             max_rounds: turn_loop.max_rounds.max(1),
@@ -1025,7 +1025,7 @@ mod tests {
         )
         .expect("file.read payload summary should stay valid json");
 
-        assert_eq!(envelope["tool"], "file.read");
+        assert_eq!(envelope["tool"], "read");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["path"], "/repo/README.md");
         assert_eq!(summary["bytes"], 8_192);
@@ -1119,7 +1119,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("user followup prompt should exist");
 
-        assert!(user_prompt.contains("Repair guidance for shell.exec:"));
+        assert!(user_prompt.contains("Repair guidance for exec:"));
         assert!(user_prompt.contains("CMD.EXE"));
         assert!(user_prompt.contains("cmd.exe"));
     }
@@ -1270,7 +1270,7 @@ mod tests {
         let (envelope, summary) =
             crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
-        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["command"], "cargo");
         assert_eq!(summary["exit_code"], 0);
@@ -1468,7 +1468,7 @@ mod tests {
         let (envelope, summary) =
             crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
-        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["command"], "cargo");
         assert_eq!(summary["exit_code"], 0);

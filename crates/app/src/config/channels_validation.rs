@@ -202,12 +202,17 @@ pub(super) fn validate_discord_env_pointer(
     env_key: Option<&str>,
     inline_field_path: &str,
 ) {
+    let example_env_name = if field_path.ends_with("application_id_env") {
+        DISCORD_APPLICATION_ID_ENV
+    } else {
+        DISCORD_BOT_TOKEN_ENV
+    };
     if let Err(issue) = validate_env_pointer_field(
         field_path,
         env_key,
         EnvPointerValidationHint {
             inline_field_path,
-            example_env_name: DISCORD_BOT_TOKEN_ENV,
+            example_env_name,
             detect_telegram_token_shape: false,
         },
     ) {

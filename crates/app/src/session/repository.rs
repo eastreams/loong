@@ -2,16 +2,13 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{
-    Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
-};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::Value;
 
 use super::frozen_result::FrozenResult;
+use super::store::{self, SessionStoreConfig, SessionTranscriptTurn};
 use crate::config::ToolConsentMode;
-use crate::memory;
-use crate::memory::ConversationTurn;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::search_text::{build_search_index_text, normalize_search_text};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 pub(crate) const SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE: usize = 200;
@@ -370,7 +367,7 @@ pub struct SessionTrajectoryReadSnapshot {
     pub summary: SessionSummaryRecord,
     pub lineage_root_session_id: Option<String>,
     pub lineage_depth: usize,
-    pub turns: Vec<ConversationTurn>,
+    pub turns: Vec<SessionTranscriptTurn>,
     pub events: Vec<SessionEventRecord>,
     pub approval_requests: Vec<ApprovalRequestRecord>,
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
@@ -474,8 +471,8 @@ pub struct SessionRepository {
 }
 
 impl SessionRepository {
-    pub fn new(config: &MemoryRuntimeConfig) -> Result<Self, String> {
-        let db_path = memory::ensure_memory_db_ready(config.sqlite_path.clone(), config)?;
+    pub fn new(config: &SessionStoreConfig) -> Result<Self, String> {
+        let db_path = store::ensure_session_store_ready(config.sqlite_path.clone(), config)?;
         Ok(Self { db_path })
     }
 
@@ -756,6 +753,8 @@ impl SessionRepository {
         let event_payload_json = request.event_payload_json;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session transition event payload failed: {error}"))?;
+        let event_search_text =
+            session_event_search_text(event_kind.as_str(), encoded_event_payload.as_str());
         let ts = unix_ts_now();
 
         let mut conn = self.open_connection()?;
@@ -783,13 +782,14 @@ impl SessionRepository {
         }
         tx.execute(
             "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_id,
                 event_kind,
                 actor_session_id.as_deref(),
                 encoded_event_payload,
+                event_search_text,
                 ts
             ],
         )
@@ -826,6 +826,8 @@ impl SessionRepository {
         let event_payload_json = request.event_payload_json;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session transition event payload failed: {error}"))?;
+        let event_search_text =
+            session_event_search_text(event_kind.as_str(), encoded_event_payload.as_str());
         let ts = unix_ts_now();
 
         let mut conn = self.open_connection()?;
@@ -858,13 +860,14 @@ impl SessionRepository {
         .map_err(|error| format!("clear session terminal outcome failed: {error}"))?;
         tx.execute(
             "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_id,
                 event_kind,
                 actor_session_id.as_deref(),
                 encoded_event_payload,
+                event_search_text,
                 ts
             ],
         )
@@ -1183,7 +1186,8 @@ impl SessionRepository {
         limit: usize,
     ) -> Result<Vec<SessionSearchRecord>, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
-        let normalized_query = normalize_required_text(query, "query")?.to_ascii_lowercase();
+        let raw_query = normalize_required_text(query, "query")?;
+        let normalized_query = normalize_search_text(raw_query.as_str());
         let conn = self.open_connection()?;
         Self::search_session_content_with_conn(&conn, &session_id, &normalized_query, limit)
     }
@@ -1220,7 +1224,7 @@ impl SessionRepository {
             let lineage_root_session_id =
                 Self::lineage_root_session_id_with_conn(conn, &session_id)?;
             let lineage_depth = Self::session_lineage_depth_with_conn(conn, &session_id)?;
-            let turns = memory::transcript_direct_paged_with_conn(
+            let turns = store::transcript_session_turns_paged_with_conn(
                 conn,
                 &session_id,
                 SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE,
@@ -2384,6 +2388,8 @@ impl SessionRepository {
         let frozen_result = request.frozen_result;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session terminal event payload failed: {error}"))?;
+        let event_search_text =
+            session_event_search_text(event_kind.as_str(), encoded_event_payload.as_str());
         let encoded_outcome_payload = serde_json::to_string(&outcome_payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
         let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
@@ -2413,13 +2419,14 @@ impl SessionRepository {
         }
         tx.execute(
             "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_id,
                 event_kind,
                 actor_session_id.as_deref(),
                 encoded_event_payload,
+                event_search_text,
                 ts
             ],
         )
@@ -2490,6 +2497,8 @@ impl SessionRepository {
         let frozen_result = request.frozen_result;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session terminal event payload failed: {error}"))?;
+        let event_search_text =
+            session_event_search_text(event_kind.as_str(), encoded_event_payload.as_str());
         let encoded_outcome_payload = serde_json::to_string(&outcome_payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
         let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
@@ -2520,13 +2529,14 @@ impl SessionRepository {
         }
         tx.execute(
             "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_id,
                 event_kind,
                 actor_session_id.as_deref(),
                 encoded_event_payload,
+                event_search_text,
                 ts
             ],
         )
@@ -2593,6 +2603,8 @@ impl SessionRepository {
         let ts = unix_ts_now();
         let payload_json = serde_json::to_string(&event.payload_json)
             .map_err(|error| format!("encode session event payload failed: {error}"))?;
+        let event_search_text =
+            session_event_search_text(event_kind.as_str(), payload_json.as_str());
         let actor_session_id = normalize_optional_text(event.actor_session_id);
 
         let conn = self.open_connection()?;
@@ -2609,9 +2621,16 @@ impl SessionRepository {
 
         conn.execute(
             "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session_id, event_kind, actor_session_id, payload_json, ts],
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                session_id,
+                event_kind,
+                actor_session_id,
+                payload_json,
+                event_search_text,
+                ts,
+            ],
         )
         .map_err(|error| format!("insert session event failed: {error}"))?;
 
@@ -2636,6 +2655,8 @@ impl SessionRepository {
         let payload_value = event.payload_json;
         let payload_json = serde_json::to_string(&payload_value)
             .map_err(|error| format!("encode session event payload failed: {error}"))?;
+        let event_search_text =
+            session_event_search_text(event_kind.as_str(), payload_json.as_str());
 
         let mut conn = self.open_connection()?;
         let tx = conn
@@ -2663,13 +2684,14 @@ impl SessionRepository {
 
         tx.execute(
             "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_id.as_str(),
                 event_kind.as_str(),
                 actor_session_id.as_deref(),
                 payload_json.as_str(),
+                event_search_text.as_str(),
                 ts,
             ],
         )
@@ -2705,6 +2727,8 @@ impl SessionRepository {
         let event_payload_json = request.event_payload_json;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session event payload failed: {error}"))?;
+        let event_search_text =
+            session_event_search_text(event_kind.as_str(), encoded_event_payload.as_str());
         let ts = unix_ts_now();
 
         tx.execute(
@@ -2724,13 +2748,14 @@ impl SessionRepository {
         .map_err(|error| format!("insert session row failed: {error}"))?;
         tx.execute(
             "INSERT INTO session_events(
-                session_id, event_kind, actor_session_id, payload_json, ts
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_id,
                 event_kind,
                 actor_session_id.as_deref(),
                 encoded_event_payload,
+                event_search_text,
                 ts
             ],
         )
@@ -3137,27 +3162,17 @@ impl SessionRepository {
             return Ok(Vec::new());
         }
 
-        let turn_match_query = build_search_fts_query(normalized_query);
-        let patterns = build_search_like_patterns(normalized_query);
-        if turn_match_query.is_none() && patterns.is_empty() {
+        let Some(match_query) = build_search_fts_query(normalized_query) else {
             return Ok(Vec::new());
-        }
+        };
 
         let mut hits = Vec::new();
-        if let Some(turn_match_query) = turn_match_query.as_deref() {
-            let turn_hits =
-                Self::search_session_turns_with_conn(conn, session_id, turn_match_query, limit)?;
-            hits.extend(turn_hits);
-        }
-        if !patterns.is_empty() {
-            let event_hits = Self::search_session_events_with_conn(
-                conn,
-                session_id,
-                patterns.as_slice(),
-                limit,
-            )?;
-            hits.extend(event_hits);
-        }
+        let turn_hits =
+            Self::search_session_turns_with_conn(conn, session_id, &match_query, limit)?;
+        hits.extend(turn_hits);
+        let event_hits =
+            Self::search_session_events_with_conn(conn, session_id, &match_query, limit)?;
+        hits.extend(event_hits);
         Ok(hits)
     }
 
@@ -3221,32 +3236,30 @@ impl SessionRepository {
     fn search_session_events_with_conn(
         conn: &Connection,
         session_id: &str,
-        patterns: &[String],
+        match_query: &str,
         limit: usize,
     ) -> Result<Vec<SessionSearchRecord>, String> {
-        let where_clause = build_search_where_clause(
-            "lower(event_kind || ' ' || payload_json)",
-            patterns.len(),
-            2,
-        );
-        let sql = format!(
-            "SELECT id, session_id, event_kind, payload_json, ts
-             FROM session_events
-             WHERE session_id = ?1
-               AND ({where_clause})
-             ORDER BY id DESC
-             LIMIT {limit}"
-        );
-
         let mut stmt = conn
-            .prepare(sql.as_str())
+            .prepare(
+                "SELECT event.id,
+                        event.session_id,
+                        event.event_kind,
+                        event.payload_json,
+                        event.ts
+                 FROM session_events_fts AS fts
+                 JOIN session_events AS event
+                   ON event.id = fts.rowid
+                 WHERE session_events_fts MATCH ?1
+                   AND event.session_id = ?2
+                 ORDER BY bm25(session_events_fts),
+                          event.ts DESC,
+                          event.id DESC
+                 LIMIT ?3",
+            )
             .map_err(|error| format!("prepare session search events query failed: {error}"))?;
-        let mut bindings = Vec::with_capacity(patterns.len().saturating_add(1));
-        bindings.push(session_id.to_owned());
-        bindings.extend(patterns.iter().cloned());
 
         let rows = stmt
-            .query_map(params_from_iter(bindings.iter()), |row| {
+            .query_map(params![match_query, session_id, limit as i64], |row| {
                 Ok(RawSessionSearchEventRecord {
                     id: row.get(0)?,
                     session_id: row.get(1)?,
@@ -3839,87 +3852,12 @@ fn sort_session_summaries(sessions: &mut [SessionSummaryRecord]) {
     });
 }
 
-fn build_search_where_clause(
-    expression: &str,
-    pattern_count: usize,
-    first_placeholder_index: usize,
-) -> String {
-    let mut clauses = Vec::with_capacity(pattern_count);
-    for offset in 0..pattern_count {
-        let placeholder = first_placeholder_index.saturating_add(offset);
-        clauses.push(format!("{expression} LIKE ?{placeholder} ESCAPE '\\'"));
-    }
-    clauses.join(" OR ")
-}
-
-fn build_search_like_patterns(normalized_query: &str) -> Vec<String> {
-    let mut patterns = Vec::new();
-    patterns.push(like_pattern(normalized_query));
-
-    for token in tokenize_search_query(normalized_query) {
-        let pattern = like_pattern(token.as_str());
-        if patterns.iter().any(|existing| existing == &pattern) {
-            continue;
-        }
-        patterns.push(pattern);
-    }
-
-    patterns
-}
-
 fn build_search_fts_query(normalized_query: &str) -> Option<String> {
-    let trimmed_query = normalized_query.trim();
-    if trimmed_query.is_empty() {
-        return None;
-    }
-
-    let mut terms = Vec::new();
-    let mut seen_terms = BTreeSet::new();
-
-    let escaped_query = trimmed_query.replace('"', "\"\"");
-    let quoted_query = format!("\"{escaped_query}\"");
-    if seen_terms.insert(quoted_query.clone()) {
-        terms.push(quoted_query);
-    }
-
-    for token in tokenize_search_query(normalized_query).into_iter().take(6) {
-        let escaped_token = token.replace('"', "\"\"");
-        let quoted_token = format!("\"{escaped_token}\"");
-        if seen_terms.insert(quoted_token.clone()) {
-            terms.push(quoted_token);
-        }
-    }
-
-    if terms.is_empty() {
-        return None;
-    }
-
-    Some(terms.join(" OR "))
+    crate::search_text::build_search_fts_query(normalized_query, 6)
 }
 
-fn tokenize_search_query(query: &str) -> Vec<String> {
-    query
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn like_pattern(raw: &str) -> String {
-    let mut escaped = String::with_capacity(raw.len().saturating_add(4));
-    escaped.push('%');
-    for ch in raw.chars() {
-        match ch {
-            '%' | '_' | '\\' => {
-                escaped.push('\\');
-                escaped.push(ch);
-            }
-            _ => escaped.push(ch),
-        }
-    }
-    escaped.push('%');
-    escaped
+fn session_event_search_text(event_kind: &str, payload_json: &str) -> String {
+    build_search_index_text(&[event_kind, payload_json])
 }
 
 #[cfg(test)]
@@ -3932,23 +3870,22 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::memory::append_turn_direct;
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
+    use crate::session::store::{SessionStoreConfig, append_session_turn_direct};
     use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
     use super::*;
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-session-repository-{test_name}-{}",
+            "loong-session-repository-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&base);
         let db_path = base.join("memory.sqlite3");
         let _ = fs::remove_file(&db_path);
-        MemoryRuntimeConfig {
+        SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..MemoryRuntimeConfig::default()
+            ..SessionStoreConfig::default()
         }
     }
 
@@ -3979,12 +3916,12 @@ mod tests {
     }
 
     fn append_session_turn(
-        config: &MemoryRuntimeConfig,
+        config: &SessionStoreConfig,
         session_id: &str,
         role: &str,
         content: &str,
     ) {
-        append_turn_direct(session_id, role, content, config).expect("append session turn");
+        append_session_turn_direct(session_id, role, content, config).expect("append session turn");
     }
 
     fn set_session_updated_at(repo: &SessionRepository, session_id: &str, updated_at: i64) {
@@ -4504,8 +4441,9 @@ mod tests {
     #[test]
     fn list_visible_sessions_infers_legacy_rows_from_turn_history_without_backfill() {
         let config = isolated_memory_config("legacy-visible-sessions");
-        append_turn_direct("telegram:123", "user", "hello", &config).expect("append user turn");
-        append_turn_direct("telegram:123", "assistant", "world", &config)
+        append_session_turn_direct("telegram:123", "user", "hello", &config)
+            .expect("append user turn");
+        append_session_turn_direct("telegram:123", "assistant", "world", &config)
             .expect("append assistant turn");
 
         let repo = SessionRepository::new(&config).expect("repository");
@@ -4536,9 +4474,10 @@ mod tests {
     #[test]
     fn inferred_legacy_session_kind_uses_known_prefixes() {
         let config = isolated_memory_config("legacy-kind-prefixes");
-        append_turn_direct("delegate:legacy-child", "assistant", "done", &config)
+        append_session_turn_direct("delegate:legacy-child", "assistant", "done", &config)
             .expect("append delegate turn");
-        append_turn_direct("telegram:456", "user", "ping", &config).expect("append telegram turn");
+        append_session_turn_direct("telegram:456", "user", "ping", &config)
+            .expect("append telegram turn");
 
         let repo = SessionRepository::new(&config).expect("repository");
         let delegate_session = repo
@@ -4819,7 +4758,7 @@ mod tests {
         })
         .expect("create child");
 
-        append_turn_direct(
+        append_session_turn_direct(
             "child-session",
             "assistant",
             "Deploy freeze window is Friday and migration starts Saturday.",

@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 use super::acpx::AcpxCliProbeBackend;
 use super::backend::AcpRuntimeBackend;
 use crate::config::AcpConfig;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 
 #[tokio::test]
 async fn doctor_reports_invalid_mcp_registry_config() {
     let backend = AcpxCliProbeBackend;
-    let config = LoongClawConfig {
+    let config = LoongConfig {
         acp: AcpConfig {
             allow_mcp_server_injection: true,
             ..AcpConfig::default()
@@ -32,7 +32,7 @@ async fn doctor_reports_invalid_mcp_registry_config() {
                 },
             )]),
         },
-        ..LoongClawConfig::default()
+        ..LoongConfig::default()
     };
 
     let report = backend

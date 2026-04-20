@@ -11,7 +11,7 @@ release-governance support material.
 | --- | --- | --- |
 | read public release history | the `vX.Y.Z*.md` notes and `*-announcement.md` files in this directory | those are the public release artifacts |
 | compare versions through the broader public history | `../../CHANGELOG.md` and GitHub Releases | those stay canonical for release history outside the raw repo tree |
-| prepare or review release-support material | [`support/README.md`](support/README.md) | maintainer workflow, templates, and monthly drift reports live there |
+| prepare or review release-support material | [`support/README.md`](support/README.md) | maintainer workflow and templates live there |
 
 ## What Belongs At The Top Level
 
@@ -22,7 +22,6 @@ release-governance support material.
 
 - release-governance workflow docs
 - release document templates
-- monthly architecture drift maintenance artifacts
 
 ## Boundary Rules
 

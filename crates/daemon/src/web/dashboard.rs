@@ -130,7 +130,7 @@ pub(super) async fn dashboard_config(
                     .endpoint
                     .as_deref()
                     .map(str::trim)
-                    .is_some_and(|value| !value.is_empty()),
+                    .is_some_and(|value: &str| !value.is_empty()),
             endpoint: snapshot.config.provider.endpoint(),
             api_key_configured: active_provider
                 .as_ref()
@@ -150,7 +150,7 @@ pub(super) async fn dashboard_config(
                 .system_prompt_addendum
                 .as_deref()
                 .map(str::trim)
-                .is_some_and(|value| !value.is_empty()),
+                .is_some_and(|value: &str| !value.is_empty()),
             prompt_addendum: snapshot
                 .config
                 .cli
@@ -186,7 +186,7 @@ pub(super) async fn dashboard_tools(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardToolsPayload>>, WebApiError> {
     let snapshot = load_web_snapshot(state.as_ref())?;
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &snapshot.config,
         None,
     );

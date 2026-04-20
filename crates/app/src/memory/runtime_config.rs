@@ -66,7 +66,7 @@ impl MemoryRuntimeConfig {
     }
 
     fn apply_env_overrides(&mut self) {
-        if let Some(backend) = std::env::var("LOONGCLAW_MEMORY_BACKEND")
+        if let Some(backend) = std::env::var("LOONG_MEMORY_BACKEND")
             .ok()
             .as_deref()
             .and_then(MemoryBackendKind::parse_id)
@@ -74,7 +74,7 @@ impl MemoryRuntimeConfig {
             self.backend = backend;
         }
 
-        if let Some(profile) = std::env::var("LOONGCLAW_MEMORY_PROFILE")
+        if let Some(profile) = std::env::var("LOONG_MEMORY_PROFILE")
             .ok()
             .as_deref()
             .and_then(MemoryProfile::parse_id)
@@ -88,11 +88,11 @@ impl MemoryRuntimeConfig {
             self.resolved_system_id = Some(system_id);
         }
 
-        if let Some(fail_open) = parse_bool(std::env::var("LOONGCLAW_MEMORY_FAIL_OPEN").ok()) {
+        if let Some(fail_open) = parse_bool(std::env::var("LOONG_MEMORY_FAIL_OPEN").ok()) {
             self.fail_open = fail_open;
         }
 
-        if let Some(ingest_mode) = std::env::var("LOONGCLAW_MEMORY_INGEST_MODE")
+        if let Some(ingest_mode) = std::env::var("LOONG_MEMORY_INGEST_MODE")
             .ok()
             .as_deref()
             .and_then(MemoryIngestMode::parse_id)
@@ -100,26 +100,23 @@ impl MemoryRuntimeConfig {
             self.ingest_mode = ingest_mode;
         }
 
-        if let Some(sqlite_path) = std::env::var("LOONGCLAW_SQLITE_PATH")
-            .ok()
-            .map(PathBuf::from)
-        {
+        if let Some(sqlite_path) = std::env::var("LOONG_SQLITE_PATH").ok().map(PathBuf::from) {
             self.sqlite_path = Some(sqlite_path);
         }
 
         if let Some(sliding_window) =
-            parse_positive_usize(std::env::var("LOONGCLAW_SLIDING_WINDOW").ok())
+            parse_positive_usize(std::env::var("LOONG_SLIDING_WINDOW").ok())
         {
             self.sliding_window = sliding_window;
         }
 
         if let Some(summary_max_chars) =
-            parse_positive_usize(std::env::var("LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS").ok())
+            parse_positive_usize(std::env::var("LOONG_MEMORY_SUMMARY_MAX_CHARS").ok())
         {
             self.summary_max_chars = summary_max_chars;
         }
 
-        if let Ok(profile_note) = std::env::var("LOONGCLAW_MEMORY_PROFILE_NOTE") {
+        if let Ok(profile_note) = std::env::var("LOONG_MEMORY_PROFILE_NOTE") {
             let trimmed = profile_note.trim();
             self.profile_note = if trimmed.is_empty() {
                 None
@@ -132,7 +129,7 @@ impl MemoryRuntimeConfig {
     /// Build a config by reading the legacy environment variable.
     ///
     /// Keeps full backward compatibility for callers that still rely on
-    /// `LOONGCLAW_SQLITE_PATH`.
+    /// `LOONG_SQLITE_PATH`.
     pub fn from_env() -> Self {
         let defaults = MemoryConfig::default();
         let mut runtime = Self::from_memory_config_base(&defaults);
@@ -148,6 +145,18 @@ impl MemoryRuntimeConfig {
 
     pub fn from_memory_config_without_env_overrides(config: &MemoryConfig) -> Self {
         Self::from_memory_config_base(config)
+    }
+
+    /// Build a minimal runtime config bound to one explicit SQLite path.
+    ///
+    /// This is intended for tooling and tests that need to inspect canonical
+    /// memory records through the same runtime surface without constructing a
+    /// full `MemoryConfig`.
+    pub fn for_sqlite_path(sqlite_path: impl Into<PathBuf>) -> Self {
+        Self {
+            sqlite_path: Some(sqlite_path.into()),
+            ..Self::default()
+        }
     }
 
     pub const fn strict_mode_requested(&self) -> bool {
@@ -288,6 +297,17 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_for_sqlite_path_sets_only_explicit_sqlite_override() {
+        let config = MemoryRuntimeConfig::for_sqlite_path("/tmp/helper-memory.sqlite3");
+
+        assert_eq!(
+            config.sqlite_path,
+            Some(PathBuf::from("/tmp/helper-memory.sqlite3"))
+        );
+        assert_eq!(config.backend, MemoryBackendKind::Sqlite);
+    }
+
+    #[test]
     fn runtime_config_from_memory_config_carries_profile_and_limits() {
         let _env = ScopedEnv::new();
         let config = MemoryConfig {
@@ -361,13 +381,13 @@ mod tests {
     #[test]
     fn runtime_config_from_memory_config_applies_memory_env_overrides() {
         let mut env = ScopedEnv::new();
-        env.set("LOONGCLAW_MEMORY_PROFILE", "profile_plus_window");
-        env.set("LOONGCLAW_MEMORY_FAIL_OPEN", "true");
-        env.set("LOONGCLAW_MEMORY_INGEST_MODE", "async_background");
-        env.set("LOONGCLAW_SLIDING_WINDOW", "24");
-        env.set("LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS", "2048");
-        env.set("LOONGCLAW_MEMORY_PROFILE_NOTE", "  env profile note  ");
-        env.set("LOONGCLAW_SQLITE_PATH", "/tmp/env-memory.sqlite3");
+        env.set("LOONG_MEMORY_PROFILE", "profile_plus_window");
+        env.set("LOONG_MEMORY_FAIL_OPEN", "true");
+        env.set("LOONG_MEMORY_INGEST_MODE", "async_background");
+        env.set("LOONG_SLIDING_WINDOW", "24");
+        env.set("LOONG_MEMORY_SUMMARY_MAX_CHARS", "2048");
+        env.set("LOONG_MEMORY_PROFILE_NOTE", "  env profile note  ");
+        env.set("LOONG_SQLITE_PATH", "/tmp/env-memory.sqlite3");
 
         let config = MemoryConfig {
             profile: MemoryProfile::WindowOnly,

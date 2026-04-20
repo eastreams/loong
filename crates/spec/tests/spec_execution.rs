@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use kernel::{AuditEventKind, Capability};
-use loongclaw_spec::test_support::make_runner_spec;
-use loongclaw_spec::{OperationSpec, execute_spec, spec_requires_native_tool_executor};
+use loong_spec::test_support::make_runner_spec;
+use loong_spec::{OperationSpec, execute_spec, spec_requires_native_tool_executor};
 use serde_json::json;
 
 #[test]

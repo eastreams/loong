@@ -357,7 +357,7 @@ mod tests {
                     id: "n1".to_owned(),
                     kind: PlanNodeKind::Tool,
                     label: "collect".to_owned(),
-                    tool_name: Some("file.read".to_owned()),
+                    tool_name: Some("read".to_owned()),
                     timeout_ms: 1_000,
                     max_attempts: 1,
                     risk_tier: RiskTier::Low,

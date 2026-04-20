@@ -5,7 +5,7 @@ use std::panic::AssertUnwindSafe;
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
 use futures_util::FutureExt;
-use loongclaw_contracts::{AuditEventKind, ExecutionPlane, PlaneTier};
+use loong_contracts::{AuditEventKind, ExecutionPlane, PlaneTier};
 use serde::Serialize;
 use serde_json::{Value, json};
 #[cfg(feature = "memory-sqlite")]
@@ -14,10 +14,14 @@ use tokio::sync::Mutex;
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, timeout};
 
+#[path = "turn_coordinator/pending_approval.rs"]
+mod pending_approval;
 #[path = "turn_coordinator/safe_lane_events.rs"]
 mod safe_lane_events;
 #[path = "turn_coordinator/safe_lane_execution.rs"]
 mod safe_lane_execution;
+#[path = "turn_coordinator/safe_lane_governor.rs"]
+mod safe_lane_governor;
 #[path = "turn_coordinator/safe_lane_routing.rs"]
 mod safe_lane_routing;
 #[path = "turn_coordinator_support.rs"]
@@ -31,20 +35,26 @@ use crate::acp::{
     AcpConversationTurnOptions, AcpTurnEventSink, evaluate_acp_conversation_turn_entry_for_address,
     execute_acp_conversation_turn_for_address,
 };
+#[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
     DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed,
 };
 use crate::runtime_self_continuity;
+use crate::session::store::{self, SessionStoreConfig};
 
+use self::pending_approval::*;
 use self::safe_lane_events::*;
 use self::safe_lane_execution::*;
+use self::safe_lane_governor::*;
 pub(crate) use self::safe_lane_routing::SafeLaneFailureRoute;
 use self::safe_lane_routing::*;
-use super::super::config::{LoongClawConfig, ToolConsentMode};
+use super::super::config::{LoongConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
+#[cfg(feature = "memory-sqlite")]
+use super::active_external_skills;
 use super::analytics::{
     SafeLaneEventSummary, TurnCheckpointProgressStatus as AnalyticsTurnCheckpointProgressStatus,
     TurnCheckpointRecoveryAction, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,
@@ -53,7 +63,7 @@ use super::analytics::{
 use super::announce::DelegateAnnounceSettings;
 #[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
-use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
+use super::context_engine::AssembledConversationContext;
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
     enqueue_delegate_result_announce_with_memory_config,
@@ -63,6 +73,8 @@ use super::delegate_support::{
 };
 use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
+#[cfg(feature = "memory-sqlite")]
+use super::mailbox_for_session;
 use super::persistence::{
     format_provider_error_reply, persist_acp_runtime_events, persist_conversation_event,
     persist_reply_turns_raw_with_mode, persist_reply_turns_with_mode, persist_tool_decision,
@@ -80,7 +92,8 @@ use super::plan_verifier::{
     PlanVerificationReport, verify_output,
 };
 use super::runtime::{
-    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
+    AsyncDelegateSpawnRequest, BoxedDefaultConversationRuntime, ConversationRuntime,
+    SessionContext, load_default_conversation_runtime,
 };
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::safe_lane_failure::{
@@ -94,7 +107,8 @@ use super::session_history::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentOwnerKind,
+    ConstrainedSubagentTerminalReason,
 };
 use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
 use super::trust_projection::{
@@ -135,7 +149,8 @@ use super::turn_shared::{
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
     build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, effective_followup_tool_name,
-    format_approval_required_reply, next_conversation_turn_id, reduce_followup_payload_for_model,
+    effective_followup_visible_tool_name, format_approval_required_reply,
+    next_conversation_turn_id, reduce_followup_payload_for_model,
     request_completion_with_raw_fallback, summarize_provider_lane_tool_request,
     summarize_single_tool_followup_request, tool_driven_followup_payload,
     tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
@@ -159,6 +174,8 @@ use crate::session::repository::{
     ApprovalDecision, ApprovalRequestStatus, NewSessionEvent, NewSessionRecord, SessionKind,
     SessionRepository, SessionState,
 };
+#[cfg(feature = "memory-sqlite")]
+use loong_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
 use support::{
     ProviderTurnPreparation, ProviderTurnReplyTailPhase, ProviderTurnSessionState,
     emit_async_delegate_child_queued_event, emit_discovery_first_event, emit_prompt_frame_event,
@@ -309,142 +326,6 @@ impl SafeLaneExecutionMetrics {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct SafeLaneAdaptiveVerifyPolicyState {
-    min_anchor_matches: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct SafeLaneToolOutputStats {
-    output_lines: usize,
-    result_lines: usize,
-    truncated_result_lines: usize,
-}
-
-impl SafeLaneToolOutputStats {
-    fn truncation_ratio_milli(self) -> usize {
-        if self.result_lines == 0 {
-            return 0;
-        }
-        self.truncated_result_lines
-            .saturating_mul(1000)
-            .saturating_div(self.result_lines)
-    }
-
-    fn as_json(self) -> Value {
-        json!({
-            "output_lines": self.output_lines,
-            "result_lines": self.result_lines,
-            "truncated_result_lines": self.truncated_result_lines,
-            "any_truncated": self.truncated_result_lines > 0,
-            "truncation_ratio_milli": self.truncation_ratio_milli(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SafeLaneRuntimeHealthSignal {
-    severity: &'static str,
-    flags: Vec<String>,
-}
-
-impl SafeLaneRuntimeHealthSignal {
-    fn as_json(&self) -> Value {
-        json!({
-            "severity": self.severity,
-            "flags": self.flags,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum SafeLaneGovernorHistoryLoadStatus {
-    #[default]
-    Disabled,
-    Loaded,
-    Unavailable,
-}
-
-impl SafeLaneGovernorHistoryLoadStatus {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Loaded => "loaded",
-            Self::Unavailable => "unavailable",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-struct SafeLaneSessionGovernorDecision {
-    engaged: bool,
-    history_window_turns: usize,
-    history_load_status: SafeLaneGovernorHistoryLoadStatus,
-    history_load_error: Option<AssistantHistoryLoadErrorCode>,
-    failed_final_status_events: u32,
-    failed_final_status_threshold: u32,
-    failed_threshold_triggered: bool,
-    backpressure_failure_events: u32,
-    backpressure_failure_threshold: u32,
-    backpressure_threshold_triggered: bool,
-    trend_enabled: bool,
-    trend_samples: usize,
-    trend_min_samples: usize,
-    trend_failure_ewma: Option<f64>,
-    trend_failure_ewma_threshold: f64,
-    trend_backpressure_ewma: Option<f64>,
-    trend_backpressure_ewma_threshold: f64,
-    trend_threshold_triggered: bool,
-    recovery_success_streak: u32,
-    recovery_success_streak_threshold: u32,
-    recovery_failure_ewma_threshold: f64,
-    recovery_backpressure_ewma_threshold: f64,
-    recovery_threshold_triggered: bool,
-    force_no_replan: bool,
-    forced_node_max_attempts: Option<u8>,
-}
-
-impl SafeLaneSessionGovernorDecision {
-    fn as_json(&self) -> Value {
-        json!({
-            "engaged": self.engaged,
-            "history_window_turns": self.history_window_turns,
-            "history_load_status": self.history_load_status.as_str(),
-            "history_load_error": self.history_load_error.map(|error| error.as_str()),
-            "failed_final_status_events": self.failed_final_status_events,
-            "failed_final_status_threshold": self.failed_final_status_threshold,
-            "failed_threshold_triggered": self.failed_threshold_triggered,
-            "backpressure_failure_events": self.backpressure_failure_events,
-            "backpressure_failure_threshold": self.backpressure_failure_threshold,
-            "backpressure_threshold_triggered": self.backpressure_threshold_triggered,
-            "trend_enabled": self.trend_enabled,
-            "trend_samples": self.trend_samples,
-            "trend_min_samples": self.trend_min_samples,
-            "trend_failure_ewma": self.trend_failure_ewma,
-            "trend_failure_ewma_threshold": self.trend_failure_ewma_threshold,
-            "trend_backpressure_ewma": self.trend_backpressure_ewma,
-            "trend_backpressure_ewma_threshold": self.trend_backpressure_ewma_threshold,
-            "trend_threshold_triggered": self.trend_threshold_triggered,
-            "recovery_success_streak": self.recovery_success_streak,
-            "recovery_success_streak_threshold": self.recovery_success_streak_threshold,
-            "recovery_failure_ewma_threshold": self.recovery_failure_ewma_threshold,
-            "recovery_backpressure_ewma_threshold": self.recovery_backpressure_ewma_threshold,
-            "recovery_threshold_triggered": self.recovery_threshold_triggered,
-            "force_no_replan": self.force_no_replan,
-            "forced_node_max_attempts": self.forced_node_max_attempts,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct SafeLaneGovernorHistorySignals {
-    history_load_status: SafeLaneGovernorHistoryLoadStatus,
-    history_load_error: Option<AssistantHistoryLoadErrorCode>,
-    summary: SafeLaneEventSummary,
-    final_status_failed_samples: Vec<bool>,
-    backpressure_failure_samples: Vec<bool>,
-}
-
 #[derive(Debug, Clone)]
 struct SafeLanePlanLoopState {
     governor: SafeLaneSessionGovernorDecision,
@@ -457,7 +338,7 @@ struct SafeLanePlanLoopState {
 }
 
 impl SafeLanePlanLoopState {
-    fn new(config: &LoongClawConfig, governor: SafeLaneSessionGovernorDecision) -> Self {
+    fn new(config: &LoongConfig, governor: SafeLaneSessionGovernorDecision) -> Self {
         let force_no_replan = governor.force_no_replan;
         let mut tool_node_max_attempts = config.conversation.safe_lane_node_max_attempts.max(1);
         if let Some(forced_node_max_attempts) = governor.forced_node_max_attempts {
@@ -489,7 +370,7 @@ impl SafeLanePlanLoopState {
         }
     }
 
-    fn refresh_verify_policy(&mut self, config: &LoongClawConfig) -> Option<usize> {
+    fn refresh_verify_policy(&mut self, config: &LoongConfig) -> Option<usize> {
         let next_min_anchor_matches =
             compute_safe_lane_verify_min_anchor_matches(config, self.metrics.verify_failures);
         if next_min_anchor_matches == self.adaptive_verify_policy.min_anchor_matches {
@@ -569,7 +450,7 @@ struct ProviderTurnLanePlan {
 }
 
 impl ProviderTurnLanePlan {
-    fn from_user_input(config: &LoongClawConfig, user_input: &str) -> Self {
+    fn from_user_input(config: &LoongConfig, user_input: &str) -> Self {
         let decision = if config.conversation.hybrid_lane_enabled {
             lane_policy_from_config(config).decide(user_input)
         } else {
@@ -586,11 +467,7 @@ impl ProviderTurnLanePlan {
         }
     }
 
-    fn should_use_safe_lane_plan_path(
-        &self,
-        config: &LoongClawConfig,
-        turn: &ProviderTurn,
-    ) -> bool {
+    fn should_use_safe_lane_plan_path(&self, config: &LoongConfig, turn: &ProviderTurn) -> bool {
         config.conversation.safe_lane_plan_execution_enabled
             && matches!(self.decision.lane, ExecutionLane::Safe)
             && !turn.tool_intents.is_empty()
@@ -642,7 +519,7 @@ struct ProviderTurnLoopPolicy {
 }
 
 impl ProviderTurnLoopPolicy {
-    fn from_config(config: &LoongClawConfig) -> Self {
+    fn from_config(config: &LoongConfig) -> Self {
         let turn_loop = &config.conversation.turn_loop;
         Self {
             max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
@@ -731,7 +608,7 @@ struct ProviderTurnContinuePhase {
     lane_execution: ProviderTurnLaneExecution,
     reply_phase: ToolDrivenReplyPhase,
     loop_verdict: Option<ProviderTurnLoopVerdict>,
-    followup_config: LoongClawConfig,
+    followup_config: LoongConfig,
     ingress: Option<ConversationIngressContext>,
 }
 
@@ -740,7 +617,7 @@ impl ProviderTurnContinuePhase {
         tool_intents: usize,
         lane_execution: ProviderTurnLaneExecution,
         loop_verdict: Option<ProviderTurnLoopVerdict>,
-        followup_config: LoongClawConfig,
+        followup_config: LoongConfig,
         ingress: Option<&ConversationIngressContext>,
     ) -> Self {
         let reply_phase = lane_execution.reply_phase();
@@ -924,7 +801,7 @@ enum ProviderTurnTerminalPhase<'a> {
 impl<'a> ProviderTurnTerminalPhase<'a> {
     async fn apply<R: ConversationRuntime + ?Sized>(
         self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         runtime: &R,
         session_id: &str,
         user_input: &str,
@@ -1064,46 +941,85 @@ fn build_resolved_provider_checkpoint(
     }
 }
 
-#[cfg(feature = "memory-sqlite")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PendingApprovalInputDecision {
-    RunOnce,
-    SessionAuto,
-    SessionFull,
-    Cancel,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExplicitSkillActivationInput {
+    skill_id: String,
+    followup_request: String,
 }
 
-#[cfg(feature = "memory-sqlite")]
-impl PendingApprovalInputDecision {
-    fn approval_decision(self) -> ApprovalDecision {
-        match self {
-            Self::RunOnce | Self::SessionAuto | Self::SessionFull => ApprovalDecision::ApproveOnce,
-            Self::Cancel => ApprovalDecision::Deny,
+fn parse_explicit_skill_activation_input(input: &str) -> Option<ExplicitSkillActivationInput> {
+    let trimmed = input.trim_start();
+    let raw_skill_token = trimmed.strip_prefix('$')?;
+    let skill_token_len = raw_skill_token
+        .char_indices()
+        .take_while(|(_idx, ch)| explicit_skill_token_char(*ch))
+        .last()
+        .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+    if skill_token_len == 0 {
+        return None;
+    }
+
+    let raw_skill_id = &raw_skill_token[..skill_token_len];
+    let trailing = &raw_skill_token[skill_token_len..];
+    if trailing
+        .chars()
+        .next()
+        .is_some_and(|ch| !ch.is_whitespace())
+    {
+        return None;
+    }
+
+    let skill_id = normalize_explicit_skill_activation_id(raw_skill_id)?;
+    let remaining_request = trailing.trim();
+    let followup_request = if remaining_request.is_empty() {
+        format!(
+            "The user explicitly activated external skill `{skill_id}` without an additional task. Confirm activation briefly and ask what to do next."
+        )
+    } else {
+        remaining_request.to_owned()
+    };
+
+    Some(ExplicitSkillActivationInput {
+        skill_id,
+        followup_request,
+    })
+}
+
+fn explicit_skill_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')
+}
+
+fn normalize_explicit_skill_activation_id(raw: &str) -> Option<String> {
+    let mut normalized = String::new();
+    let mut last_dash = false;
+    for ch in raw.trim().chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            Some(ch.to_ascii_lowercase())
+        } else if matches!(ch, '-' | '_' | ' ' | '.') {
+            Some('-')
+        } else {
+            None
+        };
+        if let Some(value) = mapped {
+            if value == '-' {
+                if !last_dash {
+                    normalized.push(value);
+                }
+                last_dash = true;
+            } else {
+                normalized.push(value);
+                last_dash = false;
+            }
         }
     }
-
-    fn session_mode(self) -> Option<ToolConsentMode> {
-        match self {
-            Self::RunOnce | Self::Cancel => None,
-            Self::SessionAuto => Some(ToolConsentMode::Auto),
-            Self::SessionFull => Some(ToolConsentMode::Full),
-        }
-    }
+    let normalized = normalized.trim_matches('-').to_owned();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
-#[cfg(feature = "memory-sqlite")]
-fn normalize_pending_approval_control_input(input: &str) -> String {
-    super::turn_shared::normalize_approval_prompt_control_input(input)
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn parse_pending_approval_input_decision(input: &str) -> Option<PendingApprovalInputDecision> {
-    match parse_approval_prompt_action_input(input)? {
-        ApprovalPromptActionId::Yes => Some(PendingApprovalInputDecision::RunOnce),
-        ApprovalPromptActionId::Auto => Some(PendingApprovalInputDecision::SessionAuto),
-        ApprovalPromptActionId::Full => Some(PendingApprovalInputDecision::SessionFull),
-        ApprovalPromptActionId::Esc => Some(PendingApprovalInputDecision::Cancel),
-    }
+fn explicit_skill_activation_tool_call_id(skill_id: &str) -> String {
+    let normalized = normalize_explicit_skill_activation_id(skill_id)
+        .unwrap_or_else(|| "external-skill".to_owned());
+    format!("call-explicit-skill-activation-{normalized}")
 }
 
 #[allow(dead_code)]
@@ -1114,23 +1030,23 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn compact_session(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.compact_session_with_runtime(config, session_id, &runtime, binding)
             .await
     }
 
     pub async fn compact_production_session(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.compact_session_with_runtime(config, session_id, &runtime, production_binding)
             .await
@@ -1138,7 +1054,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn compact_session_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         runtime: &R,
         binding: ConversationRuntimeBinding<'_>,
@@ -1200,7 +1116,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1220,7 +1136,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_ingress(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1229,7 +1145,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id(session_id);
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             &address,
@@ -1245,7 +1161,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_acp_options(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1266,23 +1182,23 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn repair_turn_checkpoint_tail(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.repair_turn_checkpoint_tail_with_runtime(config, session_id, &runtime, binding)
             .await
     }
 
     pub async fn repair_production_turn_checkpoint_tail(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.repair_turn_checkpoint_tail_with_runtime(
             config,
@@ -1295,11 +1211,11 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn load_turn_checkpoint_diagnostics(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config,
             session_id,
@@ -1312,7 +1228,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn load_production_turn_checkpoint_diagnostics(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
@@ -1324,12 +1240,12 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn load_turn_checkpoint_diagnostics_with_limit(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config, session_id, limit, &runtime, binding,
         )
@@ -1338,7 +1254,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn load_production_turn_checkpoint_diagnostics_with_limit(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
@@ -1356,11 +1272,11 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
             session_id,
@@ -1373,12 +1289,12 @@ impl ConversationTurnCoordinator {
 
     pub async fn probe_production_turn_checkpoint_tail_runtime_gate(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
@@ -1392,12 +1308,12 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_limit(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config, session_id, limit, &runtime, binding,
         )
@@ -1406,13 +1322,13 @@ impl ConversationTurnCoordinator {
 
     pub async fn probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
         let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
 
         self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
             config,
@@ -1426,7 +1342,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_acp_event_sink(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1447,7 +1363,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_address(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1467,7 +1383,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_address_and_acp_event_sink(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1488,7 +1404,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1496,7 +1412,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
@@ -1512,14 +1428,14 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_address_and_acp_options(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
             config,
             address,
@@ -1535,7 +1451,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1561,7 +1477,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_address_and_acp_options_and_observer(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1584,7 +1500,7 @@ impl ConversationTurnCoordinator {
 
     pub async fn handle_production_turn_with_address_and_acp_options_and_observer(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1608,13 +1524,13 @@ impl ConversationTurnCoordinator {
     }
 
     fn build_default_runtime_or_observe_failure(
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         observer: Option<&ConversationTurnObserverHandle>,
-    ) -> CliResult<DefaultConversationRuntime<Box<dyn ConversationContextEngine>>> {
+    ) -> CliResult<BoxedDefaultConversationRuntime> {
         // Keep runtime-construction failures visible to the turn observer so
         // operator surfaces receive the same failed phase signal as execution
         // errors later in the turn pipeline.
-        let runtime_result = DefaultConversationRuntime::from_config_or_env(config);
+        let runtime_result = load_default_conversation_runtime(config);
         let runtime = match runtime_result {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -1628,7 +1544,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1650,7 +1566,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_runtime_and_ingress<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1677,14 +1593,14 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         runtime: &R,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+            let memory_config = store::session_store_config_from_memory_config(&config.memory);
             let Some(entry) = load_latest_turn_checkpoint_entry(
                 session_id,
                 config.memory.sliding_window,
@@ -1710,7 +1626,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         limit: usize,
         runtime: &R,
@@ -1718,7 +1634,7 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<TurnCheckpointDiagnostics> {
         #[cfg(feature = "memory-sqlite")]
         {
-            let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+            let memory_config = store::session_store_config_from_memory_config(&config.memory);
             let (summary, latest_entry) =
                 load_turn_checkpoint_history_snapshot(session_id, limit, binding, &memory_config)
                     .await?
@@ -1762,7 +1678,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         runtime: &R,
         binding: ConversationRuntimeBinding<'_>,
@@ -1781,7 +1697,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         limit: usize,
         runtime: &R,
@@ -1809,7 +1725,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1835,7 +1751,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         session_id: &str,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1858,7 +1774,7 @@ impl ConversationTurnCoordinator {
 
     pub(crate) async fn handle_turn_with_runtime_and_address<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1883,7 +1799,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1908,7 +1824,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1935,7 +1851,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1964,7 +1880,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -1990,6 +1906,20 @@ impl ConversationTurnCoordinator {
                 .await?
             {
                 return Ok((ConversationTurnOutcome { reply, usage: None }, false));
+            }
+            if let Some(reply) = self
+                .maybe_handle_explicit_skill_activation_control_turn(
+                    config,
+                    runtime,
+                    session_id,
+                    user_input,
+                    error_mode,
+                    binding,
+                    observer.as_ref(),
+                )
+                .await?
+            {
+                return Ok((reply, false));
             }
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
@@ -2139,7 +2069,7 @@ impl ConversationTurnCoordinator {
     #[cfg(feature = "memory-sqlite")]
     async fn maybe_handle_pending_approval_control_turn<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         runtime: &R,
         session_id: &str,
         user_input: &str,
@@ -2155,7 +2085,7 @@ impl ConversationTurnCoordinator {
             runtime.bootstrap(config, session_id, kernel_ctx).await?;
         }
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config)?;
         let Some(pending_request) = repo
             .list_approval_requests_for_session(session_id, Some(ApprovalRequestStatus::Pending))?
@@ -2246,27 +2176,148 @@ impl ConversationTurnCoordinator {
         Ok(Some(reply.reply))
     }
 
+    async fn maybe_handle_explicit_skill_activation_control_turn<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongConfig,
+        runtime: &R,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<Option<ConversationTurnOutcome>> {
+        let Some(explicit_activation) = parse_explicit_skill_activation_input(user_input) else {
+            return Ok(None);
+        };
+
+        let followup_request = explicit_activation.followup_request.as_str();
+        let turn_id = next_conversation_turn_id();
+
+        if let Some(kernel_ctx) = binding.kernel_context() {
+            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        }
+
+        observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
+        let assembled_context = runtime
+            .build_context(config, session_id, true, binding)
+            .await?;
+        let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
+            config,
+            assembled_context,
+            followup_request,
+            turn_id.as_str(),
+            None,
+        );
+        observe_turn_phase(
+            observer,
+            ConversationTurnPhaseEvent::context_ready(
+                preparation.session.messages.len(),
+                preparation.session.estimated_tokens,
+            ),
+        );
+        let tool_runtime_config =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+        let activation_outcome = crate::tools::execute_tool_core_with_config(
+            loong_contracts::ToolCoreRequest {
+                tool_name: "external_skills.invoke".to_owned(),
+                payload: json!({
+                    "skill_id": explicit_activation.skill_id,
+                }),
+            },
+            &tool_runtime_config,
+        );
+        let activation_outcome = match activation_outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return match error_mode {
+                    ProviderErrorMode::Propagate => Err(error),
+                    ProviderErrorMode::InlineMessage => {
+                        let synthetic = format_provider_error_reply(&error);
+                        persist_reply_turns_raw_with_mode(
+                            runtime,
+                            session_id,
+                            followup_request,
+                            &synthetic,
+                            ReplyPersistenceMode::InlineProviderError,
+                            binding,
+                        )
+                        .await?;
+                        Ok(Some(ConversationTurnOutcome {
+                            reply: synthetic,
+                            usage: None,
+                        }))
+                    }
+                };
+            }
+        };
+        let payload_summary =
+            serde_json::to_string(&activation_outcome.payload).unwrap_or_else(|_| "{}".to_owned());
+        let payload_chars = payload_summary.chars().count();
+        let tool_result_text = format!(
+            "[ok] {}",
+            json!({
+                "status": activation_outcome.status,
+                "tool": "external_skills.invoke",
+                "tool_call_id": explicit_skill_activation_tool_call_id(
+                    explicit_activation.skill_id.as_str(),
+                ),
+                "payload_semantics": "external_skill_context",
+                "payload_summary": payload_summary,
+                "payload_chars": payload_chars,
+                "payload_truncated": false,
+            })
+        );
+        let followup_payload = ToolDrivenFollowupPayload::ToolResult {
+            text: tool_result_text,
+        };
+        #[cfg(feature = "memory-sqlite")]
+        persist_active_external_skills_from_followup_payload_if_needed(
+            config,
+            session_id,
+            &followup_payload,
+        );
+        let follow_up_messages = build_turn_reply_followup_messages_with_warning(
+            &preparation.session.messages,
+            "",
+            followup_payload,
+            None,
+            followup_request,
+            None,
+        );
+        let reply = request_completion_with_raw_fallback(
+            runtime,
+            config,
+            &follow_up_messages,
+            binding,
+            followup_request,
+        )
+        .await;
+        persist_reply_turns_raw_with_mode(
+            runtime,
+            session_id,
+            followup_request,
+            &reply,
+            ReplyPersistenceMode::Success,
+            binding,
+        )
+        .await?;
+        Ok(Some(ConversationTurnOutcome { reply, usage: None }))
+    }
+
     fn reload_followup_provider_config_after_tool_turn(
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         turn: &ProviderTurn,
-    ) -> LoongClawConfig {
+    ) -> LoongConfig {
         let config_path_from_tool = turn.tool_intents.iter().rev().find_map(|intent| {
             let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
             let payload = if canonical_tool_name == "provider.switch" {
                 intent.args_json.as_object()
             } else if canonical_tool_name == "tool.invoke" {
-                intent
-                    .args_json
-                    .as_object()
-                    .filter(|payload| {
-                        payload
-                            .get("tool_id")
-                            .and_then(Value::as_str)
-                            .map(crate::tools::canonical_tool_name)
-                            == Some("provider.switch")
-                    })
-                    .and_then(|payload| payload.get("arguments"))
-                    .and_then(Value::as_object)
+                crate::tools::invoked_discoverable_tool_request(&intent.args_json)
+                    .filter(|(tool_name, _arguments)| *tool_name == "provider.switch")
+                    .and_then(|(_tool_name, arguments)| arguments.as_object())
             } else {
                 None
             };
@@ -2297,7 +2348,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -2328,7 +2379,7 @@ impl ConversationTurnCoordinator {
         R: ConversationRuntime + ?Sized,
     >(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -2352,7 +2403,7 @@ impl ConversationTurnCoordinator {
 
     async fn handle_turn_via_acp<R: ConversationRuntime + ?Sized>(
         &self,
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
@@ -2427,7 +2478,7 @@ impl ConversationTurnCoordinator {
 }
 
 async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     messages: &[Value],
@@ -2470,7 +2521,7 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
             .filter(|value| !value.is_empty())
             .map(|_| config.tools.resolved_file_root());
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
         let compact_stage_result =
             crate::memory::run_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
                 .await;
@@ -2516,10 +2567,10 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 fn persist_runtime_self_continuity_for_compaction(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
 ) -> Result<(), String> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
     ensure_session_exists_for_runtime_self_continuity(&repo, session_id)?;
@@ -2610,7 +2661,7 @@ fn ensure_session_exists_for_runtime_self_continuity(
 
 #[cfg(feature = "memory-sqlite")]
 fn effective_runtime_self_continuity_for_session(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_context: &SessionContext,
 ) -> Option<runtime_self_continuity::RuntimeSelfContinuity> {
     let live_continuity =
@@ -2652,7 +2703,7 @@ fn analytics_turn_checkpoint_progress_status(
     }
 }
 
-fn lane_policy_from_config(config: &LoongClawConfig) -> LaneArbiterPolicy {
+fn lane_policy_from_config(config: &LoongConfig) -> LaneArbiterPolicy {
     let normalized_keywords = config.conversation.normalized_high_risk_keywords();
     let high_risk_keywords = if normalized_keywords.is_empty() {
         LaneArbiterPolicy::default().high_risk_keywords
@@ -2873,7 +2924,7 @@ fn summarize_tool_event_request(intent: &ToolIntent) -> Option<String> {
     summarize_single_tool_followup_request(intent)
 }
 fn provider_turn_observer_supports_streaming(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> bool {
     if observer.is_none() {
@@ -2884,7 +2935,7 @@ fn provider_turn_observer_supports_streaming(
 }
 
 async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     turn_id: &str,
@@ -2897,7 +2948,8 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
     if let Some(observer) = observer
         && provider_turn_observer_supports_streaming(config, Some(observer))
     {
-        let on_token = build_observer_streaming_token_callback(observer);
+        let request_started_at = std::time::Instant::now();
+        let on_token = build_observer_streaming_token_callback(observer, request_started_at);
         return runtime
             .request_turn_streaming(
                 config, session_id, turn_id, messages, tool_view, binding, on_token,
@@ -2919,7 +2971,7 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
 }
 
 async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     user_input: &str,
@@ -3039,7 +3091,7 @@ fn build_turn_loop_circuit_breaker_resolved_turn(
 }
 
 async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
@@ -3098,7 +3150,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
 
 async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
     continue_phase: &ProviderTurnContinuePhase,
@@ -3112,7 +3164,10 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> ResolvedProviderTurn {
     enum ReplyLoopDecision {
-        FinalizeDirect(String),
+        FinalizeDirect {
+            reply: String,
+            latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+        },
         Followup {
             raw_reply: String,
             payload: ToolDrivenFollowupPayload,
@@ -3192,7 +3247,10 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             .map(ToOwned::to_owned),
                     }
                 } else {
-                    ReplyLoopDecision::FinalizeDirect(reply.clone())
+                    ReplyLoopDecision::FinalizeDirect {
+                        reply: reply.clone(),
+                        latest_tool_payload,
+                    }
                 }
             }
             ToolDrivenReplyBaseDecision::RequireFollowup {
@@ -3219,7 +3277,18 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         };
 
         match reply_decision {
-            ReplyLoopDecision::FinalizeDirect(reply) => {
+            ReplyLoopDecision::FinalizeDirect {
+                reply,
+                latest_tool_payload,
+            } => {
+                #[cfg(feature = "memory-sqlite")]
+                if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
+                    persist_active_external_skills_from_followup_payload_if_needed(
+                        &current_continue_phase.followup_config,
+                        session_id,
+                        latest_tool_payload,
+                    );
+                }
                 let checkpoint = current_continue_phase.checkpoint(preparation, user_input, &reply);
                 return ResolvedProviderTurn::persist_reply(
                     reply,
@@ -3233,6 +3302,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 requires_completion_pass,
                 loop_warning_reason,
             } => {
+                #[cfg(feature = "memory-sqlite")]
+                persist_active_external_skills_from_followup_payload_if_needed(
+                    &current_continue_phase.followup_config,
+                    session_id,
+                    &followup,
+                );
                 let follow_up_messages = build_turn_reply_followup_messages_with_warning(
                     &current_preparation.session.messages,
                     current_continue_phase
@@ -3468,6 +3543,14 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 reason,
                 latest_tool_payload,
             } => {
+                #[cfg(feature = "memory-sqlite")]
+                if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
+                    persist_active_external_skills_from_followup_payload_if_needed(
+                        &current_continue_phase.followup_config,
+                        session_id,
+                        latest_tool_payload,
+                    );
+                }
                 let guard_messages = build_turn_reply_guard_messages(
                     &current_preparation.session.messages,
                     current_continue_phase
@@ -3492,6 +3575,51 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             }
         }
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_active_external_skills_from_followup_payload_if_needed(
+    config: &LoongConfig,
+    session_id: &str,
+    payload: &ToolDrivenFollowupPayload,
+) {
+    let ToolDrivenFollowupPayload::ToolResult { text } = payload else {
+        return;
+    };
+
+    let updates =
+        active_external_skills::collect_active_external_skills_from_tool_result_text(text);
+    if updates.is_empty() {
+        return;
+    }
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let Ok(repo) = SessionRepository::new(&memory_config) else {
+        return;
+    };
+    let Ok(existing_state) =
+        active_external_skills::load_persisted_active_external_skills(&repo, session_id)
+    else {
+        return;
+    };
+    let Some(merged_state) =
+        active_external_skills::merge_active_external_skills(existing_state.clone(), updates)
+    else {
+        return;
+    };
+    if existing_state.as_ref() == Some(&merged_state) {
+        return;
+    }
+
+    let _ = repo.append_event(NewSessionEvent {
+        session_id: session_id.to_owned(),
+        event_kind: active_external_skills::ACTIVE_EXTERNAL_SKILLS_EVENT_KIND.to_owned(),
+        actor_session_id: Some(session_id.to_owned()),
+        payload_json: json!({
+            "source": "tool_followup",
+            "active_external_skills": merged_state,
+        }),
+    });
 }
 
 #[cfg(test)]
@@ -3551,7 +3679,7 @@ fn build_turn_reply_guard_messages(
 
 #[cfg(feature = "memory-sqlite")]
 async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     entry: &super::session_history::TurnCheckpointLatestEntry,
@@ -3723,7 +3851,7 @@ async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 async fn probe_turn_checkpoint_tail_runtime_gate_entry<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     entry: &super::session_history::TurnCheckpointLatestEntry,
@@ -3749,7 +3877,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_entry<R: ConversationRuntime + 
 
 #[cfg(feature = "memory-sqlite")]
 async fn load_turn_checkpoint_tail_runtime_eligibility<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     entry: &super::session_history::TurnCheckpointLatestEntry,
@@ -3782,7 +3910,7 @@ async fn load_turn_checkpoint_tail_runtime_eligibility<R: ConversationRuntime + 
         Ok(assembled) => assembled,
         Err(error) => {
             tracing::warn!(
-                target: "loongclaw.conversation",
+                target: "loong.conversation",
                 session_id = %session_id,
                 error = %error,
                 "failed to assemble runtime context for turn checkpoint tail repair; degrading to manual inspection"
@@ -3812,13 +3940,13 @@ async fn load_turn_checkpoint_tail_runtime_eligibility<R: ConversationRuntime + 
 async fn probe_turn_checkpoint_tail_runtime_gate_entry_with_limit<
     R: ConversationRuntime + ?Sized,
 >(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let Some(entry) =
         load_latest_turn_checkpoint_entry(session_id, limit, binding, &memory_config).await?
     else {
@@ -3829,7 +3957,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_entry_with_limit<
 }
 
 async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     user_input: &str,
@@ -3978,7 +4106,7 @@ async fn persist_resolved_provider_error_checkpoint<R: ConversationRuntime + ?Si
 }
 
 async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     user_input: &str,
@@ -4036,7 +4164,7 @@ fn effective_tool_config_for_session(
 }
 
 struct CoordinatorAppToolDispatcher<'a, R: ?Sized> {
-    config: &'a LoongClawConfig,
+    config: &'a LoongConfig,
     runtime: &'a R,
     fallback: &'a DefaultAppToolDispatcher,
 }
@@ -4081,7 +4209,7 @@ where
         &self,
         session_context: &SessionContext,
         intent: &ToolIntent,
-        request: loongclaw_contracts::ToolCoreRequest,
+        request: loong_contracts::ToolCoreRequest,
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolExecutionPreflight, String> {
@@ -4099,9 +4227,9 @@ where
     async fn execute_app_tool(
         &self,
         session_context: &SessionContext,
-        request: loongclaw_contracts::ToolCoreRequest,
+        request: loong_contracts::ToolCoreRequest,
         binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    ) -> Result<loong_contracts::ToolCoreOutcome, String> {
         match crate::tools::canonical_tool_name(request.tool_name.as_str()) {
             "approval_request_resolve" => {
                 #[cfg(not(feature = "memory-sqlite"))]
@@ -4113,8 +4241,7 @@ where
 
                 #[cfg(feature = "memory-sqlite")]
                 {
-                    let memory_config =
-                        MemoryRuntimeConfig::from_memory_config(&self.config.memory);
+                    let memory_config = SessionStoreConfig::from_memory_config(&self.config.memory);
                     let effective_tool_config =
                         effective_tool_config_for_session(&self.config.tools, session_context);
                     let approval_runtime = CoordinatorApprovalResolutionRuntime::new(
@@ -4166,8 +4293,8 @@ where
         session_context: &SessionContext,
         intent: &ToolIntent,
         intent_sequence: usize,
-        request: &loongclaw_contracts::ToolCoreRequest,
-        outcome: &loongclaw_contracts::ToolCoreOutcome,
+        request: &loong_contracts::ToolCoreRequest,
+        outcome: &loong_contracts::ToolCoreOutcome,
         binding: ConversationRuntimeBinding<'_>,
     ) {
         let tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
@@ -4191,7 +4318,7 @@ async fn persist_tool_discovery_refresh_event_if_needed<R: ConversationRuntime +
     intent: &ToolIntent,
     intent_sequence: usize,
     tool_name: &str,
-    outcome: &loongclaw_contracts::ToolCoreOutcome,
+    outcome: &loong_contracts::ToolCoreOutcome,
     binding: ConversationRuntimeBinding<'_>,
 ) {
     if tool_name != "tool.search" {
@@ -4272,12 +4399,12 @@ fn build_tool_discovery_refresh_event_payload(
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_context: &SessionContext,
     payload: Value,
     binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
         return Err("app_tool_disabled: delegate is disabled by config".to_owned());
     }
@@ -4290,7 +4417,9 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
+    let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
+        &config.memory,
+    ))?;
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -4313,6 +4442,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                     let execution_policy = DelegateChildExecutionPolicy {
                         isolation: delegate_policy.isolation,
                         profile: delegate_policy.profile,
+                        owner_kind: None,
                         timeout_seconds: delegate_policy.timeout_seconds,
                         allow_shell_in_child: delegate_policy.allow_shell_in_child,
                         child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -4372,12 +4502,12 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_context: &SessionContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
     binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
         return Err("app_tool_disabled: delegate is disabled by config".to_owned());
     }
@@ -4392,6 +4522,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
+        ConstrainedSubagentOwnerKind::AsyncDelegateSpawner,
         binding,
     )
     .await?;
@@ -4411,12 +4542,12 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_context: &SessionContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
     binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
         return Err("app_tool_disabled: delegate is disabled by config".to_owned());
     }
@@ -4432,6 +4563,7 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
+        ConstrainedSubagentOwnerKind::BackgroundTaskHost,
         binding,
     )
     .await?;
@@ -4479,17 +4611,18 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 struct PreparedAsyncDelegateEnqueue {
-    memory_config: MemoryRuntimeConfig,
+    memory_config: SessionStoreConfig,
     request: AsyncDelegateSpawnRequest,
-    outcome: loongclaw_contracts::ToolCoreOutcome,
+    outcome: loong_contracts::ToolCoreOutcome,
 }
 
 #[cfg(feature = "memory-sqlite")]
 async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_context: &SessionContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
+    owner_kind: ConstrainedSubagentOwnerKind,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
@@ -4498,7 +4631,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
     ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
@@ -4516,6 +4649,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                 let execution_policy = DelegateChildExecutionPolicy {
                     isolation: delegate_policy.isolation,
                     profile: delegate_policy.profile,
+                    owner_kind: Some(owner_kind),
                     timeout_seconds: delegate_policy.timeout_seconds,
                     allow_shell_in_child: delegate_policy.allow_shell_in_child,
                     child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -4590,7 +4724,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
 
 #[cfg(feature = "memory-sqlite")]
 pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     task: &str,
@@ -4598,7 +4732,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     _specialization: Option<String>,
     timeout_seconds: Option<u64>,
     binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     let session_context = runtime.session_context(config, session_id, binding)?;
     let mut delegate_payload = json!({
         "task": task,
@@ -4632,7 +4766,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
 
 #[cfg(not(feature = "memory-sqlite"))]
 pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
-    _config: &LoongClawConfig,
+    _config: &LoongConfig,
     _runtime: &R,
     _session_id: &str,
     _task: &str,
@@ -4640,18 +4774,18 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     _specialization: Option<String>,
     _timeout_seconds: Option<u64>,
     _binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     Err("delegate_async requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
 }
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_context: &SessionContext,
     payload: Value,
     binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     if !binding.allows_mutation() {
         return Err("app_tool_denied: governed_runtime_binding_required".to_owned());
     }
@@ -4664,23 +4798,23 @@ pub(super) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>
 
 #[cfg(not(feature = "memory-sqlite"))]
 pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
-    _config: &LoongClawConfig,
+    _config: &LoongConfig,
     _runtime: &R,
     _session_context: &SessionContext,
     _payload: Value,
     _binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     Err("delegate requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
 pub(super) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
-    _config: &LoongClawConfig,
+    _config: &LoongConfig,
     _runtime: &R,
     _session_context: &SessionContext,
     _payload: Value,
     _binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     Err("delegate_async requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
 }
 
@@ -4688,7 +4822,7 @@ pub(super) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>
 pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     R: ConversationRuntime + ?Sized,
 >(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     child_session_id: &str,
     parent_session_id: &str,
@@ -4698,12 +4832,14 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     execution: ConstrainedSubagentExecution,
     timeout_seconds: u64,
     binding: ConversationRuntimeBinding<'_>,
-) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+) -> Result<loong_contracts::ToolCoreOutcome, String> {
     // This resumes execution after the child session row/workspace have already
     // been created. The remaining job is to run the child turn with the shared
     // runtime/binding, enforce timeout + unwind containment, and then finalize
     // the persisted delegate session/announcement state from the outcome.
-    let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
+    let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
+        &config.memory,
+    ))?;
     let start = Instant::now();
     let child_coordinator = ConversationTurnCoordinator::new();
     let child_turn_future = child_coordinator.handle_turn_with_runtime(
@@ -4782,6 +4918,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
+            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
         Ok(Ok(Err(error))) => {
@@ -4838,6 +4975,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
+            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
         Ok(Err(panic_payload)) => {
@@ -4895,6 +5033,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
+            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
         Err(_) => {
@@ -4951,13 +5090,39 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 )
                 .await;
             }
+            notify_parent_delegate_result(parent_session_id, child_session_id, &outcome);
             Ok(outcome)
         }
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn notify_parent_delegate_result(
+    parent_session_id: &str,
+    child_session_id: &str,
+    outcome: &loong_contracts::ToolCoreOutcome,
+) {
+    let mailbox = mailbox_for_session(parent_session_id);
+    let author = AgentPath::root()
+        .join(child_session_id)
+        .unwrap_or_else(|_| AgentPath::root());
+    let message = InterAgentMessage {
+        author,
+        recipient: AgentPath::root(),
+        content: MailboxContent::DelegateResult {
+            session_id: child_session_id.to_owned(),
+            frozen_result: json!({
+                "status": outcome.status,
+                "payload": outcome.payload,
+            }),
+        },
+        trigger_turn: true,
+    };
+    let _ = mailbox.send(message);
+}
+
 async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
@@ -5001,7 +5166,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         }
     };
     let base_app_dispatcher = DefaultAppToolDispatcher::with_config(
-        MemoryRuntimeConfig::from_memory_config(&config.memory),
+        store::session_store_config_from_memory_config(&config.memory),
         config.clone(),
     );
     let app_dispatcher = CoordinatorAppToolDispatcher {
@@ -5160,7 +5325,7 @@ fn assistant_preface_signals_provider_turn_followup(assistant_preface: &str) -> 
     contains_first || contains_then || contains_next || contains_after_that || contains_afterwards
 }
 async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     session_id: &str,
     lane_decision: &LaneDecision,
@@ -5563,7 +5728,7 @@ async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
 }
 
 async fn evaluate_safe_lane_round(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     lane_decision: &LaneDecision,
     turn: &ProviderTurn,
     session_context: &SessionContext,
@@ -5603,7 +5768,7 @@ async fn evaluate_safe_lane_round(
 }
 
 fn build_safe_lane_plan_graph(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     lane_decision: &LaneDecision,
     turn: &ProviderTurn,
     tool_node_max_attempts: u8,
@@ -5615,11 +5780,12 @@ fn build_safe_lane_plan_graph(
     let node_risk_tier = select_safe_lane_risk_tier(config, lane_decision);
     let normalized_start = start_tool_index.min(turn.tool_intents.len());
     for (index, intent) in turn.tool_intents.iter().enumerate().skip(normalized_start) {
+        let visible_tool_name = effective_followup_visible_tool_name(intent);
         nodes.push(PlanNode {
             id: format!("tool-{}", index + 1),
             kind: PlanNodeKind::Tool,
-            label: format!("invoke `{}`", intent.tool_name),
-            tool_name: Some(intent.tool_name.clone()),
+            label: format!("invoke `{visible_tool_name}`"),
+            tool_name: Some(visible_tool_name),
             timeout_ms: 3_000,
             max_attempts: tool_node_max_attempts,
             risk_tier: node_risk_tier,
@@ -5675,124 +5841,8 @@ fn build_safe_lane_plan_graph(
     }
 }
 
-fn summarize_safe_lane_tool_output_stats(outputs: &[String]) -> SafeLaneToolOutputStats {
-    let mut stats = SafeLaneToolOutputStats::default();
-    for output in outputs {
-        for line in output
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            stats.output_lines = stats.output_lines.saturating_add(1);
-            if !line.starts_with('[') {
-                continue;
-            }
-            stats.result_lines = stats.result_lines.saturating_add(1);
-            if tool_result_contains_truncation_signal(line) {
-                stats.truncated_result_lines = stats.truncated_result_lines.saturating_add(1);
-            }
-        }
-    }
-    stats
-}
-
-fn derive_safe_lane_runtime_health_signal(
-    config: &LoongClawConfig,
-    metrics: SafeLaneExecutionMetrics,
-    final_status_failed: bool,
-    final_failure_code: Option<&str>,
-) -> SafeLaneRuntimeHealthSignal {
-    let rounds_started = metrics.rounds_started as f64;
-    let replan_rate = if rounds_started > 0.0 {
-        metrics.replans_triggered as f64 / rounds_started
-    } else {
-        0.0
-    };
-    let verify_failure_rate = if rounds_started > 0.0 {
-        metrics.verify_failures as f64 / rounds_started
-    } else {
-        0.0
-    };
-    let aggregate_truncation_ratio = metrics
-        .aggregate_tool_truncation_ratio_milli()
-        .map(|milli| (milli as f64) / 1000.0);
-    let truncation_warn_threshold = config
-        .conversation
-        .safe_lane_health_truncation_warn_threshold();
-    let truncation_critical_threshold = config
-        .conversation
-        .safe_lane_health_truncation_critical_threshold();
-    let verify_failure_warn_threshold = config
-        .conversation
-        .safe_lane_health_verify_failure_warn_threshold();
-    let replan_warn_threshold = config.conversation.safe_lane_health_replan_warn_threshold();
-
-    let mut flags = Vec::new();
-    let mut has_critical = false;
-
-    if let Some(ratio) = aggregate_truncation_ratio {
-        if ratio >= truncation_critical_threshold {
-            flags.push(format!("truncation_severe({ratio:.3})"));
-            has_critical = true;
-        } else if ratio >= truncation_warn_threshold {
-            flags.push(format!("truncation_pressure({ratio:.3})"));
-        }
-    }
-
-    if verify_failure_rate >= verify_failure_warn_threshold {
-        flags.push(format!("verify_failure_pressure({verify_failure_rate:.3})"));
-    }
-    if replan_rate >= replan_warn_threshold {
-        flags.push(format!("replan_pressure({replan_rate:.3})"));
-    }
-
-    let terminal_instability = final_status_failed
-        && final_failure_code
-            .map(|code| {
-                code.contains("verify_failed")
-                    || code.contains("backpressure")
-                    || code.contains("session_governor")
-            })
-            .unwrap_or(false);
-    if terminal_instability {
-        flags.push("terminal_instability".to_owned());
-        has_critical = true;
-    }
-
-    SafeLaneRuntimeHealthSignal {
-        severity: if has_critical {
-            "critical"
-        } else if flags.is_empty() {
-            "ok"
-        } else {
-            "warn"
-        },
-        flags,
-    }
-}
-
-fn select_safe_lane_risk_tier(config: &LoongClawConfig, lane_decision: &LaneDecision) -> RiskTier {
-    let high_risk_bar = config
-        .conversation
-        .safe_lane_risk_threshold
-        .saturating_mul(2);
-    let high_complexity_bar = config
-        .conversation
-        .safe_lane_complexity_threshold
-        .saturating_mul(2);
-    if lane_decision.risk_score >= high_risk_bar
-        || lane_decision.complexity_score >= high_complexity_bar
-    {
-        RiskTier::High
-    } else if lane_decision.risk_score > 0 || lane_decision.complexity_score > 0 {
-        RiskTier::Medium
-    } else {
-        RiskTier::Low
-    }
-}
-
 fn verify_safe_lane_final_output(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     output: &str,
     tool_intents: &[ToolIntent],
     adaptive_policy: SafeLaneAdaptiveVerifyPolicyState,
@@ -5816,242 +5866,6 @@ fn verify_safe_lane_final_output(
         min_anchor_matches: adaptive_policy.min_anchor_matches,
     };
     verify_output(output, &context, &policy)
-}
-
-fn compute_safe_lane_verify_min_anchor_matches(
-    config: &LoongClawConfig,
-    verify_failures: u32,
-) -> usize {
-    if !config
-        .conversation
-        .safe_lane_verify_adaptive_anchor_escalation
-    {
-        return 0;
-    }
-    if verify_failures
-        < config
-            .conversation
-            .safe_lane_verify_anchor_escalation_after_failures()
-    {
-        return 0;
-    }
-    config
-        .conversation
-        .safe_lane_verify_anchor_escalation_min_matches()
-}
-
-fn decide_safe_lane_session_governor(
-    config: &LoongClawConfig,
-    history: &SafeLaneGovernorHistorySignals,
-) -> SafeLaneSessionGovernorDecision {
-    let summary = &history.summary;
-    let history_window_turns = config
-        .conversation
-        .safe_lane_session_governor_window_turns();
-    let failed_final_status_events = summary.failed_final_status_events();
-    let backpressure_failure_events = summary.backpressure_failure_events();
-    let failed_final_status_threshold = config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold();
-    let backpressure_failure_threshold = config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold();
-    let failed_threshold_triggered = failed_final_status_events >= failed_final_status_threshold;
-    let backpressure_threshold_triggered =
-        backpressure_failure_events >= backpressure_failure_threshold;
-    let trend_enabled = config.conversation.safe_lane_session_governor_trend_enabled;
-    let trend_samples = history.final_status_failed_samples.len();
-    let trend_min_samples = config
-        .conversation
-        .safe_lane_session_governor_trend_min_samples();
-    let trend_failure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_trend_failure_ewma_threshold();
-    let trend_backpressure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_trend_backpressure_ewma_threshold();
-    let trend_ewma_alpha = config
-        .conversation
-        .safe_lane_session_governor_trend_ewma_alpha();
-    let trend_ready = trend_enabled && trend_samples >= trend_min_samples;
-    let trend_failure_ewma = if trend_ready {
-        compute_ewma_bool(
-            history.final_status_failed_samples.as_slice(),
-            trend_ewma_alpha,
-        )
-    } else {
-        None
-    };
-    let trend_backpressure_ewma = if trend_ready {
-        compute_ewma_bool(
-            history.backpressure_failure_samples.as_slice(),
-            trend_ewma_alpha,
-        )
-    } else {
-        None
-    };
-    let trend_threshold_triggered = trend_failure_ewma
-        .map(|value| value >= trend_failure_ewma_threshold)
-        .unwrap_or(false)
-        || trend_backpressure_ewma
-            .map(|value| value >= trend_backpressure_ewma_threshold)
-            .unwrap_or(false);
-
-    let recovery_success_streak = if trend_ready {
-        trailing_success_streak(history.final_status_failed_samples.as_slice())
-    } else {
-        0
-    };
-    let recovery_success_streak_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_success_streak();
-    let recovery_failure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_max_failure_ewma();
-    let recovery_backpressure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_max_backpressure_ewma();
-    let recovery_threshold_triggered = trend_ready
-        && recovery_success_streak >= recovery_success_streak_threshold
-        && trend_failure_ewma
-            .map(|value| value <= recovery_failure_ewma_threshold)
-            .unwrap_or(false)
-        && trend_backpressure_ewma
-            .map(|value| value <= recovery_backpressure_ewma_threshold)
-            .unwrap_or(false);
-
-    let engaged = config.conversation.safe_lane_session_governor_enabled
-        && (failed_threshold_triggered
-            || backpressure_threshold_triggered
-            || trend_threshold_triggered)
-        && !recovery_threshold_triggered;
-
-    SafeLaneSessionGovernorDecision {
-        engaged,
-        history_window_turns,
-        history_load_status: history.history_load_status,
-        history_load_error: history.history_load_error,
-        failed_final_status_events,
-        failed_final_status_threshold,
-        failed_threshold_triggered,
-        backpressure_failure_events,
-        backpressure_failure_threshold,
-        backpressure_threshold_triggered,
-        trend_enabled,
-        trend_samples,
-        trend_min_samples,
-        trend_failure_ewma,
-        trend_failure_ewma_threshold,
-        trend_backpressure_ewma,
-        trend_backpressure_ewma_threshold,
-        trend_threshold_triggered,
-        recovery_success_streak,
-        recovery_success_streak_threshold,
-        recovery_failure_ewma_threshold,
-        recovery_backpressure_ewma_threshold,
-        recovery_threshold_triggered,
-        force_no_replan: engaged
-            && config
-                .conversation
-                .safe_lane_session_governor_force_no_replan,
-        forced_node_max_attempts: engaged.then(|| {
-            config
-                .conversation
-                .safe_lane_session_governor_force_node_max_attempts()
-        }),
-    }
-}
-
-async fn load_safe_lane_history_signals_for_governor(
-    config: &LoongClawConfig,
-    session_id: &str,
-    binding: ConversationRuntimeBinding<'_>,
-) -> SafeLaneGovernorHistorySignals {
-    if !config.conversation.safe_lane_session_governor_enabled {
-        return SafeLaneGovernorHistorySignals::default();
-    }
-
-    let window_turns = config
-        .conversation
-        .safe_lane_session_governor_window_turns();
-    #[cfg(feature = "memory-sqlite")]
-    {
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        return match load_assistant_contents_from_session_window_detailed(
-            session_id,
-            window_turns,
-            binding,
-            &memory_config,
-        )
-        .await
-        {
-            Ok(assistant_contents) => {
-                summarize_governor_history_signals(assistant_contents.iter().map(String::as_str))
-            }
-            Err(error) => SafeLaneGovernorHistorySignals {
-                history_load_status: SafeLaneGovernorHistoryLoadStatus::Unavailable,
-                history_load_error: Some(error.code()),
-                ..SafeLaneGovernorHistorySignals::default()
-            },
-        };
-    }
-
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        SafeLaneGovernorHistorySignals::default()
-    }
-}
-
-fn summarize_governor_history_signals<'a, I>(
-    assistant_contents: I,
-) -> SafeLaneGovernorHistorySignals
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let projection = summarize_safe_lane_history(assistant_contents);
-    SafeLaneGovernorHistorySignals {
-        history_load_status: SafeLaneGovernorHistoryLoadStatus::Loaded,
-        history_load_error: None,
-        summary: projection.summary,
-        final_status_failed_samples: projection.final_status_failed_samples,
-        backpressure_failure_samples: projection.backpressure_failure_samples,
-    }
-}
-
-fn compute_ewma_bool(samples: &[bool], alpha: f64) -> Option<f64> {
-    let mut iter = samples.iter();
-    let first = iter.next().copied()?;
-    let mut ewma = if first { 1.0 } else { 0.0 };
-    for sample in iter {
-        let value = if *sample { 1.0 } else { 0.0 };
-        ewma = (alpha * value) + ((1.0 - alpha) * ewma);
-    }
-    Some(ewma)
-}
-
-fn trailing_success_streak(failed_samples: &[bool]) -> u32 {
-    let mut streak = 0u32;
-    for failed in failed_samples.iter().rev() {
-        if *failed {
-            break;
-        }
-        streak = streak.saturating_add(1);
-    }
-    streak
-}
-
-fn safe_lane_backpressure_budget(config: &LoongClawConfig) -> Option<SafeLaneBackpressureBudget> {
-    config
-        .conversation
-        .safe_lane_backpressure_guard_enabled
-        .then(|| {
-            SafeLaneBackpressureBudget::new(
-                config
-                    .conversation
-                    .safe_lane_backpressure_max_total_attempts(),
-                config.conversation.safe_lane_backpressure_max_replans(),
-            )
-        })
 }
 
 #[cfg(test)]
@@ -6194,7 +6008,7 @@ mod tests {
 
     fn unique_sqlite_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-turn-coordinator-{label}-{}.sqlite3",
+            "loong-turn-coordinator-{label}-{}.sqlite3",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
@@ -6231,6 +6045,42 @@ mod tests {
         assert_eq!(parse_pending_approval_input_decision("maybe"), None);
     }
 
+    #[test]
+    fn explicit_skill_activation_parser_extracts_skill_and_request() {
+        assert_eq!(
+            parse_explicit_skill_activation_input("  $Demo.Skill summarize release notes"),
+            Some(ExplicitSkillActivationInput {
+                skill_id: "demo-skill".to_owned(),
+                followup_request: "summarize release notes".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn explicit_skill_activation_parser_generates_followup_when_request_missing() {
+        let parsed =
+            parse_explicit_skill_activation_input("$release-guard").expect("explicit activation");
+        assert_eq!(parsed.skill_id, "release-guard");
+        assert!(
+            parsed
+                .followup_request
+                .contains("Confirm activation briefly and ask what to do next."),
+            "missing-request activation should synthesize a followup prompt: {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_skill_activation_parser_ignores_non_prefix_mentions() {
+        assert_eq!(
+            parse_explicit_skill_activation_input("please use $release-guard"),
+            None
+        );
+        assert_eq!(
+            parse_explicit_skill_activation_input("$release-guard, summarize"),
+            None
+        );
+    }
+
     #[cfg(feature = "memory-sqlite")]
     #[derive(Default)]
     struct ApprovalControlRuntime {
@@ -6242,7 +6092,7 @@ mod tests {
     impl ConversationRuntime for ApprovalControlRuntime {
         async fn build_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _include_system_prompt: bool,
             _tool_view: &crate::tools::ToolView,
@@ -6256,7 +6106,7 @@ mod tests {
 
         async fn request_completion(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _messages: &[Value],
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<String> {
@@ -6265,7 +6115,7 @@ mod tests {
 
         async fn request_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6277,7 +6127,7 @@ mod tests {
 
         async fn request_turn_streaming(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6300,7 +6150,7 @@ mod tests {
 
         async fn bootstrap(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _kernel_ctx: &KernelContext,
         ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
@@ -6321,7 +6171,7 @@ mod tests {
     impl ConversationRuntime for CoreReplayRuntime {
         fn session_context(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<SessionContext> {
@@ -6330,7 +6180,7 @@ mod tests {
 
         async fn build_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _include_system_prompt: bool,
             _tool_view: &crate::tools::ToolView,
@@ -6341,7 +6191,7 @@ mod tests {
 
         async fn request_completion(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _messages: &[Value],
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<String> {
@@ -6350,7 +6200,7 @@ mod tests {
 
         async fn request_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6362,7 +6212,7 @@ mod tests {
 
         async fn request_turn_streaming(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6385,12 +6235,12 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn sqlite_memory_config(label: &str) -> MemoryRuntimeConfig {
+    fn sqlite_memory_config(label: &str) -> SessionStoreConfig {
         let path = unique_sqlite_path(label);
         let _ = std::fs::remove_file(&path);
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.memory.sqlite_path = path.display().to_string();
-        MemoryRuntimeConfig::from_memory_config(&config.memory)
+        store::session_store_config_from_memory_config(&config.memory)
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -6427,7 +6277,7 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     fn unique_workspace_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-turn-coordinator-workspace-{label}-{}",
+            "loong-turn-coordinator-workspace-{label}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
@@ -6441,12 +6291,189 @@ mod tests {
         compact_calls: StdMutex<usize>,
     }
 
+    #[derive(Default)]
+    struct ExplicitSkillActivationRuntime {
+        completion_messages: StdMutex<Vec<Value>>,
+        persisted_turns: StdMutex<Vec<(String, String)>>,
+        bootstrap_calls: StdMutex<usize>,
+    }
+
+    #[async_trait]
+    impl ConversationRuntime for ExplicitSkillActivationRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(vec![json!({
+                "role": "system",
+                "content": "explicit skill activation test"
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongConfig,
+            messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            let mut stored = self
+                .completion_messages
+                .lock()
+                .expect("completion messages lock");
+            *stored = messages.to_vec();
+            Ok("explicit activation handled".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn should not run for explicit skill activation control turns")
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            panic!(
+                "request_turn_streaming should not run for explicit skill activation control turns"
+            )
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            role: &str,
+            content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            let mut stored = self.persisted_turns.lock().expect("persisted turns lock");
+            stored.push((role.to_owned(), content.to_owned()));
+            Ok(())
+        }
+
+        async fn bootstrap(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _kernel_ctx: &KernelContext,
+        ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
+            let mut calls = self.bootstrap_calls.lock().expect("bootstrap lock");
+            *calls += 1;
+            Ok(Default::default())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill_context() {
+        let workspace_root =
+            crate::test_support::unique_temp_dir("turn-coordinator-explicit-skill-activation");
+        std::fs::create_dir_all(workspace_root.join(".agents/skills/demo-skill"))
+            .expect("create skill root");
+        std::fs::write(
+            workspace_root.join(".agents/skills/demo-skill/SKILL.md"),
+            "---\nname: demo-skill\ndescription: Summarize notes with release discipline.\n---\n\n# Demo Skill\n\nFollow the managed skill instruction before answering.\n",
+        )
+        .expect("write skill");
+
+        let runtime = ExplicitSkillActivationRuntime::default();
+        let coordinator = ConversationTurnCoordinator::new();
+        let mut config = LoongConfig::default();
+        config.external_skills.enabled = true;
+        config.tools.file_root = Some(workspace_root.display().to_string());
+
+        let reply = coordinator
+            .handle_turn_with_runtime(
+                &config,
+                "session-explicit-skill-activation",
+                "$demo-skill summarize the changelog",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                ConversationRuntimeBinding::direct(),
+            )
+            .await
+            .expect("explicit activation turn should succeed");
+
+        assert_eq!(reply, "explicit activation handled");
+
+        let messages = runtime
+            .completion_messages
+            .lock()
+            .expect("completion messages lock")
+            .clone();
+        let injected_skill = messages
+            .iter()
+            .find(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("External skill `demo-skill`"))
+            })
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("skill system message should exist: {messages:?}"));
+        assert!(
+            injected_skill.contains("External skill `demo-skill`"),
+            "explicit activation should inject skill context: {injected_skill}"
+        );
+        assert!(
+            injected_skill.contains("Follow the managed skill instruction before answering."),
+            "skill system message should include loaded instructions: {injected_skill}"
+        );
+        let followup_prompt = messages
+            .iter()
+            .find(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("Original request:"))
+            })
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("followup prompt should exist: {messages:?}"));
+        assert!(
+            followup_prompt.contains("Original request:\nsummarize the changelog"),
+            "explicit activation should strip the $skill prefix from the forwarded request: {followup_prompt}"
+        );
+        assert!(
+            !followup_prompt.contains("$demo-skill"),
+            "followup prompt should not leak the explicit activation token: {followup_prompt}"
+        );
+
+        let persisted_turns = runtime
+            .persisted_turns
+            .lock()
+            .expect("persisted turns lock")
+            .clone();
+        assert!(
+            persisted_turns
+                .iter()
+                .any(|(role, content)| role == "user" && content == "summarize the changelog"),
+            "persisted turns should store the forwarded request without the activation token: {persisted_turns:?}"
+        );
+    }
+
     #[cfg(feature = "memory-sqlite")]
     #[async_trait]
     impl ConversationRuntime for RecordingCompactRuntime {
         async fn build_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _include_system_prompt: bool,
             _tool_view: &crate::tools::ToolView,
@@ -6457,7 +6484,7 @@ mod tests {
 
         async fn request_completion(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _messages: &[Value],
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<String> {
@@ -6466,7 +6493,7 @@ mod tests {
 
         async fn request_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6478,7 +6505,7 @@ mod tests {
 
         async fn request_turn_streaming(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6501,7 +6528,7 @@ mod tests {
 
         async fn compact_context(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _messages: &[Value],
             _kernel_ctx: &KernelContext,
@@ -6535,7 +6562,7 @@ mod tests {
     impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
         fn session_context(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             session_id: &str,
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<SessionContext> {
@@ -6547,7 +6574,7 @@ mod tests {
 
         async fn build_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             include_system_prompt: bool,
             tool_view: &crate::tools::ToolView,
@@ -6577,7 +6604,7 @@ mod tests {
 
         async fn request_completion(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _messages: &[Value],
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<String> {
@@ -6586,7 +6613,7 @@ mod tests {
 
         async fn request_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6598,7 +6625,7 @@ mod tests {
 
         async fn request_turn_streaming(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6621,7 +6648,7 @@ mod tests {
 
         async fn compact_context(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _messages: &[Value],
             _kernel_ctx: &KernelContext,
@@ -6639,7 +6666,7 @@ mod tests {
     impl ConversationRuntime for ObserverStreamingRuntime {
         async fn build_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _include_system_prompt: bool,
             _tool_view: &crate::tools::ToolView,
@@ -6653,7 +6680,7 @@ mod tests {
 
         async fn request_completion(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _messages: &[Value],
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<String> {
@@ -6662,7 +6689,7 @@ mod tests {
 
         async fn request_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6674,7 +6701,7 @@ mod tests {
 
         async fn request_turn_streaming(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6722,7 +6749,7 @@ mod tests {
     impl ConversationRuntime for ObserverFallbackRuntime {
         async fn build_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _include_system_prompt: bool,
             _tool_view: &crate::tools::ToolView,
@@ -6736,7 +6763,7 @@ mod tests {
 
         async fn request_completion(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _messages: &[Value],
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<String> {
@@ -6745,7 +6772,7 @@ mod tests {
 
         async fn request_turn(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6767,7 +6794,7 @@ mod tests {
 
         async fn request_turn_streaming(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _turn_id: &str,
             _messages: &[Value],
@@ -6829,7 +6856,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_turn_with_observer_uses_streaming_request_and_emits_live_events() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.kind = crate::config::ProviderKind::Anthropic;
 
         let runtime = ObserverStreamingRuntime::default();
@@ -6886,11 +6913,12 @@ mod tests {
         assert_eq!(token_events.len(), 1);
         assert_eq!(token_events[0].event_type, "text_delta");
         assert_eq!(token_events[0].delta.text.as_deref(), Some("draft"));
+        assert!(token_events[0].elapsed_ms.is_some());
     }
 
     #[tokio::test]
     async fn handle_turn_with_observer_falls_back_when_streaming_events_are_unsupported() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.kind = crate::config::ProviderKind::Openai;
         config.provider.wire_api = crate::config::ProviderWireApi::Responses;
 
@@ -6959,7 +6987,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_turn_with_observer_emits_lifecycle_for_explicit_acp_inline_message() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let runtime = ObserverStreamingRuntime::default();
         let observer = Arc::new(RecordingTurnObserver::default());
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
@@ -7022,7 +7050,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_turn_with_ingress_and_observer_marks_failed_when_runtime_bootstrap_fails() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.context_engine = Some("missing-observer-runtime-ingress".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
@@ -7058,7 +7086,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_turn_with_observer_marks_failed_when_runtime_bootstrap_fails() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
@@ -7094,7 +7122,7 @@ mod tests {
     #[tokio::test]
     async fn handle_production_turn_with_observer_rejects_direct_binding_before_runtime_bootstrap()
     {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.context_engine = Some("missing-observer-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
@@ -7135,7 +7163,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_production_turn_with_runtime_rejects_direct_binding_before_provider_request() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.provider.kind = crate::config::ProviderKind::Anthropic;
 
         let runtime = ObserverStreamingRuntime::default();
@@ -7186,7 +7214,7 @@ mod tests {
 
     #[tokio::test]
     async fn compact_production_session_rejects_direct_binding_before_runtime_bootstrap() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
@@ -7208,7 +7236,7 @@ mod tests {
     #[tokio::test]
     async fn repair_production_turn_checkpoint_tail_rejects_direct_binding_before_runtime_bootstrap()
      {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
@@ -7230,7 +7258,7 @@ mod tests {
     #[tokio::test]
     async fn load_production_turn_checkpoint_diagnostics_rejects_direct_binding_before_runtime_bootstrap()
      {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
@@ -7252,7 +7280,7 @@ mod tests {
     #[tokio::test]
     async fn probe_production_turn_checkpoint_tail_runtime_gate_rejects_direct_binding_before_runtime_bootstrap()
      {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
@@ -7399,7 +7427,7 @@ mod tests {
     }
 
     #[test]
-    fn build_provider_turn_tool_terminal_events_attach_canonical_shell_request_summary() {
+    fn build_provider_turn_tool_terminal_events_attach_visible_shell_request_summary() {
         let turn = ProviderTurn {
             assistant_text: String::new(),
             tool_intents: vec![ToolIntent {
@@ -7429,7 +7457,7 @@ mod tests {
         assert_eq!(
             request_summary_json,
             json!({
-                "tool": "shell.exec",
+                "tool": "exec",
                 "request": {"command": "ls", "args_redacted": 1}
             })
         );
@@ -7473,8 +7501,8 @@ mod tests {
             .expect("multi-intent request summary should be an array");
 
         assert_eq!(request_entries.len(), 2);
-        assert_eq!(request_entries[0]["tool"], "file.read");
-        assert_eq!(request_entries[1]["tool"], "shell.exec");
+        assert_eq!(request_entries[0]["tool"], "read");
+        assert_eq!(request_entries[1]["tool"], "exec");
         assert_eq!(request_entries[1]["request"]["command"], "ls");
         assert_eq!(request_entries[1]["request"]["args_redacted"], 1);
     }
@@ -7602,6 +7630,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -7734,6 +7763,7 @@ mod tests {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
             isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -7916,7 +7946,7 @@ mod tests {
         let child_session_id = "delegate:child-session";
         let live_agents_text = "Keep standing instructions visible.";
         let stored_identity_text = "# Identity\n\n- Name: Stored continuity identity";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         let sqlite_path = memory_config
             .sqlite_path
@@ -8013,7 +8043,7 @@ mod tests {
         let repo = SessionRepository::new(&memory_config).expect("session repository");
         let root_session_id = "root-session";
         let child_session_id = "delegate:legacy-child";
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         let sqlite_path = memory_config
             .sqlite_path
@@ -8083,7 +8113,7 @@ mod tests {
         let workspace_root = unique_workspace_root("compaction-fail-open");
         let sqlite_path = unique_sqlite_path("compaction-fail-open");
         let runtime = RecordingCompactRuntime::default();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::create_dir_all(&workspace_root).expect("create workspace root");
         std::fs::write(
@@ -8136,7 +8166,7 @@ mod tests {
         let workspace_root_file = workspace_root_parent.join("workspace-root-file");
         let sqlite_path = unique_sqlite_path("compaction-durable-flush-fail-open");
         let runtime = RecordingCompactRuntime::default();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
 
         std::fs::create_dir_all(&workspace_root_parent).expect("create workspace root parent");
         std::fs::write(
@@ -8153,15 +8183,15 @@ mod tests {
         config.conversation.compact_trigger_estimated_tokens = Some(1);
         config.conversation.compact_fail_open = true;
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "session-durable-flush-fail-open",
             "user",
             "remember the deployment cutoff",
             &memory_config,
         )
         .expect("append user turn");
-        crate::memory::append_turn_direct(
+        crate::session::store::append_session_turn_direct(
             "session-durable-flush-fail-open",
             "assistant",
             "deployment cutoff is tonight",
@@ -8204,13 +8234,13 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
     async fn compact_session_uses_session_context_tool_view_and_turn_like_build_flags() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let sqlite_path = unique_sqlite_path("compact-session-build-messages");
         let _ = std::fs::remove_file(&sqlite_path);
         config.memory.sqlite_path = sqlite_path.display().to_string();
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "compact-session-build-messages",
             "user",
             "remember this detail",
@@ -8261,13 +8291,13 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
     async fn compact_session_skips_when_post_compaction_readback_fails() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let sqlite_path = unique_sqlite_path("compact-session-readback-fail");
         let _ = std::fs::remove_file(&sqlite_path);
         config.memory.sqlite_path = sqlite_path.display().to_string();
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-        crate::memory::append_turn_direct(
+        let memory_config = store::session_store_config_from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
             "compact-session-readback-fail",
             "user",
             "keep the context intact",
@@ -8307,6 +8337,46 @@ mod tests {
         assert_eq!(build_messages_calls.len(), 2);
 
         let _ = std::fs::remove_file(&sqlite_path);
+    }
+
+    #[test]
+    fn build_safe_lane_plan_graph_uses_precise_visible_names_for_grouped_hidden_invokes() {
+        let config = LoongConfig::default();
+        let lane_decision = LaneDecision {
+            lane: ExecutionLane::Safe,
+            risk_score: 0,
+            complexity_score: 0,
+            reasons: Vec::new(),
+        };
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "tool.invoke".to_owned(),
+                args_json: json!({
+                    "tool_id": "agent",
+                    "lease": "lease-agent",
+                    "arguments": {
+                        "operation": "delegate-background",
+                        "task": "summarize the repo"
+                    }
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-a".to_owned(),
+                turn_id: "turn-a".to_owned(),
+                tool_call_id: "call-agent".to_owned(),
+            }],
+            raw_meta: Value::Null,
+        };
+
+        let plan = build_safe_lane_plan_graph(&config, &lane_decision, &turn, 2, 0);
+        let tool_node = plan
+            .nodes
+            .iter()
+            .find(|node| node.kind == PlanNodeKind::Tool)
+            .expect("plan should include a tool node");
+
+        assert_eq!(tool_node.label, "invoke `delegate_async`");
+        assert_eq!(tool_node.tool_name.as_deref(), Some("delegate_async"));
     }
 
     #[test]
@@ -8374,7 +8444,7 @@ mod tests {
         )
         .expect("file.read payload summary should stay valid json");
 
-        assert_eq!(envelope["tool"], "file.read");
+        assert_eq!(envelope["tool"], "read");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["path"], "/repo/README.md");
         assert_eq!(summary["bytes"], 8_192);
@@ -8427,7 +8497,7 @@ mod tests {
         let (envelope, summary) =
             crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
 
-        assert_eq!(envelope["tool"], "shell.exec");
+        assert_eq!(envelope["tool"], "exec");
         assert_eq!(envelope["payload_truncated"], true);
         assert_eq!(summary["command"], "cargo");
         assert_eq!(summary["exit_code"], 0);
@@ -8555,7 +8625,7 @@ mod tests {
         let observer = Arc::new(RecordingTurnObserver::default());
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
         let coordinator = ConversationTurnCoordinator::new();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let memory_config = sqlite_memory_config("approval-control-bootstrap");
         let sqlite_path = memory_config
             .sqlite_path
@@ -8630,7 +8700,7 @@ mod tests {
     async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolution_fails() {
         let coordinator = ConversationTurnCoordinator::new();
         let runtime = ApprovalControlRuntime::default();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let memory_config = sqlite_memory_config("approval-control-session-mode");
         let sqlite_path = memory_config
             .sqlite_path
@@ -8710,9 +8780,72 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
+    async fn pending_approval_control_turn_resolves_delegate_request_after_yes_confirmation() {
+        let coordinator = ConversationTurnCoordinator::new();
+        let runtime = ApprovalControlRuntime::default();
+        let mut config = LoongConfig::default();
+        let memory_config = sqlite_memory_config("approval-control-run-once-success");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        seed_pending_approval_request(&repo, "root-session", "apr-delegate-yes", "delegate", "app");
+
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("root-session");
+        let reply = coordinator
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "yes",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                None,
+            )
+            .await
+            .expect("approval control turn should succeed");
+
+        assert_eq!(reply, "approval handled");
+
+        let approval_request = repo
+            .load_approval_request("apr-delegate-yes")
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(approval_request.status, ApprovalRequestStatus::Approved);
+        assert_eq!(
+            approval_request.decision,
+            Some(ApprovalDecision::ApproveOnce)
+        );
+        assert_eq!(
+            approval_request.resolved_by_session_id.as_deref(),
+            Some("root-session")
+        );
+        assert!(
+            approval_request.last_error.is_none(),
+            "request={approval_request:?}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
     async fn approval_request_resolve_persists_session_mode_on_success() {
         let runtime = ApprovalControlRuntime::default();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let memory_config = sqlite_memory_config("approval-control-session-mode-success");
         let sqlite_path = memory_config
             .sqlite_path
@@ -8745,7 +8878,7 @@ mod tests {
             ConversationRuntimeBinding::direct(),
         );
         let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "approval_request_resolve".to_owned(),
                 payload: json!({
                     "approval_request_id": "apr-auto-success",
@@ -8787,7 +8920,7 @@ mod tests {
     #[tokio::test]
     async fn approval_request_resolve_retries_missing_session_mode_after_approval() {
         let runtime = ApprovalControlRuntime::default();
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let memory_config = sqlite_memory_config("approval-control-session-mode-retry");
         let sqlite_path = memory_config
             .sqlite_path
@@ -8834,7 +8967,7 @@ mod tests {
             ConversationRuntimeBinding::direct(),
         );
         let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
-            loongclaw_contracts::ToolCoreRequest {
+            loong_contracts::ToolCoreRequest {
                 tool_name: "approval_request_resolve".to_owned(),
                 payload: json!({
                     "approval_request_id": "apr-auto-retry",
@@ -8867,7 +9000,7 @@ mod tests {
     #[tokio::test]
     async fn core_approval_replay_skips_app_session_context_loading() {
         let runtime = CoreReplayRuntime;
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         let memory_config = sqlite_memory_config("approval-core-replay");
         let sqlite_path = memory_config
             .sqlite_path
@@ -9048,7 +9181,7 @@ mod tests {
             system_prompt_addition: None,
         };
         let preparation = ProviderTurnPreparation::from_assembled_context(
-            &LoongClawConfig::default(),
+            &LoongConfig::default(),
             assembled,
             "use the recent result",
             None,
@@ -9126,7 +9259,7 @@ mod tests {
             system_prompt_addition: None,
         };
         let preparation = ProviderTurnPreparation::from_assembled_context(
-            &LoongClawConfig::default(),
+            &LoongConfig::default(),
             assembled,
             "use the recent result",
             None,
@@ -9174,7 +9307,7 @@ mod tests {
 
     #[test]
     fn provider_turn_lane_plan_hybrid_disabled_forces_fast_lane_limits() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.hybrid_lane_enabled = false;
         config.conversation.fast_lane_max_tool_steps_per_turn = 3;
         config.conversation.safe_lane_max_tool_steps_per_turn = 7;
@@ -9193,7 +9326,7 @@ mod tests {
 
     #[test]
     fn provider_turn_preparation_derives_lane_plan_and_raw_mode() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.fast_lane_max_tool_steps_per_turn = 2;
         config.conversation.safe_lane_max_tool_steps_per_turn = 5;
 
@@ -9220,7 +9353,7 @@ mod tests {
 
     #[test]
     fn provider_turn_lane_plan_safe_plan_path_requires_safe_lane_and_tool_intents() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.safe_lane_plan_execution_enabled = true;
 
         let safe_plan = ProviderTurnLanePlan::from_user_input(
@@ -9257,7 +9390,7 @@ mod tests {
 
     #[test]
     fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.safe_lane_max_tool_steps_per_turn = 5;
         let preparation = ProviderTurnPreparation::from_assembled_context(
             &config,
@@ -9425,13 +9558,13 @@ mod tests {
         use std::fs;
 
         let root = std::env::temp_dir().join(format!(
-            "loongclaw-provider-switch-followup-{}",
+            "loong-provider-switch-followup-{}",
             std::process::id()
         ));
         fs::create_dir_all(&root).expect("create fixture root");
-        let config_path = root.join("loongclaw.toml");
+        let config_path = root.join("loong.toml");
 
-        let mut expected = LoongClawConfig::default();
+        let mut expected = LoongConfig::default();
         let mut openai =
             crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
         openai.model = "gpt-5".to_owned();
@@ -9471,7 +9604,7 @@ mod tests {
         };
 
         let reloaded = ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(
-            &LoongClawConfig::default(),
+            &LoongConfig::default(),
             &turn,
         );
 
@@ -9483,7 +9616,7 @@ mod tests {
     #[test]
     fn provider_turn_continue_phase_checkpoint_keeps_direct_reply_without_followup() {
         let preparation = ProviderTurnPreparation::from_assembled_context(
-            &LoongClawConfig::default(),
+            &LoongConfig::default(),
             AssembledConversationContext::from_messages(vec![serde_json::json!({
                 "role": "system",
                 "content": "sys"
@@ -9508,7 +9641,7 @@ mod tests {
                 tool_events: Vec::new(),
             },
             None,
-            LoongClawConfig::default(),
+            LoongConfig::default(),
             None,
         );
 
@@ -9553,7 +9686,7 @@ mod tests {
 
     #[test]
     fn resolved_provider_turn_checkpoint_preserves_safe_lane_route_provenance() {
-        let mut config = LoongClawConfig::default();
+        let mut config = LoongConfig::default();
         config.conversation.safe_lane_max_tool_steps_per_turn = 5;
 
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
@@ -9673,7 +9806,7 @@ mod tests {
                     "provider unavailable",
                 )),
                 preparation: ProviderTurnPreparation::from_assembled_context(
-                    &LoongClawConfig::default(),
+                    &LoongConfig::default(),
                     AssembledConversationContext::from_messages(vec![serde_json::json!({
                         "role": "system",
                         "content": "sys"
@@ -9719,7 +9852,7 @@ mod tests {
             checkpoint: TurnCheckpointSnapshot {
                 identity: None,
                 preparation: ProviderTurnPreparation::from_assembled_context(
-                    &LoongClawConfig::default(),
+                    &LoongConfig::default(),
                     AssembledConversationContext::from_messages(vec![serde_json::json!({
                         "role": "system",
                         "content": "sys"
@@ -9769,7 +9902,7 @@ mod tests {
             checkpoint: TurnCheckpointSnapshot {
                 identity: Some(TurnCheckpointIdentity::from_turn("say hello", "done")),
                 preparation: ProviderTurnPreparation::from_assembled_context(
-                    &LoongClawConfig::default(),
+                    &LoongConfig::default(),
                     AssembledConversationContext::from_messages(vec![serde_json::json!({
                         "role": "system",
                         "content": "sys"
@@ -9831,7 +9964,7 @@ mod tests {
             checkpoint: TurnCheckpointSnapshot {
                 identity: None,
                 preparation: ProviderTurnPreparation::from_assembled_context(
-                    &LoongClawConfig::default(),
+                    &LoongConfig::default(),
                     AssembledConversationContext::from_messages(vec![serde_json::json!({
                         "role": "system",
                         "content": "sys"
@@ -9863,7 +9996,7 @@ mod tests {
     #[test]
     fn provider_turn_request_terminal_phase_builds_inline_provider_error_reply() {
         let preparation = ProviderTurnPreparation::from_assembled_context(
-            &LoongClawConfig::default(),
+            &LoongConfig::default(),
             AssembledConversationContext::from_messages(vec![serde_json::json!({
                 "role": "system",
                 "content": "sys"
@@ -9903,7 +10036,7 @@ mod tests {
     #[test]
     fn provider_turn_request_terminal_phase_builds_return_error_without_reply_identity() {
         let preparation = ProviderTurnPreparation::from_assembled_context(
-            &LoongClawConfig::default(),
+            &LoongConfig::default(),
             AssembledConversationContext::from_messages(vec![serde_json::json!({
                 "role": "system",
                 "content": "sys"

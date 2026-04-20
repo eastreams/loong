@@ -1,3 +1,9 @@
+use std::io::IsTerminal;
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::text::{Line, Text};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,12 +164,72 @@ pub fn render_tui_screen_spec(
     lines
 }
 
+pub fn render_tui_screen_spec_ratatui(
+    spec: &TuiScreenSpec,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let width = width.max(36);
+    let header_lines = build_screen_header_lines(spec, width.saturating_sub(4), color_enabled);
+    let mut blocks = Vec::new();
+
+    for section in &spec.sections {
+        let (title, lines) = build_screen_section_block(section, width.saturating_sub(4));
+        blocks.push(RenderedScreenBlock { title, lines });
+    }
+
+    if !spec.choices.is_empty() {
+        blocks.push(RenderedScreenBlock {
+            title: Some("choices".to_owned()),
+            lines: render_choice_lines(&spec.choices, width.saturating_sub(4)),
+        });
+    }
+
+    if !spec.footer_lines.is_empty() {
+        blocks.push(RenderedScreenBlock {
+            title: Some("next".to_owned()),
+            lines: render_wrapped_display_lines(&spec.footer_lines, width.saturating_sub(4)),
+        });
+    }
+
+    let total_height = rendered_screen_height(&header_lines, &blocks);
+    let area = Rect::new(0, 0, width as u16, total_height);
+    let mut buffer = Buffer::empty(area);
+    let mut row = 0_u16;
+
+    let header_height = block_height(&header_lines);
+    render_text_block(
+        Rect::new(0, row, area.width, header_height),
+        "loong",
+        &header_lines,
+        &mut buffer,
+    );
+    row = row.saturating_add(header_height);
+
+    for block in &blocks {
+        let height = block_height(&block.lines);
+        render_text_block(
+            Rect::new(0, row, area.width, height),
+            block.title.as_deref().unwrap_or("section"),
+            &block.lines,
+            &mut buffer,
+        );
+        row = row.saturating_add(height);
+    }
+
+    render_buffer_to_lines(&buffer)
+}
+
 pub fn render_onboard_screen_spec(
     spec: &TuiScreenSpec,
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    render_tui_screen_spec(spec, width, color_enabled)
+    if color_enabled && std::io::stdout().is_terminal() {
+        render_tui_screen_spec_ratatui(spec, width, color_enabled)
+    } else {
+        render_tui_screen_spec(spec, width, color_enabled)
+    }
 }
 
 pub fn render_tui_message_spec(spec: &TuiMessageSpec, width: usize) -> Vec<String> {
@@ -184,6 +250,30 @@ pub fn render_tui_message_body_spec(spec: &TuiMessageSpec, width: usize) -> Vec<
     if !spec.footer_lines.is_empty() {
         lines.push(String::new());
         lines.extend(render_wrapped_display_lines(&spec.footer_lines, width));
+    }
+
+    lines
+}
+
+fn build_screen_header_lines(
+    spec: &TuiScreenSpec,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let subtitle = spec.subtitle.as_deref();
+    let mut lines = render_header(spec.header_style, width, subtitle, color_enabled);
+
+    if let Some(title) = spec.title.as_deref() {
+        lines.push(String::new());
+        lines.extend(render_wrapped_display_lines([title], width));
+    }
+
+    if let Some(progress_line) = spec.progress_line.as_deref() {
+        lines.extend(render_wrapped_display_lines([progress_line], width));
+    }
+
+    if !spec.intro_lines.is_empty() {
+        lines.extend(render_wrapped_display_lines(&spec.intro_lines, width));
     }
 
     lines
@@ -229,6 +319,99 @@ fn render_message_heading(spec: &TuiMessageSpec) -> String {
     }
 
     format!("{role}: {trimmed_caption}")
+}
+
+fn build_screen_section_block(
+    section: &TuiSectionSpec,
+    width: usize,
+) -> (Option<String>, Vec<String>) {
+    match section {
+        TuiSectionSpec::Narrative {
+            title,
+            lines: content,
+        } => (
+            title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            render_wrapped_display_lines(content, width),
+        ),
+        TuiSectionSpec::KeyValues { title, items } => (
+            title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            items
+                .iter()
+                .flat_map(|item| render_key_value_item_lines(item, width))
+                .collect(),
+        ),
+        TuiSectionSpec::ActionGroup {
+            title,
+            inline_title_when_wide,
+            items,
+        } => (
+            title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            render_action_group_lines(None, *inline_title_when_wide, items, width),
+        ),
+        TuiSectionSpec::Checklist { title, items } => (
+            title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            render_checklist_lines(None, items, width),
+        ),
+        TuiSectionSpec::Callout {
+            tone,
+            title,
+            lines: content,
+        } => (
+            Some(
+                match title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    Some(title) => format!("{}: {title}", tone_label(*tone)),
+                    None => tone_label(*tone).to_owned(),
+                },
+            ),
+            render_wrapped_display_lines(content, width),
+        ),
+        TuiSectionSpec::Preformatted {
+            title,
+            language,
+            lines: content,
+        } => (
+            build_preformatted_heading(
+                title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+                language
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+            ),
+            content
+                .iter()
+                .map(|line| {
+                    if line.is_empty() {
+                        String::new()
+                    } else {
+                        format!("    {line}")
+                    }
+                })
+                .collect(),
+        ),
+    }
 }
 
 fn append_section_lines(lines: &mut Vec<String>, section: &TuiSectionSpec, width: usize) {
@@ -504,6 +687,58 @@ fn render_choice_lines(choices: &[TuiChoiceSpec], width: usize) -> Vec<String> {
     lines
 }
 
+fn rendered_screen_height(header_lines: &[String], blocks: &[RenderedScreenBlock]) -> u16 {
+    let mut total = block_height(header_lines);
+    for block in blocks {
+        total = total.saturating_add(block_height(&block.lines));
+    }
+    total
+}
+
+fn block_height(lines: &[String]) -> u16 {
+    u16::try_from(lines.len().max(1))
+        .unwrap_or(u16::MAX)
+        .saturating_add(2)
+}
+
+fn render_text_block(area: Rect, title: &str, lines: &[String], buffer: &mut Buffer) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "));
+    let inner = block.inner(area);
+    block.render(area, buffer);
+    let content_lines = if lines.is_empty() {
+        vec![String::new()]
+    } else {
+        lines.to_vec()
+    };
+    Paragraph::new(text_from_lines(&content_lines))
+        .wrap(Wrap { trim: false })
+        .render(inner, buffer);
+}
+
+fn text_from_lines(lines: &[String]) -> Text<'static> {
+    Text::from(lines.iter().cloned().map(Line::from).collect::<Vec<_>>())
+}
+
+fn render_buffer_to_lines(buffer: &Buffer) -> Vec<String> {
+    let area = buffer.area;
+    let mut rendered = Vec::new();
+    for y in area.top()..area.bottom() {
+        let mut line = String::new();
+        for x in area.left()..area.right() {
+            line.push_str(buffer[(x, y)].symbol());
+        }
+        rendered.push(line.trim_end_matches(' ').to_owned());
+    }
+    rendered
+}
+
+struct RenderedScreenBlock {
+    title: Option<String>,
+    lines: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +865,88 @@ mod tests {
                 .any(|line| line == "press Enter to use default 1, continue"),
             "footer guidance should remain visible after structured sections: {lines:#?}"
         );
+    }
+
+    #[test]
+    fn ratatui_renderer_wraps_screen_in_shell_blocks() {
+        let spec = TuiScreenSpec {
+            header_style: TuiHeaderStyle::Compact,
+            subtitle: Some("guided setup".to_owned()),
+            title: Some("security check".to_owned()),
+            progress_line: Some("step 2 of 3".to_owned()),
+            intro_lines: vec!["review the trust boundary before write".to_owned()],
+            sections: vec![
+                TuiSectionSpec::ActionGroup {
+                    title: Some("start here".to_owned()),
+                    inline_title_when_wide: false,
+                    items: vec![TuiActionSpec {
+                        label: "ask".to_owned(),
+                        command: "loong ask --message 'hello'".to_owned(),
+                    }],
+                },
+                TuiSectionSpec::Checklist {
+                    title: Some("preflight".to_owned()),
+                    items: vec![TuiChecklistItemSpec {
+                        status: TuiChecklistStatus::Warn,
+                        label: "provider probe".to_owned(),
+                        detail: "catalog probe failed".to_owned(),
+                    }],
+                },
+            ],
+            choices: vec![TuiChoiceSpec {
+                key: "1".to_owned(),
+                label: "Continue".to_owned(),
+                detail_lines: vec!["write this draft".to_owned()],
+                recommended: true,
+            }],
+            footer_lines: vec!["press Enter to continue".to_owned()],
+        };
+
+        let lines = render_tui_screen_spec_ratatui(&spec, 80, false);
+        let rendered = lines.join("\n");
+
+        assert!(rendered.contains(" loong "), "{rendered}");
+        assert!(rendered.contains(" start here "), "{rendered}");
+        assert!(rendered.contains(" preflight "), "{rendered}");
+        assert!(rendered.contains(" choices "), "{rendered}");
+        assert!(rendered.contains(" next "), "{rendered}");
+        assert!(rendered.contains("LOONG"), "{rendered}");
+        assert!(
+            rendered.contains("loong ask --message 'hello'"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn onboard_renderer_falls_back_to_legacy_lines_when_stdout_is_not_a_tty() {
+        let spec = TuiScreenSpec {
+            header_style: TuiHeaderStyle::Compact,
+            subtitle: Some("guided setup".to_owned()),
+            title: Some("security check".to_owned()),
+            progress_line: None,
+            intro_lines: vec!["review the trust boundary before write".to_owned()],
+            sections: vec![TuiSectionSpec::Callout {
+                tone: TuiCalloutTone::Warning,
+                title: Some("what onboarding can do".to_owned()),
+                lines: vec!["tool execution can touch local files".to_owned()],
+            }],
+            choices: vec![TuiChoiceSpec {
+                key: "y".to_owned(),
+                label: "Continue".to_owned(),
+                detail_lines: vec!["proceed with setup".to_owned()],
+                recommended: false,
+            }],
+            footer_lines: vec!["press Enter to continue".to_owned()],
+        };
+
+        let rendered = render_onboard_screen_spec(&spec, 80, true).join("\n");
+
+        assert!(rendered.contains("LOONG"), "{rendered}");
+        assert!(
+            rendered.contains("attention: what onboarding can do"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("y) Continue"), "{rendered}");
     }
 
     #[test]

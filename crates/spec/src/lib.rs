@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, sync::Mutex};
 use kernel::{ToolCoreOutcome, ToolCoreRequest};
 
 pub mod kernel_bootstrap;
+mod path_policy;
 pub mod programmatic;
 pub mod spec_execution;
 pub mod spec_runtime;
@@ -12,6 +13,7 @@ pub mod spec_runtime;
 pub mod test_support;
 
 pub use kernel_bootstrap::{BootstrapBuilder, KernelBuilder, default_pack_manifest};
+pub use path_policy::{normalize_path_for_policy, resolve_plugin_relative_path};
 pub use programmatic::{
     acquire_programmatic_circuit_slot, execute_programmatic_tool_call,
     record_programmatic_circuit_outcome,

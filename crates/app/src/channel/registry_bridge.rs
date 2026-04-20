@@ -1,8 +1,13 @@
 use std::path::Path;
 
 use crate::channel::http;
+use crate::channel::runtime::state;
+#[cfg(feature = "channel-plugin-bridge")]
+use crate::channel::{
+    ManagedPluginBridgeRuntimeBinding, resolve_managed_plugin_bridge_runtime_binding,
+};
 use crate::config::{
-    ChannelDefaultAccountSelectionSource, LoongClawConfig, ONEBOT_ACCESS_TOKEN_ENV,
+    ChannelDefaultAccountSelectionSource, LoongConfig, ONEBOT_ACCESS_TOKEN_ENV,
     ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
     ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
     WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, normalize_channel_account_id,
@@ -13,9 +18,11 @@ use super::{
     ChannelCatalogOperation, ChannelCatalogOperationAvailability,
     ChannelCatalogOperationRequirement, ChannelCatalogTargetKind, ChannelDoctorCheckSpec,
     ChannelDoctorCheckTrigger, ChannelOnboardingDescriptor, ChannelOnboardingStrategy,
+    ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
     ChannelPluginBridgeStableTarget, ChannelRegistryDescriptor, ChannelRegistryOperationDescriptor,
-    ChannelStatusSnapshot, PLUGIN_BACKED_CHANNEL_CAPABILITIES, disabled_operation,
-    misconfigured_operation, unsupported_operation, validate_http_url, validate_websocket_url,
+    ChannelStatusSnapshot, PLUGIN_BACKED_CHANNEL_CAPABILITIES, apply_runtime_attention,
+    disabled_operation, misconfigured_operation, unsupported_operation, validate_http_url,
+    validate_websocket_url,
 };
 
 const WEIXIN_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -83,7 +90,7 @@ const WEIXIN_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "bridge send",
     command: "weixin-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: WEIXIN_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -94,22 +101,37 @@ const WEIXIN_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "bridge reply loop",
     command: "weixin-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: true,
     requirements: WEIXIN_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+#[allow(dead_code)]
+pub const WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR: super::ChannelCatalogCommandFamilyDescriptor =
+    super::ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "weixin",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: WEIXIN_SEND_OPERATION,
+        serve: WEIXIN_SERVE_OPERATION,
+    };
+
 const WEIXIN_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
     name: "weixin bridge send contract",
     trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
 }];
 
-const WEIXIN_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
-    name: "weixin bridge serve contract",
-    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
-}];
+const WEIXIN_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "weixin bridge serve contract",
+        trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "weixin bridge serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
 
 const WEIXIN_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
@@ -124,7 +146,7 @@ const WEIXIN_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 
 const WEIXIN_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "plugin-bridge weixin surface; connect a compatible WeChat ClawBot or iLink bridge under weixin or weixin.accounts.<account> and let that bridge own the upstream login flow until a native LoongClaw adapter exists",
+    setup_hint: "plugin-bridge weixin surface; connect a compatible WeChat ClawBot or iLink bridge under weixin or weixin.accounts.<account> and let that bridge own the upstream login flow until a native Loong adapter exists",
     status_command: "loong doctor",
     repair_command: None,
 };
@@ -191,7 +213,7 @@ const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "gateway send",
     command: "qqbot-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: QQBOT_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -202,22 +224,37 @@ const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "gateway reply loop",
     command: "qqbot-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: true,
     requirements: QQBOT_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+#[allow(dead_code)]
+pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: super::ChannelCatalogCommandFamilyDescriptor =
+    super::ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "qqbot",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: QQBOT_SEND_OPERATION,
+        serve: QQBOT_SERVE_OPERATION,
+    };
+
 const QQBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
     name: "qqbot bridge send contract",
     trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
 }];
 
-const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
-    name: "qqbot bridge serve contract",
-    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
-}];
+const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "qqbot bridge serve contract",
+        trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "qqbot bridge serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
 
 const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
@@ -305,7 +342,7 @@ const ONEBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "bridge send",
     command: "onebot-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: ONEBOT_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -316,22 +353,37 @@ const ONEBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "bridge event loop",
     command: "onebot-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: true,
     requirements: ONEBOT_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+#[allow(dead_code)]
+pub const ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: super::ChannelCatalogCommandFamilyDescriptor =
+    super::ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "onebot",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: ONEBOT_SEND_OPERATION,
+        serve: ONEBOT_SERVE_OPERATION,
+    };
+
 const ONEBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
     name: "onebot bridge send contract",
     trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
 }];
 
-const ONEBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
-    name: "onebot bridge serve contract",
-    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
-}];
+const ONEBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "onebot bridge serve contract",
+        trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "onebot bridge serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
 
 const ONEBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
@@ -402,6 +454,138 @@ const QQBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str =
 
 const ONEBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str =
     "keep <account> stable so personal-account bridge routes stay unambiguous";
+
+const MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION: &str = "send_message";
+const MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION: &str = "receive_batch";
+const MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION: &str = "ack_inbound";
+const MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION: &str = "complete_batch";
+
+#[cfg(not(feature = "channel-plugin-bridge"))]
+fn managed_bridge_operation_status(
+    _config: &LoongConfig,
+    _channel_id: &str,
+    _configured_account_id: &str,
+    operation: ChannelCatalogOperation,
+    _required_runtime_operations: &[&str],
+) -> ChannelOperationStatus {
+    let detail = "managed bridge runtime is unavailable in this feature set; enable channel-plugin-bridge (managed bridge runtime is disabled)".to_owned();
+    unsupported_operation(operation, detail)
+}
+
+#[cfg(feature = "channel-plugin-bridge")]
+fn managed_bridge_operation_status(
+    config: &LoongConfig,
+    channel_id: &str,
+    configured_account_id: &str,
+    operation: ChannelCatalogOperation,
+    required_runtime_operations: &[&str],
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> ChannelOperationStatus {
+    let binding_result = resolve_managed_plugin_bridge_runtime_binding(
+        config,
+        channel_id,
+        Some(configured_account_id),
+    );
+    let binding = match binding_result {
+        Ok(binding) => binding,
+        Err(error) => {
+            return unsupported_operation(operation, error);
+        }
+    };
+
+    let missing_runtime_operations =
+        missing_managed_bridge_runtime_operations(&binding, required_runtime_operations);
+    if !missing_runtime_operations.is_empty() {
+        let rendered_operations = missing_runtime_operations.join(",");
+        let issue = format!(
+            "managed bridge plugin {} is missing runtime operations: {rendered_operations}",
+            binding.plugin.plugin_id
+        );
+        return unsupported_operation(operation, issue);
+    }
+
+    let detail = format!(
+        "managed bridge runtime ready via plugin {} (bridge_kind={}, runtime_contract={})",
+        binding.plugin.plugin_id,
+        binding.plugin.runtime.bridge_kind.as_str(),
+        binding.runtime_contract
+    );
+
+    let mut status = ChannelOperationStatus {
+        id: operation.id,
+        label: operation.label,
+        command: operation.command,
+        health: ChannelOperationHealth::Ready,
+        detail,
+        issues: Vec::new(),
+        runtime: None,
+    };
+
+    if operation.tracks_runtime {
+        status.runtime = state::load_channel_operation_runtime_for_account_from_dir(
+            runtime_dir,
+            binding.platform,
+            operation.id,
+            binding.account_id.as_str(),
+            now_ms,
+        )
+        .map(|mut runtime| {
+            if runtime.account_id.is_none() {
+                runtime.account_id = Some(binding.account_id.clone());
+            }
+            if runtime.account_label.is_none() {
+                runtime.account_label = Some(binding.account_label.clone());
+            }
+            runtime
+        })
+        .or(Some(ChannelOperationRuntime {
+            running: false,
+            stale: false,
+            busy: false,
+            active_runs: 0,
+            consecutive_failures: 0,
+            last_run_activity_at: None,
+            last_heartbeat_at: None,
+            last_failure_at: None,
+            last_recovery_at: None,
+            last_error: None,
+            last_duplicate_reclaim_at: None,
+            pid: None,
+            account_id: Some(binding.account_id.clone()),
+            account_label: Some(binding.account_label.clone()),
+            instance_count: 0,
+            running_instances: 0,
+            stale_instances: 0,
+            duplicate_owner_pids: Vec::new(),
+            last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+            recent_incidents: Vec::new(),
+        }));
+        apply_runtime_attention(&mut status);
+    }
+
+    status
+}
+
+#[cfg(feature = "channel-plugin-bridge")]
+fn missing_managed_bridge_runtime_operations(
+    binding: &ManagedPluginBridgeRuntimeBinding,
+    required_runtime_operations: &[&str],
+) -> Vec<String> {
+    let mut missing_operations = Vec::new();
+
+    for required_runtime_operation in required_runtime_operations {
+        let supports_operation = binding.supports_operation(required_runtime_operation);
+        if supports_operation {
+            continue;
+        }
+
+        let missing_operation = (*required_runtime_operation).to_owned();
+        missing_operations.push(missing_operation);
+    }
+
+    missing_operations
+}
 
 pub(super) const WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
@@ -477,9 +661,9 @@ pub(super) fn plugin_bridge_account_scope_note_for_channel_id(
 
 fn build_weixin_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
-    _runtime_dir: &Path,
-    _now_ms: u64,
+    config: &LoongConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = true;
     let http_policy = http::outbound_http_policy_from_config(config);
@@ -500,12 +684,15 @@ fn build_weixin_snapshots(
                 .resolve_account(Some(configured_account_id.as_str()))
             {
                 Ok(resolved) => build_weixin_snapshot_for_account(
+                    config,
                     descriptor,
                     compiled,
                     resolved,
                     is_default_account,
                     default_account_source,
                     http_policy,
+                    runtime_dir,
+                    now_ms,
                 ),
                 Err(error) => build_invalid_weixin_snapshot(
                     descriptor,
@@ -523,9 +710,9 @@ fn build_weixin_snapshots(
 
 fn build_qqbot_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
-    _runtime_dir: &Path,
-    _now_ms: u64,
+    config: &LoongConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = true;
     let default_selection = config.qqbot.default_configured_account_selection();
@@ -545,11 +732,14 @@ fn build_qqbot_snapshots(
                 .resolve_account(Some(configured_account_id.as_str()))
             {
                 Ok(resolved) => build_qqbot_snapshot_for_account(
+                    config,
                     descriptor,
                     compiled,
                     resolved,
                     is_default_account,
                     default_account_source,
+                    runtime_dir,
+                    now_ms,
                 ),
                 Err(error) => build_invalid_qqbot_snapshot(
                     descriptor,
@@ -567,9 +757,9 @@ fn build_qqbot_snapshots(
 
 fn build_onebot_snapshots(
     descriptor: &ChannelRegistryDescriptor,
-    config: &LoongClawConfig,
-    _runtime_dir: &Path,
-    _now_ms: u64,
+    config: &LoongConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = true;
     let default_selection = config.onebot.default_configured_account_selection();
@@ -589,11 +779,14 @@ fn build_onebot_snapshots(
                 .resolve_account(Some(configured_account_id.as_str()))
             {
                 Ok(resolved) => build_onebot_snapshot_for_account(
+                    config,
                     descriptor,
                     compiled,
                     resolved,
                     is_default_account,
                     default_account_source,
+                    runtime_dir,
+                    now_ms,
                 ),
                 Err(error) => build_invalid_onebot_snapshot(
                     descriptor,
@@ -610,12 +803,15 @@ fn build_onebot_snapshots(
 }
 
 fn build_weixin_snapshot_for_account(
+    config: &LoongConfig,
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
     resolved: ResolvedWeixinChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
     http_policy: http::ChannelOutboundHttpPolicy,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -654,9 +850,14 @@ fn build_weixin_snapshot_for_account(
     } else if !send_issues.is_empty() {
         misconfigured_operation(WEIXIN_SEND_OPERATION, send_issues)
     } else {
-        unsupported_operation(
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
             WEIXIN_SEND_OPERATION,
-            "weixin-send is reserved for the surface contract; outbound delivery still belongs to an external bridge plugin".to_owned(),
+            &[MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+            runtime_dir,
+            now_ms,
         )
     };
 
@@ -673,9 +874,19 @@ fn build_weixin_snapshot_for_account(
     } else if !serve_issues.is_empty() {
         misconfigured_operation(WEIXIN_SERVE_OPERATION, serve_issues)
     } else {
-        unsupported_operation(
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
             WEIXIN_SERVE_OPERATION,
-            "weixin-serve is reserved for the surface contract; the reply loop still belongs to an external bridge plugin".to_owned(),
+            &[
+                MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+            ],
+            runtime_dir,
+            now_ms,
         )
     };
 
@@ -724,16 +935,20 @@ fn build_weixin_snapshot_for_account(
             .and(bridge_url.as_deref())
             .and_then(http::redact_endpoint_status_url),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
 
 fn build_qqbot_snapshot_for_account(
+    config: &LoongConfig,
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
     resolved: ResolvedQqbotChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -769,9 +984,14 @@ fn build_qqbot_snapshot_for_account(
     } else if !send_issues.is_empty() {
         misconfigured_operation(QQBOT_SEND_OPERATION, send_issues)
     } else {
-        unsupported_operation(
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
             QQBOT_SEND_OPERATION,
-            "qqbot-send is reserved for the surface contract; outbound delivery still belongs to the external gateway or bridge plugin".to_owned(),
+            &[MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+            runtime_dir,
+            now_ms,
         )
     };
 
@@ -788,9 +1008,19 @@ fn build_qqbot_snapshot_for_account(
     } else if !serve_issues.is_empty() {
         misconfigured_operation(QQBOT_SERVE_OPERATION, serve_issues)
     } else {
-        unsupported_operation(
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
             QQBOT_SERVE_OPERATION,
-            "qqbot-serve is reserved for the surface contract; the reply loop still belongs to the external gateway or bridge plugin".to_owned(),
+            &[
+                MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+            ],
+            runtime_dir,
+            now_ms,
         )
     };
 
@@ -837,16 +1067,20 @@ fn build_qqbot_snapshot_for_account(
         enabled: resolved.enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
 
 fn build_onebot_snapshot_for_account(
+    config: &LoongConfig,
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
     resolved: ResolvedOnebotChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -885,9 +1119,14 @@ fn build_onebot_snapshot_for_account(
     } else if !send_issues.is_empty() {
         misconfigured_operation(ONEBOT_SEND_OPERATION, send_issues)
     } else {
-        unsupported_operation(
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
             ONEBOT_SEND_OPERATION,
-            "onebot-send is reserved for the surface contract; outbound delivery still belongs to the external bridge runtime".to_owned(),
+            &[MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+            runtime_dir,
+            now_ms,
         )
     };
 
@@ -904,9 +1143,19 @@ fn build_onebot_snapshot_for_account(
     } else if !serve_issues.is_empty() {
         misconfigured_operation(ONEBOT_SERVE_OPERATION, serve_issues)
     } else {
-        unsupported_operation(
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
             ONEBOT_SERVE_OPERATION,
-            "onebot-serve is reserved for the surface contract; the event loop still belongs to the external bridge runtime".to_owned(),
+            &[
+                MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+            ],
+            runtime_dir,
+            now_ms,
         )
     };
 
@@ -952,14 +1201,12 @@ fn build_onebot_snapshot_for_account(
             .as_deref()
             .and_then(http::redact_endpoint_status_url),
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
 
-fn configured_weixin_account_enabled(
-    config: &LoongClawConfig,
-    configured_account_id: &str,
-) -> bool {
+fn configured_weixin_account_enabled(config: &LoongConfig, configured_account_id: &str) -> bool {
     let account_enabled = config
         .weixin
         .accounts
@@ -975,7 +1222,7 @@ fn configured_weixin_account_enabled(
     config.weixin.enabled && account_enabled
 }
 
-fn configured_qqbot_account_enabled(config: &LoongClawConfig, configured_account_id: &str) -> bool {
+fn configured_qqbot_account_enabled(config: &LoongConfig, configured_account_id: &str) -> bool {
     let account_enabled = config
         .qqbot
         .accounts
@@ -991,10 +1238,7 @@ fn configured_qqbot_account_enabled(config: &LoongClawConfig, configured_account
     config.qqbot.enabled && account_enabled
 }
 
-fn configured_onebot_account_enabled(
-    config: &LoongClawConfig,
-    configured_account_id: &str,
-) -> bool {
+fn configured_onebot_account_enabled(config: &LoongConfig, configured_account_id: &str) -> bool {
     let account_enabled = config
         .onebot
         .accounts
@@ -1063,6 +1307,7 @@ fn build_invalid_weixin_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1120,6 +1365,7 @@ fn build_invalid_qqbot_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
@@ -1177,18 +1423,91 @@ fn build_invalid_onebot_snapshot(
         enabled: configured_enabled,
         api_base_url: None,
         notes,
+        reserved_runtime_fields: Vec::new(),
         operations: vec![send_operation, serve_operation],
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
+    use std::path::Path;
+
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::channel::registry::{
         ChannelOperationHealth, channel_status_snapshots, list_channel_catalog,
     };
+
+    fn write_runtime_manifest(
+        root: &Path,
+        directory_name: &str,
+        channel_id: &str,
+        runtime_operations: Vec<&str>,
+    ) {
+        let runtime_operations = runtime_operations
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let runtime_operations_json =
+            serde_json::to_string(&runtime_operations).expect("serialize runtime operations");
+        let metadata = BTreeMap::from([
+            ("bridge_kind".to_owned(), "http_json".to_owned()),
+            ("adapter_family".to_owned(), "channel-bridge".to_owned()),
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            ("target_contract".to_owned(), "weixin_reply_loop".to_owned()),
+            (
+                "channel_runtime_contract".to_owned(),
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_CONTRACT_V1.to_owned(),
+            ),
+            (
+                "channel_runtime_operations_json".to_owned(),
+                runtime_operations_json,
+            ),
+        ]);
+        let manifest = loong_kernel::PluginManifest {
+            api_version: Some("v1alpha1".to_owned()),
+            version: Some("1.0.0".to_owned()),
+            plugin_id: "weixin-managed-runtime".to_owned(),
+            provider_id: "weixin-managed-runtime-provider".to_owned(),
+            connector_name: "weixin-managed-runtime-connector".to_owned(),
+            channel_id: Some(channel_id.to_owned()),
+            endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
+            capabilities: BTreeSet::new(),
+            trust_tier: loong_kernel::PluginTrustTier::Unverified,
+            metadata,
+            summary: None,
+            tags: Vec::new(),
+            input_examples: Vec::new(),
+            output_examples: Vec::new(),
+            defer_loading: false,
+            setup: Some(loong_kernel::PluginSetup {
+                mode: loong_kernel::PluginSetupMode::MetadataOnly,
+                surface: Some("channel".to_owned()),
+                required_env_vars: Vec::new(),
+                recommended_env_vars: Vec::new(),
+                required_config_keys: Vec::new(),
+                default_env_var: None,
+                docs_urls: Vec::new(),
+                remediation: None,
+            }),
+            slot_claims: Vec::new(),
+            compatibility: None,
+        };
+        let plugin_directory = root.join(directory_name);
+        let manifest_path = plugin_directory.join("loong.plugin.json");
+        let encoded_manifest =
+            serde_json::to_string_pretty(&manifest).expect("serialize runtime manifest");
+
+        fs::create_dir_all(&plugin_directory).expect("create runtime plugin directory");
+        fs::write(&manifest_path, encoded_manifest).expect("write runtime plugin manifest");
+    }
 
     #[test]
     fn channel_catalog_includes_plugin_backed_weixin_qqbot_and_onebot_surfaces() {
@@ -1233,7 +1552,7 @@ mod tests {
 
     #[test]
     fn weixin_status_reports_configured_bridge_surface_without_native_runtime() {
-        let config: LoongClawConfig = serde_json::from_value(json!({
+        let config: LoongConfig = serde_json::from_value(json!({
             "weixin": {
                 "enabled": true,
                 "bridge_url": "https://bridge.example.test/api?access_token=secret-token",
@@ -1261,15 +1580,15 @@ mod tests {
         assert!(
             send.issues
                 .iter()
-                .any(|issue| issue.contains("external bridge plugin")),
-            "send issues should explain bridge ownership"
+                .any(|issue| issue.contains("managed bridge runtime is disabled")),
+            "send issues should explain managed bridge runtime requirements"
         );
         assert!(
             serve
                 .issues
                 .iter()
-                .any(|issue| issue.contains("reply loop still belongs")),
-            "serve issues should explain runtime ownership"
+                .any(|issue| issue.contains("managed bridge runtime is disabled")),
+            "serve issues should explain managed bridge runtime requirements"
         );
         assert!(
             weixin
@@ -1293,7 +1612,7 @@ mod tests {
 
     #[test]
     fn qqbot_status_reports_configured_bridge_surface_without_native_runtime() {
-        let config: LoongClawConfig = serde_json::from_value(json!({
+        let config: LoongConfig = serde_json::from_value(json!({
             "qqbot": {
                 "enabled": true,
                 "app_id": "10001",
@@ -1318,15 +1637,15 @@ mod tests {
         assert!(
             send.issues
                 .iter()
-                .any(|issue| issue.contains("external gateway or bridge plugin")),
-            "send issues should explain gateway ownership"
+                .any(|issue| issue.contains("managed bridge runtime is disabled")),
+            "send issues should explain managed bridge runtime requirements"
         );
         assert!(
             serve
                 .issues
                 .iter()
-                .any(|issue| issue.contains("reply loop still belongs")),
-            "serve issues should explain runtime ownership"
+                .any(|issue| issue.contains("managed bridge runtime is disabled")),
+            "serve issues should explain managed bridge runtime requirements"
         );
         assert!(
             qqbot
@@ -1350,8 +1669,204 @@ mod tests {
     }
 
     #[test]
+    fn weixin_status_reports_ready_when_managed_bridge_runtime_is_resolved() {
+        let runtime_root = TempDir::new().expect("create runtime plugin root");
+        write_runtime_manifest(
+            runtime_root.path(),
+            "weixin-managed-runtime",
+            "weixin",
+            vec![
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+            ],
+        );
+
+        let mut config: LoongConfig = serde_json::from_value(json!({
+            "weixin": {
+                "enabled": true,
+                "bridge_url": "https://bridge.example.test/api",
+                "bridge_access_token": "bridge-token",
+                "allowed_contact_ids": ["wxid_alice"]
+            }
+        }))
+        .expect("deserialize weixin config");
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
+
+        let snapshots = channel_status_snapshots(&config);
+        let weixin = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "weixin")
+            .expect("weixin snapshot");
+        let send = weixin.operation("send").expect("weixin send operation");
+        let serve = weixin.operation("serve").expect("weixin serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Ready);
+        assert_eq!(serve.health, ChannelOperationHealth::Ready);
+        assert!(
+            send.detail
+                .contains("managed bridge runtime ready via plugin")
+        );
+        assert!(
+            serve
+                .detail
+                .contains("managed bridge runtime ready via plugin")
+        );
+        assert!(serve.runtime.is_some());
+        let runtime = serve.runtime.as_ref().expect("serve runtime");
+        assert!(!runtime.running);
+        assert_eq!(runtime.account_id.as_deref(), Some("default"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn weixin_status_attaches_live_runtime_state_when_managed_bridge_serve_is_running() {
+        let runtime_root = TempDir::new().expect("create runtime plugin root");
+        write_runtime_manifest(
+            runtime_root.path(),
+            "weixin-managed-runtime",
+            "weixin",
+            vec![
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+            ],
+        );
+
+        let mut config: LoongConfig = serde_json::from_value(json!({
+            "weixin": {
+                "enabled": true,
+                "bridge_url": "https://bridge.example.test/api",
+                "bridge_access_token": "bridge-token",
+                "allowed_contact_ids": ["wxid_alice"]
+            }
+        }))
+        .expect("deserialize weixin config");
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
+
+        let spec = crate::channel::runtime::serve::ChannelServeRuntimeSpec {
+            platform: crate::channel::ChannelPlatform::Weixin,
+            operation_id: crate::channel::CHANNEL_OPERATION_SERVE_ID,
+            account_id: "default",
+            account_label: "default",
+        };
+
+        let snapshots = crate::channel::runtime::serve::with_channel_serve_runtime_in_dir(
+            runtime_root.path(),
+            4242,
+            spec,
+            |_runtime| async {
+                Ok(super::super::channel_status_snapshots_with_now(
+                    &config,
+                    runtime_root.path(),
+                    crate::channel::runtime::serve::channel_runtime_now_ms(),
+                ))
+            },
+        )
+        .await
+        .expect("produce runtime-backed snapshots");
+        let weixin = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "weixin")
+            .expect("weixin snapshot");
+        let serve = weixin.operation("serve").expect("weixin serve operation");
+        let runtime = serve.runtime.as_ref().expect("serve runtime");
+
+        assert!(runtime.running);
+        assert!(!runtime.stale);
+        assert_eq!(runtime.account_id.as_deref(), Some("default"));
+        assert_eq!(runtime.account_label.as_deref(), Some("default"));
+        assert_eq!(runtime.running_instances, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn weixin_status_surfaces_retrying_runtime_attention_for_managed_bridge_serve() {
+        let runtime_root = TempDir::new().expect("create runtime plugin root");
+        write_runtime_manifest(
+            runtime_root.path(),
+            "weixin-managed-runtime",
+            "weixin",
+            vec![
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                crate::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+            ],
+        );
+
+        let mut config: LoongConfig = serde_json::from_value(json!({
+            "weixin": {
+                "enabled": true,
+                "bridge_url": "https://bridge.example.test/api",
+                "bridge_access_token": "bridge-token",
+                "allowed_contact_ids": ["wxid_alice"]
+            }
+        }))
+        .expect("deserialize weixin config");
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
+        let runtime_root_path = runtime_root.path().to_path_buf();
+        let runtime_root_path_for_snapshots = runtime_root_path.clone();
+
+        let spec = crate::channel::runtime::serve::ChannelServeRuntimeSpec {
+            platform: crate::channel::ChannelPlatform::Weixin,
+            operation_id: crate::channel::CHANNEL_OPERATION_SERVE_ID,
+            account_id: "default",
+            account_label: "default",
+        };
+
+        let snapshots = crate::channel::runtime::serve::with_channel_serve_runtime_in_dir(
+            runtime_root_path.as_path(),
+            4343,
+            spec,
+            |runtime| async move {
+                runtime
+                    .record_failure("temporary bridge timeout")
+                    .await
+                    .expect("record runtime failure");
+                Ok(super::super::channel_status_snapshots_with_now(
+                    &config,
+                    runtime_root_path_for_snapshots.as_path(),
+                    crate::channel::runtime::serve::channel_runtime_now_ms(),
+                ))
+            },
+        )
+        .await
+        .expect("produce retrying runtime snapshots");
+        let weixin = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "weixin")
+            .expect("weixin snapshot");
+        let serve = weixin.operation("serve").expect("weixin serve operation");
+        let runtime = serve.runtime.as_ref().expect("serve runtime");
+
+        assert!(
+            serve
+                .detail
+                .contains("runtime retrying after transient failures")
+        );
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue.contains("consecutive_failures=1"))
+        );
+        assert_eq!(runtime.consecutive_failures, 1);
+        assert_eq!(
+            runtime.last_error.as_deref(),
+            Some("temporary bridge timeout")
+        );
+    }
+
+    #[test]
     fn onebot_status_reports_configured_bridge_surface_without_native_runtime() {
-        let config: LoongClawConfig = serde_json::from_value(json!({
+        let config: LoongConfig = serde_json::from_value(json!({
             "onebot": {
                 "enabled": true,
                 "websocket_url": "ws://127.0.0.1:5700?access_token=secret-token",
@@ -1376,15 +1891,15 @@ mod tests {
         assert!(
             send.issues
                 .iter()
-                .any(|issue| issue.contains("external bridge runtime")),
-            "send issues should explain bridge ownership"
+                .any(|issue| issue.contains("managed bridge runtime is disabled")),
+            "send issues should explain managed bridge runtime requirements"
         );
         assert!(
             serve
                 .issues
                 .iter()
-                .any(|issue| issue.contains("event loop still belongs")),
-            "serve issues should explain runtime ownership"
+                .any(|issue| issue.contains("managed bridge runtime is disabled")),
+            "serve issues should explain managed bridge runtime requirements"
         );
         assert!(
             onebot

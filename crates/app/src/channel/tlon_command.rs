@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "channel-tlon")]
 use super::tlon;
 #[cfg(feature = "channel-tlon")]
-use crate::config::{ChannelResolvedAccountRoute, LoongClawConfig, ResolvedTlonChannelConfig};
+use crate::config::{ChannelResolvedAccountRoute, LoongConfig, ResolvedTlonChannelConfig};
 
 #[cfg(feature = "channel-tlon")]
 struct TlonCommandContext {
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     resolved: ResolvedTlonChannelConfig,
     route: ChannelResolvedAccountRoute,
 }
@@ -28,7 +28,7 @@ fn load_tlon_command_context(
 #[cfg(feature = "channel-tlon")]
 fn build_tlon_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<TlonCommandContext> {
     let resolved = config.tlon.resolve_account(account_id)?;
@@ -51,7 +51,7 @@ fn build_tlon_command_context(
 }
 
 #[cfg(feature = "channel-tlon")]
-fn initialize_tlon_runtime(config: &LoongClawConfig, resolved_path: &Path) {
+fn initialize_tlon_runtime(config: &LoongConfig, resolved_path: &Path) {
     crate::runtime_env::initialize_runtime_environment(config, Some(resolved_path));
 }
 

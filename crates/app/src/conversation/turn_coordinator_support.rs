@@ -106,7 +106,7 @@ pub(super) struct ProviderTurnPreparation {
 impl ProviderTurnPreparation {
     #[cfg(test)]
     pub(super) fn from_assembled_context(
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         assembled_context: AssembledConversationContext,
         user_input: &str,
         ingress: Option<&ConversationIngressContext>,
@@ -122,7 +122,7 @@ impl ProviderTurnPreparation {
     }
 
     pub(super) fn from_assembled_context_with_turn_id(
-        config: &LoongClawConfig,
+        config: &LoongConfig,
         assembled_context: AssembledConversationContext,
         user_input: &str,
         turn_id: &str,
@@ -356,7 +356,7 @@ pub(super) async fn emit_async_delegate_child_terminal_event<R: ConversationRunt
 
 #[cfg(feature = "memory-sqlite")]
 pub(super) fn inject_delegate_workspace_metadata(
-    outcome: &mut loongclaw_contracts::ToolCoreOutcome,
+    outcome: &mut loong_contracts::ToolCoreOutcome,
     execution: &ConstrainedSubagentExecution,
     cleanup: Option<&DelegateWorkspaceCleanupResult>,
     cleanup_error: Option<String>,

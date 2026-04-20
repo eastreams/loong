@@ -2,12 +2,12 @@ use std::sync::OnceLock;
 
 use crate::{
     CliResult,
-    config::{ConfigValidationIssue, LoongClawConfig},
+    config::{ConfigValidationIssue, LoongConfig},
 };
 
 use super::registry::{
-    ChannelRuntimeCommandDescriptor, resolve_channel_catalog_entry,
-    resolve_channel_command_family_descriptor, resolve_channel_selection_order,
+    ChannelRuntimeCommandDescriptor, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_selection_order,
 };
 
 #[cfg(feature = "channel-feishu")]
@@ -28,7 +28,33 @@ use super::registry::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelRuntimeKind {
     Interactive,
-    Service,
+    RuntimeBacked,
+    PluginBacked,
+    OutboundOnly,
+    CatalogOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelOperationalModel {
+    Interactive,
+    GatewaySupervised,
+    StandaloneRuntime,
+    PluginBacked,
+    OutboundOnly,
+    CatalogOnly,
+}
+
+impl ChannelOperationalModel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::GatewaySupervised => "gateway_supervised",
+            Self::StandaloneRuntime => "standalone_runtime",
+            Self::PluginBacked => "plugin_backed",
+            Self::OutboundOnly => "outbound_only",
+            Self::CatalogOnly => "catalog_only",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,12 +63,13 @@ pub struct ChannelDescriptor {
     pub label: &'static str,
     pub surface_label: &'static str,
     pub runtime_kind: ChannelRuntimeKind,
+    pub operational_model: ChannelOperationalModel,
     pub serve_subcommand: Option<&'static str>,
 }
 
-type ChannelEnabledFn = fn(&LoongClawConfig) -> bool;
-type ChannelValidationFn = fn(&LoongClawConfig) -> Vec<ConfigValidationIssue>;
-type BackgroundSurfaceEnabledFn = fn(&LoongClawConfig, Option<&str>) -> CliResult<bool>;
+type ChannelEnabledFn = fn(&LoongConfig) -> bool;
+type ChannelValidationFn = fn(&LoongConfig) -> Vec<ConfigValidationIssue>;
+type BackgroundSurfaceEnabledFn = fn(&LoongConfig, Option<&str>) -> CliResult<bool>;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChannelIntegrationDescriptor {
@@ -363,13 +390,15 @@ fn build_channel_descriptor(
     let surface_label_text = channel_surface_label_text(channel_id);
     let surface_label = leak_channel_string(surface_label_text);
     let runtime_kind = channel_runtime_kind(channel_id);
-    let serve_subcommand = channel_serve_subcommand(channel_id, background_runtime);
+    let operational_model = channel_operational_model(channel_id, runtime_kind, background_runtime);
+    let serve_subcommand = channel_serve_subcommand(channel_id);
 
     ChannelDescriptor {
         id: channel_id,
         label,
         surface_label,
         runtime_kind,
+        operational_model,
         serve_subcommand,
     }
 }
@@ -410,24 +439,58 @@ fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
         return ChannelRuntimeKind::Interactive;
     }
 
-    ChannelRuntimeKind::Service
+    let implementation_status = resolve_channel_catalog_entry(channel_id)
+        .map(|entry| entry.implementation_status)
+        .unwrap_or(crate::channel::ChannelCatalogImplementationStatus::ConfigBacked);
+
+    match implementation_status {
+        crate::channel::ChannelCatalogImplementationStatus::RuntimeBacked => {
+            ChannelRuntimeKind::RuntimeBacked
+        }
+        crate::channel::ChannelCatalogImplementationStatus::PluginBacked => {
+            ChannelRuntimeKind::PluginBacked
+        }
+        crate::channel::ChannelCatalogImplementationStatus::ConfigBacked => {
+            ChannelRuntimeKind::OutboundOnly
+        }
+        crate::channel::ChannelCatalogImplementationStatus::Stub => ChannelRuntimeKind::CatalogOnly,
+    }
 }
 
-fn channel_serve_subcommand(
+fn channel_operational_model(
     channel_id: &str,
+    runtime_kind: ChannelRuntimeKind,
     background_runtime: Option<ChannelRuntimeCommandDescriptor>,
-) -> Option<&'static str> {
-    background_runtime?;
+) -> ChannelOperationalModel {
+    if channel_id == "cli" {
+        return ChannelOperationalModel::Interactive;
+    }
 
-    let family_descriptor = resolve_channel_command_family_descriptor(channel_id);
-    debug_assert!(
-        family_descriptor.is_some(),
-        "missing command-family metadata for `{channel_id}`"
-    );
-    let family_descriptor = family_descriptor?;
-    let serve_operation = family_descriptor.serve();
-    let serve_command = serve_operation.command;
-    Some(serve_command)
+    match runtime_kind {
+        ChannelRuntimeKind::Interactive => ChannelOperationalModel::Interactive,
+        ChannelRuntimeKind::RuntimeBacked => {
+            if background_runtime.is_some() {
+                return ChannelOperationalModel::GatewaySupervised;
+            }
+
+            ChannelOperationalModel::StandaloneRuntime
+        }
+        ChannelRuntimeKind::PluginBacked => ChannelOperationalModel::PluginBacked,
+        ChannelRuntimeKind::OutboundOnly => ChannelOperationalModel::OutboundOnly,
+        ChannelRuntimeKind::CatalogOnly => ChannelOperationalModel::CatalogOnly,
+    }
+}
+
+fn channel_serve_subcommand(channel_id: &str) -> Option<&'static str> {
+    let family_descriptor = resolve_channel_catalog_command_family_descriptor(channel_id)?;
+    let serve_operation = family_descriptor.serve;
+    if serve_operation.availability
+        != super::catalog::ChannelCatalogOperationAvailability::Implemented
+    {
+        return None;
+    }
+
+    Some(serve_operation.command)
 }
 
 pub fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -453,7 +516,10 @@ fn channel_integration_order_key(
     let runtime_kind = channel_runtime_kind(channel_id);
     let runtime_group = match runtime_kind {
         ChannelRuntimeKind::Interactive => 0_u8,
-        ChannelRuntimeKind::Service => 1_u8,
+        ChannelRuntimeKind::RuntimeBacked => 1_u8,
+        ChannelRuntimeKind::PluginBacked => 2_u8,
+        ChannelRuntimeKind::OutboundOnly => 3_u8,
+        ChannelRuntimeKind::CatalogOnly => 4_u8,
     };
     let selection_order = if channel_id == "cli" {
         u16::MAX
@@ -469,15 +535,82 @@ fn channel_integration_order_key(
 }
 
 pub fn service_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    runtime_backed_channel_descriptors()
+}
+
+pub fn runtime_backed_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
     ordered_channel_integrations()
         .into_iter()
         .filter_map(|integration| channel_descriptor(integration.channel_id))
-        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::Service)
+        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::RuntimeBacked)
         .collect()
 }
 
+pub fn gateway_supervised_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| {
+            descriptor.operational_model == ChannelOperationalModel::GatewaySupervised
+        })
+        .collect()
+}
+
+pub fn standalone_runtime_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| {
+            descriptor.operational_model == ChannelOperationalModel::StandaloneRuntime
+        })
+        .collect()
+}
+
+pub fn plugin_backed_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::PluginBacked)
+        .collect()
+}
+
+pub fn outbound_only_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    ordered_channel_integrations()
+        .into_iter()
+        .filter_map(|integration| channel_descriptor(integration.channel_id))
+        .filter(|descriptor| descriptor.runtime_kind == ChannelRuntimeKind::OutboundOnly)
+        .collect()
+}
+
+pub fn catalog_only_channel_descriptors() -> Vec<&'static ChannelDescriptor> {
+    super::registry::list_channel_catalog()
+        .into_iter()
+        .filter(|entry| {
+            entry.implementation_status == super::ChannelCatalogImplementationStatus::Stub
+        })
+        .map(|entry| {
+            let id = leak_channel_string(entry.id.to_owned());
+            let label = leak_channel_string(entry.label.to_owned());
+            let surface_label = leak_channel_string(channel_surface_label_text(entry.id));
+            ChannelDescriptor {
+                id,
+                label,
+                surface_label,
+                runtime_kind: ChannelRuntimeKind::CatalogOnly,
+                operational_model: ChannelOperationalModel::CatalogOnly,
+                serve_subcommand: None,
+            }
+        })
+        .map(leak_channel_descriptor)
+        .collect()
+}
+
+fn leak_channel_descriptor(descriptor: ChannelDescriptor) -> &'static ChannelDescriptor {
+    Box::leak(Box::new(descriptor))
+}
+
 pub(crate) fn enabled_channel_ids(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime_kind: Option<ChannelRuntimeKind>,
 ) -> Vec<String> {
     ordered_channel_integrations()
@@ -497,7 +630,7 @@ pub(crate) fn enabled_channel_ids(
 }
 
 pub(crate) fn collect_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     ordered_channel_integrations()
         .into_iter()
@@ -514,7 +647,7 @@ pub fn background_channel_runtime_descriptors() -> Vec<ChannelRuntimeCommandDesc
 
 pub fn is_background_channel_surface_enabled(
     channel_id: &str,
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     let integration = find_channel_integration(channel_id)
@@ -541,248 +674,224 @@ fn find_channel_integration(id: &str) -> Option<&'static ChannelIntegrationDescr
         .find(|integration| integration.channel_id == normalized_id)
 }
 
-fn cli_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn cli_channel_is_enabled(config: &LoongConfig) -> bool {
     config.cli.enabled
 }
 
-fn telegram_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn telegram_channel_is_enabled(config: &LoongConfig) -> bool {
     config.telegram.enabled
 }
 
-fn feishu_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn feishu_channel_is_enabled(config: &LoongConfig) -> bool {
     config.feishu.enabled
 }
 
-fn matrix_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn matrix_channel_is_enabled(config: &LoongConfig) -> bool {
     config.matrix.enabled
 }
 
-fn wecom_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn wecom_channel_is_enabled(config: &LoongConfig) -> bool {
     config.wecom.enabled
 }
 
-fn weixin_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn weixin_channel_is_enabled(config: &LoongConfig) -> bool {
     config.weixin.enabled
 }
 
-fn qqbot_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn qqbot_channel_is_enabled(config: &LoongConfig) -> bool {
     config.qqbot.enabled
 }
 
-fn onebot_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn onebot_channel_is_enabled(config: &LoongConfig) -> bool {
     config.onebot.enabled
 }
 
-fn discord_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn discord_channel_is_enabled(config: &LoongConfig) -> bool {
     config.discord.enabled
 }
 
-fn slack_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn slack_channel_is_enabled(config: &LoongConfig) -> bool {
     config.slack.enabled
 }
 
-fn line_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn line_channel_is_enabled(config: &LoongConfig) -> bool {
     config.line.enabled
 }
 
-fn dingtalk_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn dingtalk_channel_is_enabled(config: &LoongConfig) -> bool {
     config.dingtalk.enabled
 }
 
-fn whatsapp_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn whatsapp_channel_is_enabled(config: &LoongConfig) -> bool {
     config.whatsapp.enabled
 }
 
-fn email_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn email_channel_is_enabled(config: &LoongConfig) -> bool {
     config.email.enabled
 }
 
-fn webhook_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn webhook_channel_is_enabled(config: &LoongConfig) -> bool {
     config.webhook.enabled
 }
 
-fn google_chat_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn google_chat_channel_is_enabled(config: &LoongConfig) -> bool {
     config.google_chat.enabled
 }
 
-fn signal_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn signal_channel_is_enabled(config: &LoongConfig) -> bool {
     config.signal.enabled
 }
 
-fn twitch_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn twitch_channel_is_enabled(config: &LoongConfig) -> bool {
     config.twitch.enabled
 }
 
-fn teams_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn teams_channel_is_enabled(config: &LoongConfig) -> bool {
     config.teams.enabled
 }
 
-fn tlon_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn tlon_channel_is_enabled(config: &LoongConfig) -> bool {
     config.tlon.enabled
 }
 
-fn mattermost_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn mattermost_channel_is_enabled(config: &LoongConfig) -> bool {
     config.mattermost.enabled
 }
 
-fn nextcloud_talk_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn nextcloud_talk_channel_is_enabled(config: &LoongConfig) -> bool {
     config.nextcloud_talk.enabled
 }
 
-fn synology_chat_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn synology_chat_channel_is_enabled(config: &LoongConfig) -> bool {
     config.synology_chat.enabled
 }
 
-fn irc_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn irc_channel_is_enabled(config: &LoongConfig) -> bool {
     config.irc.enabled
 }
 
-fn imessage_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn imessage_channel_is_enabled(config: &LoongConfig) -> bool {
     config.imessage.enabled
 }
 
-fn nostr_channel_is_enabled(config: &LoongClawConfig) -> bool {
+fn nostr_channel_is_enabled(config: &LoongConfig) -> bool {
     config.nostr.enabled
 }
 
-fn collect_cli_channel_validation_issues(_config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_cli_channel_validation_issues(_config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     Vec::new()
 }
 
-fn collect_telegram_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_telegram_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.telegram.validate()
 }
 
-fn collect_feishu_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_feishu_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.feishu.validate()
 }
 
-fn collect_matrix_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_matrix_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.matrix.validate()
 }
 
-fn collect_wecom_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_wecom_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.wecom.validate()
 }
 
-fn collect_weixin_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_weixin_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.weixin.validate()
 }
 
-fn collect_qqbot_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_qqbot_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.qqbot.validate()
 }
 
-fn collect_onebot_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_onebot_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.onebot.validate()
 }
 
-fn collect_discord_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_discord_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.discord.validate()
 }
 
-fn collect_slack_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_slack_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.slack.validate()
 }
 
-fn collect_line_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_line_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.line.validate()
 }
 
-fn collect_dingtalk_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_dingtalk_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.dingtalk.validate()
 }
 
-fn collect_whatsapp_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_whatsapp_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.whatsapp.validate()
 }
 
-fn collect_email_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_email_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.email.validate()
 }
 
-fn collect_webhook_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_webhook_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.webhook.validate()
 }
 
 fn collect_google_chat_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.google_chat.validate()
 }
 
-fn collect_signal_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_signal_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.signal.validate()
 }
 
-fn collect_twitch_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_twitch_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.twitch.validate()
 }
 
-fn collect_teams_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_teams_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.teams.validate()
 }
 
-fn collect_tlon_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_tlon_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.tlon.validate()
 }
 
 fn collect_mattermost_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.mattermost.validate()
 }
 
 fn collect_nextcloud_talk_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.nextcloud_talk.validate()
 }
 
 fn collect_synology_chat_channel_validation_issues(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.synology_chat.validate()
 }
 
-fn collect_irc_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_irc_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.irc.validate()
 }
 
-fn collect_imessage_channel_validation_issues(
-    config: &LoongClawConfig,
-) -> Vec<ConfigValidationIssue> {
+fn collect_imessage_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.imessage.validate()
 }
 
-fn collect_nostr_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+fn collect_nostr_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.nostr.validate()
 }
 
 fn telegram_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.telegram.enabled {
@@ -794,7 +903,7 @@ fn telegram_background_surface_is_enabled(
 
 #[cfg(feature = "feishu-integration")]
 fn feishu_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.feishu.enabled {
@@ -811,7 +920,7 @@ fn feishu_background_surface_is_enabled(
 
 #[cfg(not(feature = "feishu-integration"))]
 fn feishu_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.feishu.enabled {
@@ -823,7 +932,7 @@ fn feishu_background_surface_is_enabled(
 }
 
 fn matrix_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.matrix.enabled {
@@ -834,7 +943,7 @@ fn matrix_background_surface_is_enabled(
 }
 
 fn wecom_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.wecom.enabled {
@@ -845,7 +954,7 @@ fn wecom_background_surface_is_enabled(
 }
 
 fn whatsapp_background_surface_is_enabled(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<bool> {
     if !config.whatsapp.enabled {
@@ -859,32 +968,38 @@ fn whatsapp_background_surface_is_enabled(
 mod tests {
     use std::collections::BTreeMap;
 
-    use loongclaw_contracts::SecretRef;
+    use loong_contracts::SecretRef;
 
     use super::*;
 
     fn expected_background_channel_ids() -> Vec<&'static str> {
         let mut channel_ids = Vec::new();
-        let catalog = super::super::registry::list_channel_catalog();
 
-        for catalog_entry in catalog {
-            let runtime_descriptor =
-                super::super::registry::resolve_channel_runtime_command_descriptor(
-                    catalog_entry.id,
-                );
-            if runtime_descriptor.is_none() {
+        for integration in CHANNEL_INTEGRATIONS {
+            if integration.background_runtime.is_none() {
                 continue;
             }
-            let Some(descriptor) = channel_descriptor(catalog_entry.id) else {
+
+            let maybe_descriptor = channel_descriptor(integration.channel_id);
+            let Some(descriptor) = maybe_descriptor else {
                 continue;
             };
-            if descriptor.runtime_kind != ChannelRuntimeKind::Service {
+            if descriptor.runtime_kind != ChannelRuntimeKind::RuntimeBacked {
                 continue;
             }
+
             channel_ids.push(descriptor.id);
         }
 
         channel_ids
+    }
+
+    fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
+        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+    }
+
+    fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
+        vec!["line", "webhook"]
     }
 
     #[test]
@@ -898,31 +1013,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "telegram",
-                "feishu",
-                "matrix",
-                "wecom",
-                "weixin",
-                "qqbot",
-                "onebot",
-                "discord",
-                "slack",
-                "line",
-                "dingtalk",
-                "whatsapp",
-                "email",
-                "webhook",
-                "google-chat",
-                "signal",
-                "twitch",
-                "teams",
-                "mattermost",
-                "nextcloud-talk",
-                "synology-chat",
-                "irc",
-                "imessage",
-                "nostr",
-                "tlon",
+                "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook",
             ]
         );
     }
@@ -940,8 +1031,32 @@ mod tests {
     }
 
     #[test]
+    fn gateway_supervised_channel_descriptors_follow_background_runtime_contracts() {
+        let descriptors = gateway_supervised_channel_descriptors();
+        let ids = descriptors
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let expected_ids = expected_gateway_supervised_channel_ids();
+
+        assert_eq!(ids, expected_ids);
+    }
+
+    #[test]
+    fn standalone_runtime_channel_descriptors_track_native_serve_without_gateway_supervision() {
+        let descriptors = standalone_runtime_channel_descriptors();
+        let ids = descriptors
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        let expected_ids = expected_standalone_runtime_channel_ids();
+
+        assert_eq!(ids, expected_ids);
+    }
+
+    #[test]
     fn unsupported_background_channels_are_rejected() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let error = is_background_channel_surface_enabled("cli", &config, None)
             .expect_err("cli should not be a background channel");
 
@@ -950,7 +1065,7 @@ mod tests {
 
     #[test]
     fn background_channel_surface_enablement_normalizes_aliases() {
-        let config = LoongClawConfig::default();
+        let config = LoongConfig::default();
         let enabled = is_background_channel_surface_enabled(" LARK ", &config, None)
             .expect("feishu alias should normalize through the channel registry");
 
@@ -963,18 +1078,33 @@ mod tests {
         assert_eq!(weixin.id, "weixin");
         assert_eq!(weixin.label, "Weixin");
         assert_eq!(weixin.surface_label, "weixin channel");
+        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            weixin.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(weixin.serve_subcommand, None);
 
         let qqbot = channel_descriptor("qq").expect("qq alias should resolve");
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.label, "QQ Bot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            qqbot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(qqbot.serve_subcommand, None);
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
         assert_eq!(onebot.id, "onebot");
         assert_eq!(onebot.label, "OneBot");
         assert_eq!(onebot.surface_label, "onebot channel");
+        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(
+            onebot.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
         assert_eq!(onebot.serve_subcommand, None);
     }
 
@@ -983,10 +1113,26 @@ mod tests {
         let feishu = channel_descriptor("feishu").expect("feishu descriptor");
         assert_eq!(feishu.label, "Feishu/Lark");
         assert_eq!(feishu.surface_label, "feishu channel");
+        assert_eq!(
+            feishu.operational_model,
+            ChannelOperationalModel::GatewaySupervised
+        );
+
+        let line = channel_descriptor("line").expect("line descriptor");
+        assert_eq!(line.label, "LINE");
+        assert_eq!(line.surface_label, "line channel");
+        assert_eq!(
+            line.operational_model,
+            ChannelOperationalModel::StandaloneRuntime
+        );
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.label, "Google Chat");
         assert_eq!(google_chat.surface_label, "google chat channel");
+        assert_eq!(
+            google_chat.operational_model,
+            ChannelOperationalModel::OutboundOnly
+        );
     }
 
     #[test]
@@ -1038,9 +1184,9 @@ mod tests {
             accounts,
             ..crate::config::FeishuChannelConfig::default()
         };
-        let config = LoongClawConfig {
+        let config = LoongConfig {
             feishu,
-            ..LoongClawConfig::default()
+            ..LoongConfig::default()
         };
 
         let enabled = is_background_channel_surface_enabled(

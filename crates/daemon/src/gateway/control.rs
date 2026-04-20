@@ -23,7 +23,7 @@ use tokio::{
 };
 
 use crate::mvp::acp::AcpSessionManager;
-use crate::mvp::config::LoongClawConfig;
+use crate::mvp::config::LoongConfig;
 use crate::{
     CliResult, build_channels_cli_json_payload,
     collect_runtime_snapshot_cli_state_from_loaded_config, mvp, supervisor::LoadedSupervisorConfig,
@@ -76,7 +76,7 @@ pub(crate) struct GatewayControlAppState {
     pub(crate) runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
     pub(crate) event_bus: Option<GatewayEventBus>,
     pub(crate) acp_manager: Option<Arc<AcpSessionManager>>,
-    pub(crate) config: Option<LoongClawConfig>,
+    pub(crate) config: Option<LoongConfig>,
 }
 
 impl GatewayControlAppState {
@@ -92,6 +92,13 @@ impl GatewayControlAppState {
                 primary_channel_view: "channel_surfaces",
                 catalog_view: "channel_catalog",
                 legacy_channel_views: &[],
+            },
+            summary: GatewayChannelInventorySummaryReadModel {
+                total_surface_count: 0,
+                runtime_backed_surface_count: 0,
+                config_backed_surface_count: 0,
+                plugin_backed_surface_count: 0,
+                catalog_only_surface_count: 0,
             },
             channels: vec![],
             catalog_only_channels: vec![],
@@ -112,13 +119,20 @@ impl GatewayControlAppState {
             acp: json!({}),
             channels: GatewayRuntimeSnapshotChannelsReadModel {
                 enabled_channel_ids: vec![],
+                enabled_runtime_backed_channel_ids: vec![],
                 enabled_service_channel_ids: vec![],
+                enabled_plugin_backed_channel_ids: vec![],
+                enabled_outbound_only_channel_ids: vec![],
                 inventory: channel_inventory.clone(),
             },
             tool_runtime: json!({}),
             tools: GatewayRuntimeSnapshotToolsReadModel {
                 visible_tool_count: 0,
                 visible_tool_names: vec![],
+                visible_direct_tool_names: vec![],
+                hidden_tool_count: 0,
+                hidden_tool_tags: vec![],
+                hidden_tool_surfaces: vec![],
                 capability_snapshot_sha256: String::new(),
                 capability_snapshot: String::new(),
                 tool_calling: super::read_models::GatewayToolCallingReadModel {
@@ -127,6 +141,13 @@ impl GatewayControlAppState {
                     effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
                     active_model: String::new(),
                     reason: "no runtime-visible tools are enabled".to_owned(),
+                },
+                web_access: super::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: false,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
             runtime_plugins: json!({}),
@@ -747,7 +768,7 @@ fn build_gateway_operator_summary_read_model(
     build_operator_summary_read_model(status, channel_inventory, runtime_snapshot)
 }
 
-fn gateway_control_config(app_state: &GatewayControlAppState) -> CliResult<&LoongClawConfig> {
+fn gateway_control_config(app_state: &GatewayControlAppState) -> CliResult<&LoongConfig> {
     let config = app_state
         .config
         .as_ref()
@@ -1003,7 +1024,7 @@ pub fn build_gateway_events_test_router(
 #[doc(hidden)]
 pub fn build_gateway_acp_test_router(
     bearer_token: String,
-    config: LoongClawConfig,
+    config: LoongConfig,
     acp_manager: Arc<AcpSessionManager>,
 ) -> Router {
     let mut state = GatewayControlAppState::test_minimal(bearer_token);

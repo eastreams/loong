@@ -1,4 +1,4 @@
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 use serde_json::Value;
 
 use crate::tools;
@@ -81,6 +81,10 @@ pub(crate) fn render_tool_input_repair_guidance_from_reason(
     )
 }
 
+pub(crate) fn repair_guidance_visible_tool_name(tool_name: &str) -> String {
+    tools::user_visible_tool_name(tool_name)
+}
+
 fn render_tool_input_repair_guidance_for_issue(
     tool_name: &str,
     descriptor: &tools::ToolDescriptor,
@@ -128,6 +132,12 @@ fn render_tool_input_repair_guidance_from_reason_with_descriptor(
     descriptor: &tools::ToolDescriptor,
     tool_failure_reason: &str,
 ) -> Option<String> {
+    if let Some(guidance) =
+        render_invalid_tool_lease_repair_guidance(tool_name, tool_failure_reason)
+    {
+        return Some(guidance);
+    }
+
     let issue = parse_tool_input_contract_issue_from_reason(descriptor, tool_failure_reason)?;
     let guidance = render_tool_input_repair_guidance_for_issue(tool_name, descriptor, &issue);
     Some(guidance)
@@ -144,6 +154,31 @@ fn strip_tool_input_reason_prefix(reason: &str) -> &str {
     let followup_prefix = "tool input needs repair: ";
     let stripped_followup_reason = trimmed_reason.strip_prefix(followup_prefix);
     stripped_followup_reason.unwrap_or(trimmed_reason)
+}
+
+fn render_invalid_tool_lease_repair_guidance(
+    tool_name: &str,
+    tool_failure_reason: &str,
+) -> Option<String> {
+    if tool_name != "tool.invoke" {
+        return None;
+    }
+
+    let stripped_reason = tool_failure_reason.trim();
+    let mentions_invalid_tool_lease = stripped_reason.contains("invalid_tool_lease:");
+    if !mentions_invalid_tool_lease {
+        return None;
+    }
+
+    Some([
+        "Repair guidance for tool.invoke:".to_owned(),
+        "The lease is invalid, expired, or scoped to a different turn/session.".to_owned(),
+        "Refresh the tool card with `tool.search` before retrying `tool.invoke`.".to_owned(),
+        "If you already know the tool id, call `tool.search` with `exact_tool_id` to fetch a fresh lease.".to_owned(),
+        "Do not reuse older leases from earlier search results.".to_owned(),
+        "Expected payload shape: tool_id:string,lease:string,arguments:object.".to_owned(),
+    ]
+    .join("\n"))
 }
 
 fn parse_tool_input_contract_issue_from_reason(
@@ -353,9 +388,17 @@ fn render_repair_guidance_for_issue(
     descriptor: &tools::ToolDescriptor,
     issue: &ToolInputContractIssue,
 ) -> String {
+    let canonical_tool_name = tools::canonical_tool_name(tool_name);
+    let visible_tool_name = repair_guidance_visible_tool_name(canonical_tool_name);
     let mut lines = Vec::new();
-    let heading = format!("Repair guidance for {tool_name}:");
+    let heading = format!("Repair guidance for {visible_tool_name}:");
     lines.push(heading);
+
+    if visible_tool_name != canonical_tool_name {
+        lines.push(format!(
+            "Prefer the direct `{visible_tool_name}` surface instead of hidden `{canonical_tool_name}` when possible."
+        ));
+    }
 
     match issue {
         ToolInputContractIssue::PayloadMustBeObject => {
@@ -406,7 +449,7 @@ mod tests {
         render_tool_input_repair_guidance, render_tool_input_repair_guidance_from_reason,
     };
     use crate::tools;
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::json;
 
     #[test]
@@ -442,9 +485,14 @@ mod tests {
         let guidance = render_tool_input_repair_guidance("file.read", summary.get("request"))
             .expect("guidance");
 
-        assert!(guidance.contains("Repair guidance for file.read:"));
+        assert!(guidance.contains("Repair guidance for read:"));
+        assert!(guidance.contains(
+            "Prefer the direct `read` surface instead of hidden `file.read` when possible."
+        ));
         assert!(guidance.contains("Add required field `payload.path` as a string."));
-        assert!(guidance.contains("Expected payload shape: path:string,max_bytes?:integer."));
+        assert!(guidance.contains(
+            "Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer."
+        ));
     }
 
     #[test]
@@ -500,10 +548,31 @@ mod tests {
         )
         .expect("guidance");
 
-        assert!(guidance.contains("Repair guidance for shell.exec:"));
+        assert!(guidance.contains("Repair guidance for exec:"));
+        assert!(guidance.contains(
+            "Prefer the direct `exec` surface instead of hidden `shell.exec` when possible."
+        ));
         assert!(guidance.contains("Set `payload.args` to an array value."));
         assert!(guidance.contains(
             "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
         ));
+    }
+
+    #[test]
+    fn render_tool_input_repair_guidance_from_reason_recovers_invalid_tool_lease_refresh_steps() {
+        let guidance = render_tool_input_repair_guidance_from_reason(
+            "tool.invoke",
+            "invalid_tool_lease: expired lease",
+        )
+        .expect("guidance");
+
+        assert!(guidance.contains("Repair guidance for tool.invoke:"));
+        assert!(guidance.contains("tool.search"));
+        assert!(guidance.contains("exact_tool_id"));
+        assert!(guidance.contains("Do not reuse older leases"));
+        assert!(
+            guidance
+                .contains("Expected payload shape: tool_id:string,lease:string,arguments:object.")
+        );
     }
 }

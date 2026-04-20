@@ -1,14 +1,15 @@
 use std::fs;
 use std::path::Path;
 
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Map, Value, json};
 
 use crate::memory::{
     MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
-    ParsedWorkspaceMemoryDocument, WorkspaceMemoryDocumentLocation,
+    ParsedWorkspaceMemoryDocument, WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
     collect_workspace_memory_document_locations, parse_workspace_memory_document,
 };
+use crate::search_text::{normalize_search_text, tokenize_normalized_search_text};
 
 const DEFAULT_MEMORY_SEARCH_MAX_RESULTS: usize = 5;
 const MAX_MEMORY_SEARCH_RESULTS: usize = 8;
@@ -70,23 +71,33 @@ pub(super) fn execute_memory_search_tool_with_config(
         Some(MAX_MEMORY_SEARCH_RESULTS),
     )?;
 
-    let query_normalized = query.to_ascii_lowercase();
+    let query_normalized = normalize_search_text(query);
     let query_tokens = tokenize_memory_query(query_normalized.as_str());
 
     let mut results = Vec::new();
     if let Some(workspace_root) = config.file_root.as_deref() {
-        let locations = collect_workspace_memory_document_locations(workspace_root)?;
-        for location in locations {
-            let maybe_result = search_memory_location(
-                query_normalized.as_str(),
-                query_tokens.as_slice(),
-                config,
-                &location,
-            )?;
-            let Some(result) = maybe_result else {
-                continue;
-            };
-            results.push(result);
+        if let Some(indexed_results) = search_indexed_workspace_memory_results(
+            query_normalized.as_str(),
+            query_tokens.as_slice(),
+            max_results,
+            config,
+            workspace_root,
+        )? {
+            results.extend(indexed_results);
+        } else {
+            let locations = collect_workspace_memory_document_locations(workspace_root)?;
+            for location in locations {
+                let maybe_result = search_memory_location(
+                    query_normalized.as_str(),
+                    query_tokens.as_slice(),
+                    config,
+                    &location,
+                )?;
+                let Some(result) = maybe_result else {
+                    continue;
+                };
+                results.push(result);
+            }
         }
     }
     results.extend(search_canonical_memory_results(
@@ -372,35 +383,59 @@ fn search_memory_location(
         return Ok(None);
     }
 
-    let maybe_match = best_line_match(query, query_tokens, lines.as_slice());
-    let Some(best_match) = maybe_match else {
+    let scope = parsed_document
+        .provenance
+        .scope
+        .map(|scope| scope.as_str().to_owned());
+    let kind = parsed_document
+        .provenance
+        .derived_kind
+        .map(|kind| kind.as_str().to_owned());
+    let metadata = memory_document_metadata_payload(&parsed_document);
+    let metadata_score = workspace_memory_match_score(
+        query,
+        query_tokens,
+        location.label.as_str(),
+        scope.as_deref(),
+        kind.as_deref(),
+        &metadata,
+    );
+    let best_body_match = best_line_match(query, query_tokens, lines.as_slice());
+    let focus_line = best_body_match
+        .map(|matched| matched.line_number)
+        .or_else(|| (metadata_score > 0).then_some(1));
+    let Some(focus_line) = focus_line else {
         return Ok(None);
     };
 
     let total_lines = lines.len();
     let context_radius = MEMORY_SEARCH_CONTEXT_RADIUS_LINES;
-    let (start_line, end_line) =
-        snippet_window(total_lines, best_match.line_number, context_radius);
+    let (start_line, end_line) = snippet_window(total_lines, focus_line, context_radius);
     let start_index = start_line.saturating_sub(1);
     let end_index = end_line;
     let snippet_lines = lines
         .get(start_index..end_index)
         .ok_or_else(|| "memory_search selected snippet window is out of bounds".to_owned())?;
     let snippet = snippet_lines.join("\n");
+    let score = best_body_match
+        .map(|matched| matched.score)
+        .unwrap_or(0)
+        .max(metadata_score)
+        .max(1);
 
     let result = MemorySearchResult {
         source: "workspace_file",
         path: Some(location.label.clone()),
         session_id: None,
-        scope: None,
-        kind: None,
+        scope,
+        kind,
         role: None,
         start_line: Some(start_line),
         end_line: Some(end_line),
         snippet,
-        score: best_match.score,
+        score,
         provenance: parsed_document.provenance.clone(),
-        metadata: Some(memory_document_metadata_payload(&parsed_document)),
+        metadata: Some(metadata),
     };
 
     Ok(Some(result))
@@ -434,7 +469,7 @@ fn best_line_match(query: &str, query_tokens: &[String], lines: &[&str]) -> Opti
 }
 
 fn line_match_score(query: &str, query_tokens: &[String], line: &str) -> u32 {
-    let normalized_line = line.to_ascii_lowercase();
+    let normalized_line = normalize_search_text(line);
     let mut score = 0u32;
 
     if normalized_line.contains(query) {
@@ -457,12 +492,7 @@ fn line_match_score(query: &str, query_tokens: &[String], line: &str) -> u32 {
 }
 
 fn tokenize_memory_query(query: &str) -> Vec<String> {
-    query
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
+    tokenize_normalized_search_text(query)
 }
 
 fn snippet_window(total_lines: usize, focus_line: usize, context_radius: usize) -> (usize, usize) {
@@ -519,11 +549,12 @@ fn search_canonical_memory_results(
         return Ok(Vec::new());
     }
 
-    let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-        sqlite_path: Some(sqlite_path.clone()),
-        ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-    };
-    let hits = crate::memory::search_canonical_memory(query, max_results, None, &memory_config)?;
+    let hits = crate::memory::search_canonical_memory_with_sqlite_path(
+        query,
+        max_results,
+        None,
+        sqlite_path,
+    )?;
 
     Ok(hits
         .into_iter()
@@ -595,6 +626,189 @@ fn memory_search_result_payload(result: &MemorySearchResult) -> Value {
     })
 }
 
+fn workspace_memory_match_score(
+    query: &str,
+    query_tokens: &[String],
+    label: &str,
+    scope: Option<&str>,
+    kind: Option<&str>,
+    metadata: &Value,
+) -> u32 {
+    let label_score = line_match_score(query, query_tokens, label);
+    let scope_score = scope
+        .map(|scope| line_match_score(query, query_tokens, scope))
+        .unwrap_or(0);
+    let kind_score = kind
+        .map(|kind| line_match_score(query, query_tokens, kind))
+        .unwrap_or(0);
+    let metadata_text = metadata.to_string();
+    let metadata_score = line_match_score(query, query_tokens, metadata_text.as_str());
+
+    label_score
+        .max(scope_score)
+        .max(kind_score)
+        .max(metadata_score)
+}
+
+fn search_indexed_workspace_memory_results(
+    query: &str,
+    query_tokens: &[String],
+    max_results: usize,
+    config: &super::runtime_config::ToolRuntimeConfig,
+    workspace_root: &Path,
+) -> Result<Option<Vec<MemorySearchResult>>, String> {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (query, query_tokens, max_results, config, workspace_root);
+        Ok(None)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let Some(sqlite_path) = config.memory_sqlite_path.as_ref() else {
+            return Ok(None);
+        };
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(sqlite_path.clone()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        let hits = crate::memory::search_workspace_memory_documents(
+            query,
+            max_results,
+            workspace_root,
+            config.selected_memory_system_id.as_str(),
+            &memory_config,
+        )?;
+
+        let mut results = Vec::new();
+        for hit in hits {
+            let maybe_result =
+                indexed_workspace_memory_hit_to_result(query, query_tokens, config, &hit)?;
+            let Some(result) = maybe_result else {
+                continue;
+            };
+            results.push(result);
+        }
+
+        Ok(Some(results))
+    }
+}
+
+fn indexed_workspace_memory_hit_to_result(
+    query: &str,
+    query_tokens: &[String],
+    config: &super::runtime_config::ToolRuntimeConfig,
+    hit: &crate::memory::WorkspaceMemoryIndexedSearchHit,
+) -> Result<Option<MemorySearchResult>, String> {
+    let lines = hit.body.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Ok(None);
+    }
+
+    let scope = workspace_memory_scope(hit.document_kind)
+        .as_str()
+        .to_owned();
+    let kind = hit.derived_kind.as_str().to_owned();
+    let metadata = indexed_workspace_memory_metadata_payload(hit);
+    let metadata_score = workspace_memory_match_score(
+        query,
+        query_tokens,
+        hit.label.as_str(),
+        Some(scope.as_str()),
+        Some(kind.as_str()),
+        &metadata,
+    );
+    let best_body_match = best_line_match(query, query_tokens, lines.as_slice());
+    let focus_line = best_body_match
+        .map(|matched| matched.line_number)
+        .or_else(|| (metadata_score > 0).then_some(1));
+    let Some(focus_line) = focus_line else {
+        return Ok(None);
+    };
+    let total_lines = lines.len();
+    let (start_line, end_line) =
+        snippet_window(total_lines, focus_line, MEMORY_SEARCH_CONTEXT_RADIUS_LINES);
+    let snippet_lines = lines
+        .get(start_line.saturating_sub(1)..end_line)
+        .ok_or_else(|| {
+            "memory_search selected indexed workspace snippet window is out of bounds".to_owned()
+        })?;
+    let snippet = snippet_lines.join("\n");
+    let score = best_body_match
+        .map(|matched| matched.score)
+        .unwrap_or(0)
+        .max(metadata_score)
+        .max(1);
+
+    Ok(Some(MemorySearchResult {
+        source: "workspace_file",
+        path: Some(hit.label.clone()),
+        session_id: None,
+        scope: Some(scope),
+        kind: Some(kind),
+        role: None,
+        start_line: Some(start_line),
+        end_line: Some(end_line),
+        snippet,
+        score,
+        provenance: indexed_workspace_memory_hit_provenance(config, hit),
+        metadata: Some(metadata),
+    }))
+}
+
+fn workspace_memory_scope(
+    document_kind: WorkspaceMemoryDocumentKind,
+) -> crate::memory::MemoryScope {
+    match document_kind {
+        WorkspaceMemoryDocumentKind::Curated => crate::memory::MemoryScope::Workspace,
+        WorkspaceMemoryDocumentKind::DailyLog => crate::memory::MemoryScope::Session,
+    }
+}
+
+fn indexed_workspace_memory_hit_provenance(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    hit: &crate::memory::WorkspaceMemoryIndexedSearchHit,
+) -> MemoryContextProvenance {
+    let scope = Some(workspace_memory_scope(hit.document_kind));
+
+    let mut provenance = MemoryContextProvenance::new(
+        config.selected_memory_system_id.as_str(),
+        MemoryProvenanceSourceKind::WorkspaceDocument,
+        Some(hit.label.clone()),
+        Some(hit.path.clone()),
+        scope,
+        MemoryRecallMode::OperatorInspection,
+    )
+    .with_trust_level(hit.trust_level)
+    .with_authority(hit.authority)
+    .with_derived_kind(hit.derived_kind)
+    .with_content_hash(hit.content_hash.clone())
+    .with_record_status(hit.record_status);
+
+    if let Some(freshness_ts) = hit.freshness_ts {
+        provenance = provenance.with_freshness_ts(freshness_ts);
+    }
+    if let Some(ref superseded_by) = hit.superseded_by {
+        provenance = provenance.with_superseded_by(superseded_by.clone());
+    }
+
+    provenance
+}
+
+fn indexed_workspace_memory_metadata_payload(
+    hit: &crate::memory::WorkspaceMemoryIndexedSearchHit,
+) -> Value {
+    json!({
+        "derived_kind": hit.derived_kind.as_str(),
+        "freshness_ts": hit.freshness_ts,
+        "record_status": hit.record_status.as_str(),
+        "trust_level": hit.trust_level.as_str(),
+        "authority": hit.authority.as_str(),
+        "superseded_by": hit.superseded_by,
+        "body_line_offset": hit.body_line_offset,
+    })
+}
+
 fn canonical_memory_hit_provenance(
     config: &super::runtime_config::ToolRuntimeConfig,
     hit: &crate::memory::CanonicalMemorySearchHit,
@@ -658,20 +872,16 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
     #[test]
     fn memory_search_tool_returns_cross_session_canonical_hits_without_workspace_root() {
-        let root = unique_temp_dir("loongclaw-memory-search-canonical");
+        let root = unique_temp_dir("loong-memory-search-canonical");
         let db_path = root.join("memory.sqlite3");
 
         std::fs::create_dir_all(&root).expect("create root dir");
 
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
-        crate::memory::append_turn_direct(
+        crate::memory::append_turn_direct_with_sqlite_path(
             "release-session",
             "assistant",
             "Deployment cutoff is 17:00 Beijing time and requires a release note.",
-            &memory_config,
+            &db_path,
         )
         .expect("append canonical assistant turn");
 
@@ -728,18 +938,14 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
     #[test]
     fn memory_search_tool_preserves_metadata_only_canonical_hits() {
-        let root = unique_temp_dir("loongclaw-memory-search-canonical-metadata");
+        let root = unique_temp_dir("loong-memory-search-canonical-metadata");
         let db_path = root.join("memory.sqlite3");
 
         std::fs::create_dir_all(&root).expect("create root dir");
 
-        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
-        };
         let payload = json!({
             "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
+            "_loong_internal": true,
             "scope": "workspace",
             "kind": "imported_profile",
             "content": "release checklist",
@@ -748,11 +954,11 @@ mod tests {
             },
         })
         .to_string();
-        crate::memory::append_turn_direct(
+        crate::memory::append_turn_direct_with_sqlite_path(
             "metadata-session",
             "assistant",
             &payload,
-            &memory_config,
+            &db_path,
         )
         .expect("append structured canonical turn");
 
@@ -792,8 +998,275 @@ mod tests {
 
     #[cfg(feature = "tool-file")]
     #[test]
+    fn memory_search_tool_matches_workspace_metadata_only_queries() {
+        let root = unique_temp_dir("loong-memory-search-workspace-metadata");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            root.join("MEMORY.md"),
+            concat!(
+                "---\n",
+                "kind: procedure\n",
+                "trust: workspace_curated\n",
+                "status: active\n",
+                "---\n",
+                "发布窗口需要双人复核。\n",
+            ),
+        )
+        .expect("write root memory");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "procedure",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1, "results={results:?}");
+        assert_eq!(results[0]["source"], "workspace_file");
+        assert_eq!(results[0]["path"], "MEMORY.md");
+        assert_eq!(results[0]["scope"], "workspace");
+        assert_eq!(results[0]["kind"], "procedure");
+        assert!(
+            results[0]["snippet"]
+                .as_str()
+                .is_some_and(|value| value.contains("双人复核")),
+            "results={results:?}"
+        );
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
+    #[test]
+    fn memory_search_tool_uses_indexed_workspace_memory_when_sqlite_is_available() {
+        let root = unique_temp_dir("loongclaw-memory-search-indexed-workspace");
+        let db_path = root.join("memory.sqlite3");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "中文分词用于数据库搜索。\n")
+            .expect("write root memory");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            memory_sqlite_path: Some(db_path),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "中文 分词",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1, "results={results:?}");
+        assert_eq!(results[0]["source"], "workspace_file");
+        assert_eq!(results[0]["path"], "MEMORY.md");
+        assert_eq!(
+            results[0]["provenance"]["source_kind"],
+            "workspace_document"
+        );
+        assert_eq!(results[0]["metadata"]["derived_kind"], "overview");
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
+    #[test]
+    fn memory_search_tool_matches_indexed_workspace_metadata_only_queries() {
+        let root = unique_temp_dir("loong-memory-search-indexed-workspace-metadata");
+        let db_path = root.join("memory.sqlite3");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            root.join("MEMORY.md"),
+            concat!(
+                "---\n",
+                "kind: procedure\n",
+                "trust: workspace_curated\n",
+                "status: active\n",
+                "---\n",
+                "发布窗口需要双人复核。\n",
+            ),
+        )
+        .expect("write root memory");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            memory_sqlite_path: Some(db_path),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "workspace_curated",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1, "results={results:?}");
+        assert_eq!(results[0]["source"], "workspace_file");
+        assert_eq!(results[0]["path"], "MEMORY.md");
+        assert_eq!(results[0]["scope"], "workspace");
+        assert_eq!(results[0]["kind"], "procedure");
+        assert_eq!(results[0]["metadata"]["trust_level"], "workspace_curated");
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
+    #[test]
+    fn memory_search_tool_refreshes_indexed_workspace_memory_after_file_changes() {
+        let root = unique_temp_dir("loongclaw-memory-search-index-refresh");
+        let db_path = root.join("memory.sqlite3");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(&memory_path, "旧部署窗口记录。\n").expect("write initial memory");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            memory_sqlite_path: Some(db_path),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let first = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "部署 窗口",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("initial memory search should succeed");
+        assert_eq!(first.payload["returned"], 1);
+
+        let initial_modified = std::fs::metadata(&memory_path)
+            .expect("memory metadata before rewrite")
+            .modified()
+            .expect("memory modified time before rewrite");
+        loop {
+            std::fs::write(&memory_path, "新的回滚检查清单。\n").expect("rewrite memory file");
+            let rewritten_modified = std::fs::metadata(&memory_path)
+                .expect("memory metadata after rewrite")
+                .modified()
+                .expect("memory modified time after rewrite");
+            if rewritten_modified > initial_modified {
+                break;
+            }
+            std::hint::spin_loop();
+        }
+
+        let refreshed = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "回滚 检查",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("refreshed memory search should succeed");
+        assert_eq!(
+            refreshed.payload["returned"], 1,
+            "payload={:?}",
+            refreshed.payload
+        );
+        assert!(
+            refreshed.payload["results"][0]["snippet"]
+                .as_str()
+                .is_some_and(|value| value.contains("回滚检查清单")),
+            "payload={:?}",
+            refreshed.payload
+        );
+
+        let stale = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "部署 窗口",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("stale query memory search should succeed");
+        assert_eq!(stale.payload["returned"], 0, "payload={:?}", stale.payload);
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
+    #[test]
+    fn memory_search_tool_drops_deleted_workspace_documents_from_index() {
+        let root = unique_temp_dir("loongclaw-memory-search-index-delete");
+        let db_path = root.join("memory.sqlite3");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(&memory_path, "发布清单需要双人复核。\n").expect("write memory file");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            memory_sqlite_path: Some(db_path),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let initial = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "发布 清单",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("initial memory search should succeed");
+        assert_eq!(
+            initial.payload["returned"], 1,
+            "payload={:?}",
+            initial.payload
+        );
+
+        std::fs::remove_file(&memory_path).expect("delete memory file");
+
+        let after_delete = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "发布 清单",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("post-delete memory search should succeed");
+        assert_eq!(
+            after_delete.payload["returned"], 0,
+            "payload={:?}",
+            after_delete.payload
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
     fn memory_search_tool_skips_tombstoned_workspace_memory_files() {
-        let root = unique_temp_dir("loongclaw-memory-search-tombstoned");
+        let root = unique_temp_dir("loong-memory-search-tombstoned");
         let memory_dir = root.join("memory");
 
         std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -844,8 +1317,39 @@ mod tests {
 
     #[cfg(feature = "tool-file")]
     #[test]
+    fn memory_search_tool_matches_segmented_chinese_workspace_queries() {
+        let root = unique_temp_dir("loongclaw-memory-search-chinese-workspace");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "中文分词用于数据库搜索。\n")
+            .expect("write root memory");
+
+        let config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "中文 分词",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1, "results={results:?}");
+        assert_eq!(results[0]["source"], "workspace_file");
+        assert_eq!(results[0]["path"], "MEMORY.md");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
     fn memory_get_tool_strips_frontmatter_and_surfaces_workspace_metadata() {
-        let root = unique_temp_dir("loongclaw-memory-get-frontmatter");
+        let root = unique_temp_dir("loong-memory-get-frontmatter");
         let memory_path = root.join("MEMORY.md");
 
         std::fs::create_dir_all(&root).expect("create root dir");

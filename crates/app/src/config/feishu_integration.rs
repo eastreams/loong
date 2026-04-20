@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::shared::{
-    ConfigValidationIssue, DEFAULT_FEISHU_SQLITE_FILE, default_loongclaw_home, expand_path,
+    ConfigValidationIssue, DEFAULT_FEISHU_SQLITE_FILE, default_loong_home, expand_path,
     validate_numeric_range,
 };
 
@@ -208,7 +208,7 @@ impl FeishuIntegrationConfig {
 }
 
 fn default_feishu_sqlite_path() -> String {
-    default_loongclaw_home()
+    default_loong_home()
         .join(DEFAULT_FEISHU_SQLITE_FILE)
         .display()
         .to_string()
@@ -264,15 +264,15 @@ fn normalize_scope_alias(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::ScopedLoongClawHome;
+    use crate::test_support::ScopedLoongHome;
 
     #[test]
     fn feishu_integration_defaults_use_dedicated_runtime_db() {
-        let _home = ScopedLoongClawHome::new("loongclaw-feishu-integration-home");
+        let _home = ScopedLoongHome::new("loong-feishu-integration-home");
         let config = FeishuIntegrationConfig::default();
         assert_eq!(
             config.resolved_sqlite_path(),
-            crate::config::default_loongclaw_home().join("feishu.sqlite3")
+            crate::config::default_loong_home().join("feishu.sqlite3")
         );
         assert_eq!(config.oauth_state_ttl_s, 600);
         assert_eq!(config.request_timeout_s, 20);
@@ -308,7 +308,7 @@ mod tests {
             default_scopes = ["offline_access", "docs:document:readonly", "offline_access"]
         "#;
 
-        let config: crate::config::LoongClawConfig = toml::from_str(raw).expect("parse config");
+        let config: crate::config::LoongConfig = toml::from_str(raw).expect("parse config");
 
         assert_eq!(config.feishu_integration.oauth_state_ttl_s, 900);
         assert_eq!(config.feishu_integration.retry_max_attempts, 5);
@@ -341,7 +341,7 @@ mod tests {
             bitable = true
         "#;
 
-        let config: crate::config::LoongClawConfig = toml::from_str(raw).expect("parse config");
+        let config: crate::config::LoongConfig = toml::from_str(raw).expect("parse config");
 
         assert!(config.feishu_integration.capabilities.docs);
         assert!(config.feishu_integration.capabilities.messages);
@@ -359,7 +359,7 @@ mod tests {
             bitable = false
         "#;
 
-        let config: crate::config::LoongClawConfig = toml::from_str(raw).expect("parse config");
+        let config: crate::config::LoongConfig = toml::from_str(raw).expect("parse config");
 
         assert!(config.feishu_integration.has_explicit_capability_config());
     }
@@ -371,7 +371,7 @@ mod tests {
             request_timeout_s = 20
         "#;
 
-        let config: crate::config::LoongClawConfig = toml::from_str(raw).expect("parse config");
+        let config: crate::config::LoongConfig = toml::from_str(raw).expect("parse config");
 
         assert!(!config.feishu_integration.has_explicit_capability_config());
     }

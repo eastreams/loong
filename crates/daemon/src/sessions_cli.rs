@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use kernel::ToolCoreRequest;
-use loongclaw_app as mvp;
-use loongclaw_spec::CliResult;
+use loong_app as mvp;
+use loong_spec::CliResult;
 use serde_json::{Value, json};
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -138,13 +138,16 @@ pub async fn execute_sessions_command(
             include_archived,
             include_delegate_lifecycle,
         )?,
-        SessionsCommands::Status { session_id } => execute_status_command(
-            &resolved_config_path,
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &session_id,
-        )?,
+        SessionsCommands::Status { session_id } => {
+            execute_status_command(
+                &resolved_config_path,
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &session_id,
+            )
+            .await?
+        }
         SessionsCommands::Events {
             session_id,
             after_id,
@@ -295,15 +298,20 @@ fn execute_list_command(
     }))
 }
 
-fn execute_status_command(
+async fn execute_status_command(
     resolved_config_path: &str,
     current_session_id: &str,
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
     session_id: &str,
 ) -> CliResult<Value> {
-    let detail =
-        load_session_status_payload(memory_config, tool_config, current_session_id, session_id)?;
+    let detail = load_session_status_payload_with_runtime_summaries(
+        memory_config,
+        tool_config,
+        current_session_id,
+        session_id,
+    )
+    .await?;
     let recipes = build_session_recipes(resolved_config_path, current_session_id, session_id);
     let next_steps = build_session_next_steps();
 
@@ -316,6 +324,38 @@ fn execute_status_command(
         "recipes": recipes,
         "next_steps": next_steps,
     }))
+}
+
+async fn load_session_status_payload_with_runtime_summaries(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    session_id: &str,
+) -> CliResult<Value> {
+    let mut detail =
+        load_session_status_payload(memory_config, tool_config, current_session_id, session_id)?;
+    let prompt_frame = crate::session_prompt_frame_cli::load_session_prompt_frame_payload(
+        memory_config,
+        session_id,
+    )
+    .await;
+    let safe_lane =
+        crate::session_runtime_truth_cli::load_session_safe_lane_payload(memory_config, session_id)
+            .await;
+    let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
+        memory_config,
+        session_id,
+    )
+    .await;
+
+    let detail_object = detail
+        .as_object_mut()
+        .ok_or_else(|| "session status payload must be an object".to_owned())?;
+    detail_object.insert("prompt_frame".to_owned(), prompt_frame);
+    detail_object.insert("safe_lane".to_owned(), safe_lane);
+    detail_object.insert("turn_checkpoint".to_owned(), turn_checkpoint);
+
+    Ok(detail)
 }
 
 fn execute_events_command(
@@ -608,7 +648,7 @@ pub fn render_sessions_cli_text(execution: &SessionsCommandExecution) -> CliResu
     Ok(rendered)
 }
 
-fn sanitize_terminal_text(value: &str) -> String {
+pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     let mut sanitized = String::new();
     for character in value.chars() {
         if character.is_control() {
@@ -640,21 +680,36 @@ fn render_sessions_list_text(payload: &Value) -> CliResult<String> {
         .unwrap_or("unknown");
     let sanitized_scope = sanitize_terminal_text(scope);
 
-    let mut lines = Vec::new();
-    lines.push(format!(
+    let mut session_lines = Vec::new();
+    session_lines.push(format!(
         "visible sessions from scope `{sanitized_scope}`: {returned_count}/{matched_count}"
     ));
     if sessions.is_empty() {
-        lines.push("No persisted sessions are currently visible.".to_owned());
-        return Ok(lines.join("\n"));
+        session_lines.push("No persisted sessions are currently visible.".to_owned());
+        return Ok(render_sessions_surface(
+            "visible sessions",
+            "session shell",
+            Vec::new(),
+            vec![("sessions", session_lines)],
+            vec!["Use `sessions status <id>` to inspect one session in detail.".to_owned()],
+        ));
     }
 
     for session in sessions {
         let line = render_session_brief_line(session)?;
-        lines.push(format!("- {line}"));
+        session_lines.push(format!("- {line}"));
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_sessions_surface(
+        "visible sessions",
+        "session shell",
+        Vec::new(),
+        vec![("sessions", session_lines)],
+        vec![
+            "Use `sessions status <id>` for a single session, or `sessions history <id>` for transcript turns."
+                .to_owned(),
+        ],
+    ))
 }
 
 fn render_sessions_status_text(payload: &Value) -> CliResult<String> {
@@ -670,25 +725,43 @@ fn render_sessions_status_text(payload: &Value) -> CliResult<String> {
         .and_then(Value::as_array)
         .ok_or_else(|| "sessions status payload missing next_steps".to_owned())?;
 
-    let mut lines = render_session_inspection_lines(detail)?;
+    let detail_lines = render_session_inspection_lines(detail)?;
+    let mut sections = vec![("session detail", detail_lines)];
+    let mut footer_lines = vec![
+        "Use `sessions events`, `sessions wait`, and `sessions history` to keep drilling into the same session."
+            .to_owned(),
+    ];
+    let mut recipes_lines = Vec::new();
     if !recipes.is_empty() {
-        lines.push("recipes:".to_owned());
         for recipe in recipes {
             let text = recipe.as_str().unwrap_or("");
             let sanitized_text = sanitize_terminal_text(text);
-            lines.push(format!("- {sanitized_text}"));
+            recipes_lines.push(format!("- {sanitized_text}"));
         }
     }
+    if !recipes_lines.is_empty() {
+        sections.push(("recipes", recipes_lines));
+    }
+    let mut next_lines = Vec::new();
     if !next_steps.is_empty() {
-        lines.push("next steps:".to_owned());
         for step in next_steps {
             let text = step.as_str().unwrap_or("");
             let sanitized_text = sanitize_terminal_text(text);
-            lines.push(format!("- {sanitized_text}"));
+            next_lines.push(format!("- {sanitized_text}"));
         }
     }
+    if !next_lines.is_empty() {
+        sections.insert(0, ("next steps", next_lines));
+        footer_lines = vec!["Use the first next step as the operator handoff, then come back here if the session needs deeper inspection.".to_owned()];
+    }
 
-    Ok(lines.join("\n"))
+    Ok(render_sessions_surface(
+        "session detail",
+        "session shell",
+        Vec::new(),
+        sections,
+        footer_lines,
+    ))
 }
 
 fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
@@ -712,7 +785,15 @@ fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
     ));
     if events.is_empty() {
         lines.push("No newer events.".to_owned());
-        return Ok(lines.join("\n"));
+        return Ok(render_sessions_surface(
+            "session events",
+            "session shell",
+            Vec::new(),
+            vec![("events", lines)],
+            vec![
+                "Use `sessions wait` to keep following the same session incrementally.".to_owned(),
+            ],
+        ));
     }
 
     for event in events {
@@ -726,7 +807,13 @@ fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
         lines.push(format!("- #{event_id} {sanitized_event_kind} ts={ts}"));
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_sessions_surface(
+        "session events",
+        "session shell",
+        Vec::new(),
+        vec![("events", lines)],
+        vec!["Use `sessions wait` for incremental follow-up or `sessions status` for the latest session state.".to_owned()],
+    ))
 }
 
 fn render_sessions_wait_text(payload: &Value) -> CliResult<String> {
@@ -764,7 +851,16 @@ fn render_sessions_wait_text(payload: &Value) -> CliResult<String> {
         }
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_sessions_surface(
+        "session wait",
+        "session shell",
+        Vec::new(),
+        vec![("result", lines)],
+        vec![
+            "Re-run `sessions wait` with the returned cursor when you need more lifecycle changes."
+                .to_owned(),
+        ],
+    ))
 }
 
 fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
@@ -785,7 +881,13 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
     ));
     if turns.is_empty() {
         lines.push("No transcript turns are currently stored.".to_owned());
-        return Ok(lines.join("\n"));
+        return Ok(render_sessions_surface(
+            "session history",
+            "session shell",
+            Vec::new(),
+            vec![("history", lines)],
+            vec!["Use `sessions status` to compare transcript turns with workflow state and lifecycle metadata.".to_owned()],
+        ));
     }
 
     for turn in turns {
@@ -799,7 +901,13 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
         lines.push(format!("- {sanitized_role}: {sanitized_content}"));
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_sessions_surface(
+        "session history",
+        "session shell",
+        Vec::new(),
+        vec![("history", lines)],
+        vec!["Use `sessions status` to compare transcript turns with workflow state and lifecycle metadata.".to_owned()],
+    ))
 }
 
 fn render_sessions_mutation_text(payload: &Value) -> CliResult<String> {
@@ -839,7 +947,50 @@ fn render_sessions_mutation_text(payload: &Value) -> CliResult<String> {
         lines.extend(render_session_inspection_lines(&inspection)?);
     }
 
-    Ok(lines.join("\n"))
+    Ok(render_sessions_surface(
+        "session action",
+        "session shell",
+        Vec::new(),
+        vec![("action result", lines)],
+        vec![
+            "Use `sessions status <id>` to confirm the current session state after the mutation."
+                .to_owned(),
+        ],
+    ))
+}
+
+fn render_sessions_surface(
+    title: &str,
+    subtitle: &str,
+    intro_lines: Vec<String>,
+    sections: Vec<(&str, Vec<String>)>,
+    footer_lines: Vec<String>,
+) -> String {
+    let sections = sections
+        .into_iter()
+        .map(
+            |(section_title, lines)| mvp::tui_surface::TuiSectionSpec::Narrative {
+                title: Some(section_title.to_owned()),
+                lines,
+            },
+        )
+        .collect();
+    let screen = mvp::tui_surface::TuiScreenSpec {
+        header_style: mvp::tui_surface::TuiHeaderStyle::Compact,
+        subtitle: Some(subtitle.to_owned()),
+        title: Some(title.to_owned()),
+        progress_line: None,
+        intro_lines,
+        sections,
+        choices: Vec::new(),
+        footer_lines,
+    };
+    mvp::tui_surface::render_tui_screen_spec_ratatui(
+        &screen,
+        mvp::presentation::detect_render_width(),
+        false,
+    )
+    .join("\n")
 }
 
 fn render_session_brief_line(session: &Value) -> CliResult<String> {
@@ -858,6 +1009,11 @@ fn render_session_brief_line(session: &Value) -> CliResult<String> {
         .and_then(|value| value.get("task"))
         .and_then(Value::as_str)
         .unwrap_or("-");
+    let workflow_phase = session
+        .get("workflow")
+        .and_then(|value| value.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
     let lineage_depth = session
         .get("workflow")
         .and_then(|value| value.get("lineage_depth"))
@@ -865,7 +1021,7 @@ fn render_session_brief_line(session: &Value) -> CliResult<String> {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_owned());
     let line = format!(
-        "{} state={state} kind={kind} label={} task={} depth={lineage_depth}",
+        "{} state={state} kind={kind} workflow_phase={workflow_phase} label={} task={} depth={lineage_depth}",
         sanitize_terminal_text(session_id.as_str()),
         sanitize_terminal_text(label),
         sanitize_terminal_text(task),
@@ -906,6 +1062,45 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         .unwrap_or("-");
     let workflow = detail.get("workflow").cloned().unwrap_or(Value::Null);
     let task = workflow.get("task").and_then(Value::as_str).unwrap_or("-");
+    let workflow_id = workflow
+        .get("workflow_id")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_phase = workflow.get("phase").and_then(Value::as_str).unwrap_or("-");
+    let workflow_operation_kind = workflow
+        .get("operation_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_operation_scope = workflow
+        .get("operation_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_task_session_id = workflow
+        .get("task_session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_binding_mode = workflow
+        .get("binding")
+        .and_then(|value| value.get("mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_execution_surface = workflow
+        .get("binding")
+        .and_then(|value| value.get("execution_surface"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_worktree_id = workflow
+        .get("binding")
+        .and_then(|value| value.get("worktree"))
+        .and_then(|value| value.get("worktree_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let workflow_workspace_root = workflow
+        .get("binding")
+        .and_then(|value| value.get("worktree"))
+        .and_then(|value| value.get("workspace_root"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
     let lineage_root_session_id = workflow
         .get("lineage_root_session_id")
         .and_then(Value::as_str)
@@ -917,6 +1112,16 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         .unwrap_or_else(|| "-".to_owned());
     let continuity =
         render_runtime_self_continuity_summary(workflow.get("runtime_self_continuity"));
+    let prompt_frame_summary =
+        crate::session_prompt_frame_cli::render_prompt_frame_summary(detail.get("prompt_frame"));
+    let prompt_frame_summary = sanitize_terminal_text(prompt_frame_summary.as_str());
+    let safe_lane_summary =
+        crate::session_runtime_truth_cli::render_safe_lane_summary(detail.get("safe_lane"));
+    let safe_lane_summary = sanitize_terminal_text(safe_lane_summary.as_str());
+    let turn_checkpoint_summary = crate::session_runtime_truth_cli::render_turn_checkpoint_summary(
+        detail.get("turn_checkpoint"),
+    );
+    let turn_checkpoint_summary = sanitize_terminal_text(turn_checkpoint_summary.as_str());
     let delegate_mode = detail
         .get("delegate_lifecycle")
         .and_then(|value| value.get("mode"))
@@ -956,6 +1161,12 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     let sanitized_parent_session_id = sanitize_terminal_text(parent_session_id);
     let sanitized_label = sanitize_terminal_text(label);
     let sanitized_task = sanitize_terminal_text(task);
+    let sanitized_workflow_id = sanitize_terminal_text(workflow_id);
+    let sanitized_workflow_task_session_id = sanitize_terminal_text(workflow_task_session_id);
+    let sanitized_workflow_binding_mode = sanitize_terminal_text(workflow_binding_mode);
+    let sanitized_workflow_execution_surface = sanitize_terminal_text(workflow_execution_surface);
+    let sanitized_workflow_worktree_id = sanitize_terminal_text(workflow_worktree_id);
+    let sanitized_workflow_workspace_root = sanitize_terminal_text(workflow_workspace_root);
     let sanitized_lineage_root_session_id = sanitize_terminal_text(lineage_root_session_id);
     let sanitized_last_error = sanitize_terminal_text(last_error);
 
@@ -963,6 +1174,29 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("session_id: {sanitized_session_id}"));
     lines.push(format!("kind: {kind}"));
     lines.push(format!("state: {state}"));
+    lines.push(format!("workflow_id: {sanitized_workflow_id}"));
+    lines.push(format!("workflow_phase: {workflow_phase}"));
+    lines.push(format!(
+        "workflow_operation_kind: {workflow_operation_kind}"
+    ));
+    lines.push(format!(
+        "workflow_operation_scope: {workflow_operation_scope}"
+    ));
+    lines.push(format!(
+        "workflow_task_session_id: {sanitized_workflow_task_session_id}"
+    ));
+    lines.push(format!(
+        "workflow_binding_mode: {sanitized_workflow_binding_mode}"
+    ));
+    lines.push(format!(
+        "workflow_execution_surface: {sanitized_workflow_execution_surface}"
+    ));
+    lines.push(format!(
+        "workflow_worktree_id: {sanitized_workflow_worktree_id}"
+    ));
+    lines.push(format!(
+        "workflow_workspace_root: {sanitized_workflow_workspace_root}"
+    ));
     lines.push(format!("parent_session_id: {sanitized_parent_session_id}"));
     lines.push(format!("label: {sanitized_label}"));
     lines.push(format!("task: {sanitized_task}"));
@@ -971,6 +1205,9 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     ));
     lines.push(format!("lineage_depth: {lineage_depth}"));
     lines.push(format!("runtime_self_continuity: {continuity}"));
+    lines.push(format!("prompt_frame: {prompt_frame_summary}"));
+    lines.push(format!("safe_lane: {safe_lane_summary}"));
+    lines.push(format!("turn_checkpoint: {turn_checkpoint_summary}"));
     lines.push(format!("turn_count: {turn_count}"));
     lines.push(format!("last_turn_at: {last_turn_at}"));
     lines.push(format!("last_error: {sanitized_last_error}"));

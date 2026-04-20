@@ -14,10 +14,13 @@ use super::dispatch::{
 use super::runtime::serve::ChannelServeStopHandle;
 use super::{ChannelOutboundTargetKind, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR};
 use super::{
-    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_base_url,
+        validate_outbound_http_target,
+    },
     runtime::state::ChannelOperationRuntimeTracker,
 };
-use crate::config::{ChannelDefaultAccountSelectionSource, LoongClawConfig};
+use crate::config::{ChannelDefaultAccountSelectionSource, LoongConfig};
 use crate::{CliResult, KernelContext, config::ResolvedWhatsappChannelConfig};
 use webhook::{WhatsappWebhookState, whatsapp_verify_handler, whatsapp_webhook_handler};
 
@@ -46,10 +49,15 @@ pub(super) async fn run_whatsapp_send(
         return Err("whatsapp outbound target id is empty".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
+    let raw_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url = validate_outbound_http_base_url(
+        "whatsapp api_base_url",
+        raw_api_base_url.as_str(),
+        policy,
+    )?;
     let request_url = format!(
         "{}/{}/messages",
-        api_base_url.trim_end_matches('/'),
+        api_base_url.as_str().trim_end_matches('/'),
         phone_number_id.trim()
     );
     let request_url =
@@ -95,7 +103,7 @@ pub(super) async fn run_whatsapp_send(
 
 #[allow(clippy::print_stdout)] // CLI startup banner
 pub(super) async fn run_whatsapp_channel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved: &ResolvedWhatsappChannelConfig,
     resolved_path: &Path,
     selected_by_default: bool,
@@ -242,7 +250,7 @@ pub(super) async fn run_whatsapp_channel_with_context(
 
 pub(super) async fn run_whatsapp_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,

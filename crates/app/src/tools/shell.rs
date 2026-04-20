@@ -2,9 +2,9 @@
 use super::process_exec;
 #[cfg(feature = "tool-shell")]
 use super::runtime_events::current_tool_runtime_event_sink;
-use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
-use serde_json::{Value, json};
+use serde_json::Value;
 #[cfg(feature = "tool-shell")]
 use std::path::PathBuf;
 pub(super) fn execute_shell_tool_with_config(
@@ -75,34 +75,29 @@ pub(super) fn execute_shell_tool_with_config(
         }
 
         let runtime_event_sink = current_tool_runtime_event_sink();
+        let resolved_invocation = crate::process_launch::resolve_command_invocation(
+            normalized_command.as_str(),
+            args.iter().map(String::as_str),
+        );
         // process_exec owns runtime command metrics emission. Keep shell.exec
         // focused on payload construction so the live surface observes one
         // metrics event per command.
         let output = run_shell_async(run_shell_command_with_timeout(
-            normalized_command.as_str(),
-            &args,
+            resolved_invocation.program.as_os_str(),
+            resolved_invocation.args.as_slice(),
             cwd.as_path(),
             timeout_ms,
             runtime_event_sink.clone(),
+            config.file_root.as_deref(),
         ))??;
 
-        Ok(ToolCoreOutcome {
-            status: if output.status.success() {
-                "ok".to_owned()
-            } else {
-                "failed".to_owned()
-            },
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": request.tool_name,
-                "command": command,
-                "args": args,
-                "cwd": cwd.display().to_string(),
-                "exit_code": output.status.code(),
-                "stdout": String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-                "stderr": String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }),
-        })
+        Ok(process_exec::build_process_tool_outcome(
+            request.tool_name.as_str(),
+            command,
+            Some(args.as_slice()),
+            cwd.as_path(),
+            output,
+        ))
     }
 }
 
@@ -137,14 +132,15 @@ where
 
 #[cfg(feature = "tool-shell")]
 async fn run_shell_command_with_timeout(
-    command: &str,
-    args: &[String],
+    command: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
     cwd: &std::path::Path,
     timeout_ms: u64,
     runtime_event_sink: Option<
         std::sync::Arc<dyn crate::tools::runtime_events::ToolRuntimeEventSink>,
     >,
-) -> Result<std::process::Output, String> {
+    accessible_output_root: Option<&std::path::Path>,
+) -> Result<process_exec::ProcessExecOutcome, String> {
     process_exec::run_process_with_timeout_with_sink(
         command,
         args,
@@ -152,6 +148,7 @@ async fn run_shell_command_with_timeout(
         timeout_ms,
         "shell command",
         runtime_event_sink,
+        accessible_output_root,
     )
     .await
 }
@@ -159,7 +156,7 @@ async fn run_shell_command_with_timeout(
 #[cfg(all(test, feature = "tool-shell", unix))]
 mod tests {
     use super::*;
-    use crate::test_support::unique_temp_dir;
+    use crate::test_support::{ScopedEnv, acquire_subprocess_test_guard, unique_temp_dir};
     use crate::tools::runtime_config::ToolRuntimeConfig;
     use crate::tools::runtime_events::{
         ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
@@ -197,9 +194,30 @@ mod tests {
         }
     }
 
+    fn shell_test_env() -> ScopedEnv {
+        let mut env = ScopedEnv::new();
+
+        #[cfg(unix)]
+        env.set("PATH", "/bin:/usr/bin:/usr/local/bin");
+
+        #[cfg(windows)]
+        env.set("PATH", r"C:\Windows\System32;C:\Windows");
+
+        env
+    }
+
+    fn execute_shell_tool_for_subprocess_test(
+        request: ToolCoreRequest,
+        config: &ToolRuntimeConfig,
+    ) -> Result<ToolCoreOutcome, String> {
+        let _guard = acquire_subprocess_test_guard();
+        let _env = shell_test_env();
+        execute_shell_tool_with_config(request, config)
+    }
+
     #[test]
     fn shell_exec_defaults_cwd_to_configured_file_root() {
-        let root = unique_temp_dir("loongclaw-shell-default-cwd");
+        let root = unique_temp_dir("loong-shell-default-cwd");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = shell_test_config(&root);
         let request = ToolCoreRequest {
@@ -209,8 +227,8 @@ mod tests {
             }),
         };
 
-        let outcome =
-            execute_shell_tool_with_config(request, &config).expect("shell.exec should succeed");
+        let outcome = execute_shell_tool_for_subprocess_test(request, &config)
+            .expect("shell.exec should succeed");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["cwd"], root.display().to_string());
@@ -225,8 +243,8 @@ mod tests {
 
     #[test]
     fn shell_exec_rejects_cwd_that_escapes_configured_file_root() {
-        let root = unique_temp_dir("loongclaw-shell-cwd-root");
-        let outside = unique_temp_dir("loongclaw-shell-cwd-outside");
+        let root = unique_temp_dir("loong-shell-cwd-root");
+        let outside = unique_temp_dir("loong-shell-cwd-outside");
         std::fs::create_dir_all(&root).expect("create shell root");
         std::fs::create_dir_all(&outside).expect("create outside dir");
         let config = shell_test_config(&root);
@@ -249,7 +267,7 @@ mod tests {
 
     #[test]
     fn shell_exec_rejects_non_directory_cwd() {
-        let root = unique_temp_dir("loongclaw-shell-cwd-file");
+        let root = unique_temp_dir("loong-shell-cwd-file");
         std::fs::create_dir_all(&root).expect("create shell root");
         let file_path = root.join("note.txt");
         std::fs::write(&file_path, "hello").expect("write shell cwd file");
@@ -270,7 +288,7 @@ mod tests {
 
     #[test]
     fn shell_exec_rejects_non_string_cwd() {
-        let root = unique_temp_dir("loongclaw-shell-cwd-non-string");
+        let root = unique_temp_dir("loong-shell-cwd-non-string");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = shell_test_config(&root);
         let request = ToolCoreRequest {
@@ -289,7 +307,7 @@ mod tests {
 
     #[test]
     fn shell_exec_emits_runtime_output_delta_and_metrics_events() {
-        let root = unique_temp_dir("loongclaw-shell-runtime-events");
+        let root = unique_temp_dir("loong-shell-runtime-events");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = ToolRuntimeConfig {
             file_root: Some(root),
@@ -311,7 +329,7 @@ mod tests {
             .expect("current-thread runtime");
 
         let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
-            execute_shell_tool_with_config(request, &config)
+            execute_shell_tool_for_subprocess_test(request, &config)
         }));
         let outcome = outcome.expect("shell.exec should succeed under runtime sink");
         let events = lock_runtime_events(&sink);
@@ -344,7 +362,7 @@ mod tests {
 
     #[test]
     fn shell_exec_runtime_output_delta_counts_terminal_newline_without_extra_line() {
-        let root = unique_temp_dir("loongclaw-shell-runtime-line-count");
+        let root = unique_temp_dir("loong-shell-runtime-line-count");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = ToolRuntimeConfig {
             file_root: Some(root),
@@ -366,7 +384,7 @@ mod tests {
             .expect("current-thread runtime");
 
         let outcome = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
-            execute_shell_tool_with_config(request, &config)
+            execute_shell_tool_for_subprocess_test(request, &config)
         }));
         let outcome = outcome.expect("shell.exec should succeed");
         let events = lock_runtime_events(&sink);
@@ -388,7 +406,7 @@ mod tests {
 
     #[test]
     fn shell_exec_emits_runtime_metrics_for_timeout_failures() {
-        let root = unique_temp_dir("loongclaw-shell-runtime-timeout-metrics");
+        let root = unique_temp_dir("loong-shell-runtime-timeout-metrics");
         std::fs::create_dir_all(&root).expect("create shell root");
         let config = ToolRuntimeConfig {
             file_root: Some(root),
@@ -411,7 +429,7 @@ mod tests {
             .expect("current-thread runtime");
 
         let error = runtime.block_on(with_tool_runtime_event_sink(runtime_sink, async {
-            execute_shell_tool_with_config(request, &config)
+            execute_shell_tool_for_subprocess_test(request, &config)
         }));
         let error = error.expect_err("shell.exec should time out");
         let events = lock_runtime_events(&sink);

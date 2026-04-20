@@ -1,6 +1,6 @@
 ---
 title: Gateway And Supervision
-description: Choose the right ownership model for longer-lived runtime-backed service channels.
+description: Choose the right ownership model for longer-lived gateway-supervised service channels.
 ---
 
 # Gateway And Supervision
@@ -22,20 +22,20 @@ trust config shape, start with
 | Need | Best command | Why |
 | --- | --- | --- |
 | keep one service channel in the foreground while you verify it | `loong <surface>-serve` | simplest single-surface loop; no cross-channel supervisor yet |
-| keep several runtime-backed channels attached to one foreground shell | `loong multi-channel-serve --session <name>` | compatibility wrapper for operators who want one visible CLI-first session |
+| keep several gateway-supervised runtime-backed channels attached to one foreground shell | `loong multi-channel-serve --session <name>` | compatibility wrapper for operators who want one visible CLI-first session |
 | claim the persisted owner slot and manage it from another process | `loong gateway run` | explicit owner contract with `status` and `stop` |
 | claim gateway ownership and also attach a named CLI host | `loong gateway run --session <name>` | same owner contract, plus an attached concurrent CLI session |
 
 ## Current Public Ownership Model
 
 - `gateway run`, `gateway status`, and `gateway stop` are the current explicit
-  owner contract for longer-lived runtime-backed delivery.
+  owner contract for longer-lived gateway-supervised delivery.
 - `multi-channel-serve` uses the same ownership model while preserving the
   attached foreground workflow many operators want during rollout.
 - `multi-channel-serve` is still the compatibility wrapper, not the long-term
   product noun.
-- This ownership model is for runtime-backed service channels. It is not the
-  umbrella story for every outbound integration in the catalog.
+- This ownership model is for gateway-supervised service channels. It is not
+  the umbrella story for every outbound integration in the catalog.
 
 ## What Gateway Supervision Includes Today
 
@@ -49,17 +49,17 @@ Included in runtime supervision today:
 
 Not part of runtime supervision today:
 
-- Webhook and Email
-- Slack, Discord, Teams, Google Chat, Mattermost, Nextcloud Talk, and Synology Chat
-- LINE, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon, Twitch, and similar outbound-only surfaces
+- Standalone native-serve surfaces: LINE and Webhook
+- Outbound-only surfaces: Email, Slack, Discord, Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon, Twitch, and similar direct-send integrations
 
-If a surface is outbound-only, it should stay documented as outbound-only
-instead of being described as if it joins the same reply-loop supervisor.
+If a surface is standalone native-serve or outbound-only, it should stay
+documented that way instead of being described as if it joins the same
+reply-loop supervisor.
 
 ## Channel-Account Selectors
 
 Use repeatable `--channel-account <CHANNEL=ACCOUNT>` selectors when you want to
-pin a specific account for a runtime-backed channel family.
+pin a specific account for a gateway-supervised channel family.
 
 Rules that matter:
 
@@ -114,7 +114,7 @@ loong gateway stop
 ## Rollout Order
 
 1. Get `onboard`, `ask` or `chat`, and `doctor` healthy first.
-2. Bring up one runtime-backed surface with its own `loong <surface>-serve`
+2. Bring up one gateway-supervised surface with its own `loong <surface>-serve`
    loop before you introduce supervision.
 3. Add `default_account` plus `accounts.<id>` before you rely on multi-account
    supervision.
@@ -130,19 +130,22 @@ When startup or supervision is unclear, use the shortest diagnostic loop first:
 loong doctor
 loong channels
 loong gateway status --json
+loong status --json
 ```
 
-That combination answers three different questions:
+That combination answers four different questions:
 
 - `doctor` checks provider and channel readiness
 - `channels` shows how Loong currently classifies each surface
 - `gateway status --json` is the quickest way to inspect current ownership from
   another CLI process
+- `loong status --json` provides the broader operator summary across gateway,
+  ACP, and work-unit surfaces
 
 If the runtime still does not start cleanly:
 
-- confirm that the selected surface is actually runtime-backed, not
-  outbound-only
+- confirm that the selected surface is actually gateway-supervised, not a
+  standalone native-serve or outbound-only lane
 - confirm that the selected account id exists under `accounts.<id>`
 - rerun with explicit `--channel-account` selectors when a channel family has
   more than one configured account
@@ -156,8 +159,8 @@ If the runtime still does not start cleanly:
   provider, channel, and gateway choices combined into one setup path.
 - Continue to [Configuration Patterns](/use-loong/configuration-patterns)
   for the shared public account, selector, and trust-toggle config shapes.
-- Go back to [Channels](/use-loong/channels) for the surface model and
-  runtime-backed versus outbound-only boundary.
+- Go back to [Channels](/use-loong/channels) for the surface model and the
+  gateway-supervised versus standalone native-serve versus outbound-only boundary.
 - Continue to [Channel Guides](/use-loong/channel-guides/index) for the
   exact built-in contract of one shipped channel surface.
 - Continue to [Channel Setup](/use-loong/channel-setup) for the practical

@@ -123,11 +123,14 @@ How to choose:
 ```bash
 loong gateway status
 loong gateway status --json
+loong status --json
 loong gateway stop
 ```
 
-Use `status --json` whenever another process or operator needs the shortest
-machine-readable view of the current owner state.
+Use `gateway status --json` whenever another process or operator needs the shortest
+machine-readable view of the current owner state. Use `loong status --json` when
+you want the broader operator summary that rolls gateway ownership together with
+ACP and work-unit status.
 
 ## Common Failure Modes
 

@@ -20,12 +20,13 @@ use crate::channel::{
     ChannelDelivery, ChannelInboundMessage, ChannelOutboundTarget, ChannelOutboundTargetKind,
     ChannelPlatform, ChannelSession, ChannelTurnFeedbackPolicy,
     http::{
-        build_outbound_http_client, outbound_http_policy_from_config, validate_outbound_http_target,
+        build_outbound_http_client, outbound_http_policy_from_config,
+        validate_outbound_http_base_url, validate_outbound_http_target,
     },
     process_inbound_with_provider,
     runtime::state::ChannelOperationRuntimeTracker,
 };
-use crate::config::{LoongClawConfig, ResolvedWhatsappChannelConfig};
+use crate::config::{LoongConfig, ResolvedWhatsappChannelConfig};
 
 // ---------------------------------------------------------------------------
 // RecentIdCache — copied from feishu/webhook.rs (private struct)
@@ -114,7 +115,7 @@ impl RecentIdCache {
 
 #[derive(Clone)]
 pub(super) struct WhatsappWebhookState {
-    config: LoongClawConfig,
+    config: LoongConfig,
     resolved_path: Option<PathBuf>,
     configured_account_id: String,
     account_id: String,
@@ -131,7 +132,7 @@ pub(super) struct WhatsappWebhookState {
 
 impl WhatsappWebhookState {
     pub(super) fn new(
-        config: LoongClawConfig,
+        config: LoongConfig,
         resolved_path: PathBuf,
         resolved: &ResolvedWhatsappChannelConfig,
         kernel_ctx: KernelContext,
@@ -493,9 +494,14 @@ async fn send_whatsapp_text_reply(
     text: &str,
 ) -> CliResult<()> {
     let policy = outbound_http_policy_from_config(&state.config);
+    let api_base_url = validate_outbound_http_base_url(
+        "whatsapp api_base_url",
+        state.api_base_url.as_str(),
+        policy,
+    )?;
     let raw_url = format!(
         "{}/{}/messages",
-        state.api_base_url.trim_end_matches('/'),
+        api_base_url.as_str().trim_end_matches('/'),
         state.phone_number_id.trim()
     );
     let url = validate_outbound_http_target("whatsapp api_base_url", &raw_url, policy)?;
@@ -556,7 +562,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        std::env::temp_dir().join(format!("loongclaw-whatsapp-webhook-{label}-{timestamp}"))
+        std::env::temp_dir().join(format!("loong-whatsapp-webhook-{label}-{timestamp}"))
     }
 
     async fn build_test_state(app_secret: Option<&str>) -> WhatsappWebhookState {
@@ -576,7 +582,7 @@ mod tests {
                 .expect("bootstrap kernel context");
 
         WhatsappWebhookState {
-            config: LoongClawConfig::default(),
+            config: LoongConfig::default(),
             resolved_path: None,
             configured_account_id: "default".to_owned(),
             account_id: "whatsapp-test".to_owned(),

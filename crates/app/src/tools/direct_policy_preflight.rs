@@ -1,4 +1,4 @@
-use loongclaw_contracts::ToolCoreRequest;
+use loong_contracts::ToolCoreRequest;
 
 use super::file_policy_ext;
 use super::runtime_config;
@@ -36,7 +36,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use loongclaw_contracts::ToolCoreRequest;
+    use loong_contracts::ToolCoreRequest;
     use serde_json::json;
 
     use super::run;
@@ -48,7 +48,7 @@ mod tests {
 
         let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
         let temp_root = std::env::temp_dir();
-        let dirname = format!("loongclaw-{prefix}-{sequence}");
+        let dirname = format!("loong-{prefix}-{sequence}");
         let path = temp_root.join(dirname);
         std::fs::create_dir_all(&path).expect("create temp dir");
         path

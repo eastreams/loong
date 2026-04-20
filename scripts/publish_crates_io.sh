@@ -8,6 +8,7 @@ PACKAGES=(
   loong-contracts
   loong-protocol
   loong-kernel
+  loong-bridge-runtime
   loong-spec
   loong-bench
   loong-app
@@ -28,7 +29,7 @@ Real publish mode:
   scripts/publish_crates_io.sh --publish
 
 Resume from a package in the publish chain:
-  scripts/publish_crates_io.sh --from loong-spec
+  scripts/publish_crates_io.sh --from loong-bridge-runtime
 EOF
 }
 

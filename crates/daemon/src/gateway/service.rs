@@ -45,6 +45,15 @@ enum GatewayRuntimeEntryPoint {
     MultiChannelServeCompatibility,
 }
 
+impl GatewayRuntimeEntryPoint {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::GatewayRun => "gateway_run",
+            Self::MultiChannelServeCompatibility => "multi_channel_compat",
+        }
+    }
+}
+
 pub async fn run_gateway_cli(command: GatewayCommand) -> CliResult<()> {
     match command {
         GatewayCommand::Run {
@@ -106,6 +115,22 @@ async fn run_gateway_runtime_with_hooks_for_test(
     let spec =
         build_gateway_supervisor_spec(&loaded_config, session, &channel_accounts, entry_point)?;
     let owner_mode = gateway_owner_mode(entry_point, session);
+    let configured_surface_count = spec.surfaces.len();
+    let resolved_config_path = loaded_config.resolved_path.display().to_string();
+    let runtime_dir_display = runtime_dir.display().to_string();
+    let attached_cli_session = session.unwrap_or("-");
+
+    tracing::info!(
+        target: "loong.gateway",
+        entry_point = entry_point.as_str(),
+        owner_mode = owner_mode.as_str(),
+        config_path = %resolved_config_path,
+        runtime_dir = %runtime_dir_display,
+        attached_cli_session = %attached_cli_session,
+        configured_surface_count,
+        "starting gateway runtime"
+    );
+
     let tracker = Arc::new(GatewayOwnerTracker::acquire(
         runtime_dir,
         owner_mode,
@@ -135,6 +160,22 @@ async fn run_gateway_runtime_with_hooks_for_test(
         tracker.finalize_with_error(final_error.as_str())?;
         return Err(final_error);
     }
+
+    let control_binding = control_surface.binding();
+    let bind_address = control_binding.bind_address.as_str();
+    let port = control_binding.port;
+    let token_path = control_binding.token_path.display().to_string();
+
+    tracing::info!(
+        target: "loong.gateway",
+        entry_point = entry_point.as_str(),
+        owner_mode = owner_mode.as_str(),
+        configured_surface_count,
+        bind_address = %bind_address,
+        port,
+        token_path = %token_path,
+        "gateway control surface is ready"
+    );
 
     let mut runtime_hooks = hooks.clone();
     let original_wait_for_shutdown = hooks.wait_for_shutdown.clone();
@@ -329,7 +370,7 @@ pub(crate) fn default_gateway_owner_status(runtime_dir: &Path) -> GatewayOwnerSt
 }
 
 fn build_gateway_acp_session_manager(
-    config: &crate::mvp::config::LoongClawConfig,
+    config: &crate::mvp::config::LoongConfig,
 ) -> CliResult<Arc<AcpSessionManager>> {
     let manager = crate::mvp::acp::shared_acp_session_manager(config)?;
     Ok(manager)
@@ -337,8 +378,8 @@ fn build_gateway_acp_session_manager(
 
 fn acquire_gateway_acp_session_manager(
     tracker: &GatewayOwnerTracker,
-    config: &crate::mvp::config::LoongClawConfig,
-    builder: impl FnOnce(&crate::mvp::config::LoongClawConfig) -> CliResult<Arc<AcpSessionManager>>,
+    config: &crate::mvp::config::LoongConfig,
+    builder: impl FnOnce(&crate::mvp::config::LoongConfig) -> CliResult<Arc<AcpSessionManager>>,
 ) -> CliResult<Arc<AcpSessionManager>> {
     let manager_result = builder(config);
     let manager = match manager_result {
@@ -426,7 +467,7 @@ mod tests {
             .as_nanos();
         let process_id = std::process::id();
         let runtime_dir = std::env::temp_dir().join(format!(
-            "loongclaw-gateway-service-{label}-{process_id}-{timestamp}"
+            "loong-gateway-service-{label}-{process_id}-{timestamp}"
         ));
         fs::create_dir_all(runtime_dir.as_path()).expect("create runtime dir");
         runtime_dir
@@ -444,9 +485,9 @@ mod tests {
             1,
         )
         .expect("acquire gateway owner tracker");
-        let config = crate::mvp::config::LoongClawConfig::default();
+        let config = crate::mvp::config::LoongConfig::default();
         let expected_error = "simulated ACP manager init failure".to_owned();
-        let builder = |_config: &crate::mvp::config::LoongClawConfig| Err(expected_error.clone());
+        let builder = |_config: &crate::mvp::config::LoongConfig| Err(expected_error.clone());
 
         let manager_result = acquire_gateway_acp_session_manager(&tracker, &config, builder);
         let error = match manager_result {

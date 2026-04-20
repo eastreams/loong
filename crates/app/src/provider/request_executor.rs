@@ -1388,6 +1388,7 @@ mod tests {
                 tool_call: None,
             },
             index: None,
+            elapsed_ms: None,
         };
 
         let json = serde_json::to_string(&text_event).expect("should serialize");
@@ -1412,6 +1413,7 @@ mod tests {
                 }),
             },
             index: Some(0),
+            elapsed_ms: None,
         };
 
         let json = serde_json::to_string(&tool_event).expect("should serialize");
@@ -1434,7 +1436,7 @@ mod tests {
     async fn execute_model_request_uses_mock_transport_without_http() {
         use crate::provider::mock_transport::MockTransport;
         use crate::provider::transport_trait::TransportResponse;
-        use loongclaw_contracts::SecretRef;
+        use loong_contracts::SecretRef;
 
         let provider = ProviderConfig {
             kind: crate::config::ProviderKind::Openai,

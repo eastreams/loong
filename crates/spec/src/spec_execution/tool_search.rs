@@ -1,17 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel::{
-    IntegrationCatalog, PluginActivationCandidate, PluginActivationInventoryEntry,
-    PluginActivationPlan, PluginBridgeKind, PluginCompatibility, PluginCompatibilityMode,
-    PluginCompatibilityShim, PluginContractDialect, PluginDiagnosticFinding, PluginScanReport,
-    PluginSetupReadinessContext, PluginSlotClaim, PluginTranslationReport, PluginTrustTier,
+    AuditEventKind, IntegrationCatalog, LoongKernel, PluginActivationCandidate,
+    PluginActivationInventoryEntry, PluginActivationPlan, PluginBridgeKind, PluginCompatibility,
+    PluginCompatibilityMode, PluginCompatibilityShim, PluginContractDialect,
+    PluginDiagnosticFinding, PluginScanReport, PluginSetupReadinessContext, PluginSlotClaim,
+    PluginTranslationReport, PluginTrustTier, StaticPolicyEngine,
     evaluate_plugin_setup_requirements, plugin_provenance_summary_for_descriptor,
 };
 use serde_json::Value;
 
 use super::descriptor_bridge_kind;
 use crate::spec_runtime::{
-    ToolSearchEntry, ToolSearchResult, ToolSearchTrustFilterSummary, detect_provider_bridge_kind,
+    ToolSearchEntry, ToolSearchOperationSummary, ToolSearchOperationSummaryEntry, ToolSearchResult,
+    ToolSearchTrustFilterSummary, detect_provider_bridge_kind,
     provider_plugin_activation_attestation_result,
 };
 
@@ -33,6 +35,176 @@ struct ToolSearchTranslationSnapshot {
     channel_bridge_account_scope: Option<String>,
     channel_bridge_ready: Option<bool>,
     channel_bridge_missing_fields: Vec<String>,
+}
+
+pub(super) fn build_tool_search_operation_summary(
+    outcome: &Value,
+) -> Option<ToolSearchOperationSummary> {
+    let payload = outcome.as_object()?;
+    let results = payload.get("results")?.as_array()?;
+    let top_results = results
+        .iter()
+        .take(3)
+        .filter_map(build_tool_search_operation_summary_entry)
+        .collect::<Vec<_>>();
+    let trust_filter_summary = payload
+        .get("trust_filter_summary")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ToolSearchTrustFilterSummary>(value).ok())
+        .unwrap_or_default();
+    let query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let returned = payload
+        .get("returned")
+        .and_then(Value::as_u64)
+        .map_or(results.len(), |value| value as usize);
+    let trust_tiers = payload
+        .get("trust_tiers")
+        .and_then(Value::as_array)
+        .map(|tiers| {
+            tiers
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Some(ToolSearchOperationSummary {
+        headline: build_tool_search_operation_headline(
+            &query,
+            returned,
+            &trust_tiers,
+            &trust_filter_summary,
+            &top_results,
+        ),
+        query,
+        returned,
+        trust_tiers,
+        trust_filter_summary,
+        top_results,
+    })
+}
+
+fn build_tool_search_operation_summary_entry(
+    value: &Value,
+) -> Option<ToolSearchOperationSummaryEntry> {
+    let entry = value.as_object()?;
+    Some(ToolSearchOperationSummaryEntry {
+        tool_id: entry.get("tool_id")?.as_str()?.to_owned(),
+        provider_id: entry.get("provider_id")?.as_str()?.to_owned(),
+        connector_name: entry.get("connector_name")?.as_str()?.to_owned(),
+        trust_tier: entry
+            .get("trust_tier")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        bridge_kind: entry.get("bridge_kind")?.as_str()?.to_owned(),
+        score: entry
+            .get("score")
+            .and_then(Value::as_u64)
+            .map_or(0, |value| value as u32),
+        setup_ready: entry
+            .get("setup_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        deferred: entry
+            .get("deferred")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        loaded: entry
+            .get("loaded")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn build_tool_search_operation_headline(
+    query: &str,
+    returned: usize,
+    trust_tiers: &[String],
+    trust_filter_summary: &ToolSearchTrustFilterSummary,
+    top_results: &[ToolSearchOperationSummaryEntry],
+) -> String {
+    let result_noun = if returned == 1 { "result" } else { "results" };
+    let mut parts = vec![format!("returned {returned} {result_noun}")];
+
+    if trust_filter_summary.applied {
+        let scope = if trust_filter_summary.effective_tiers.is_empty() {
+            "none".to_owned()
+        } else {
+            trust_filter_summary.effective_tiers.join(",")
+        };
+        parts.push(format!("trust_scope={scope}"));
+        if trust_filter_summary.filtered_out_candidates > 0 {
+            let filtered_noun = if trust_filter_summary.filtered_out_candidates == 1 {
+                "candidate"
+            } else {
+                "candidates"
+            };
+            parts.push(format!(
+                "filtered_out={} {filtered_noun}",
+                trust_filter_summary.filtered_out_candidates
+            ));
+        }
+        if trust_filter_summary.conflicting_requested_tiers {
+            parts.push("conflicting_trust_filters=true".to_owned());
+        }
+    } else if !trust_tiers.is_empty() {
+        parts.push(format!("requested_tiers={}", trust_tiers.join(",")));
+    }
+
+    if let Some(first) = top_results.first() {
+        parts.push(format!("top_match={}", first.provider_id));
+    }
+
+    if query.is_empty() {
+        parts.join("; ")
+    } else {
+        format!("query=\"{query}\"; {}", parts.join("; "))
+    }
+}
+
+pub(super) fn emit_tool_search_audit_event(
+    kernel: &LoongKernel<StaticPolicyEngine>,
+    pack_id: &str,
+    agent_id: &str,
+    summary: &ToolSearchOperationSummary,
+) -> Result<(), String> {
+    let top_provider_ids = summary
+        .top_results
+        .iter()
+        .map(|entry| entry.provider_id.clone())
+        .collect::<Vec<_>>();
+
+    kernel
+        .record_audit_event(
+            Some(agent_id),
+            AuditEventKind::ToolSearchEvaluated {
+                pack_id: pack_id.to_owned(),
+                query: summary.query.clone(),
+                returned: summary.returned,
+                trust_filter_applied: summary.trust_filter_summary.applied,
+                query_requested_tiers: summary.trust_filter_summary.query_requested_tiers.clone(),
+                structured_requested_tiers: summary
+                    .trust_filter_summary
+                    .structured_requested_tiers
+                    .clone(),
+                effective_tiers: summary.trust_filter_summary.effective_tiers.clone(),
+                conflicting_requested_tiers: summary
+                    .trust_filter_summary
+                    .conflicting_requested_tiers,
+                filtered_out_candidates: summary.trust_filter_summary.filtered_out_candidates,
+                filtered_out_tier_counts: summary
+                    .trust_filter_summary
+                    .filtered_out_tier_counts
+                    .clone(),
+                top_provider_ids,
+            },
+        )
+        .map_err(|error| format!("failed to record tool search audit event: {error}"))
 }
 
 pub(super) fn execute_tool_search(
@@ -910,8 +1082,8 @@ fn metadata_plugin_dialect(
     key: &str,
 ) -> Option<PluginContractDialect> {
     metadata_optional_string(metadata, key).and_then(|value| match value.as_str() {
-        "loongclaw_package_manifest" => Some(PluginContractDialect::LoongClawPackageManifest),
-        "loongclaw_embedded_source" => Some(PluginContractDialect::LoongClawEmbeddedSource),
+        "loong_package_manifest" => Some(PluginContractDialect::LoongPackageManifest),
+        "loong_embedded_source" => Some(PluginContractDialect::LoongEmbeddedSource),
         "openclaw_modern_manifest" => Some(PluginContractDialect::OpenClawModernManifest),
         "openclaw_legacy_package" => Some(PluginContractDialect::OpenClawLegacyPackage),
         _ => None,
@@ -1740,7 +1912,7 @@ mod tests {
                 ("plugin_id".to_owned(), "tavily-search".to_owned()),
                 (
                     "plugin_source_path".to_owned(),
-                    "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                    "/tmp/tavily/loong.plugin.json".to_owned(),
                 ),
                 (
                     "plugin_source_kind".to_owned(),
@@ -1749,11 +1921,11 @@ mod tests {
                 ("plugin_package_root".to_owned(), "/tmp/tavily".to_owned()),
                 (
                     "plugin_package_manifest_path".to_owned(),
-                    "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                    "/tmp/tavily/loong.plugin.json".to_owned(),
                 ),
                 (
                     "plugin_provenance_summary".to_owned(),
-                    "package_manifest:/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                    "package_manifest:/tmp/tavily/loong.plugin.json".to_owned(),
                 ),
                 ("plugin_trust_tier".to_owned(), "official".to_owned()),
                 (
@@ -1794,7 +1966,7 @@ mod tests {
                 ),
                 (
                     "plugin_compatibility_host_api".to_owned(),
-                    "loongclaw-plugin/v1".to_owned(),
+                    "loong-plugin/v1".to_owned(),
                 ),
                 (
                     "plugin_compatibility_host_version_req".to_owned(),
@@ -1812,10 +1984,10 @@ mod tests {
             blocked_plugins: 1,
             candidates: vec![PluginActivationCandidate {
                 plugin_id: "tavily-search".to_owned(),
-                source_path: "/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                source_path: "/tmp/tavily/loong.plugin.json".to_owned(),
                 source_kind: PluginSourceKind::PackageManifest,
                 package_root: "/tmp/tavily".to_owned(),
-                package_manifest_path: Some("/tmp/tavily/loongclaw.plugin.json".to_owned()),
+                package_manifest_path: Some("/tmp/tavily/loong.plugin.json".to_owned()),
                 trust_tier: kernel::PluginTrustTier::Official,
                 compatibility_mode: PluginCompatibilityMode::Native,
                 compatibility_shim: None,
@@ -1834,7 +2006,7 @@ mod tests {
                     phase: PluginDiagnosticPhase::Activation,
                     blocking: true,
                     plugin_id: Some("tavily-search".to_owned()),
-                    source_path: Some("/tmp/tavily/loongclaw.plugin.json".to_owned()),
+                    source_path: Some("/tmp/tavily/loong.plugin.json".to_owned()),
                     source_kind: Some(PluginSourceKind::PackageManifest),
                     field_path: Some("slot_claims".to_owned()),
                     message: "slot claim `provider:web_search`:`tavily` conflicts with existing plugin `web-search`".to_owned(),
@@ -1878,12 +2050,12 @@ mod tests {
         );
         assert_eq!(
             report.results[0].package_manifest_path.as_deref(),
-            Some("/tmp/tavily/loongclaw.plugin.json")
+            Some("/tmp/tavily/loong.plugin.json")
         );
         assert!(report.results[0].compatibility_shim.is_none());
         assert_eq!(
             report.results[0].provenance_summary.as_deref(),
-            Some("package_manifest:/tmp/tavily/loongclaw.plugin.json")
+            Some("package_manifest:/tmp/tavily/loong.plugin.json")
         );
         assert_eq!(report.results[0].trust_tier.as_deref(), Some("official"));
         assert_eq!(
@@ -1924,7 +2096,7 @@ mod tests {
                 .compatibility
                 .as_ref()
                 .and_then(|compatibility| compatibility.host_api.as_deref()),
-            Some("loongclaw-plugin/v1")
+            Some("loong-plugin/v1")
         );
         assert_eq!(
             report.results[0]

@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn resolve_plugin_preflight_policy_accepts_custom_path_with_matching_sha() {
-        let path = unique_temp_policy_path("loongclaw-plugin-preflight-policy");
+        let path = unique_temp_policy_path("loong-plugin-preflight-policy");
         let policy = PluginPreflightPolicyProfile {
             policy_version: Some("custom".to_owned()),
             runtime_activation: PluginPreflightRuleProfile {
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn resolve_plugin_preflight_policy_rejects_sha_mismatch() {
-        let path = unique_temp_policy_path("loongclaw-plugin-preflight-policy-mismatch");
+        let path = unique_temp_policy_path("loong-plugin-preflight-policy-mismatch");
         fs::write(
             &path,
             serde_json::to_string_pretty(&PluginPreflightPolicyProfile::default())
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn resolve_plugin_preflight_policy_rejects_fail_closed_waivers() {
-        let path = unique_temp_policy_path("loongclaw-plugin-preflight-policy-invalid-waiver");
+        let path = unique_temp_policy_path("loong-plugin-preflight-policy-invalid-waiver");
         let policy = PluginPreflightPolicyProfile {
             policy_version: Some("invalid-waiver".to_owned()),
             exceptions: vec![PluginPreflightPolicyException {
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn resolve_plugin_preflight_policy_rejects_exception_without_approval_metadata() {
-        let path = unique_temp_policy_path("loongclaw-plugin-preflight-policy-missing-approval");
+        let path = unique_temp_policy_path("loong-plugin-preflight-policy-missing-approval");
         let policy = PluginPreflightPolicyProfile {
             policy_version: Some("missing-approval".to_owned()),
             exceptions: vec![PluginPreflightPolicyException {
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn resolve_plugin_preflight_policy_rejects_invalid_plugin_version_req() {
-        let path = unique_temp_policy_path("loongclaw-plugin-preflight-policy-bad-version-req");
+        let path = unique_temp_policy_path("loong-plugin-preflight-policy-bad-version-req");
         let policy = PluginPreflightPolicyProfile {
             policy_version: Some("bad-version-req".to_owned()),
             exceptions: vec![PluginPreflightPolicyException {

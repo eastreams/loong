@@ -12,7 +12,7 @@ use super::context_engine::{
 pub const DEFAULT_CONTEXT_ENGINE_ID: &str = "default";
 pub const LEGACY_CONTEXT_ENGINE_ID: &str = "legacy";
 pub const CONTEXT_ENGINE_ENV: &str = "LOONG_CONTEXT_ENGINE";
-pub const LEGACY_CONTEXT_ENGINE_ENV: &str = "LOONGCLAW_CONTEXT_ENGINE";
+pub const LEGACY_CONTEXT_ENGINE_ENV: &str = "LOONG_CONTEXT_ENGINE";
 
 type ContextEngineFactory = Arc<dyn Fn() -> Box<dyn ConversationContextEngine> + Send + Sync>;
 
@@ -178,7 +178,7 @@ mod tests {
     use serde_json::Value;
 
     use super::super::runtime_binding::ConversationRuntimeBinding;
-    use crate::config::LoongClawConfig;
+    use crate::config::LoongConfig;
 
     use super::super::context_engine::ContextEngineCapability;
     use super::*;
@@ -193,7 +193,7 @@ mod tests {
 
         async fn assemble_messages(
             &self,
-            _config: &LoongClawConfig,
+            _config: &LoongConfig,
             _session_id: &str,
             _include_system_prompt: bool,
             _binding: ConversationRuntimeBinding<'_>,

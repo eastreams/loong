@@ -5,12 +5,14 @@ impl Commands {
         match self {
             Self::Welcome => "welcome",
             Self::Demo => "demo",
+            Self::Update => "update",
             Self::RunTask { .. } => "run_task",
             Self::Turn { command } => match command {
                 crate::TurnCommands::Run { .. } => "turn_run",
             },
             Self::InvokeConnector { .. } => "invoke_connector",
             Self::AuditDemo => "audit_demo",
+            Self::Web { .. } => "web",
             Self::InitSpec { .. } => "init_spec",
             Self::RunSpec { .. } => "run_spec",
             Self::BenchmarkProgrammaticPressure { .. } => "benchmark_programmatic_pressure",
@@ -66,14 +68,22 @@ impl Commands {
             Self::MatrixServe { .. } => "matrix_serve",
             Self::WecomSend { .. } => "wecom_send",
             Self::WecomServe { .. } => "wecom_serve",
+            Self::WeixinSend { .. } => "weixin_send",
+            Self::WeixinServe { .. } => "weixin_serve",
+            Self::QqbotSend { .. } => "qqbot_send",
+            Self::QqbotServe { .. } => "qqbot_serve",
+            Self::OnebotSend { .. } => "onebot_send",
+            Self::OnebotServe { .. } => "onebot_serve",
             Self::WhatsappServe { .. } => "whatsapp_serve",
             Self::DiscordSend { .. } => "discord_send",
             Self::DingtalkSend { .. } => "dingtalk_send",
             Self::SlackSend { .. } => "slack_send",
             Self::LineSend { .. } => "line_send",
+            Self::LineServe { .. } => "line_serve",
             Self::WhatsappSend { .. } => "whatsapp_send",
             Self::EmailSend { .. } => "email_send",
             Self::WebhookSend { .. } => "webhook_send",
+            Self::WebhookServe { .. } => "webhook_serve",
             Self::GoogleChatSend { .. } => "google_chat_send",
             Self::TeamsSend { .. } => "teams_send",
             Self::TlonSend { .. } => "tlon_send",
@@ -106,6 +116,14 @@ mod tests {
     fn command_kind_for_logging_uses_stable_variant_names() {
         assert_eq!(Commands::Welcome.command_kind_for_logging(), "welcome");
         assert_eq!(Commands::AuditDemo.command_kind_for_logging(), "audit_demo");
+        assert_eq!(
+            Commands::Web {
+                command: crate::WebCommand::Status,
+            }
+            .command_kind_for_logging(),
+            "web"
+        );
+        assert_eq!(Commands::Update.command_kind_for_logging(), "update");
         assert_eq!(
             Commands::ValidateConfig {
                 config: None,

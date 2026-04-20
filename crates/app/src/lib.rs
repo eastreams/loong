@@ -16,10 +16,12 @@ pub(crate) mod operator;
 pub mod presentation;
 pub mod prompt;
 pub mod provider;
+pub mod runtime_bridge;
 pub mod runtime_env;
 mod runtime_identity;
 mod runtime_self;
 mod runtime_self_continuity;
+pub(crate) mod search_text;
 mod secrets;
 pub mod session;
 pub mod tools;
@@ -49,7 +51,7 @@ pub type CliResult<T> = Result<T, String>;
 mod secret_runtime_tests {
     use std::fs;
 
-    use loongclaw_contracts::{SecretRef, SecretResolver};
+    use loong_contracts::{SecretRef, SecretResolver};
 
     use crate::test_support::unique_temp_dir;
 

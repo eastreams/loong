@@ -1,6 +1,6 @@
 use clap_complete::{Shell, generate};
 
-use loongclaw_spec::CliResult;
+use loong_spec::CliResult;
 
 const CLI_COMPLETIONS_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -61,8 +61,8 @@ mod tests {
                 .expect("generate zsh completions"),
         )
         .unwrap();
-        assert!(out.contains("#compdef loong"));
-        assert!(!out.contains("#compdef loongclaw"));
+        let expected = format!("#compdef {}", crate::CLI_COMMAND_NAME);
+        assert!(out.contains(&expected));
     }
 
     #[test]

@@ -383,6 +383,52 @@ impl ControlPlaneSessionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneSessionWorkflowContinuity {
+    pub present: bool,
+    pub resolved_identity_present: bool,
+    pub session_profile_projection_present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneSessionWorkflowBindingWorktree {
+    pub worktree_id: String,
+    pub workspace_root: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneSessionWorkflowBinding {
+    pub session_id: String,
+    pub task_id: String,
+    pub mode: String,
+    pub execution_surface: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<ControlPlaneSessionWorkflowBindingWorktree>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneSessionWorkflow {
+    pub workflow_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage_root_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage_depth: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_self_continuity: Option<ControlPlaneSessionWorkflowContinuity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<ControlPlaneSessionWorkflowBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneSessionSummary {
     pub session_id: String,
     pub kind: ControlPlaneSessionKind,
@@ -400,6 +446,8 @@ pub struct ControlPlaneSessionSummary {
     pub last_turn_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub workflow: ControlPlaneSessionWorkflow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,6 +492,50 @@ pub struct ControlPlaneSessionListResponse {
 pub struct ControlPlaneSessionReadResponse {
     pub current_session_id: String,
     pub observation: ControlPlaneSessionObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneTaskSummary {
+    pub task_id: String,
+    pub session_id: String,
+    pub scope_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub session_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    pub workflow: ControlPlaneSessionWorkflow,
+    pub approval_request_count: usize,
+    pub approval_attention_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_tool_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_requested_tool_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_tool_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_effective_tool_ids: Vec<String>,
+    pub effective_runtime_narrowing: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneTaskListResponse {
+    pub current_session_id: String,
+    pub matched_count: usize,
+    pub returned_count: usize,
+    pub tasks: Vec<ControlPlaneTaskSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneTaskReadResponse {
+    pub current_session_id: String,
+    pub task: ControlPlaneTaskSummary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -497,6 +589,10 @@ pub struct ControlPlaneApprovalSummary {
     pub turn_id: String,
     pub tool_call_id: String,
     pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_summary: Option<Value>,
     pub approval_key: String,
     pub status: ControlPlaneApprovalRequestStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]

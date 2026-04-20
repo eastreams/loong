@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn default_web_install_dir() -> PathBuf {
-    mvp::config::default_loongclaw_home().join("web")
+    mvp::config::default_loong_home().join("web")
 }
 
 pub(super) fn web_install_dist_dir(install_dir: &FsPath) -> PathBuf {
@@ -149,7 +149,7 @@ pub(super) fn run_web_install(source: &str) -> CliResult<()> {
         .map_err(|error| format!("failed to write install manifest: {error}"))?;
 
     println!("Web Console installed to: {}", dist_dir.display());
-    println!("Run `loongclaw web serve` to start the same-origin Web Console.");
+    println!("Run `loong web serve` to start the same-origin Web Console.");
     Ok(())
 }
 
@@ -160,7 +160,7 @@ pub(super) fn run_web_status() -> CliResult<()> {
 
     if !manifest_path.exists() {
         println!("Web Console: not installed");
-        println!("Run `loongclaw web install --source <path/to/web/dist>` to install.");
+        println!("Run `loong web install --source <path/to/web/dist>` to install.");
         return Ok(());
     }
 
