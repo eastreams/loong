@@ -136,6 +136,7 @@ async fn run_update_cli_with_runtime(
         script_path.as_path(),
         install_prefix.as_path(),
         latest_release.tag_name.as_str(),
+        &runtime,
     );
 
     let cleanup_result = fs::remove_file(&script_path);
@@ -293,9 +294,10 @@ fn run_update_script(
     script_path: &Path,
     install_prefix: &Path,
     release_tag: &str,
+    runtime: &UpdateRuntimeConfig,
 ) -> CliResult<()> {
     let mut command =
-        build_update_script_command(platform, script_path, install_prefix, release_tag)?;
+        build_update_script_command(platform, script_path, install_prefix, release_tag, runtime)?;
     let rendered_command = render_update_command(&command);
     let status = command.status().map_err(|error| {
         format!("failed to launch update installer `{rendered_command}`: {error}")
@@ -320,8 +322,9 @@ fn build_update_script_command(
     script_path: &Path,
     install_prefix: &Path,
     release_tag: &str,
+    runtime: &UpdateRuntimeConfig,
 ) -> CliResult<Command> {
-    match platform {
+    let mut command = match platform {
         UpdatePlatform::Windows => {
             let shell = ["pwsh", "powershell"]
                 .into_iter()
@@ -342,7 +345,7 @@ fn build_update_script_command(
                 .arg(install_prefix)
                 .arg("-Version")
                 .arg(release_tag);
-            Ok(command)
+            command
         }
         UpdatePlatform::Unix => {
             if !command_exists("bash") {
@@ -356,9 +359,15 @@ fn build_update_script_command(
                 .arg(install_prefix)
                 .arg("--version")
                 .arg(release_tag);
-            Ok(command)
+            command
         }
-    }
+    };
+    command.env(INSTALL_RELEASE_REPO_ENV, runtime.release_repo.as_str());
+    command.env(
+        INSTALL_RELEASE_BASE_URL_ENV,
+        runtime.release_base_url.as_str(),
+    );
+    Ok(command)
 }
 
 fn render_update_command(command: &Command) -> String {
@@ -489,12 +498,16 @@ mod tests {
         let prefix_dir = temp_dir.path().join("bin");
         fs::create_dir_all(&prefix_dir).expect("prefix dir");
         let capture_file = temp_dir.path().join("installer-args.txt");
-        let (release_api_url, release_base_url, server_handle) =
-            spawn_release_test_server("v9.9.9".to_owned(), capture_file.clone());
+        let env_capture_file = temp_dir.path().join("installer-env.txt");
+        let (release_api_url, release_base_url, server_handle) = spawn_release_test_server(
+            "v9.9.9".to_owned(),
+            capture_file.clone(),
+            env_capture_file.clone(),
+        );
         let runtime = UpdateRuntimeConfig {
             release_repo: DEFAULT_RELEASE_REPO.to_owned(),
             latest_release_api_url: release_api_url,
-            release_base_url,
+            release_base_url: release_base_url.clone(),
         };
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -513,12 +526,59 @@ mod tests {
             captured,
             format!("--prefix\n{expected_prefix}\n--version\nv9.9.9\n")
         );
+        let env_capture =
+            fs::read_to_string(&env_capture_file).expect("captured installer environment");
+        let expected_repo_line = format!("repo={DEFAULT_RELEASE_REPO}\n");
+        let expected_base_line = format!("base={release_base_url}\n");
+        assert_eq!(
+            env_capture,
+            format!("{expected_repo_line}{expected_base_line}")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_update_cli_propagates_runtime_release_overrides_to_installer() {
+        let _env_lock = ENV_LOCK.lock().expect("env lock");
+        let temp_dir = TempDir::new().expect("temp dir");
+        let prefix_dir = temp_dir.path().join("bin");
+        fs::create_dir_all(&prefix_dir).expect("prefix dir");
+        let capture_file = temp_dir.path().join("installer-args.txt");
+        let env_capture_file = temp_dir.path().join("installer-env.txt");
+        let release_repo = "example/loong-fork".to_owned();
+        let (release_api_url, release_base_url, server_handle) =
+            spawn_release_test_server("v2.3.4".to_owned(), capture_file, env_capture_file.clone());
+        let runtime = UpdateRuntimeConfig {
+            release_repo: release_repo.clone(),
+            latest_release_api_url: release_api_url,
+            release_base_url: release_base_url.clone(),
+        };
+        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let result = tokio_runtime.block_on(run_update_cli_with_runtime(
+            runtime,
+            Some(prefix_dir.join("loong")),
+        ));
+        server_handle.join().expect("server should exit cleanly");
+
+        result.expect("update command should propagate release overrides");
+        let env_capture =
+            fs::read_to_string(&env_capture_file).expect("captured installer environment");
+        let expected_repo_line = format!("repo={release_repo}\n");
+        let expected_base_line = format!("base={release_base_url}\n");
+        assert_eq!(
+            env_capture,
+            format!("{expected_repo_line}{expected_base_line}")
+        );
     }
 
     #[cfg(unix)]
     fn spawn_release_test_server(
         stable_tag: String,
         capture_file: PathBuf,
+        env_capture_file: PathBuf,
     ) -> (String, String, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let address = listener.local_addr().expect("local test server addr");
@@ -546,7 +606,9 @@ mod tests {
                     (
                         "HTTP/1.1 200 OK",
                         format!(
-                            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" > \"{}\"\n",
+                            "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'repo=%s\\n' \"${{LOONG_INSTALL_REPO:-}}\" > \"{}\"\nprintf 'base=%s\\n' \"${{LOONG_INSTALL_RELEASE_BASE_URL:-}}\" >> \"{}\"\nprintf '%s\\n' \"$@\" > \"{}\"\n",
+                            env_capture_file.display(),
+                            env_capture_file.display(),
                             capture_file.display()
                         ),
                         "text/plain",
