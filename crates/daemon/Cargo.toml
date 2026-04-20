@@ -91,6 +91,7 @@ dunce = "1"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wait-timeout = "0.2"
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
