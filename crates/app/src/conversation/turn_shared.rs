@@ -305,9 +305,7 @@ impl ToolDrivenFollowupPayload {
 }
 
 pub fn turn_failure_supports_discovery_recovery(failure: &TurnFailure) -> bool {
-    let is_tool_not_found = failure.code == "tool_not_found";
-    let has_recovery_hint = failure.supports_discovery_recovery;
-    is_tool_not_found && has_recovery_hint
+    failure.supports_discovery_recovery
 }
 
 pub fn tool_driven_followup_payload(
@@ -2529,12 +2527,12 @@ mod tests {
     #[test]
     fn turn_failure_supports_discovery_recovery_requires_structured_metadata() {
         let recovery_failure = TurnFailure::policy_denied_with_discovery_recovery(
-            "tool_not_found",
-            "tool_not_found: requested tool is not available If you need a non-core capability, call tool.search with a short natural-language description of the task.",
+            "invalid_tool_lease",
+            "tool.invoke needs a fresh lease from the current tool.search result. If you need a non-core capability, call tool.search with a short natural-language description of the task.",
         );
         let plain_failure = TurnFailure::policy_denied(
-            "tool_not_found",
-            "tool_not_found: requested tool is not available",
+            "invalid_tool_lease",
+            "tool execution failed: invalid_tool_lease: expired lease",
         );
 
         assert!(turn_failure_supports_discovery_recovery(&recovery_failure));

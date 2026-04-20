@@ -373,6 +373,9 @@ fn render_deferred_tool_text_workflow_section() -> String {
         "When you need a tool, emit the raw JSON call instead of only describing the missing capability.".to_owned(),
         "Direct tool example:".to_owned(),
         direct_call_example,
+        "In raw JSON tool calls, use the provider tool names `tool_search` and `tool_invoke`.".to_owned(),
+        "tool_invoke leases are short-lived; after any invalid_tool_lease response, refresh with tool_search before retrying.".to_owned(),
+        "If you already know the tool id, refresh directly with exact_tool_id to fetch a fresh lease card.".to_owned(),
         "Hidden-tool discovery example:".to_owned(),
         discovery_call_example,
         "Hidden-tool invocation example:".to_owned(),
@@ -1147,6 +1150,8 @@ mod tests {
         assert!(system_content.contains("`web { query }` uses web-search providers"));
         assert!(system_content.contains("\"name\": \"tool_search\""));
         assert!(system_content.contains("\"name\": \"tool_invoke\""));
+        assert!(system_content.contains("invalid_tool_lease"));
+        assert!(system_content.contains("exact_tool_id"));
     }
 
     #[test]

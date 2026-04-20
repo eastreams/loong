@@ -8630,6 +8630,127 @@ async fn handle_turn_with_runtime_auto_recovers_provider_unknown_tool_into_disco
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_auto_recovers_invalid_tool_invoke_lease_into_discovery_followup()
+{
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let input_path = harness.temp_dir.join("note.md");
+    let note_contents = "hello from invalid lease recovery";
+
+    std::fs::write(&input_path, note_contents).expect("seed input note");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "I'll reuse the previous tool card.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "tool.invoke".to_owned(),
+                    args_json: json!({
+                        "tool_id": "file.read",
+                        "lease": "invalid.lease",
+                        "arguments": {
+                            "path": "note.md"
+                        }
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-invalid-lease-recovery".to_owned(),
+                    turn_id: "turn-invalid-lease-recovery-1".to_owned(),
+                    tool_call_id: "call-invalid-lease-recovery-1".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Let me refresh that tool card.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({
+                        "query": "read note.md",
+                        "exact_tool_id": "file.read",
+                        "limit": 1
+                    }),
+                    "session-invalid-lease-recovery",
+                    "turn-invalid-lease-recovery-2",
+                    "call-invalid-lease-recovery-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I'll read the file with the fresh lease.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({"path": "note.md"}),
+                    "session-invalid-lease-recovery",
+                    "turn-invalid-lease-recovery-3",
+                    "call-invalid-lease-recovery-3",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: note_contents.to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-invalid-lease-recovery",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("invalid lease recovery followup turn should succeed");
+
+    assert_eq!(reply, note_contents);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 4);
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.starts_with("[tool_recovery]\n")
+                            && content.contains("fresh lease")
+                            && !content.contains("invalid_tool_lease")
+                    })
+        }),
+        "second provider turn should receive bounded invalid-lease recovery context: {requested_turn_messages:?}"
+    );
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("user")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.contains("tool.search")
+                            && content.contains("fresh lease")
+                            && !content.contains("invalid_tool_lease")
+                    })
+        }),
+        "second provider turn should receive fresh-lease recovery instructions: {requested_turn_messages:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::await_holding_lock)] // env override state is process-global; keep lock for full test body.
 async fn handle_turn_with_runtime_provider_shape_function_calls_multi_step_chain_continues() {
     use crate::test_support::TurnTestHarness;
