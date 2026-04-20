@@ -40,7 +40,7 @@ assert_equal(
 )
 assert_equal(
     resolve("crates/daemon/tests/integration/managed_bridge_fixtures.rs"),
-    ["daemon_cli", "daemon_gateway", "daemon_onboard"],
+    ["daemon_gateway", "daemon_onboard", "daemon_channels"],
     "managed bridge fixtures map to all dependent shards",
 )
 assert_equal(
@@ -69,14 +69,24 @@ assert_equal(
     "audit root tests map to the cli shard",
 )
 assert_equal(
-    resolve("crates/daemon/tests/integration/channel_surfaces_text.rs"),
-    ["daemon_cli"],
-    "channel surface text root tests map to the cli shard",
+    resolve("crates/daemon/tests/integration/channel_catalog_text.rs"),
+    ["daemon_channels"],
+    "channel catalog text tests map to the channels shard",
 )
 assert_equal(
-    resolve("crates/daemon/tests/integration/channel_surfaces_json.rs"),
-    ["daemon_cli"],
-    "channel surface json root tests map to the cli shard",
+    resolve("crates/daemon/tests/integration/channel_plugin_bridge_text.rs"),
+    ["daemon_channels"],
+    "channel plugin bridge text tests map to the channels shard",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/channel_catalog_json.rs"),
+    ["daemon_channels"],
+    "channel catalog json tests map to the channels shard",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/channel_plugin_bridge_json.rs"),
+    ["daemon_channels"],
+    "channel plugin bridge json tests map to the channels shard",
 )
 assert_equal(
     resolve("crates/daemon/tests/integration/memory_surfaces.rs"),
