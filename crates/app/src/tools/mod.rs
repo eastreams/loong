@@ -1312,6 +1312,11 @@ pub(crate) fn capability_snapshot_for_view_with_config(
         visible_direct_states.as_slice(),
         discoverable_summary.hidden_surfaces.as_slice(),
     ));
+    if let Some(skill_catalog_section) =
+        external_skills::model_skill_catalog_section_with_config(config)
+    {
+        lines.push(skill_catalog_section);
+    }
     lines.join("\n")
 }
 

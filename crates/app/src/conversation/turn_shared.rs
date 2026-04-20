@@ -16,6 +16,7 @@ use super::turn_engine::{
 use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
@@ -717,7 +718,7 @@ impl ApprovalPromptView {
             ApprovalPromptLocale::En => self
                 .tool_name
                 .as_ref()
-                .map(|tool_name| format!("Loong wants to call {tool_name}"))
+                .map(|tool_name| format!("loong wants to call {tool_name}"))
                 .or_else(|| Some("Tool call needs confirmation".to_owned())),
         }
     }
@@ -848,6 +849,7 @@ pub struct ExternalSkillInvokeContext {
     pub skill_id: String,
     pub display_name: String,
     pub instructions: String,
+    pub skill_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2169,10 +2171,17 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
         .filter(|value| !value.is_empty())
         .unwrap_or(skill_id.as_str())
         .to_owned();
+    let skill_root = payload_json
+        .get("skill_root")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
     Some(ExternalSkillInvokeContext {
         skill_id,
         display_name,
         instructions,
+        skill_root,
     })
 }
 

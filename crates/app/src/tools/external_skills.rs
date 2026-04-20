@@ -11,7 +11,7 @@ use std::{
 use flate2::read::GzDecoder;
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 use serde_yaml::Value as YamlValue;
 use sha2::{Digest, Sha256};
@@ -34,6 +34,7 @@ const DEFAULT_SKILL_FILENAME: &str = "SKILL.md";
 const DEFAULT_INDEX_FILENAME: &str = "index.json";
 const DEFAULT_MAX_DOWNLOAD_BYTES: usize = 5 * 1024 * 1024;
 const HARD_MAX_DOWNLOAD_BYTES: usize = 20 * 1024 * 1024;
+const DEFAULT_SKILL_RESOURCE_LIST_LIMIT: usize = 64;
 #[cfg(test)]
 const INSTALLED_SKILL_SNAPSHOT_HINT: &str = "installed managed external skill; use external_skills.inspect or external_skills.invoke for details";
 const PROJECT_DISCOVERY_DIRS: [(&str, usize); 4] = [
@@ -90,6 +91,9 @@ struct DiscoveredSkillEntry {
     skill_id: String,
     display_name: String,
     summary: String,
+    license: Option<String>,
+    compatibility: Option<String>,
+    metadata: BTreeMap<String, String>,
     scope: DiscoveredSkillScope,
     source_kind: String,
     source_path: String,
@@ -113,6 +117,7 @@ struct DiscoveredSkillModelView {
     skill_id: String,
     display_name: String,
     summary: String,
+    compatibility: Option<String>,
     scope: DiscoveredSkillScope,
     source_kind: String,
     source_path: String,
@@ -128,6 +133,7 @@ impl From<DiscoveredSkillEntry> for DiscoveredSkillModelView {
             skill_id: entry.skill_id,
             display_name: entry.display_name,
             summary: entry.summary,
+            compatibility: entry.compatibility,
             scope: entry.scope,
             source_kind: entry.source_kind,
             source_path: entry.source_path,
@@ -175,26 +181,42 @@ struct SkillEligibility {
 struct SkillFrontmatter {
     name: Option<String>,
     description: Option<String>,
-    #[serde(default)]
+    license: Option<String>,
+    compatibility: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_skill_metadata_map")]
+    metadata: BTreeMap<String, String>,
+    #[serde(default, alias = "model-visibility")]
     model_visibility: SkillModelVisibility,
-    #[serde(default)]
+    #[serde(default, alias = "disable-model-invocation")]
+    disable_model_invocation: bool,
+    #[serde(default, alias = "invocation-policy")]
     invocation_policy: Option<SkillInvocationPolicy>,
-    #[serde(default, alias = "requires_env")]
+    #[serde(default, alias = "requires_env", alias = "required-env")]
     required_env: Vec<String>,
     #[serde(
         default,
         alias = "requires_bin",
+        alias = "required-bin",
+        alias = "required_bins",
         alias = "requires_bins",
         alias = "requires_commands"
     )]
     required_bins: Vec<String>,
-    #[serde(default, alias = "requires_paths")]
+    #[serde(default, alias = "requires_paths", alias = "required-paths")]
     required_paths: Vec<String>,
-    #[serde(default)]
+    #[serde(default, alias = "required-config")]
     required_config: Vec<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "allowed-tools",
+        deserialize_with = "deserialize_skill_string_list"
+    )]
     allowed_tools: Vec<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "blocked-tools",
+        deserialize_with = "deserialize_skill_string_list"
+    )]
     blocked_tools: Vec<String>,
 }
 
@@ -246,6 +268,12 @@ struct SkillDiscoveryInventorySummary {
     visible_skill_count: usize,
     shadowed_skill_count: usize,
     blocked_skill_count: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct SkillResourceListing {
+    files: Vec<String>,
+    truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1064,7 +1092,7 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
     let inventory = discover_skill_inventory(config)?;
     let skill = resolve_discovered_skill(&inventory, skill_id)?;
     ensure_skill_access_for_audience(&skill, SkillAudience::Model)?;
-    let instructions = load_discovered_skill_markdown(config, &skill)?;
+    let raw_instructions = load_discovered_skill_markdown(config, &skill)?;
     if !skill.eligibility.available {
         return Err(format!(
             "external skill `{skill_id}` is not eligible in the current runtime: {}",
@@ -1081,6 +1109,18 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
         skill.allowed_tools.as_slice(),
         skill.blocked_tools.as_slice(),
     );
+    let skill_root = resolved_skill_root_path(&skill);
+    let resource_listing = skill_root
+        .as_deref()
+        .map(|path| list_skill_resources(path, DEFAULT_SKILL_RESOURCE_LIST_LIMIT))
+        .transpose()?
+        .unwrap_or_default();
+    let instructions = render_structured_skill_instructions(
+        &skill,
+        raw_instructions.as_str(),
+        skill_root.as_deref(),
+        &resource_listing,
+    );
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
@@ -1093,11 +1133,13 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
             "source_path": skill.source_path,
             "install_path": skill.install_path,
             "skill_md_path": skill.skill_md_path,
+            "skill_root": skill_root,
+            "resource_listing": resource_listing,
             "instructions": instructions,
             "metadata": metadata_payload_from_skill(&skill),
             "eligibility": skill.eligibility,
             "invocation_summary": format!(
-                "Loaded external skill `{}` with invocation_policy={}. Apply the instructions in `SKILL.md` before continuing the task{}.",
+                "Loaded external skill `{}` with invocation_policy={}. Apply the structured skill content before continuing the task{}.",
                 skill_id,
                 invocation_policy_id,
                 tool_restrictions_suffix
@@ -1487,6 +1529,11 @@ fn build_skill_search_argument_hint(
         invocation_policy_id(skill.invocation_policy)
     );
     fragments.push(invocation_fragment);
+    if let Some(compatibility) = skill.compatibility.as_deref()
+        && !compatibility.is_empty()
+    {
+        fragments.push(format!("compatibility {compatibility}"));
+    }
 
     if resolution == SkillDiscoveryResolution::Shadowed {
         fragments.push("shadowed by a higher-precedence resolved skill".to_owned());
@@ -3136,15 +3183,11 @@ fn parse_skill_frontmatter(skill_markdown: &str) -> Result<SkillFrontmatter, Str
     for line in lines {
         let trimmed = line.trim();
         if trimmed == "---" {
-            let raw = raw_frontmatter.join(
-                "
-",
-            );
+            let raw = raw_frontmatter.join("\n");
             if raw.trim().is_empty() {
                 return Ok(SkillFrontmatter::default());
             }
-            let parsed = serde_yaml::from_str::<YamlValue>(&raw)
-                .map_err(|error| format!("failed to parse YAML: {error}"))?;
+            let parsed = parse_skill_frontmatter_yaml(raw.as_str())?;
             let mut frontmatter = match parsed {
                 YamlValue::Null => SkillFrontmatter::default(),
                 YamlValue::Mapping(_) => serde_yaml::from_value(parsed).map_err(|error| {
@@ -3169,9 +3212,74 @@ fn parse_skill_frontmatter(skill_markdown: &str) -> Result<SkillFrontmatter, Str
     Err("frontmatter is missing a closing `---` delimiter".to_owned())
 }
 
+fn parse_skill_frontmatter_yaml(raw: &str) -> Result<YamlValue, String> {
+    match serde_yaml::from_str::<YamlValue>(raw) {
+        Ok(parsed) => Ok(parsed),
+        Err(original_error) => {
+            let repaired = repair_skill_frontmatter_yaml(raw);
+            if repaired == raw {
+                return Err(format!("failed to parse YAML: {original_error}"));
+            }
+
+            serde_yaml::from_str::<YamlValue>(&repaired).map_err(|repaired_error| {
+                format!(
+                    "failed to parse YAML: {original_error}; attempted lenient colon repair but still failed: {repaired_error}"
+                )
+            })
+        }
+    }
+}
+
+fn repair_skill_frontmatter_yaml(raw: &str) -> String {
+    raw.lines()
+        .map(repair_skill_frontmatter_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn repair_skill_frontmatter_line(line: &str) -> String {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("- ") {
+        return line.to_owned();
+    }
+    let Some((prefix, value)) = line.split_once(':') else {
+        return line.to_owned();
+    };
+    let key = prefix.trim();
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        return line.to_owned();
+    }
+
+    let value_trimmed = value.trim();
+    if value_trimmed.is_empty()
+        || value_trimmed.starts_with('"')
+        || value_trimmed.starts_with('\'')
+        || value_trimmed.starts_with('[')
+        || value_trimmed.starts_with('{')
+        || value_trimmed.starts_with('|')
+        || value_trimmed.starts_with('>')
+        || !value_trimmed.contains(':')
+    {
+        return line.to_owned();
+    }
+
+    let leading_whitespace_len = value.len() - value.trim_start_matches(char::is_whitespace).len();
+    let leading_whitespace = &value[..leading_whitespace_len];
+    let escaped = value_trimmed.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("{prefix}:{leading_whitespace}\"{escaped}\"")
+}
+
 fn normalize_skill_frontmatter(frontmatter: &mut SkillFrontmatter) {
     frontmatter.name = normalize_optional_metadata_string(frontmatter.name.take());
     frontmatter.description = normalize_optional_metadata_string(frontmatter.description.take());
+    frontmatter.license = normalize_optional_metadata_string(frontmatter.license.take());
+    frontmatter.compatibility =
+        normalize_optional_metadata_string(frontmatter.compatibility.take());
+    frontmatter.metadata = normalize_skill_metadata_map(std::mem::take(&mut frontmatter.metadata));
     frontmatter.required_env =
         normalize_metadata_string_list(std::mem::take(&mut frontmatter.required_env));
     frontmatter.required_bins =
@@ -3184,12 +3292,69 @@ fn normalize_skill_frontmatter(frontmatter: &mut SkillFrontmatter) {
         normalize_metadata_string_list(std::mem::take(&mut frontmatter.allowed_tools));
     frontmatter.blocked_tools =
         normalize_metadata_string_list(std::mem::take(&mut frontmatter.blocked_tools));
+    if frontmatter.disable_model_invocation {
+        frontmatter.model_visibility = SkillModelVisibility::Hidden;
+    }
 }
 
 fn normalize_optional_metadata_string(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+fn deserialize_skill_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawSkillStringList {
+        Single(String),
+        Many(Vec<String>),
+    }
+
+    let raw = RawSkillStringList::deserialize(deserializer)?;
+    let values = match raw {
+        RawSkillStringList::Single(value) => value
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        RawSkillStringList::Many(values) => values,
+    };
+    Ok(values)
+}
+
+fn deserialize_skill_metadata_map<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum MetadataValue {
+        String(String),
+        Bool(bool),
+        I64(i64),
+        U64(u64),
+        F64(f64),
+    }
+
+    let raw = BTreeMap::<String, MetadataValue>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(key, value)| {
+            let normalized_value = match value {
+                MetadataValue::String(value) => value,
+                MetadataValue::Bool(value) => value.to_string(),
+                MetadataValue::I64(value) => value.to_string(),
+                MetadataValue::U64(value) => value.to_string(),
+                MetadataValue::F64(value) => value.to_string(),
+            };
+            (key, normalized_value)
+        })
+        .collect())
 }
 
 fn normalize_metadata_string_list(values: Vec<String>) -> Vec<String> {
@@ -3199,6 +3364,14 @@ fn normalize_metadata_string_list(values: Vec<String>) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
+        .collect()
+}
+
+fn normalize_skill_metadata_map(values: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    values
+        .into_iter()
+        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+        .filter(|(key, value)| !key.is_empty() && !value.is_empty())
         .collect()
 }
 
@@ -3268,6 +3441,9 @@ fn build_discovered_skill_entry(
             skill_id.as_str(),
         ),
         summary: derive_skill_summary_with_frontmatter(skill_markdown, &frontmatter),
+        license: frontmatter.license.clone(),
+        compatibility: frontmatter.compatibility.clone(),
+        metadata: frontmatter.metadata.clone(),
         scope,
         source_kind,
         source_path,
@@ -3867,6 +4043,9 @@ fn discover_skill_inventory(
 
 fn metadata_payload_from_skill(skill: &DiscoveredSkillEntry) -> Value {
     json!({
+        "license": skill.license.clone(),
+        "compatibility": skill.compatibility.clone(),
+        "metadata": skill.metadata.clone(),
         "model_visibility": skill.model_visibility,
         "invocation_policy": skill.invocation_policy,
         "required_env": skill.required_env,
@@ -3963,6 +4142,41 @@ pub(super) fn installed_skill_snapshot_lines_with_config(
             })
         })
         .collect())
+}
+
+pub(super) fn model_skill_catalog_section_with_config(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Option<String> {
+    let policy = resolve_effective_policy(config).ok()?;
+    if !policy.enabled {
+        return None;
+    }
+
+    let inventory = discover_skill_inventory(config).ok()?;
+    let filtered = filter_inventory_for_audience(inventory, SkillAudience::Model);
+    if filtered.skills.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "[available_external_skills]".to_owned(),
+        "The following external skills provide specialized instructions for specific tasks.".to_owned(),
+        "When a task matches a listed skill, use `tool.search` to lease `external_skills.invoke`, then call `tool.invoke` with the selected `skill_id` to load the full skill instructions.".to_owned(),
+        "The activation result includes the structured skill content, the skill directory, and a bundled resource listing for on-demand file reads.".to_owned(),
+    ];
+
+    for skill in filtered.skills {
+        let mut line = format!("- {}: {}", skill.skill_id, skill.summary);
+        if let Some(compatibility) = skill.compatibility.as_deref()
+            && !compatibility.is_empty()
+        {
+            line.push_str(" Compatibility: ");
+            line.push_str(compatibility);
+        }
+        lines.push(line);
+    }
+
+    Some(lines.join("\n"))
 }
 
 fn discover_managed_skill_candidates(
@@ -4187,6 +4401,174 @@ fn load_discovered_skill_markdown(
             load_directory_skill_markdown(Path::new(&skill.source_path))
         }
     }
+}
+
+fn resolved_skill_root_path(skill: &DiscoveredSkillEntry) -> Option<PathBuf> {
+    if let Some(install_path) = skill.install_path.as_deref()
+        && !install_path.trim().is_empty()
+    {
+        return Some(PathBuf::from(install_path));
+    }
+    let source_path = skill.source_path.trim();
+    (!source_path.is_empty()).then(|| PathBuf::from(source_path))
+}
+
+fn list_skill_resources(skill_root: &Path, limit: usize) -> Result<SkillResourceListing, String> {
+    let mut files = Vec::new();
+    collect_skill_resource_paths(skill_root, skill_root, &mut files)?;
+    files.sort();
+
+    let truncated = files.len() > limit;
+    if truncated {
+        files.truncate(limit);
+    }
+
+    Ok(SkillResourceListing { files, truncated })
+}
+
+fn collect_skill_resource_paths(
+    root: &Path,
+    current_path: &Path,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(current_path).map_err(|error| {
+        format!(
+            "failed to inspect external skill resource path {}: {error}",
+            current_path.display()
+        )
+    })?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Ok(());
+    }
+    if file_type.is_dir() {
+        for entry in fs::read_dir(current_path).map_err(|error| {
+            format!(
+                "failed to read external skill resource directory {}: {error}",
+                current_path.display()
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "failed to traverse external skill resource directory {}: {error}",
+                    current_path.display()
+                )
+            })?;
+            collect_skill_resource_paths(root, &entry.path(), files)?;
+        }
+        return Ok(());
+    }
+    if !file_type.is_file() {
+        return Ok(());
+    }
+
+    let relative = current_path
+        .strip_prefix(root)
+        .unwrap_or(current_path)
+        .display()
+        .to_string();
+    if relative == DEFAULT_SKILL_FILENAME {
+        return Ok(());
+    }
+    files.push(relative);
+    Ok(())
+}
+
+fn render_structured_skill_instructions(
+    skill: &DiscoveredSkillEntry,
+    raw_instructions: &str,
+    skill_root: Option<&Path>,
+    resource_listing: &SkillResourceListing,
+) -> String {
+    let body = extract_skill_body(raw_instructions);
+    let mut sections = vec![format!(
+        "<skill_content name=\"{}\" skill_id=\"{}\" scope=\"{}\" source_kind=\"{}\">",
+        xml_escape(skill.display_name.as_str()),
+        xml_escape(skill.skill_id.as_str()),
+        discovered_skill_scope_id(skill.scope),
+        xml_escape(skill.source_kind.as_str())
+    )];
+
+    let has_metadata = skill.license.is_some()
+        || skill.compatibility.is_some()
+        || !skill.metadata.is_empty()
+        || !skill.allowed_tools.is_empty()
+        || !skill.blocked_tools.is_empty();
+    if has_metadata {
+        sections.push("<skill_metadata>".to_owned());
+        if let Some(license) = skill.license.as_deref() {
+            sections.push(format!("<license>{}</license>", xml_escape(license)));
+        }
+        if let Some(compatibility) = skill.compatibility.as_deref() {
+            sections.push(format!(
+                "<compatibility>{}</compatibility>",
+                xml_escape(compatibility)
+            ));
+        }
+        for (key, value) in &skill.metadata {
+            sections.push(format!(
+                "<metadata key=\"{}\">{}</metadata>",
+                xml_escape(key),
+                xml_escape(value)
+            ));
+        }
+        if !skill.allowed_tools.is_empty() {
+            sections.push(format!(
+                "<allowed_tools>{}</allowed_tools>",
+                xml_escape(skill.allowed_tools.join(" ").as_str())
+            ));
+        }
+        if !skill.blocked_tools.is_empty() {
+            sections.push(format!(
+                "<blocked_tools>{}</blocked_tools>",
+                xml_escape(skill.blocked_tools.join(" ").as_str())
+            ));
+        }
+        sections.push("</skill_metadata>".to_owned());
+    }
+
+    sections.push("<skill_instructions format=\"markdown\">".to_owned());
+    sections.push(body);
+    sections.push("</skill_instructions>".to_owned());
+
+    if let Some(skill_root) = skill_root {
+        sections.push(format!("Skill directory: {}", skill_root.display()));
+        sections.push(
+            "Relative paths referenced by this skill resolve against the skill directory."
+                .to_owned(),
+        );
+    }
+
+    sections.push(format!(
+        "<skill_resources truncated=\"{}\">",
+        resource_listing.truncated
+    ));
+    for file in &resource_listing.files {
+        sections.push(format!("<file>{}</file>", xml_escape(file)));
+    }
+    sections.push("</skill_resources>".to_owned());
+    sections.push("</skill_content>".to_owned());
+
+    sections.join("\n")
+}
+
+fn extract_skill_body(skill_markdown: &str) -> String {
+    let body = skill_content_lines(skill_markdown)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return skill_markdown.trim().to_owned();
+    }
+    trimmed.to_owned()
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn load_directory_skill_markdown(skill_root: &Path) -> Result<String, String> {
@@ -5575,7 +5957,12 @@ mod tests {
             write_file(
                 &home.path,
                 ".agents/skills/release-guard/SKILL.md",
-                "---\nname: release-guard\ndescription: Guard release discipline.\ninvocation_policy: both\nrequired_env:\n- LOONG_RELEASE_GUARD_TOKEN\nrequired_bins:\n- sh\nrequired_config:\n- external_skills.enabled\nallowed_tools:\n- shell.exec\nblocked_tools:\n- web.fetch\n---\n\n# Release Guard\n\nPrefer release checklists.\n",
+                "---\nname: release-guard\ndescription: Guard release discipline when: tags, releases, or CI promotion are involved.\ncompatibility: Requires sh and a writable repository.\nmetadata:\n  author: example-org\n  version: \"1.0\"\ninvocation-policy: both\nrequired-env:\n- LOONG_RELEASE_GUARD_TOKEN\nrequired-bin:\n- sh\nrequired-config:\n- external_skills.enabled\nallowed-tools: shell.exec bash.exec\nblocked-tools: web.fetch\n---\n\n# Release Guard\n\nPrefer release checklists.\n\nSee [checklists](references/release-checklist.md).\n",
+            );
+            write_file(
+                &home.path,
+                ".agents/skills/release-guard/references/release-checklist.md",
+                "# Release Checklist\n\n- Verify notes.\n",
             );
             let config = managed_runtime_config(&root);
 
@@ -5598,6 +5985,10 @@ mod tests {
                 listed_skill.get("metadata").is_none(),
                 "model list should not expose operator metadata: {listed_skill:?}"
             );
+            assert_eq!(
+                listed_skill["compatibility"],
+                "Requires sh and a writable repository."
+            );
 
             let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
                 .expect("operator list should succeed");
@@ -5608,8 +5999,22 @@ mod tests {
                 .find(|skill| skill["skill_id"] == "release-guard")
                 .cloned()
                 .expect("release-guard should be listed for operators");
+            assert_eq!(
+                operator_skill["compatibility"],
+                "Requires sh and a writable repository."
+            );
+            assert_eq!(
+                operator_skill["metadata"],
+                json!({
+                    "author": "example-org",
+                    "version": "1.0"
+                })
+            );
             assert_eq!(operator_skill["invocation_policy"], "both");
-            assert_eq!(operator_skill["allowed_tools"], json!(["shell.exec"]));
+            assert_eq!(
+                operator_skill["allowed_tools"],
+                json!(["bash.exec", "shell.exec"])
+            );
             assert_eq!(operator_skill["blocked_tools"], json!(["web.fetch"]));
             assert_eq!(operator_skill["eligibility"]["available"], json!(true));
             assert_eq!(operator_skill["pack_memberships"], json!([]));
@@ -5624,6 +6029,13 @@ mod tests {
             assert_eq!(
                 inspect_outcome.payload["skill"]["required_config"],
                 json!(["external_skills.enabled"])
+            );
+            assert_eq!(
+                inspect_outcome.payload["skill"]["metadata"],
+                json!({
+                    "author": "example-org",
+                    "version": "1.0"
+                })
             );
             assert_eq!(
                 inspect_outcome.payload["skill"]["eligibility"]["available"],
@@ -5649,15 +6061,45 @@ mod tests {
                 "both"
             );
             assert_eq!(
+                invoke_outcome.payload["metadata"]["compatibility"],
+                "Requires sh and a writable repository."
+            );
+            assert_eq!(
+                invoke_outcome.payload["metadata"]["metadata"],
+                json!({
+                    "author": "example-org",
+                    "version": "1.0"
+                })
+            );
+            assert_eq!(
                 invoke_outcome.payload["eligibility"]["available"],
                 json!(true)
+            );
+            assert_eq!(
+                invoke_outcome.payload["resource_listing"]["files"],
+                json!(["references/release-checklist.md"])
             );
             assert!(
                 invoke_outcome.payload["invocation_summary"]
                     .as_str()
                     .expect("invocation summary should be text")
-                    .contains("allowed_tools=shell.exec"),
+                    .contains("allowed_tools=bash.exec,shell.exec"),
                 "tool restrictions should surface in invocation summary"
+            );
+            let instructions = invoke_outcome.payload["instructions"]
+                .as_str()
+                .expect("instructions should be text");
+            assert!(
+                instructions.contains("<skill_content name=\"Release Guard\""),
+                "invoke should wrap instructions in structured skill tags: {instructions}"
+            );
+            assert!(
+                instructions.contains("<skill_resources truncated=\"false\">"),
+                "invoke should surface bundled resources: {instructions}"
+            );
+            assert!(
+                instructions.contains("Skill directory:"),
+                "invoke should surface the resolved skill directory: {instructions}"
             );
 
             fs::remove_dir_all(&root).ok();

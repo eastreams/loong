@@ -36,6 +36,8 @@ use crate::acp::{
     execute_acp_conversation_turn_for_address,
 };
 #[cfg(feature = "memory-sqlite")]
+use crate::memory::runtime_config::MemoryRuntimeConfig;
+#[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
     DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed,
 };
@@ -51,6 +53,8 @@ use self::safe_lane_routing::*;
 use super::super::config::{LoongConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
+#[cfg(feature = "memory-sqlite")]
+use super::active_external_skills;
 use super::analytics::{
     SafeLaneEventSummary, TurnCheckpointProgressStatus as AnalyticsTurnCheckpointProgressStatus,
     TurnCheckpointRecoveryAction, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,
@@ -933,6 +937,87 @@ fn build_resolved_provider_checkpoint(
         reply,
         finalization,
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExplicitSkillActivationInput {
+    skill_id: String,
+    followup_request: String,
+}
+
+fn parse_explicit_skill_activation_input(input: &str) -> Option<ExplicitSkillActivationInput> {
+    let trimmed = input.trim_start();
+    let raw_skill_token = trimmed.strip_prefix('$')?;
+    let skill_token_len = raw_skill_token
+        .char_indices()
+        .take_while(|(_idx, ch)| explicit_skill_token_char(*ch))
+        .last()
+        .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+    if skill_token_len == 0 {
+        return None;
+    }
+
+    let raw_skill_id = &raw_skill_token[..skill_token_len];
+    let trailing = &raw_skill_token[skill_token_len..];
+    if trailing
+        .chars()
+        .next()
+        .is_some_and(|ch| !ch.is_whitespace())
+    {
+        return None;
+    }
+
+    let skill_id = normalize_explicit_skill_activation_id(raw_skill_id)?;
+    let remaining_request = trailing.trim();
+    let followup_request = if remaining_request.is_empty() {
+        format!(
+            "The user explicitly activated external skill `{skill_id}` without an additional task. Confirm activation briefly and ask what to do next."
+        )
+    } else {
+        remaining_request.to_owned()
+    };
+
+    Some(ExplicitSkillActivationInput {
+        skill_id,
+        followup_request,
+    })
+}
+
+fn explicit_skill_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')
+}
+
+fn normalize_explicit_skill_activation_id(raw: &str) -> Option<String> {
+    let mut normalized = String::new();
+    let mut last_dash = false;
+    for ch in raw.trim().chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            Some(ch.to_ascii_lowercase())
+        } else if matches!(ch, '-' | '_' | ' ' | '.') {
+            Some('-')
+        } else {
+            None
+        };
+        if let Some(value) = mapped {
+            if value == '-' {
+                if !last_dash {
+                    normalized.push(value);
+                }
+                last_dash = true;
+            } else {
+                normalized.push(value);
+                last_dash = false;
+            }
+        }
+    }
+    let normalized = normalized.trim_matches('-').to_owned();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn explicit_skill_activation_tool_call_id(skill_id: &str) -> String {
+    let normalized = normalize_explicit_skill_activation_id(skill_id)
+        .unwrap_or_else(|| "external-skill".to_owned());
+    format!("call-explicit-skill-activation-{normalized}")
 }
 
 #[allow(dead_code)]
@@ -1820,6 +1905,20 @@ impl ConversationTurnCoordinator {
             {
                 return Ok((ConversationTurnOutcome { reply, usage: None }, false));
             }
+            if let Some(reply) = self
+                .maybe_handle_explicit_skill_activation_control_turn(
+                    config,
+                    runtime,
+                    session_id,
+                    user_input,
+                    error_mode,
+                    binding,
+                    observer.as_ref(),
+                )
+                .await?
+            {
+                return Ok((reply, false));
+            }
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
 
@@ -2070,6 +2169,136 @@ impl ConversationTurnCoordinator {
         )
         .await?;
         Ok(Some(reply.reply))
+    }
+
+    async fn maybe_handle_explicit_skill_activation_control_turn<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongConfig,
+        runtime: &R,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<Option<ConversationTurnOutcome>> {
+        let Some(explicit_activation) = parse_explicit_skill_activation_input(user_input) else {
+            return Ok(None);
+        };
+
+        let followup_request = explicit_activation.followup_request.as_str();
+        let turn_id = next_conversation_turn_id();
+
+        if let Some(kernel_ctx) = binding.kernel_context() {
+            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        }
+
+        observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
+        let assembled_context = runtime
+            .build_context(config, session_id, true, binding)
+            .await?;
+        let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
+            config,
+            assembled_context,
+            followup_request,
+            turn_id.as_str(),
+            None,
+        );
+        observe_turn_phase(
+            observer,
+            ConversationTurnPhaseEvent::context_ready(
+                preparation.session.messages.len(),
+                preparation.session.estimated_tokens,
+            ),
+        );
+        let tool_runtime_config =
+            crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+        let activation_outcome = crate::tools::execute_tool_core_with_config(
+            loong_contracts::ToolCoreRequest {
+                tool_name: "external_skills.invoke".to_owned(),
+                payload: json!({
+                    "skill_id": explicit_activation.skill_id,
+                }),
+            },
+            &tool_runtime_config,
+        );
+        let activation_outcome = match activation_outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return match error_mode {
+                    ProviderErrorMode::Propagate => Err(error),
+                    ProviderErrorMode::InlineMessage => {
+                        let synthetic = format_provider_error_reply(&error);
+                        persist_reply_turns_raw_with_mode(
+                            runtime,
+                            session_id,
+                            followup_request,
+                            &synthetic,
+                            ReplyPersistenceMode::InlineProviderError,
+                            binding,
+                        )
+                        .await?;
+                        Ok(Some(ConversationTurnOutcome {
+                            reply: synthetic,
+                            usage: None,
+                        }))
+                    }
+                };
+            }
+        };
+        let payload_summary =
+            serde_json::to_string(&activation_outcome.payload).unwrap_or_else(|_| "{}".to_owned());
+        let payload_chars = payload_summary.chars().count();
+        let tool_result_text = format!(
+            "[ok] {}",
+            json!({
+                "status": activation_outcome.status,
+                "tool": "external_skills.invoke",
+                "tool_call_id": explicit_skill_activation_tool_call_id(
+                    explicit_activation.skill_id.as_str(),
+                ),
+                "payload_semantics": "external_skill_context",
+                "payload_summary": payload_summary,
+                "payload_chars": payload_chars,
+                "payload_truncated": false,
+            })
+        );
+        let followup_payload = ToolDrivenFollowupPayload::ToolResult {
+            text: tool_result_text,
+        };
+        #[cfg(feature = "memory-sqlite")]
+        persist_active_external_skills_from_followup_payload_if_needed(
+            config,
+            session_id,
+            &followup_payload,
+        );
+        let follow_up_messages = build_turn_reply_followup_messages_with_warning(
+            &preparation.session.messages,
+            "",
+            followup_payload,
+            None,
+            followup_request,
+            None,
+        );
+        let reply = request_completion_with_raw_fallback(
+            runtime,
+            config,
+            &follow_up_messages,
+            binding,
+            followup_request,
+        )
+        .await;
+        persist_reply_turns_raw_with_mode(
+            runtime,
+            session_id,
+            followup_request,
+            &reply,
+            ReplyPersistenceMode::Success,
+            binding,
+        )
+        .await?;
+        Ok(Some(ConversationTurnOutcome { reply, usage: None }))
     }
 
     fn reload_followup_provider_config_after_tool_turn(
@@ -2918,7 +3147,10 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> ResolvedProviderTurn {
     enum ReplyLoopDecision {
-        FinalizeDirect(String),
+        FinalizeDirect {
+            reply: String,
+            latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+        },
         Followup {
             raw_reply: String,
             payload: ToolDrivenFollowupPayload,
@@ -2998,7 +3230,10 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             .map(ToOwned::to_owned),
                     }
                 } else {
-                    ReplyLoopDecision::FinalizeDirect(reply.clone())
+                    ReplyLoopDecision::FinalizeDirect {
+                        reply: reply.clone(),
+                        latest_tool_payload,
+                    }
                 }
             }
             ToolDrivenReplyBaseDecision::RequireFollowup {
@@ -3025,7 +3260,18 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         };
 
         match reply_decision {
-            ReplyLoopDecision::FinalizeDirect(reply) => {
+            ReplyLoopDecision::FinalizeDirect {
+                reply,
+                latest_tool_payload,
+            } => {
+                #[cfg(feature = "memory-sqlite")]
+                if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
+                    persist_active_external_skills_from_followup_payload_if_needed(
+                        &current_continue_phase.followup_config,
+                        session_id,
+                        latest_tool_payload,
+                    );
+                }
                 let checkpoint = current_continue_phase.checkpoint(preparation, user_input, &reply);
                 return ResolvedProviderTurn::persist_reply(
                     reply,
@@ -3039,6 +3285,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 requires_completion_pass,
                 loop_warning_reason,
             } => {
+                #[cfg(feature = "memory-sqlite")]
+                persist_active_external_skills_from_followup_payload_if_needed(
+                    &current_continue_phase.followup_config,
+                    session_id,
+                    &followup,
+                );
                 let follow_up_messages = build_turn_reply_followup_messages_with_warning(
                     &current_preparation.session.messages,
                     current_continue_phase
@@ -3273,6 +3525,14 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 reason,
                 latest_tool_payload,
             } => {
+                #[cfg(feature = "memory-sqlite")]
+                if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
+                    persist_active_external_skills_from_followup_payload_if_needed(
+                        &current_continue_phase.followup_config,
+                        session_id,
+                        latest_tool_payload,
+                    );
+                }
                 let guard_messages = build_turn_reply_guard_messages(
                     &current_preparation.session.messages,
                     current_continue_phase
@@ -3297,6 +3557,51 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             }
         }
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_active_external_skills_from_followup_payload_if_needed(
+    config: &LoongConfig,
+    session_id: &str,
+    payload: &ToolDrivenFollowupPayload,
+) {
+    let ToolDrivenFollowupPayload::ToolResult { text } = payload else {
+        return;
+    };
+
+    let updates =
+        active_external_skills::collect_active_external_skills_from_tool_result_text(text);
+    if updates.is_empty() {
+        return;
+    }
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let Ok(repo) = SessionRepository::new(&memory_config) else {
+        return;
+    };
+    let Ok(existing_state) =
+        active_external_skills::load_persisted_active_external_skills(&repo, session_id)
+    else {
+        return;
+    };
+    let Some(merged_state) =
+        active_external_skills::merge_active_external_skills(existing_state.clone(), updates)
+    else {
+        return;
+    };
+    if existing_state.as_ref() == Some(&merged_state) {
+        return;
+    }
+
+    let _ = repo.append_event(NewSessionEvent {
+        session_id: session_id.to_owned(),
+        event_kind: active_external_skills::ACTIVE_EXTERNAL_SKILLS_EVENT_KIND.to_owned(),
+        actor_session_id: Some(session_id.to_owned()),
+        payload_json: json!({
+            "source": "tool_followup",
+            "active_external_skills": merged_state,
+        }),
+    });
 }
 
 #[cfg(test)]
@@ -5722,6 +6027,42 @@ mod tests {
         assert_eq!(parse_pending_approval_input_decision("maybe"), None);
     }
 
+    #[test]
+    fn explicit_skill_activation_parser_extracts_skill_and_request() {
+        assert_eq!(
+            parse_explicit_skill_activation_input("  $Demo.Skill summarize release notes"),
+            Some(ExplicitSkillActivationInput {
+                skill_id: "demo-skill".to_owned(),
+                followup_request: "summarize release notes".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn explicit_skill_activation_parser_generates_followup_when_request_missing() {
+        let parsed =
+            parse_explicit_skill_activation_input("$release-guard").expect("explicit activation");
+        assert_eq!(parsed.skill_id, "release-guard");
+        assert!(
+            parsed
+                .followup_request
+                .contains("Confirm activation briefly and ask what to do next."),
+            "missing-request activation should synthesize a followup prompt: {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_skill_activation_parser_ignores_non_prefix_mentions() {
+        assert_eq!(
+            parse_explicit_skill_activation_input("please use $release-guard"),
+            None
+        );
+        assert_eq!(
+            parse_explicit_skill_activation_input("$release-guard, summarize"),
+            None
+        );
+    }
+
     #[cfg(feature = "memory-sqlite")]
     #[derive(Default)]
     struct ApprovalControlRuntime {
@@ -5930,6 +6271,183 @@ mod tests {
     #[derive(Default)]
     struct RecordingCompactRuntime {
         compact_calls: StdMutex<usize>,
+    }
+
+    #[derive(Default)]
+    struct ExplicitSkillActivationRuntime {
+        completion_messages: StdMutex<Vec<Value>>,
+        persisted_turns: StdMutex<Vec<(String, String)>>,
+        bootstrap_calls: StdMutex<usize>,
+    }
+
+    #[async_trait]
+    impl ConversationRuntime for ExplicitSkillActivationRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(vec![json!({
+                "role": "system",
+                "content": "explicit skill activation test"
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongConfig,
+            messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            let mut stored = self
+                .completion_messages
+                .lock()
+                .expect("completion messages lock");
+            *stored = messages.to_vec();
+            Ok("explicit activation handled".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn should not run for explicit skill activation control turns")
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            panic!(
+                "request_turn_streaming should not run for explicit skill activation control turns"
+            )
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            role: &str,
+            content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            let mut stored = self.persisted_turns.lock().expect("persisted turns lock");
+            stored.push((role.to_owned(), content.to_owned()));
+            Ok(())
+        }
+
+        async fn bootstrap(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _kernel_ctx: &KernelContext,
+        ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
+            let mut calls = self.bootstrap_calls.lock().expect("bootstrap lock");
+            *calls += 1;
+            Ok(Default::default())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill_context() {
+        let workspace_root =
+            crate::test_support::unique_temp_dir("turn-coordinator-explicit-skill-activation");
+        std::fs::create_dir_all(workspace_root.join(".agents/skills/demo-skill"))
+            .expect("create skill root");
+        std::fs::write(
+            workspace_root.join(".agents/skills/demo-skill/SKILL.md"),
+            "---\nname: demo-skill\ndescription: Summarize notes with release discipline.\n---\n\n# Demo Skill\n\nFollow the managed skill instruction before answering.\n",
+        )
+        .expect("write skill");
+
+        let runtime = ExplicitSkillActivationRuntime::default();
+        let coordinator = ConversationTurnCoordinator::new();
+        let mut config = LoongConfig::default();
+        config.external_skills.enabled = true;
+        config.tools.file_root = Some(workspace_root.display().to_string());
+
+        let reply = coordinator
+            .handle_turn_with_runtime(
+                &config,
+                "session-explicit-skill-activation",
+                "$demo-skill summarize the changelog",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                ConversationRuntimeBinding::direct(),
+            )
+            .await
+            .expect("explicit activation turn should succeed");
+
+        assert_eq!(reply, "explicit activation handled");
+
+        let messages = runtime
+            .completion_messages
+            .lock()
+            .expect("completion messages lock")
+            .clone();
+        let injected_skill = messages
+            .iter()
+            .find(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("External skill `demo-skill`"))
+            })
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("skill system message should exist: {messages:?}"));
+        assert!(
+            injected_skill.contains("External skill `demo-skill`"),
+            "explicit activation should inject skill context: {injected_skill}"
+        );
+        assert!(
+            injected_skill.contains("Follow the managed skill instruction before answering."),
+            "skill system message should include loaded instructions: {injected_skill}"
+        );
+        let followup_prompt = messages
+            .iter()
+            .find(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("Original request:"))
+            })
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("followup prompt should exist: {messages:?}"));
+        assert!(
+            followup_prompt.contains("Original request:\nsummarize the changelog"),
+            "explicit activation should strip the $skill prefix from the forwarded request: {followup_prompt}"
+        );
+        assert!(
+            !followup_prompt.contains("$demo-skill"),
+            "followup prompt should not leak the explicit activation token: {followup_prompt}"
+        );
+
+        let persisted_turns = runtime
+            .persisted_turns
+            .lock()
+            .expect("persisted turns lock")
+            .clone();
+        assert!(
+            persisted_turns
+                .iter()
+                .any(|(role, content)| role == "user" && content == "summarize the changelog"),
+            "persisted turns should store the forwarded request without the activation token: {persisted_turns:?}"
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
